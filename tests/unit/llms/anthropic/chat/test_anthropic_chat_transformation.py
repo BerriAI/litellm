@@ -5135,86 +5135,53 @@ def test_fast_mode_usage_calculation():
     assert usage.speed == "fast"
 
 
-def test_fast_mode_cost_calculation():
-    """
-    Test that fast mode applies the 'fast' multiplier from provider_specific_entry
-    on top of the base model cost (1.1x for claude-opus-4-6).
-    """
+_FAST_MODE_ROW: Final = {
+    "litellm_provider": "anthropic",
+    "mode": "chat",
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "provider_specific_entry": {"fast": 1.1, "us": 1.2},
+}
 
+
+@pytest.mark.parametrize(
+    "served, multiplier",
+    [({"speed": "fast"}, 1.1), ({"speed": "fast", "inference_geo": "us"}, 1.1 * 1.2), ({"inference_geo": "US"}, 1.2)],
+    ids=["fast", "fast-and-us", "geo-is-case-folded"],
+)
+def test_fast_mode_and_inference_geo_multiply_the_row_rates(served: Mapping[str, str], multiplier: float):
+    """``speed: fast`` and ``inference_geo`` multiply both directions by the factors the row's
+    ``provider_specific_entry`` lists for them."""
     from litellm.llms.anthropic.cost_calculation import cost_per_token
-    from litellm.types.utils import Usage
+    from litellm.types.utils import ModelInfo, Usage
 
-    base_prompt = 0.005
-    base_completion = 0.025
+    row: Final = cast(ModelInfo, _FAST_MODE_ROW)
+    plain: Final = cost_per_token(
+        model="claude-opus-4-6", usage=Usage(prompt_tokens=1000, completion_tokens=1000), model_info=row
+    )
+    uplifted: Final = cost_per_token(
+        model="claude-opus-4-6",
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, **served),
+        model_info=row,
+    )
 
-    with (
-        patch("litellm.llms.anthropic.cost_calculation.generic_cost_per_token") as mock_cost,
-        patch("litellm.get_model_info") as mock_info,
-    ):
-        mock_cost.return_value = (base_prompt, base_completion)
-        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
-
-        usage_fast = Usage(
-            prompt_tokens=1000,
-            completion_tokens=1000,
-            speed="fast",
-        )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="claude-opus-4-6",
-            usage=usage_fast,
-        )
-
-        # generic_cost_per_token called with the plain base model name
-        mock_cost.assert_called_once()
-        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
-        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
-
-        # 1.1x multiplier applied
-        assert abs(prompt_cost - base_prompt * 1.1) < 1e-10
-        assert abs(completion_cost - base_completion * 1.1) < 1e-10
+    assert plain == (1000 * 5e-06, 1000 * 2.5e-05)
+    assert uplifted == pytest.approx((plain[0] * multiplier, plain[1] * multiplier), rel=1e-12)
 
 
-def test_fast_mode_with_inference_geo():
-    """
-    Test that fast mode + inference_geo both apply their multipliers from
-    provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
-    """
-
+def test_an_unreadable_provider_specific_entry_drops_both_uplifts():
+    """Main's ``except Exception: pass`` around the uplifts: a geo factor ``float()`` rejects drops the speed
+    uplift too, so the call bills at the plain row rates."""
     from litellm.llms.anthropic.cost_calculation import cost_per_token
-    from litellm.types.utils import Usage
+    from litellm.types.utils import ModelInfo, Usage
 
-    base_prompt = 0.005
-    base_completion = 0.025
+    row: Final = cast(ModelInfo, {**_FAST_MODE_ROW, "provider_specific_entry": {"fast": 1.1, "us": "high"}})
 
-    with (
-        patch("litellm.llms.anthropic.cost_calculation.generic_cost_per_token") as mock_cost,
-        patch("litellm.get_model_info") as mock_info,
-    ):
-        mock_cost.return_value = (base_prompt, base_completion)
-        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
-
-        usage = Usage(
-            prompt_tokens=1000,
-            completion_tokens=1000,
-            speed="fast",
-            inference_geo="us",
-        )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="claude-opus-4-6",
-            usage=usage,
-        )
-
-        # generic_cost_per_token called with the plain base model name
-        mock_cost.assert_called_once()
-        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
-        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
-
-        # 1.1 (fast) * 1.1 (us) = 1.21x multiplier applied
-        expected_multiplier = 1.1 * 1.1
-        assert abs(prompt_cost - base_prompt * expected_multiplier) < 1e-10
-        assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
+    assert cost_per_token(
+        model="claude-opus-4-6",
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, speed="fast", inference_geo="us"),
+        model_info=row,
+    ) == (1000 * 5e-06, 1000 * 2.5e-05)
 
 
 def test_calculate_usage_captures_service_tier():

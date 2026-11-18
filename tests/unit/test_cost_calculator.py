@@ -12254,3 +12254,134 @@ def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_respons
         )
 
     assert (image_data in str(exc_info.value)) is echoes_response
+
+
+_TOKENS_PARITY: Final = Path(__file__).parents[2] / "litellm/rust/crates/cost/fixtures/tokens_parity.json"
+
+
+def _parity_case(name: str) -> Mapping[str, object]:
+    cases: Final = json.loads(_TOKENS_PARITY.read_text())["cases"]
+    return next(case for case in cases if case["name"] == name)
+
+
+def _cost_map_row(case: Mapping[str, object]) -> dict[str, object]:
+    """The fixture's row as the cost map writes it: the web search prices sit under ``search_context_cost_per_query``."""
+    row: Final = cast(Mapping[str, object], case["row"])
+    return {
+        **{key: value for key, value in row.items() if not key.startswith("search_context_size_")},
+        "litellm_provider": case["provider"],
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            key: value for key, value in row.items() if key.startswith("search_context_size_")
+        },
+    }
+
+
+def _billed_usage(case: Mapping[str, object]) -> Usage:
+    """A Usage whose billed quantities are the fixture's."""
+    billed: Final = cast(Mapping[str, object], case["usage"])
+    writes: Final = cast(Mapping[str, int], billed["cache_write"])
+    reads: Final = cast(Mapping[str, int], billed["cache_read"])["text"]
+    output: Final = cast(Mapping[str, int], billed["output"])["text"]
+    prompt_tokens: Final = cast(int, billed["prompt_tokens"])
+    web_search: Final = cast(Mapping[str, int] | None, billed.get("web_search"))
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=output,
+        total_tokens=prompt_tokens + output,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=reads,
+            cache_creation_tokens=writes["default"] + writes["one_hour"],
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=writes["default"], ephemeral_1h_input_tokens=writes["one_hour"]
+            ),
+        ),
+        server_tool_use=None if web_search is None else {"web_search_requests": web_search["requests"]},
+        speed=billed.get("speed"),
+        inference_geo=billed.get("inference_geo"),
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "anthropic_cache_mixed",
+        "anthropic_speed_fast_geo_us",
+        "anthropic_discount_and_fixed_margin",
+        "bedrock_claude_platform_geo_us",
+        "vertex_regional",
+        "azure_ai_plain",
+    ],
+)
+def test_completion_cost_prices_claude_token_calls_in_rust_at_mains_values(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Claude token call on the /v1/messages providers is priced by the Rust core, never by Python's
+    ``cost_per_token`` loop, and returns the total and stored breakdown main computed for the same call."""
+    case: Final = _parity_case(name)
+    expected: Final = cast(Mapping[str, Mapping[str, float]], case["expected"])
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, cast(str, case["row_key"]): _cost_map_row(case)})
+    monkeypatch.setattr(litellm, "cost_discount_config", dict(cast(Mapping[str, float], case["discount"])))
+    monkeypatch.setattr(litellm, "cost_margin_config", dict(cast(Mapping[str, object], case["margin"])))
+
+    def python_pricing(**_: object) -> tuple[float, float]:
+        raise AssertionError("the Python candidate loop priced a call Rust prices")
+
+    monkeypatch.setattr("litellm.cost_calculator.cost_per_token", python_pricing)
+    logging_obj: Final = Logging(
+        model=cast(str, case["model"]),
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id=f"rust-priced-{name}",
+        function_id="rust-priced",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model=cast(str, case["model"]), usage=_billed_usage(case)),
+        model=cast(str, case["model"]),
+        custom_llm_provider=cast(str, case["provider"]),
+        vertex_location=cast(str | None, case["vertex_location"]),
+        litellm_logging_obj=logging_obj,
+    )
+
+    stored: Final = expected["breakdown"]
+    breakdown: Final = logging_obj.cost_breakdown
+    assert cost == expected["total"]
+    assert breakdown is not None
+    assert (
+        breakdown["input_cost"],
+        breakdown["output_cost"],
+        breakdown["total_cost"],
+        breakdown.get("discount_amount", 0.0),
+        breakdown.get("margin_total_amount", 0.0),
+    ) == (
+        stored["input_cost"],
+        stored["output_cost"],
+        stored["total_cost"],
+        stored["discount_amount"],
+        stored["margin_total_amount"],
+    )
+
+
+def test_completion_cost_falls_back_to_python_for_a_provider_rust_does_not_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call the Rust core leaves to Python, here an OpenAI model, still prices through the Python candidate loop."""
+    priced_models: Final[list[object]] = []  # mutable-ok: records the calls the stub receives
+
+    def python_pricing(**kwargs: object) -> tuple[float, float]:
+        priced_models.append(kwargs["model"])
+        return 1.0, 2.0
+
+    monkeypatch.setattr("litellm.cost_calculator.cost_per_token", python_pricing)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="gpt-4o", usage=Usage(prompt_tokens=10, completion_tokens=5)),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == 3.0
+    assert priced_models
