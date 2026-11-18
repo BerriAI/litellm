@@ -79,6 +79,7 @@ from .common_utils import (
     model_dump_provider_response,
     upstream_error_response,
 )
+from .speech_usage_stream import speech_response_with_usage, with_usage_stream
 from .workload_identity import (
     build_async_openai_client,
     build_openai_client,
@@ -1705,7 +1706,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: str,
         voice: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         organization: str | None,
@@ -1759,13 +1760,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        params: Final = speech_create_params(model, voice, input, optional_params)
+        params: Final = speech_create_params(model, voice, input, with_usage_stream(model, optional_params))
         raw_response: Final = (
             sync_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
             if stream
             else sync_client.audio.speech.create(**params).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        speech_response: Final = speech_response_with_usage(raw_response, model, optional_params)
         set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
@@ -1774,7 +1775,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         input: str,
         voice: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         organization: str | None,
@@ -1810,13 +1811,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        params: Final = speech_create_params(model, voice, input, optional_params)
+        params: Final = speech_create_params(model, voice, input, with_usage_stream(model, optional_params))
         raw_response: Final = (
             (await openai_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
             if stream
             else (await openai_client.audio.speech.create(**params)).response
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        speech_response: Final = speech_response_with_usage(raw_response, model, optional_params)
         set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 

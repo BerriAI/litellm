@@ -385,6 +385,7 @@ from litellm.constants import (
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -855,6 +856,7 @@ from litellm.proxy.management_endpoints.request_error_endpoints import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimError, scim_error_response
 from litellm.proxy.management_endpoints.session_endpoints import (
     router as session_management_router,
 )
@@ -1687,6 +1689,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         proxy_batch_polling_interval, \
         shared_aiohttp_session
     global ui_login_enabled  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
+    global database_url_configured  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
     import json
 
     resources.callback(_forget_prisma_client)
@@ -1794,9 +1797,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Final[str | None] = get_secret("DATABASE_URL", None)
+        database_url_configured = isinstance(_db_url, str) and _db_url.strip() != ""  # rebind-ok: set once at startup
         prisma_client = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await ProxyStartupEvent.setup_prisma_client(
-                database_url=_db_url,
+                database_url=_db_url if database_url_configured else None,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_cache=user_api_key_cache,
             )
@@ -2535,6 +2539,12 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Ex
 async def management_problem_exception_handler(request: Request, exc: ManagementProblem):
     _close_dangling_otel_server_span(request, exc.problem.status, exc=exc)
     return problem_response(exc.problem)
+
+
+@app.exception_handler(ScimError)
+async def scim_error_exception_handler(request: Request, exc: ScimError) -> JSONResponse:
+    _close_dangling_otel_server_span(request, exc.status_code, exc=exc.traced_as or exc)
+    return scim_error_response(exc)
 
 
 class _ConfigParamRow(Protocol):
@@ -3336,6 +3346,7 @@ disable_spend_logs = False
 litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()
 jwt_http_handler: Final = JwksHTTPHandler()
 ui_login_enabled: bool = True
+database_url_configured: bool = False  # rebind-ok: set once at startup so auth does not look the secret up per request
 prompt_injection_detection_obj: Final[OPTIONAL_PromptInjectionDetection | None] = None
 store_model_in_db: bool = False
 open_telemetry_logger: OpenTelemetry | None = None
@@ -6170,11 +6181,21 @@ def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
     return tuple(chain.from_iterable(_callback_list_entries(list_name) for list_name in _CALLBACK_LIST_NAMES))
 
 
+def _current_callback(entry: object) -> object:
+    return entry.active_logger() if isinstance(entry, GenericAPILogger) else entry
+
+
+def _current_entries(entries: tuple[tuple[str, object], ...]) -> tuple[tuple[str, object], ...]:
+    return tuple((list_name, _current_callback(entry)) for list_name, entry in entries)
+
+
 def _entries_missing_from(
     entries: tuple[tuple[str, object], ...], others: tuple[tuple[str, object], ...]
 ) -> tuple[tuple[str, object], ...]:
-    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in others)
-    return tuple((list_name, entry) for list_name, entry in entries if (list_name, id(entry)) not in other_ids)
+    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in _current_entries(others))
+    return tuple(
+        (list_name, entry) for list_name, entry in entries if (list_name, id(_current_callback(entry))) not in other_ids
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -6198,7 +6219,7 @@ def _restore_displaced_callback(list_name: str, entry: object) -> None:
 
 
 def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
-    for list_name, entry in registration.added:
+    for list_name, entry in _current_entries(registration.added):
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
             _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), entry, require_self=False
         )
@@ -8489,7 +8510,7 @@ class ProxyConfig:
         )
         after: Final = _registered_callback_entries()
         return _DbCallbackRegistration(
-            added=previous.added + _entries_missing_from(after, before),
+            added=_current_entries(previous.added) + _entries_missing_from(after, before),
             displaced=previous.displaced + _entries_missing_from(before, after),
         )
 
@@ -10180,16 +10201,10 @@ class ProxyConfig:
         config: Final = await self.get_config(config_file_path=user_config_file_path)
         credential_list: Final = self.load_credential_list(config=config)
 
-        ## COMBINED LIST ##
-        combined_list: Final = db_credentials + credential_list
-
-        ## DELETE ##
-        idx_to_delete: Final = []
-        for idx, credential in enumerate(litellm.credential_list):
-            if credential.credential_name not in [cred.credential_name for cred in combined_list]:
-                idx_to_delete.append(idx)
-        for idx in sorted(idx_to_delete, reverse=True):
-            litellm.credential_list.pop(idx)
+        names_to_keep: Final = frozenset(cred.credential_name for cred in db_credentials + credential_list)
+        litellm.credential_list[:] = tuple(
+            cred for cred in litellm.credential_list if cred.credential_name in names_to_keep
+        )
 
     async def get_credentials(self, prisma_client: PrismaClient):
         try:

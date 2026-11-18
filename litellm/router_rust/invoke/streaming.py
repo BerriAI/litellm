@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import dataclasses
 import json
+import time
 import weakref
 from collections.abc import (
     AsyncGenerator,
@@ -44,6 +45,7 @@ from collections.abc import (
     Sequence,
 )
 from collections.abc import Set as AbstractSet
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -69,12 +71,13 @@ from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hid
 from litellm.litellm_core_utils.on_end_byte_stream import StreamClosedEarly, StreamCompleted, StreamEnd, StreamFailed
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.stream_close import aclose_if_supported
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.router_rust.invoke.slots import hold_slot_until_closed
 from litellm.router_rust.surface.health import failure_already_logged, logged_call
+from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import ModelResponseStream, Usage
 
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.core import RustCore
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuationOutput, ContinuedPartial
@@ -84,6 +87,12 @@ if TYPE_CHECKING:
 # hitting either cap commits the stream instead.
 MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS: Final = 200
 MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
+
+_RESPONSES_TERMINAL_EVENT_TYPES: Final = (
+    ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+    ResponsesAPIStreamEvents.RESPONSE_FAILED,
+)
 
 # The hidden params and headers a fallback's response carries, as dicts the proxy writes into.
 _Prepared: TypeAlias = "tuple[dict[str, object], dict[str, object]]"
@@ -1672,7 +1681,7 @@ def _mid_stream_error_before_output(error: MidStreamFallbackError) -> bool:
     return not error.generated_content or error.is_pre_first_chunk
 
 
-def _extract_partial_responses_usage(source_iterator: "BaseResponsesAPIStreamingIterator") -> "ResponseAPIUsage | None":
+def _extract_partial_responses_usage(source_iterator: BaseResponsesAPIStreamingIterator) -> "ResponseAPIUsage | None":
     """Partial token usage of a Responses stream that failed, normalized to ``ResponseAPIUsage``."""
     from litellm.responses.litellm_completion_transformation.streaming_iterator import (
         LiteLLMCompletionStreamingIterator,
@@ -1733,117 +1742,137 @@ def _params_sent_to_deployment(attempt: StreamAttempt, deployment_id: object) ->
     return attempt.core.params_sent_to_deployment(attempt.request, deployment_id)
 
 
+class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
+    """Subclasses the base iterator only for isinstance checks; iteration is the generator's."""
+
+    fallback_headers_adopted: bool = False
+
+    def __init__(  # pyright: ignore[reportMissingSuperCall]  # no httpx response of its own
+        self,
+        async_generator: AsyncGenerator[object, None],
+        attempt: StreamAttempt,
+        source_iterator: BaseResponsesAPIStreamingIterator,
+    ) -> None:
+        self._async_generator: Final = async_generator
+        self.attempt: Final = attempt
+        self._source_iterator: Final = source_iterator
+        self._billing_source: object = source_iterator
+        self._last_sequence_number = -1
+        self.response = getattr(source_iterator, "response", None)  # pyright: ignore[reportAttributeAccessIssue]  # copied from the source
+        self.model = getattr(source_iterator, "model", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
+        self.logging_obj = getattr(
+            source_iterator, "logging_obj", getattr(source_iterator, "litellm_logging_obj", None)
+        )  # pyright: ignore[reportAttributeAccessIssue]  # see above
+        self.finished = False
+        self.responses_api_provider_config = getattr(source_iterator, "responses_api_provider_config", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
+        self.completed_response = None
+        self.start_time = getattr(source_iterator, "start_time", None) or datetime.now(timezone.utc).replace(
+            tzinfo=None
+        )
+        self._failure_handled = False
+        self._yielded_first_chunk = False
+        self._generated_content = ""
+        self._completed_response_cached = False
+        self._completed_response_logged = False
+        self._completed_response_cache_hit = None
+        self._persist_completed_response_before_logging = True
+        self._stream_created_time = time.time()
+        self.litellm_metadata = getattr(source_iterator, "litellm_metadata", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
+        self.custom_llm_provider = getattr(source_iterator, "custom_llm_provider", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
+        self.request_data = getattr(source_iterator, "request_data", {}) or {}
+        self.call_type = getattr(source_iterator, "call_type", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
+        self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
+
+    def adopt_fallback_headers(self, fallback_response: object) -> _Prepared:
+        prepared: Final = _prepare_fallback_hidden_params(fallback_response)
+        self._billing_source = fallback_response
+        self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
+        self.fallback_headers_adopted = True
+        return prepared
+
+    def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
+        from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+
+        current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
+        if self._billing_source is self._source_iterator:
+            return current
+        primary: Final = partial_responses_incomplete_event_on_disconnect(self._source_iterator)
+        if current is None or primary is None:
+            return current or primary
+        if primary.response.usage is not None:
+            _combine_responses_fallback_usage(current, primary.response.usage)
+        return current
+
+    def __aiter__(self) -> "FallbackResponsesStreamWrapper":
+        return self
+
+    @property
+    def yielded_first_chunk(self) -> bool:
+        return self._yielded_first_chunk
+
+    async def __anext__(self) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # yields what the stream yields
+        try:
+            chunk: Final = await self._async_generator.__anext__()
+        except StopAsyncIteration:
+            if self.completed_response is None:
+                self.completed_response = getattr(self._source_iterator, "completed_response", None)
+            raise
+        if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
+            self.completed_response = chunk  # pyright: ignore[reportAttributeAccessIssue]  # the terminal event
+        self._yielded_first_chunk = True
+        sequence_number: Final = getattr(chunk, "sequence_number", None)
+        if not isinstance(sequence_number, int):
+            return chunk
+        if not self.fallback_headers_adopted:
+            self._last_sequence_number = max(self._last_sequence_number, sequence_number)
+            return chunk
+        self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
+        if self._last_sequence_number == sequence_number:
+            return chunk
+        return chunk.model_copy(update={"sequence_number": self._last_sequence_number})  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # a response event, the only item with a sequence_number
+
+    async def aclose(self) -> None:
+        await self._async_generator.aclose()
+
+
+_ResponsesWrapperRef: TypeAlias = "weakref.ref[FallbackResponsesStreamWrapper]"
+
+
+def _adopt_responses_fallback_headers(wrapper_ref: _ResponsesWrapperRef, fallback_response: object) -> _Prepared:
+    wrapper: Final = wrapper_ref()
+    if wrapper is None:
+        return _prepare_fallback_hidden_params(fallback_response)
+    return wrapper.adopt_fallback_headers(fallback_response)
+
+
+def _responses_stream_fallback_error(
+    stream_error: "MidStreamFallbackError | litellm_exceptions.ContextWindowExceededError",
+    source_iterator: BaseResponsesAPIStreamingIterator,
+    wrapper_ref: _ResponsesWrapperRef,
+) -> MidStreamFallbackError:
+    if not _is_context_window(stream_error):
+        return cast("MidStreamFallbackError", stream_error)  # cast-ok: not a context window error
+    wrapper: Final = wrapper_ref()
+    return _context_window_stream_fallback_error(
+        stream_error,
+        source_iterator.model or "",
+        source_iterator.custom_llm_provider or "",
+        wrapper is not None and wrapper.yielded_first_chunk,
+    )
+
+
 def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it ports
     attempt: StreamAttempt,
-    response: "BaseResponsesAPIStreamingIterator",
+    response: BaseResponsesAPIStreamingIterator,
     deadline: float | None = None,
     expired: Callable[[], MidStreamFallbackError] | None = None,
-) -> "BaseResponsesAPIStreamingIterator":
+) -> BaseResponsesAPIStreamingIterator:
     """``_aresponses_streaming_iterator``: pre-output lifecycle events are held while a fallback can take
     over; a mid-stream error falls back through the core, continuing after text."""
-    import time
-    from datetime import datetime, timezone
-
-    from litellm.responses.streaming_iterator import (
-        PRE_OUTPUT_LIFECYCLE_EVENT_TYPES,
-        BaseResponsesAPIStreamingIterator,
-        get_openai_response_types,
-    )
+    from litellm.responses.streaming_iterator import PRE_OUTPUT_LIFECYCLE_EVENT_TYPES
 
     source_iterator: Final = response
     attempt.take_outcome()
-    openai_types: Final = get_openai_response_types()
-    terminal_event_types: Final = (
-        openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-        openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
-        openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
-    )
-
-    class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
-        """Subclasses the base iterator only for isinstance checks; iteration is the generator's."""
-
-        fallback_headers_adopted: bool = False
-
-        def __init__(self, async_generator: AsyncGenerator[object, None]) -> None:  # pyright: ignore[reportMissingSuperCall]  # no httpx response of its own
-            self._async_generator: Final = async_generator
-            self.attempt: Final = attempt
-            self._billing_source: object = source_iterator
-            self._last_sequence_number = -1
-            self.response = getattr(source_iterator, "response", None)  # pyright: ignore[reportAttributeAccessIssue]  # copied from the source
-            self.model = getattr(source_iterator, "model", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
-            self.logging_obj = getattr(
-                source_iterator, "logging_obj", getattr(source_iterator, "litellm_logging_obj", None)
-            )  # pyright: ignore[reportAttributeAccessIssue]  # see above
-            self.finished = False
-            self.responses_api_provider_config = getattr(source_iterator, "responses_api_provider_config", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
-            self.completed_response = None
-            self.start_time = getattr(source_iterator, "start_time", None) or datetime.now(timezone.utc).replace(
-                tzinfo=None
-            )
-            self._failure_handled = False
-            self._yielded_first_chunk = False
-            self._generated_content = ""
-            self._completed_response_cached = False
-            self._completed_response_logged = False
-            self._completed_response_cache_hit = None
-            self._persist_completed_response_before_logging = True
-            self._stream_created_time = time.time()
-            self.litellm_metadata = getattr(source_iterator, "litellm_metadata", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
-            self.custom_llm_provider = getattr(source_iterator, "custom_llm_provider", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
-            self.request_data = getattr(source_iterator, "request_data", {}) or {}
-            self.call_type = getattr(source_iterator, "call_type", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
-            self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
-
-        def adopt_fallback_headers(self, fallback_response: object) -> _Prepared:
-            prepared: Final = _prepare_fallback_hidden_params(fallback_response)
-            self._billing_source = fallback_response
-            self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
-            self.fallback_headers_adopted = True
-            return prepared
-
-        def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
-            from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
-
-            current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
-            if self._billing_source is source_iterator:
-                return current
-            primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
-            if current is None or primary is None:
-                return current or primary
-            if primary.response.usage is not None:
-                _combine_responses_fallback_usage(current, primary.response.usage)
-            return current
-
-        def __aiter__(self) -> "FallbackResponsesStreamWrapper":
-            return self
-
-        @property
-        def yielded_first_chunk(self) -> bool:
-            return self._yielded_first_chunk
-
-        async def __anext__(self) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # yields what the stream yields
-            try:
-                chunk: Final = await self._async_generator.__anext__()
-            except StopAsyncIteration:
-                if self.completed_response is None:
-                    self.completed_response = getattr(source_iterator, "completed_response", None)
-                raise
-            if self.completed_response is None and getattr(chunk, "type", None) in terminal_event_types:
-                self.completed_response = chunk  # pyright: ignore[reportAttributeAccessIssue]  # the terminal event
-            self._yielded_first_chunk = True
-            sequence_number: Final = getattr(chunk, "sequence_number", None)
-            if not isinstance(sequence_number, int):
-                return chunk
-            if not self.fallback_headers_adopted:
-                self._last_sequence_number = max(self._last_sequence_number, sequence_number)
-                return chunk
-            self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
-            if self._last_sequence_number == sequence_number:
-                return chunk
-            return chunk.model_copy(update={"sequence_number": self._last_sequence_number})  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # a response event, the only item with a sequence_number
-
-        async def aclose(self) -> None:
-            await self._async_generator.aclose()
 
     def background_stream_can_release(item: object) -> bool:
         from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
@@ -1891,21 +1920,19 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             for held_event in held:
                 yield held_event
         except (MidStreamFallbackError, litellm_exceptions.ContextWindowExceededError) as stream_error:
-            e: Final = (
-                _context_window_stream_fallback_error(
-                    stream_error,
-                    source_iterator.model or "",
-                    source_iterator.custom_llm_provider or "",
-                    wrapper.yielded_first_chunk,
-                )
-                if _is_context_window(stream_error)
-                else cast("MidStreamFallbackError", stream_error)  # cast-ok: not a context window error
-            )
+            # no frame local for the error: its traceback holds this frame, so one would pin the request
             if response_id_exposed:
-                _raise_released_stream_error(attempt, e)
+                _raise_released_stream_error(
+                    attempt, _responses_stream_fallback_error(stream_error, source_iterator, wrapper_ref)
+                )
             async with contextlib.aclosing(
                 _responses_recover_stream_error(
-                    attempt, e, source_iterator, wrapper, wrapper.adopt_fallback_headers, held, output_started
+                    attempt,
+                    _responses_stream_fallback_error(stream_error, source_iterator, wrapper_ref),
+                    source_iterator,
+                    wrapper_ref,
+                    held,
+                    output_started,
                 )
             ) as recovered_stream:
                 async for recovered_item in recovered_stream:
@@ -1915,6 +1942,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 yield held_event
             _raise_stream_failure(attempt, stream_error, before_content=not output_started)
         finally:
+            attempt.explain_failure = None  # it holds the walk, which holds this stream
             with anyio.CancelScope(shield=True):
                 if hasattr(source_iterator, "aclose"):
                     try:
@@ -1922,7 +1950,8 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                     except Exception as exc:  # noqa: BLE001  # closing is best-effort
                         verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing source: %s", exc)
 
-    wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
+    wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks(), attempt, source_iterator)
+    wrapper_ref: Final[_ResponsesWrapperRef] = weakref.ref(wrapper)
     return wrapper
 
 
@@ -1954,7 +1983,7 @@ def _raise_released_stream_error(attempt: StreamAttempt, e: MidStreamFallbackErr
 
 
 def _responses_continuation_request(
-    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: "BaseResponsesAPIStreamingIterator"
+    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: BaseResponsesAPIStreamingIterator
 ) -> Mapping[str, object] | None:
     """The request a fallback continues from once a Responses stream broke after text, or None before
     output. Raises the primary's error when the output is constrained, a tool call began, a content
@@ -1999,7 +2028,7 @@ def _responses_continuation_request(
 
 
 def _responses_stream_retries(
-    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: "BaseResponsesAPIStreamingIterator"
+    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: BaseResponsesAPIStreamingIterator
 ) -> bool:
     """Whether a broken Responses stream retries in its own group first: it broke before any output and
     before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
@@ -2013,9 +2042,8 @@ def _responses_stream_retries(
 async def _responses_recover_stream_error(
     attempt: StreamAttempt,
     e: MidStreamFallbackError,
-    source_iterator: "BaseResponsesAPIStreamingIterator",
-    wrapper: object,
-    adopt_headers: Callable[[object], _Prepared],
+    source_iterator: BaseResponsesAPIStreamingIterator,
+    wrapper_ref: _ResponsesWrapperRef,
     held: tuple[object, ...],
     output_started: bool,
 ) -> AsyncGenerator[object, None]:
@@ -2031,9 +2059,7 @@ async def _responses_recover_stream_error(
         trigger: Final = _mid_stream_retry_trigger(e)
         retried: Final = await attempt.retry(trigger)
         if not isinstance(retried, BaseException):
-            async for retried_item in _responses_yield_retried(
-                retried, wrapper, adopt_headers, attempt.explain_failure
-            ):
+            async for retried_item in _responses_yield_retried(retried, wrapper_ref, attempt.explain_failure):
                 yield retried_item
             return
         if retried is not trigger:
@@ -2041,7 +2067,7 @@ async def _responses_recover_stream_error(
                 retried if isinstance(retried, Exception) else e, e.model or "", e.llm_provider
             )
     async with contextlib.aclosing(
-        _responses_fallback_attempt(attempt, last_error, source_iterator, adopt_headers, held, output_started)
+        _responses_fallback_attempt(attempt, last_error, source_iterator, wrapper_ref, held, output_started)
     ) as fallback_stream:
         async for fallback_item in fallback_stream:
             yield fallback_item
@@ -2049,8 +2075,7 @@ async def _responses_recover_stream_error(
 
 async def _responses_yield_retried(
     retried: tuple[object, int, int],
-    wrapper: object,
-    adopt_headers: Callable[[object], _Prepared],
+    wrapper_ref: _ResponsesWrapperRef,
     explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None",
 ) -> AsyncGenerator[object, None]:
     """Hands a same-group retry's stream to the client through the wrapper, with the retry's headers, and
@@ -2063,12 +2088,15 @@ async def _responses_yield_retried(
         inner_attempt.committed_budget = budget
         inner_attempt.explain_failure = explain_failure
 
-    served_as: Final = _prepare_fallback_hidden_params(wrapper)[1].get("x-litellm-model-group")
+    served_as: Final = _prepare_fallback_hidden_params(wrapper_ref())[1].get("x-litellm-model-group")
 
     def follow_source() -> _Prepared:
-        prepared: Final = adopt_headers(response)
+        prepared: Final = _adopt_responses_fallback_headers(wrapper_ref, response)
         if served_as is not None:
             _ = prepared[1].setdefault("x-litellm-model-group", served_as)
+        wrapper: Final = wrapper_ref()
+        if wrapper is None:
+            return prepared
         newest: Final = prepared[1].get("x-litellm-attempted-retries")
         _ = add_retry_headers_to_response(
             response=wrapper,
@@ -2101,8 +2129,8 @@ async def _responses_yield_retried(
 async def _responses_fallback_attempt(
     attempt: StreamAttempt,
     e: MidStreamFallbackError,
-    source_iterator: "BaseResponsesAPIStreamingIterator",
-    adopt_headers: Callable[[object], _Prepared],
+    source_iterator: BaseResponsesAPIStreamingIterator,
+    wrapper_ref: _ResponsesWrapperRef,
     held: tuple[object, ...],
     output_started: bool,
 ) -> AsyncGenerator[object, None]:
@@ -2124,7 +2152,7 @@ async def _responses_fallback_attempt(
         hop: Final = getattr(fallback_response, "attempt", None)
         if output_started and isinstance(hop, StreamAttempt):
             hop.explain_failure = None
-        prepared: Final = adopt_headers(fallback_response)
+        prepared: Final = _adopt_responses_fallback_headers(wrapper_ref, fallback_response)
         if hasattr(fallback_response, "__aiter__"):
             spliced: Final = cast(  # cast-ok: the fallback's events
                 "AsyncIterator[object]",

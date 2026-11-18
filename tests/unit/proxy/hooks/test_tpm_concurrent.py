@@ -735,7 +735,28 @@ async def test_anthropic_messages_usage_reconciles_split_project_quota(rate_limi
         handler,
         cache,
         "proj-anthropic",
-        {"usage": {"input_tokens": 100, "output_tokens": 25, "cache_read_input_tokens": 30}},
+        {
+            "usage": {
+                "input_tokens": 40,
+                "output_tokens": 25,
+                "cache_creation_input_tokens": 60,
+                "cache_read_input_tokens": 900,
+            }
+        },
+    )
+
+    assert settled == (100, 25), "uncached input plus cache writes, with cache reads left out"
+
+
+@pytest.mark.asyncio
+async def test_usage_dict_with_prompt_tokens_keeps_cache_reads_inside_the_prompt_count(rate_limiter):
+    handler, cache = rate_limiter
+
+    _, settled = await _settle_project_io(
+        handler,
+        cache,
+        "proj-prompt-tokens",
+        {"usage": {"prompt_tokens": 100, "completion_tokens": 25, "cache_read_input_tokens": 30}},
     )
 
     assert settled == (70, 25)
