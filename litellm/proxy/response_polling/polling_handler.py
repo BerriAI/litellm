@@ -299,12 +299,30 @@ class ResponsePollingHandler:
             )
         except ResponseError as script_error:
             verbose_proxy_logger.debug(
-                "Redis did not run the polling write script, writing with GETRANGE and SET: %s", script_error
+                "Redis did not run the polling write script, writing with GETRANGE and SET XX GET: %s", script_error
             )
         if await _stored_status_prefix(redis_cache, cache_key) in ("", _CANCELLED_PREFIX):
             return 0
-        await redis_cache.async_set_cache(cache_key, json.dumps({"status": state["status"], **state}), ttl=self.ttl)
-        return _WRITTEN
+        return await self._replace_and_restore_a_cancel(redis_cache, cache_key, state)
+
+    async def _replace_and_restore_a_cancel(
+        self, redis_cache: RedisCache, cache_key: str, state: Mapping[str, object]
+    ) -> int:
+        ttl: Final = redis_cache.get_ttl(ttl=self.ttl)
+        try:
+            previous: Final = await redis_cache.async_set_existing_returning_previous(
+                cache_key, _encoded_state(state), ttl
+            )
+        except ResponseError as set_get_error:
+            verbose_proxy_logger.debug("Redis did not take SET with GET, writing with a plain SET: %s", set_get_error)
+            await redis_cache.async_set_cache(cache_key, json.dumps({"status": state["status"], **state}), ttl=ttl)
+            return _WRITTEN
+        if previous is None:
+            return 0
+        if not previous.startswith(_CANCELLED_PREFIX):
+            return _WRITTEN
+        await redis_cache.async_set_existing_returning_previous(cache_key, previous, ttl)
+        return 0
 
     @with_service_target(_RESPONSE_POLLING_TARGET)
     async def is_cancelled_or_gone(self, polling_id: str) -> bool:

@@ -99,6 +99,30 @@ async def test_async_getrange_reads_a_prefix_of_what_was_set_under_the_namespace
     await client.aclose()
 
 
+@pytest.mark.parametrize("decode_responses", [False, True])
+@pytest.mark.asyncio
+async def test_async_set_existing_returning_previous_replaces_only_a_key_that_exists(
+    decode_responses, monkeypatch, redis_no_ping
+):
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="litellm")
+    client: Final = FakeRedis(server=FakeServer(), decode_responses=decode_responses)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache("polling:1", "first", ttl=600)
+
+        assert await redis_cache.async_set_existing_returning_previous("polling:1", "second", 30) == '"first"'
+        assert await redis_cache.async_set_existing_returning_previous("polling:never-set", "second", 30) is None
+        assert await redis_cache.async_getrange("polling:1", 0, -1) == "second"
+
+    assert 0 < await client.ttl("litellm:polling:1") <= 30
+    assert await client.exists("litellm:polling:never-set") == 0
+    await client.aclose()
+
+
 @pytest.mark.asyncio
 async def test_async_getrange_that_cuts_a_multibyte_character_does_not_raise(monkeypatch, redis_no_ping):
     from fakeredis import FakeServer

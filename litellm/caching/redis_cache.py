@@ -89,6 +89,10 @@ class _AsyncRedisCommands(Protocol):
 
     def getrange(self, key: str, start: int, end: int) -> Awaitable[object]: ...
 
+    def set(
+        self, name: str, value: str | bytes, *, ex: int | None = None, xx: bool = False, get: bool = False
+    ) -> Awaitable[object]: ...
+
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
@@ -153,6 +157,7 @@ _LUA_COUNT: Final = TypeAdapter(int)
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 _GETRANGE_REPLY: Final[TypeAdapter[bytes | str]] = TypeAdapter(bytes | str)
+_SET_GET_REPLY: Final[TypeAdapter[bytes | str | None]] = TypeAdapter(bytes | str | None)
 
 
 def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
@@ -1668,6 +1673,13 @@ class RedisCache(BaseCache):
             await self._async_commands().getrange(self.check_and_fix_namespace(key=key), start, end)
         )
         return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+
+    @_redis_circuit_breaker_guard
+    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: int | None) -> str | None:
+        previous: Final = _SET_GET_REPLY.validate_python(
+            await self._async_commands().set(self.check_and_fix_namespace(key=key), value, ex=ttl, xx=True, get=True)
+        )
+        return previous.decode("utf-8", errors="replace") if isinstance(previous, bytes) else previous
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(

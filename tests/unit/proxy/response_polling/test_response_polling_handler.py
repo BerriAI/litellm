@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
-from redis.exceptions import NoPermissionError
+from redis.exceptions import NoPermissionError, ResponseError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.base_cache import BaseCache
@@ -63,6 +63,13 @@ class _RedisStandIn(BaseCache):
     async def async_getrange(self, key: str, start: int, end: int) -> str:
         return self.stored.get(key, "")[start : end + 1]
 
+    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: Optional[int]) -> Optional[str]:
+        previous: Final = self.stored.get(key)
+        if previous is not None:
+            self.stored[key] = value
+            self.ttls[key] = ttl
+        return previous
+
     def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
         async def write_unless_cancelled(keys: Sequence[str], args: Sequence[object]) -> int:
             if keys[0] not in self.stored or self.stored[keys[0]].startswith(args[2]):
@@ -80,6 +87,21 @@ class _ScriptRefusingRedisStandIn(_RedisStandIn):
             raise NoPermissionError("this user has no permissions to run the 'evalsha' command")
 
         return refused
+
+
+class _SetGetRefusingRedisStandIn(_ScriptRefusingRedisStandIn):
+    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: Optional[int]) -> NoReturn:
+        raise ResponseError("syntax error")
+
+
+class _CancelledRightAfterTheStatusCheckRedisStandIn(_ScriptRefusingRedisStandIn):
+    async def async_getrange(self, key: str, start: int, end: int) -> str:
+        prefix: Final = await super().async_getrange(key, start, end)
+        self.stored[key] = json.dumps(json.dumps(_CANCELLED_ELSEWHERE))
+        return prefix
+
+
+_CANCELLED_ELSEWHERE: Final = {"status": "cancelled", "id": "litellm_poll_test", "object": "response", "output": []}
 
 
 class _UnreachableRedisStandIn(_RedisStandIn):
@@ -645,7 +667,7 @@ class TestResponsePollingHandler:
         assert await handler.is_cancelled_or_gone("litellm_poll_never_created") is True
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("redis_type", (_RedisStandIn, _ScriptRefusingRedisStandIn))
+    @pytest.mark.parametrize("redis_type", (_RedisStandIn, _ScriptRefusingRedisStandIn, _SetGetRefusingRedisStandIn))
     async def test_a_cancel_sticks_whether_or_not_redis_runs_scripts(self, redis_type: type[_RedisStandIn]) -> None:
         redis_cache: Final = redis_type.holding(
             {"id": "litellm_poll_test", "object": "response", "status": "in_progress", "output": []}
@@ -664,6 +686,21 @@ class TestResponsePollingHandler:
         }
         assert await handler.is_cancelled_or_gone("litellm_poll_test") is True
         assert redis_cache.ttls == {ResponsePollingHandler.get_cache_key("litellm_poll_test"): 120}
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_landing_between_the_status_check_and_the_write_stays_cancelled_without_scripts(
+        self,
+    ) -> None:
+        handler: Final = ResponsePollingHandler(
+            redis_cache=_CancelledRightAfterTheStatusCheckRedisStandIn.holding(
+                {"status": "in_progress", "id": "litellm_poll_test", "object": "response", "output": []}
+            )
+        )
+
+        await handler.update_state(polling_id="litellm_poll_test", status="completed", output=[{"id": "item_1"}])
+
+        assert await handler.get_state("litellm_poll_test") == _CANCELLED_ELSEWHERE
+        assert await handler.is_cancelled_or_gone("litellm_poll_test") is True
 
     @pytest.mark.asyncio
     async def test_a_failed_state_write_keeps_the_stored_state_and_does_not_raise(self) -> None:
