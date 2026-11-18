@@ -3835,3 +3835,40 @@ async def test_a_picked_code_redeems_only_for_the_resource_it_was_authorized_for
     assert (redeemed.status_code, json.loads(redeemed.body).get("error")) == (
         (200, None) if error is None else (400, error)
     )
+
+
+def test_an_oauth_error_response_is_logged_with_its_code_and_description(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _oauth_error
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    response: Final = _oauth_error(400, "invalid_grant", "the refresh token was already used")
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_grant",
+        "error_description": "the refresh token was already used",
+    }
+    assert "400 invalid_grant: the refresh token was already used" in caplog.text
+
+
+@pytest.mark.parametrize("outcome", ["first", "unavailable"])
+def test_a_replay_error_is_not_logged_when_no_replay_happened(
+    caplog: pytest.LogCaptureFixture, outcome: str
+) -> None:
+    import logging
+
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _claim_refusal
+
+    def replayed() -> None:
+        raise AssertionError("the replay body must not be built")
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    refusal: Final = _claim_refusal(outcome, replayed)
+    if outcome == "first":
+        assert refusal is None
+    else:
+        assert refusal.status_code == 503
+    assert "invalid_grant" not in caplog.text
