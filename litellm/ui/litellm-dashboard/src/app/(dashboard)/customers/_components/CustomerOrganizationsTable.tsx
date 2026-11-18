@@ -52,7 +52,7 @@ export default function CustomerOrganizationsTable({
               <TableHead
                 key={id}
                 aria-sort={active ? direction : "none"}
-                className={cn("px-4", id === "spend" && "min-w-80", id === "status" && "text-right")}
+                className={cn("px-4", id === "spend" && "min-w-60", id === "status" && "text-right")}
               >
                 <Button
                   variant="ghost"
@@ -105,7 +105,8 @@ export default function CustomerOrganizationsTable({
                     </span>
                     <div className="min-w-0">
                       <a
-                        className="font-medium hover:text-primary hover:underline"
+                        className="block max-w-52 truncate font-medium hover:text-primary hover:underline"
+                        title={label}
                         href={usageHref(uiHref("customers/usage"), {
                           org: organization.customer_org_id,
                           from: startDate,
@@ -114,7 +115,14 @@ export default function CustomerOrganizationsTable({
                       >
                         {label}
                       </a>
-                      <p className="font-mono text-[11px] text-muted-foreground">{organization.customer_org_id}</p>
+                      {label !== organization.customer_org_id && (
+                        <p
+                          className="max-w-52 truncate font-mono text-[11px] text-muted-foreground"
+                          title={organization.customer_org_id}
+                        >
+                          {organization.customer_org_id}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </TableCell>

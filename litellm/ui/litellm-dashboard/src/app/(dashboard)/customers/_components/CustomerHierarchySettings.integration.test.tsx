@@ -1,5 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { $api } from "@/lib/http/api";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import {
   act,
@@ -76,6 +77,10 @@ describe("CustomerHierarchySettings", () => {
   beforeEach(() => {
     registerBaseUrlGetter(() => "http://localhost");
     testQueryClient.clear();
+    testQueryClient.setQueryData(
+      $api.queryOptions("get", "/management/v1/customer_organization_budget_groups", {}).queryKey,
+      { default_budgets: [{ budget_id: "shared", name: "Growth" }] },
+    );
     fetchMock.mockReset();
     onSaved.mockReset();
     onDeleted.mockReset();
@@ -97,29 +102,175 @@ describe("CustomerHierarchySettings", () => {
     );
     expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("Example organization");
     expect(screen.getByRole("textbox", { name: "Identifier" })).toHaveAttribute("readonly");
-    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(100);
+    expect(screen.getByRole("combobox", { name: "Customer budget (USD)" })).toHaveValue("100");
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
-  it("should preserve other limits when saving a zero organization spend limit", async () => {
+  it.each([
+    ["1mo", false, "$0"],
+    ["7d", false, "$0"],
+    [null, false, "$0"],
+    ["1mo", true, "$0"],
+    ["7d", true, "$0"],
+    [null, true, "$0"],
+    ["7d", false, ""],
+    ["7d", true, ""],
+    ["7d", false, "$0", null],
+    ["7d", true, "", null],
+  ] as const)("keeps reset %s via group %s with %s", async (budget_duration, viaGroup, amount, max_budget = 100) => {
     const user = userEvent.setup();
-    fetchMock.mockResolvedValue(json(organization));
+    const custom = {
+      ...organization,
+      budget_id: "owned",
+      budget: {
+        ...organization.budget,
+        max_budget,
+        budget_duration,
+        budget_limits: [{ max_budget: 1000, budget_duration: "12mo" }],
+      },
+    };
+    fetchMock.mockResolvedValue(json(custom));
     render(
       <CustomerHierarchySettings
-        entity={{ kind: "organization", record: organization }}
-        organization={organization}
+        entity={{ kind: "organization", record: custom }}
+        organization={custom}
         onSaved={onSaved}
         onDeleted={onDeleted}
       />,
     );
-    act(() =>
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } }),
-    );
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const save = screen.getByRole("button", { name: "Save changes" });
+    const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
+    await user.clear(budget);
+    if (viaGroup) {
+      await user.click(budget);
+      await user.click(screen.getByRole("option", { name: "Growth", exact: true }));
+      await user.clear(budget);
+    }
+    if (amount) await user.type(budget, amount);
+    await user.click(save);
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
     expect(lastRequest().method).toBe("PATCH");
     expect(new URL(lastRequest().url).pathname).toBe("/management/v1/customer_organizations/org-1");
-    expect(await lastRequest().clone().json()).toEqual({ budget: { ...organization.budget, max_budget: 0 } });
+    expect(await lastRequest().clone().json()).toEqual({
+      alias: "Renamed",
+      ...(amount || max_budget != null ? { budget: { ...custom.budget, max_budget: amount ? 0 : null } } : {}),
+    });
+  });
+
+  it.each(["$175", "", "Growth"])("changes a group selection to %s", async (amount) => {
+    const user = userEvent.setup();
+    const grouped = { ...organization, budget_id: "shared" };
+    fetchMock.mockImplementation(async () => json(grouped));
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "organization", record: grouped }}
+        organization={grouped}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    const save = screen.getByRole("button", { name: "Save changes" });
+    const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+    expect(budget).toHaveValue("Growth");
+    await user.clear(budget);
+    if (amount) await user.type(budget, amount === "Growth" ? "$175" : amount);
+    if (amount === "Growth") {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "300" } });
+      await user.clear(budget);
+      await user.click(screen.getByRole("option", { name: "Growth", exact: true }));
+      expect(save).toBeDisabled();
+      fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
+    }
+    await user.click(save);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toEqual(
+      amount === "Growth"
+        ? { alias: "Renamed" }
+        : { budget: amount ? { ...organization.budget, max_budget: 175, budget_limits: null } : null },
+    );
+  });
+
+  it.each([
+    [true, false],
+    [true, true],
+    [false, false],
+    [false, true],
+  ] as const)("protects shared=%s budget while catalog unavailable=%s", async (shared, unavailable) => {
+    testQueryClient.clear();
+    const grouped = { ...organization, budget_id: shared ? "shared" : "owned", budget_is_shared: shared };
+    fetchMock.mockImplementation(async (request) => {
+      if (request instanceof Request && request.url.endsWith("customer_organization_budget_groups"))
+        return unavailable ? json({ detail: "Unavailable" }, 503) : new Promise<Response>(() => {});
+      return json(grouped);
+    });
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "organization", record: grouped }}
+        organization={grouped}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+    if (unavailable) await screen.findByRole("button", { name: "Retry" });
+    if (shared) {
+      expect(budget).toBeDisabled();
+      expect(screen.queryByRole("spinbutton", { name: "Tokens per minute" })).not.toBeInTheDocument();
+    } else {
+      expect(budget).toBeEnabled();
+      await userEvent.clear(budget);
+      await userEvent.type(budget, "$40");
+      await userEvent.keyboard("{Escape}");
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "300" } });
+    }
+    fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toEqual({
+      alias: "Renamed",
+      ...(!shared ? { budget: { ...organization.budget, max_budget: 40, tpm_limit: 300 } } : {}),
+    });
+  });
+
+  it.each([false, true])("toggles custom assignment from enabled %s", async (enabled) => {
+    const custom = {
+      ...organization,
+      budget_id: enabled ? "owned" : null,
+      budget: enabled ? organization.budget : null,
+    };
+    fetchMock.mockResolvedValue(json(custom));
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "organization", record: custom }}
+        organization={custom}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Set a budget and limits" }));
+    expect(screen.getByRole("combobox", { name: "Customer budget (USD)" })).toHaveValue("");
+    if (!enabled) {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "10" } });
+      const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+      await userEvent.type(budget, "$40");
+      await userEvent.clear(budget);
+      await userEvent.keyboard("{Escape}");
+    }
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toEqual({
+      budget: enabled
+        ? null
+        : {
+            max_budget: null,
+            soft_budget: null,
+            tpm_limit: null,
+            rpm_limit: 10,
+            budget_duration: null,
+            allowed_models: null,
+          },
+    });
   });
 
   it("should show friendly template names while sending the selected template identifier", async () => {
@@ -203,14 +354,7 @@ describe("CustomerHierarchySettings", () => {
       />,
     );
     expect(
-      screen.getByText(
-        "Blank limits inherit from the selected budget template. Without a template, blank limits add no restriction. Zero is a valid limit.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "An active override changes only the fields you set. Other limits continue to come from the selected budget template.",
-      ),
+      screen.getByText("Blank limits inherit from the budget template. Without a template, blank means no limit."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Leave a limit blank for no limit. Zero is a valid limit.")).not.toBeInTheDocument();
   });

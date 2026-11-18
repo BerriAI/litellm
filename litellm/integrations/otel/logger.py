@@ -7,7 +7,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
@@ -189,8 +189,16 @@ def _llm_call_parent_context(call: LLMCallEvent) -> Context:
     return resolve_internal_call_span_context() if call.purpose is not None else resolve_request_span_context()
 
 
+def _llm_attempt_key(call: LLMCallEvent) -> str | None:
+    if call.call_id is None or call.upstream_start_seconds is None:
+        return call.call_id
+    return f"{call.call_id}:{call.upstream_start_seconds}"
+
+
 class OpenTelemetryV2(CustomLogger):
     """The ``CustomLogger`` for OpenTelemetry."""
+
+    logs_every_failed_attempt: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -325,7 +333,7 @@ class OpenTelemetryV2(CustomLogger):
         # call id; keep the first span so its start time is the true one.
         if call_id in self._open_llm_calls:
             return
-        start_time_ns: Final = to_ns(datetime.now())
+        start_time_ns: Final = to_ns(call.upstream_start_seconds) or to_ns(datetime.now())
         # Parent to the request's anchored root span (stable across the request),
         # falling back to ambient on the SDK path. Open the span live only when
         # that resolves to a recordable parent; otherwise defer to the close
@@ -419,6 +427,14 @@ class OpenTelemetryV2(CustomLogger):
             return
         self._close_llm_call(kwargs, start_time, end_time)
         self._record_failure_metrics(kwargs, start_time, end_time)
+
+    async def async_log_failed_attempt(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        self._close_llm_call(kwargs, start_time, end_time)
 
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
         """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
@@ -582,7 +598,7 @@ class OpenTelemetryV2(CustomLogger):
         end_time: datetime | float | None,
     ) -> Span | None:
         payload: Final = call.payload
-        call_id: Final = call.call_id
+        call_id: Final = _llm_attempt_key(call)
         if payload is None:
             if carrier is not None and carrier.span is not None:
                 # Opened at the boundary but the payload never materialized — end
@@ -638,6 +654,7 @@ class OpenTelemetryV2(CustomLogger):
                 end_time_ns=end_time_ns,
                 tracer=route.tracer,
                 links=_request_trace_links(parent_ctx) if route.detached else None,
+                attempt_key=call_id,
             )
         finally:
             self._tenant_tracers.release(route.provider)

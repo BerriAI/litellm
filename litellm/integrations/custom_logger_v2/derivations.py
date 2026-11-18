@@ -443,13 +443,26 @@ def _socket_session(args: HookArgs) -> UsageRecord | None:
     return usage_record(socket_session_usage(mapping(args.request) or {}, args.result))
 
 
+def _response_usage(result: object) -> object:
+    reported: Final = member(result, "usage")
+    if member(reported, "prompt_tokens") is not None or None in (
+        member(reported, "input_tokens"),
+        member(reported, "output_tokens"),
+    ):
+        return reported
+    from litellm.cost_calculator import get_usage_object
+
+    converted: Final = get_usage_object(result)
+    return reported if converted is None else converted
+
+
 def usage(args: HookArgs) -> Usage | None:
     request: Final = args.request
     streamed: Final = member(request, "async_complete_streaming_response")
     return coerce_record(
         Usage,
         {
-            "response": usage_record(member(args.result, "usage")),
+            "response": usage_record(_response_usage(args.result)),
             "streamed": usage_record(member(streamed, "usage")),
             "combined": usage_record(member(request, "combined_usage_object")),
             "upstream": usage_record(member(request, "_litellm_upstream_reported_usage")),
