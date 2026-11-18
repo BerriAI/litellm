@@ -85,11 +85,9 @@ def test_completion_cost(model):
     )
 
 
-def test_large_3_alias_is_not_retargeted():
-    info = litellm.get_model_info("mistral/mistral-large-latest")
-    assert info["input_cost_per_token"] == 5e-07
-    assert info["max_input_tokens"] == 262144
-    assert not info["supports_reasoning"]
+def test_latest_alias_matches_large_4():
+    main: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.json").read_text())
+    assert main["mistral/mistral-large-latest"] == main[MODELS[0]]
 
 
 @pytest.mark.parametrize("model", MODELS)
