@@ -379,6 +379,40 @@ def test_subtitles_are_built_from_scribes_word_timings(
     assert "-->" in response.text
 
 
+def test_subtitles_start_a_new_cue_when_the_speaker_changes(zoom_ai_env: None, respx_mock: respx.MockRouter) -> None:
+    segments: Final = [
+        {
+            "speaker": "Speaker 1",
+            "text": "so what do you",
+            "words": [
+                {"word": "so", "start": 0.0, "end": 0.2},
+                {"word": "what", "start": 0.2, "end": 0.4},
+                {"word": "do", "start": 0.4, "end": 0.5},
+                {"word": "you", "start": 0.5, "end": 0.7},
+            ],
+        },
+        {
+            "speaker": "Speaker 2",
+            "text": "think about it",
+            "words": [
+                {"word": "think", "start": 0.8, "end": 1.0},
+                {"word": "about", "start": 1.0, "end": 1.2},
+                {"word": "it", "start": 1.2, "end": 1.4},
+            ],
+        },
+    ]
+    respx_mock.post(ZOOM_AI_FAST_URL).respond(
+        json={**SCRIBE_RESPONSE, "result": {"text_display": "so what do you think about it", "segments": segments}}
+    )
+
+    response: Final = litellm.transcription(
+        model="zoom_ai/zoom-scribe-en", file=AUDIO, response_format="srt", diarization=True
+    )
+
+    cues: Final = [cue.splitlines()[-1] for cue in response.text.strip().split("\n\n")]
+    assert cues == ["so what do you", "think about it"]
+
+
 def test_text_polishing_is_requested_in_outputs_and_returned_beside_the_transcript(
     zoom_ai_env: None, respx_mock: respx.MockRouter
 ) -> None:

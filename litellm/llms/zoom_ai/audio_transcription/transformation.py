@@ -104,6 +104,7 @@ class _Word(TypedDict):
     word: ReadOnly[str]
     start: ReadOnly[float]
     end: ReadOnly[float]
+    speaker: NotRequired[ReadOnly[str]]
 
 
 class _OptionalFields(TypedDict, total=False):
@@ -248,13 +249,23 @@ def _segment(index: int, segment: _ScribeSegment) -> _Segment:
     return labelled
 
 
+def _word(word: _ScribeWord, speaker: str) -> _Word:
+    """A word carries its segment's speaker, so subtitles built from the words split cues on speaker changes."""
+    timing: Final[_Word] = {"word": word.word, "start": word.start, "end": word.end}
+    if not speaker:
+        return timing
+    labelled: Final[_Word] = {**timing, "speaker": speaker}
+    return labelled
+
+
 def _words(segments: tuple[_ScribeSegment, ...]) -> list[_Word]:  # mutable-ok: OpenAI response shape
-    return [_Word(word=word.word, start=word.start, end=word.end) for word in _flattened_words(segments)]
+    return [_word(word, speaker) for word, speaker in _flattened_words(segments)]
 
 
-def _flattened_words(segments: tuple[_ScribeSegment, ...]) -> Iterator[_ScribeWord]:
+def _flattened_words(segments: tuple[_ScribeSegment, ...]) -> Iterator[tuple[_ScribeWord, str]]:
     for segment in segments:
-        yield from segment.words
+        for word in segment.words:
+            yield word, segment.speaker
 
 
 def _optional_fields(scribe: _ScribeResponse) -> _OptionalFields:
