@@ -24,6 +24,8 @@ from litellm.proxy.mcp_server.semantic_tool_filter import (
 )
 
 if TYPE_CHECKING:
+    from openai.types.responses.function_tool_param import FunctionToolParam
+
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server.semantic_tool_filter import (
@@ -49,6 +51,15 @@ def _truncate_csv_at_tool_name_boundary(tool_names_csv: str, max_length: int) ->
         return ""
 
     return head.rsplit(",", 1)[0]
+
+
+class _OpenAIToolLoader(Protocol):
+    def __call__(
+        self,
+        *,
+        user_api_key_auth: "UserAPIKeyAuth | None",
+        mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]],
+    ) -> Awaitable[tuple[Sequence["FunctionToolParam"], Mapping[str, str]]]: ...
 
 
 class _PydanticTool(Protocol):
@@ -90,15 +101,22 @@ class SemanticToolFilterHook(CustomLogger):
     3. Returns only the top-k most relevant tools to the LLM
     """
 
-    def __init__(self, semantic_filter: "SemanticMCPToolFilter"):
+    def __init__(
+        self,
+        semantic_filter: "SemanticMCPToolFilter",
+        load_openai_tools: _OpenAIToolLoader | None = None,
+    ):
         """
         Initialize the hook.
 
         Args:
             semantic_filter: SemanticMCPToolFilter instance
+            load_openai_tools: loads the MCP tools behind gateway references, defaults to
+                LiteLLM_Proxy_MCP_Handler.process_mcp_tools_to_openai_format
         """
         super().__init__()
         self.filter = semantic_filter
+        self._load_openai_tools = load_openai_tools
 
         verbose_proxy_logger.debug(
             "Initialized SemanticToolFilterHook with filter: enabled=%s, top_k=%s",
@@ -139,12 +157,12 @@ class SemanticToolFilterHook(CustomLogger):
         if not mcp_tools:
             return []
 
-        # Use single combined method instead of 3 separate calls
-        # This already handles: fetch -> filter by allowed_tools -> deduplicate -> transform
-        (
-            openai_tools,
-            _,
-        ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_to_openai_format(
+        load_openai_tools: Final[_OpenAIToolLoader] = (
+            LiteLLM_Proxy_MCP_Handler.process_mcp_tools_to_openai_format
+            if self._load_openai_tools is None
+            else self._load_openai_tools
+        )
+        openai_tools, _ = await load_openai_tools(
             user_api_key_auth=user_api_key_dict, mcp_tools_with_litellm_proxy=mcp_tools
         )
 
