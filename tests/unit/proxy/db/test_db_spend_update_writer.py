@@ -4170,6 +4170,24 @@ def _responses_router() -> litellm.Router:
                 "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test", "use_chat_completions_api": True},
                 "model_info": {"id": "dep-forced-bridge"},
             },
+            {
+                "model_name": "native-router",
+                "litellm_params": {
+                    "model": "azure_ai/model_router/model-router",
+                    "api_base": "https://res.services.ai.azure.com/api/projects/proj/openai/v1",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "dep-native-router"},
+            },
+            {
+                "model_name": "azure-openai-router",
+                "litellm_params": {
+                    "model": "azure/model-router",
+                    "api_base": "https://res.services.ai.azure.com/openai/v1",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "dep-azure-openai-router"},
+            },
         ]
     )
 
@@ -4185,6 +4203,8 @@ def _responses_router() -> litellm.Router:
         ("aresponses", "dep-native", False),
         ("responses", "dep-native", False),
         ("acompletion", "dep-bridged", False),
+        ("aresponses", "dep-native-router", True),
+        ("aresponses", "dep-azure-openai-router", False),
     ],
 )
 async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bridge_reads_back(
