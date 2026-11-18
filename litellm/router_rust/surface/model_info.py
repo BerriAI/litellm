@@ -150,8 +150,8 @@ def _configured_deployment_id(deployment: Mapping[str, object]) -> str | None:
     return deployment_id if isinstance(deployment_id, str) else None
 
 
-def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
-    """``_operator_max_input_tokens``: the deployment's own limit, skipping one a saved
+def operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
+    """``operator_max_input_tokens``: the deployment's own limit, skipping one a saved
     ``/model/info`` response copied from the cost map."""
     model_info: Final = _configured_model_info(deployment)
     catalog_key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
@@ -795,7 +795,7 @@ class HostModelInfo:
         Returns an empty tuple for wildcard-expanded or unknown names.
         """
         return tuple(
-            _operator_max_input_tokens(deployment) for deployment in self._routable_deployments(model_name, team_id)
+            operator_max_input_tokens(deployment) for deployment in self._routable_deployments(model_name, team_id)
         )
 
     def _group_usage_counters(self, model_group: str) -> tuple[tuple[UsageCounter, ...], ...] | None:

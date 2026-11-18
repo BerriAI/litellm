@@ -4434,9 +4434,7 @@ async def test_an_async_pre_call_check_reads_embedding_media_off_the_event_loop(
     router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2", window=20)
     caption_and_images: Final = ["a red square", *[_EMBEDDING_IMAGE_INPUT] * 400]
 
-    deployment, took, lags = await timed_with_loop_lags(
-        lambda: router.select("embedder", {}, input=caption_and_images)
-    )
+    deployment, took, lags = await timed_with_loop_lags(lambda: router.select("embedder", {}, input=caption_and_images))
 
     assert deployment["litellm_params"]["model"] == "vertex_ai/gemini-embedding-2"
     assert_loop_stayed_free(took, lags)
@@ -8090,9 +8088,9 @@ async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_a
         chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/files").mock(
             return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
         )
-        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
-            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
-        )
+        chat_completions: Final = respx_mock.post(
+            host="chat-sku.openai.azure.com", path__regex=r"/chat/completions"
+        ).mock(return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION))
         with pytest.raises(raised, match="upload refused"):
             await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
         await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
@@ -19611,17 +19609,40 @@ def _kept_ids(model_list: list[dict[str, object]], messages: list[dict[str, obje
     ]
 
 
+def _cost_map_window(model: str, max_input_tokens: int) -> str:
+    provider, key = model.split("/", 1)
+    litellm.register_model(
+        {key: {"litellm_provider": provider, "mode": "chat", "max_input_tokens": max_input_tokens}},
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    return model
+
+
+def _cost_map_deployment(model: str, max_input_tokens: int, id: str = "only") -> dict[str, object]:
+    return {
+        "model_name": "m",
+        "litellm_params": {
+            "model": _cost_map_window(f"{model}-{max_input_tokens}", max_input_tokens),
+            "api_key": "my-fake-key",
+        },
+        "model_info": {"id": id},
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    "model", ["openai/my-fake-model", "anthropic/my-fake-claude-model", "deepseek/my-fake-deepseek-model"]
+    "model", ["anthropic/my-fake-claude-model", "deepseek/my-fake-deepseek-model", "cohere_chat/my-fake-command-model"]
 )
 def test_pre_call_checks_leaves_a_stand_in_overcount_within_the_margin_to_the_provider(model: str):
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
     smallest_window_within_margin: Final = -(-tokens // STAND_IN_OVERCOUNT_MARGIN)
 
-    assert _kept_ids(_single_deployment(model, tokens - 1), _RUSSIAN_PROMPT) == ["only"]
-    assert _kept_ids(_single_deployment(model, smallest_window_within_margin), _RUSSIAN_PROMPT) == ["only"]
+    assert _kept_ids([_cost_map_deployment(model, tokens - 1)], _RUSSIAN_PROMPT) == ["only"]
+    assert _kept_ids([_cost_map_deployment(model, smallest_window_within_margin)], _RUSSIAN_PROMPT) == ["only"]
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_pre_call_checks_refuses_a_stand_in_count_past_the_margin():
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
     largest_window_past_margin: Final = (tokens - 1) // STAND_IN_OVERCOUNT_MARGIN
@@ -19629,35 +19650,52 @@ def test_pre_call_checks_refuses_a_stand_in_count_past_the_margin():
     with pytest.raises(
         litellm.ContextWindowExceededError, match=f"Max Input Tokens={largest_window_past_margin}, Got={tokens}"
     ):
-        _kept_ids(_single_deployment("openai/my-fake-model", largest_window_past_margin), _RUSSIAN_PROMPT)
+        _kept_ids(
+            [_cost_map_deployment("deepseek/my-fake-deepseek-model", largest_window_past_margin)], _RUSSIAN_PROMPT
+        )
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_pre_call_checks_steers_off_a_stand_in_overcount_when_another_deployment_fits():
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
     model_list: Final = [
-        {
-            "model_name": "m",
-            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
-            "model_info": {"id": "small", "max_input_tokens": tokens - 1},
-        },
-        {
-            "model_name": "m",
-            "litellm_params": {"model": "openai/my-other-fake-model", "api_key": "my-fake-key"},
-            "model_info": {"id": "large", "max_input_tokens": tokens},
-        },
+        _cost_map_deployment("deepseek/my-fake-deepseek-model", tokens - 1, id="small"),
+        _cost_map_deployment("deepseek/my-fake-deepseek-model", tokens, id="large"),
     ]
 
     assert _kept_ids(model_list, _RUSSIAN_PROMPT) == ["large"]
 
 
-@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "deepseek/deepseek-v4-pro"])
-def test_pre_call_checks_enforce_an_operator_cap_below_the_cost_map_window_exactly(model: str):
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "deployed_model",
+    [
+        pytest.param(lambda: "claude-sonnet-5-5", id="below-the-cost-map-window"),
+        pytest.param(lambda: _cost_map_window("deepseek/my-small-deepseek-model", 1), id="above-the-cost-map-window"),
+        pytest.param(lambda: "deepseek/my-unmapped-deepseek-model", id="not-in-the-cost-map"),
+    ],
+)
+def test_pre_call_checks_enforce_an_operator_max_input_tokens_exactly(deployed_model: Callable[[], str]):
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
-    catalog_window: Final = litellm.get_model_info(model)["max_input_tokens"]
-    assert catalog_window is not None and catalog_window > tokens
 
     with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={tokens - 1}, Got={tokens}"):
-        _kept_ids(_single_deployment(model, tokens - 1), _RUSSIAN_PROMPT)
+        _kept_ids(_single_deployment(deployed_model(), tokens - 1), _RUSSIAN_PROMPT)
+
+
+def test_pre_call_checks_keep_the_margin_for_a_cost_map_window_a_saved_model_info_echoes():
+    model: Final = "mistral/mistral-small"
+    echoed: Final = litellm.get_model_info(model)
+    window: Final = echoed["max_input_tokens"]
+    assert window is not None
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": model, "api_key": "my-fake-key"},
+            "model_info": {**echoed, "id": "only"},
+        }
+    ]
+
+    assert _kept_ids(model_list, [{"role": "user", "content": _text_of_stand_in_tokens(window * 3 // 2)}]) == ["only"]
 
 
 def _text_of_stand_in_tokens(tokens: int) -> str:
@@ -19709,8 +19747,9 @@ def test_pre_call_checks_count_each_openai_model_with_its_own_pdf_framing():
     assert sorted(_kept_ids(model_list, prompt)) == sorted(own_tokens)
 
 
-def _uncertain_overflow_window() -> int:
-    return _stand_in_tokens(_RUSSIAN_PROMPT) - 1
+def _uncertain_overflow_model() -> str:
+    window: Final = _stand_in_tokens(_RUSSIAN_PROMPT) - 1
+    return _cost_map_window(f"deepseek/my-fake-deepseek-model-{window}", window)
 
 
 def _context_window_fallback_router(**router_settings: object) -> Router:
@@ -19718,8 +19757,12 @@ def _context_window_fallback_router(**router_settings: object) -> Router:
         model_list=[
             {
                 "model_name": "m",
-                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "mock_response": "m"},
-                "model_info": {"id": "m", "max_input_tokens": _uncertain_overflow_window()},
+                "litellm_params": {
+                    "model": _uncertain_overflow_model(),
+                    "api_key": "my-fake-key",
+                    "mock_response": "m",
+                },
+                "model_info": {"id": "m"},
             },
             {
                 "model_name": "fallback",
@@ -19764,6 +19807,7 @@ def _context_window_fallback_router(**router_settings: object) -> Router:
         "no_fallback",
     ],
 )
+@pytest.mark.usefixtures("local_model_cost_map")
 async def test_an_uncertain_stand_in_overflow_goes_to_a_context_window_fallback_that_resolves(
     router_settings: dict[str, object], request_settings: dict[str, object], answered_by: str
 ):
@@ -19774,6 +19818,7 @@ async def test_an_uncertain_stand_in_overflow_goes_to_a_context_window_fallback_
     assert response.choices[0].message.content == answered_by
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_a_sync_completion_sends_an_uncertain_stand_in_overflow_to_its_context_window_fallback():
     router: Final = _context_window_fallback_router(context_window_fallbacks=[{"m": ["fallback"]}])
 
@@ -19787,6 +19832,7 @@ def test_a_sync_completion_sends_an_uncertain_stand_in_overflow_to_its_context_w
     [[{"a": ["b"]}], [{"a": ["b"]}, {"b": ["a"]}]],
     ids=["fallback_target_has_no_chain_of_its_own", "fallback_target_falls_back_to_a_tried_group"],
 )
+@pytest.mark.usefixtures("local_model_cost_map")
 async def test_a_context_window_fallback_target_keeps_its_own_uncertain_stand_in_overflow(
     context_window_fallbacks: list[dict[str, list[str]]],
 ):
@@ -19794,10 +19840,14 @@ async def test_a_context_window_fallback_target_keeps_its_own_uncertain_stand_in
         model_list=[
             {
                 "model_name": group,
-                "litellm_params": {"model": model, "api_key": "my-fake-key", "mock_response": group},
-                "model_info": {"id": group, "max_input_tokens": _uncertain_overflow_window()},
+                "litellm_params": {
+                    "model": _uncertain_overflow_model(),
+                    "api_key": "my-fake-key",
+                    "mock_response": group,
+                },
+                "model_info": {"id": group},
             }
-            for group, model in (("a", "openai/my-fake-model"), ("b", "openai/my-other-fake-model"))
+            for group in ("a", "b")
         ],
         enable_pre_call_checks=True,
         num_retries=0,
@@ -19810,6 +19860,7 @@ async def test_a_context_window_fallback_target_keeps_its_own_uncertain_stand_in
 
 
 @pytest.mark.parametrize(("fitting_tags", "picked"), [(["paid"], "free"), (["free"], "fits")])
+@pytest.mark.usefixtures("local_model_cost_map")
 async def test_an_uncertain_stand_in_overflow_steers_only_to_a_deployment_tag_routing_can_pick(
     fitting_tags: list[str], picked: str
 ):
@@ -19817,13 +19868,17 @@ async def test_an_uncertain_stand_in_overflow_steers_only_to_a_deployment_tag_ro
         model_list=[
             {
                 "model_name": "m",
-                "litellm_params": {"model": "openai/my-other-fake-model", "api_key": "my-fake-key", "tags": fitting_tags},
+                "litellm_params": {
+                    "model": "openai/my-other-fake-model",
+                    "api_key": "my-fake-key",
+                    "tags": fitting_tags,
+                },
                 "model_info": {"id": "fits"},
             },
             {
                 "model_name": "m",
-                "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "tags": ["free"]},
-                "model_info": {"id": "free", "max_input_tokens": _uncertain_overflow_window()},
+                "litellm_params": {"model": _uncertain_overflow_model(), "api_key": "my-fake-key", "tags": ["free"]},
+                "model_info": {"id": "free"},
             },
         ],
         enable_pre_call_checks=True,
@@ -19838,6 +19893,7 @@ async def test_an_uncertain_stand_in_overflow_steers_only_to_a_deployment_tag_ro
     assert deployment["model_info"]["id"] == picked
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_an_uncertain_stand_in_overflow_is_kept_when_the_fitting_deployment_rejects_a_requested_param(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -19854,8 +19910,8 @@ def test_an_uncertain_stand_in_overflow_is_kept_when_the_fitting_deployment_reje
         },
         {
             "model_name": "m",
-            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
-            "model_info": {"id": "json", "max_input_tokens": _uncertain_overflow_window()},
+            "litellm_params": {"model": _uncertain_overflow_model(), "api_key": "my-fake-key"},
+            "model_info": {"id": "json"},
         },
     ]
     router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
