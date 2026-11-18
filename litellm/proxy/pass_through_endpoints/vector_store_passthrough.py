@@ -209,6 +209,8 @@ async def send_with_vector_store_fallbacks(
 
     outcome: Final = await execute_with_vector_store_fallbacks(plan.fallback_plan, attempt)
     if isinstance(outcome, Served):
+        # rebind-ok: HTTPX has no immutable header replacement; retain the original response
+        # so its decoded body is not decoded again using the upstream Content-Encoding.
         outcome.value.headers.update(served_headers(outcome))
         return outcome.value
     if outcome.value is not None:
