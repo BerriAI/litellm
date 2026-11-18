@@ -11,7 +11,7 @@ import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.caching.dual_cache import DualCache
 from litellm.models.budget import BudgetLimit
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
     CUSTOMER_ORG_ALIAS_HEADER,
@@ -23,6 +23,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_windows,
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
+    customer_identity_from_request,
     customer_member_id_from_headers,
     forget_customer_organization_aliases,
     get_customer_hierarchy,
@@ -618,6 +619,90 @@ def test_the_request_identity_is_read_from_both_customer_headers(
     headers: Mapping[str, object] | None, expected: CustomerRequestIdentity | None
 ) -> None:
     assert customer_identity_from_headers(headers) == expected
+
+
+@pytest.mark.parametrize(
+    "claims, expected",
+    [
+        (
+            {"customer": {"org": "jwt-org", "member": "jwt-member", "team": "jwt-team"}},
+            CustomerRequestIdentity(
+                customer_org_alias="jwt-org", customer_member_id="jwt-member", customer_team_id="jwt-team"
+            ),
+        ),
+        (
+            {"customer": {"member": "jwt-member"}},
+            CustomerRequestIdentity(
+                customer_org_alias="header-org", customer_member_id="jwt-member", customer_team_id="header-team"
+            ),
+        ),
+        (
+            {},
+            CustomerRequestIdentity(
+                customer_org_alias="header-org", customer_member_id="header-member", customer_team_id="header-team"
+            ),
+        ),
+        (
+            {"customer": {"org": None, "member": "", "team": []}},
+            CustomerRequestIdentity(
+                customer_org_alias="header-org", customer_member_id="header-member", customer_team_id="header-team"
+            ),
+        ),
+        (
+            None,
+            CustomerRequestIdentity(
+                customer_org_alias="header-org", customer_member_id="header-member", customer_team_id="header-team"
+            ),
+        ),
+    ],
+)
+def test_verified_customer_claims_override_only_the_headers_they_supply(
+    claims: Mapping[str, object] | None, expected: CustomerRequestIdentity
+) -> None:
+    settings: Final = LiteLLM_JWTAuth(
+        customer_org_alias_jwt_field="customer.org",
+        customer_member_id_jwt_field="customer.member",
+        customer_team_id_jwt_field="customer.team",
+    )
+    assert (
+        customer_identity_from_request(
+            {
+                CUSTOMER_ORG_ALIAS_HEADER: "header-org",
+                CUSTOMER_MEMBER_ID_HEADER: "header-member",
+                CUSTOMER_TEAM_ID_HEADER: "header-team",
+            },
+            claims,
+            settings,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("claims", [None, {}, {"unmapped": "customer"}])
+def test_no_customer_claim_or_header_leaves_customer_tracking_off(claims: Mapping[str, object] | None) -> None:
+    assert customer_identity_from_request(None, claims, LiteLLM_JWTAuth()) is None
+
+
+def test_issuer_normalized_customer_claims_override_global_claim_paths() -> None:
+    settings: Final = LiteLLM_JWTAuth(
+        customer_org_alias_jwt_field="global.org",
+        customer_member_id_jwt_field="global.member",
+        customer_team_id_jwt_field="global.team",
+        issuers=[JWTIssuerConfig(issuer="https://issuer.test", audience="litellm")],
+    )
+    assert customer_identity_from_request(
+        None,
+        {
+            "_litellm_jwt_issuer": "https://issuer.test",
+            "_litellm_customer_org_alias": "issuer-org",
+            "_litellm_customer_member_id": "issuer-member",
+            "_litellm_customer_team_id": "issuer-team",
+            "global": {"org": "other-org", "member": "other-member", "team": "other-team"},
+        },
+        settings,
+    ) == CustomerRequestIdentity(
+        customer_org_alias="issuer-org", customer_member_id="issuer-member", customer_team_id="issuer-team"
+    )
 
 
 @pytest.mark.asyncio

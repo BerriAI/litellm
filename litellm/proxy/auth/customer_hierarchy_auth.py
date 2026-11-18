@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import LiteLLM_JWTAuth, ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
@@ -39,6 +39,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
+from litellm.rust_bridge._native import jwt_claims
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
@@ -163,6 +164,20 @@ def customer_identity_from_headers(headers: Mapping[str, object] | None) -> Cust
     if identity.customer_member_id is None and identity.customer_org_alias is None:
         return None
     return identity
+
+
+def customer_identity_from_request(
+    headers: Mapping[str, object] | None,
+    verified_claims: Mapping[str, object] | None,
+    settings: LiteLLM_JWTAuth,
+) -> CustomerRequestIdentity | None:
+    mapped: Final = jwt_claims(dict(verified_claims), settings) if verified_claims is not None else None
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias=(mapped.customer_org_alias if mapped else None) or customer_org_alias_from_headers(headers),
+        customer_member_id=(mapped.customer_member_id if mapped else None) or customer_member_id_from_headers(headers),
+        customer_team_id=(mapped.customer_team_id if mapped else None) or customer_team_id_from_headers(headers),
+    )
+    return identity if identity.customer_member_id is not None or identity.customer_org_alias is not None else None
 
 
 def _scope(
