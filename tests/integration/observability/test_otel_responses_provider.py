@@ -3,6 +3,7 @@ import re
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -306,7 +307,7 @@ def _keys_under(span: Span, prefix: str) -> tuple[str, ...]:
 
 
 def _none_provider_keys(spans: tuple[Span, ...]) -> tuple[str, ...]:
-    return tuple(key for span in spans for key in _keys_under(span, "llm.None."))
+    return tuple(chain.from_iterable(_keys_under(span, "llm.None.") for span in spans))
 
 
 def _none_valued_attributes(span: Span) -> tuple[str, ...]:
