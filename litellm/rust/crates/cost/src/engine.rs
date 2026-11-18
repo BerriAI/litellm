@@ -4,7 +4,7 @@
 use crate::query::PriceQuery;
 use crate::receipt::{PriceOutcome, Unpriced};
 use crate::row::RowSource;
-use crate::{ocr, rerank, tokens, vector_store};
+use crate::{ocr, rerank, speech, tokens, transcription, vector_store};
 
 pub fn price(source: &impl RowSource, query: &PriceQuery) -> PriceOutcome {
     match query {
@@ -12,9 +12,9 @@ pub fn price(source: &impl RowSource, query: &PriceQuery) -> PriceOutcome {
         PriceQuery::Ocr(ocr) => ocr::price(source, ocr),
         PriceQuery::Rerank(rerank) => rerank::price(source, rerank),
         PriceQuery::VectorStoreSearch(search) => vector_store::price(source, search),
+        PriceQuery::Speech(speech) => speech::price(source, speech),
+        PriceQuery::Transcription(transcription) => transcription::price(source, transcription),
         PriceQuery::Image(_)
-        | PriceQuery::Speech(_)
-        | PriceQuery::Transcription(_)
         | PriceQuery::Search(_)
         | PriceQuery::Video(_)
         | PriceQuery::Session(_)

@@ -9,20 +9,13 @@ use serde_json::Value;
 use super::{OcrQuery, price};
 use crate::query::{Header, PriceSource};
 use crate::receipt::{PriceOutcome, Unpriced};
-use crate::testing::{TestSource, expected_sides, header, row_ref, units_row};
+use crate::testing::{TestSource, expected_sides, fixture_case, header, row_ref, units_row};
 
 const FIXTURE: &str = include_str!("../../fixtures/ocr_parity.json");
 const DEPLOYMENT: &str = "deployment";
 
 fn case(name: &str) -> Value {
-    let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
-    fixture["cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == name)
-        .unwrap_or_else(|| panic!("no fixture case {name}"))
-        .clone()
+    fixture_case(FIXTURE, name)
 }
 
 #[rstest]
