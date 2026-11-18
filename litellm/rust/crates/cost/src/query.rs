@@ -29,6 +29,7 @@ pub use crate::session::{
 pub use crate::speech::SpeechQuery;
 pub use crate::tools::{ToolUse, ToolsQuery};
 pub use crate::transcription::TranscriptionQuery;
+pub use crate::units::TokenBilled;
 pub use crate::vector_store::VectorStoreSearchQuery;
 pub use crate::video::VideoQuery;
 
