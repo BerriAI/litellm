@@ -326,8 +326,8 @@ async def test_a_fallback_group_spends_its_own_retries(make_core: MakeCore, host
     with pytest.raises(litellm.RateLimitError) as raised:
         await complete(core)
 
-    assert host.deployments_called("acompletion") == ["a", "a", "b", "b"]
-    assert str(raised.value) == "litellm.RateLimitError: slow down LiteLLM Retried: 1 times, LiteLLM Max Retries: 1"
+    assert host.deployments_called("acompletion") == ["a", "b", "b"]
+    assert str(raised.value) == "litellm.RateLimitError: slow down"
 
 
 @pytest.mark.asyncio

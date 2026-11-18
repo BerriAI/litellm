@@ -408,6 +408,21 @@ async def test_a_rate_limited_async_pre_call_check_cools_down_and_logs_the_failu
 
 
 @pytest.mark.asyncio
+async def test_a_rate_limited_async_pre_call_check_cools_down_a_lone_deployment_that_has_a_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.lists["callbacks"].append(Gate(rate_limit(message="gate says no")))
+    core: Final = make_core(model_list=list(PLAIN), fallbacks=[{"small": ["big"]}])
+
+    with pytest.raises(litellm.RateLimitError, match="gate says no"):
+        await core.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
+            deployment=dict(PLAIN[0]), parent_otel_span=None
+        )
+
+    assert set(cooled_down(core, ["s", "b"])) == {"s"}
+
+
+@pytest.mark.asyncio
 async def test_another_async_pre_call_check_error_logs_the_failure_without_a_cooldown(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:

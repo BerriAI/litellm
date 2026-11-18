@@ -1465,7 +1465,11 @@ impl<H: RouterHost> Call<'_, H> {
                     .await?;
                 candidates.served_as = served_as;
                 if candidates.healthy.is_empty() {
-                    return Err(candidates.none_healthy(&snapshot.registry).into());
+                    return Err(Failed {
+                        routed: routed_name(target, &candidates),
+                        served_as: candidates.served_as.clone(),
+                        ..candidates.none_healthy(&snapshot.registry).into()
+                    });
                 }
                 let deployment = self.pick(snapshot, op, request, &candidates).await?;
                 Ok((deployment, candidates))

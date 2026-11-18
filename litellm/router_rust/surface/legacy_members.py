@@ -39,13 +39,13 @@ from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.websocket import admit_deployment_turn
 from litellm.router_rust.steps.callbacks import RustOptionalChecks
 from litellm.router_rust.steps.prerouting import TIER_PARAMS_NEVER_DROPPED as _TIER_PARAMS_NEVER_DROPPED
+from litellm.router_rust.surface.health import RustHealthCallbacks
 from litellm.router_rust.surface.members import RustRegistryMembers
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GatedAutoRouterCapability,
     capability_limit_violation,
     count_capability_routers,
 )
-from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
 from litellm.router_utils.endpoint_eligibility import endpoint_selection
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_refund_failure
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -237,13 +237,12 @@ def _metadata_model_id(model_info: object) -> object:
     return model_info.get("id") if isinstance(model_info, dict) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the metadata's model_info dict
 
 
-class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
-    """Mixed into ``RustCore``, which supplies its host registry, selectors and checks."""
+class RustLegacyMembers(RustRegistryMembers, RustHealthCallbacks, RustOptionalChecks):
+    """Mixed into ``RustCore``, which supplies its host registry, health state, selectors and checks."""
 
     # RustCore sets these in its constructor.
     _cache: "DualCache"
     _usage: RouterUsage
-    _cooldown_given: object
     _custom_strategy: "CustomRoutingStrategyBase | None"
     # The constructor's argument, or the attribute as assigned.
     auto_router_capability_limit: "Callable[[], int | None] | None"
@@ -349,7 +348,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         logging_obj: "Logging | None" = None,
     ) -> None:
         """``async_routing_strategy_pre_call_checks``: a check's rate limit cools the deployment down
-        under the Python rules (``set_cooldown_deployments``, cooldown event included)."""
+        as the Rust core decides, cooldown event included."""
         from litellm import exceptions as litellm_exceptions
 
         for callback in self._opt.routing_callbacks():
@@ -358,13 +357,8 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
                     await callback.async_pre_call_check(deployment, parent_otel_span)  # pyright: ignore[reportUnknownMemberType]  # see above
                 except litellm_exceptions.RateLimitError as e:
                     _dispatch_failure(logging_obj, e)
-                    _ = set_cooldown_deployments(
-                        ctx=RoutingContext(self),  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
-                        exception_status=e.status_code,
-                        original_exception=e,
-                        deployment=deployment["model_info"]["id"],  # pyright: ignore[reportIndexIssue, reportUnknownArgumentType]  # read as the Python core reads it
-                        time_to_cooldown=self._cooldown_given,  # pyright: ignore[reportArgumentType]  # the value as given, as the Python core stores it
-                    )
+                    if isinstance(deployment_id := _metadata_model_id(deployment.get("model_info")), str):
+                        await self.cool_down_refused(deployment_id, e)
                     raise
                 except Exception as e:
                     _dispatch_failure(logging_obj, e)

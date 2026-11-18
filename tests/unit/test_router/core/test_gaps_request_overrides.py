@@ -21,7 +21,7 @@ from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
 from litellm.types.router import RetryPolicy
 from tests.unit.test_router.core.retries_health_helpers import attempt, attempt_sync
-from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit
+from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit, server_error
 from tests.unit.test_router.core.streaming_helpers import chat_stream, collect_texts, collect_texts_sync
 
 MakeCore = Callable[..., RouterCore]
@@ -90,7 +90,7 @@ async def test_the_router_retries_and_fallbacks_carry_the_request_overrides_on_e
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core: Final = make_core(model_list=GROUPS, num_retries=1, fallbacks=[{"a": ["b"]}])
-    host.answer("openai/a", rate_limit(), rate_limit())
+    host.answer("openai/a", server_error(), server_error())
 
     response: Final = await attempt(core, "a", **OVERRIDES)
 

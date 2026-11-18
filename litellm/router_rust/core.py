@@ -5242,10 +5242,7 @@ class _Driver:
         if isinstance(error, litellm_exceptions.RateLimitError):
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
             if isinstance(deployment_id, str):
-                failure: Final = {**attempt_failure(error), "caller_scoped": core.per_user_deployment(deployment_id)}
-                report: Final = core._handle.report_failure(deployment_id, failure, uncounted=True)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-                done: Final = await core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # see above
-                _ = core.cooled_down(done, deployment_id, error.status_code)
+                await core.cool_down_refused(deployment_id, error)
         return {**self._failed(step, deployment, call, error), "recorded": True}
 
     def _pick_kwargs(self, step: Mapping[str, object]) -> Mapping[str, object]:

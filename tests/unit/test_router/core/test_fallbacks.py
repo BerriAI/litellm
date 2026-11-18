@@ -460,7 +460,7 @@ async def test_a_fallback_group_runs_after_the_primary_group_spends_its_retries(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core = build(make_core, fallbacks=[{"a": ["b"]}], num_retries=2)
-    host.answer("openai/a", rate_limit())
+    host.answer("openai/a", server_error())
 
     await complete(core)
 

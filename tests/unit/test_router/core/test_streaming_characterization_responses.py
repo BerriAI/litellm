@@ -497,7 +497,7 @@ async def test_a_rate_limit_retry_policy_retries_a_responses_stream_when_num_ret
 
 
 async def test_once_the_stream_retries_are_spent_the_fallback_answers(make_core: MakeCore, host: ScriptedHost) -> None:
-    host.answer("openai/a", responses_stream(Event(CREATED), error=cut()))
+    host.answer("openai/a", responses_stream(Event(CREATED), error=cut(original=server_error())))
     host.answer("openai/b", fallback_ok())
     core = build(make_core, num_retries=1)
     stream = await open_stream(core)
@@ -586,7 +586,7 @@ class _FreshlyCutStream(ScriptedResponsesStream):
         try:
             return await super().__anext__()
         except StopAsyncIteration:
-            raise cut() from None
+            raise cut(original=server_error()) from None
 
 
 def _cut_after_created(**_request: object) -> ScriptedResponsesStream:  # kwargs-ok: the host passes the request kwargs

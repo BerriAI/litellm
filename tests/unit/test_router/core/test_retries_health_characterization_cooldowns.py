@@ -182,7 +182,7 @@ async def test_a_lone_deployment_with_a_fallback_group_cools_down_under_explicit
 
 
 @pytest.mark.asyncio
-async def test_a_lone_deployment_with_a_fallback_group_is_not_cooled_by_a_429_under_defaults(
+async def test_a_lone_deployment_with_a_fallback_group_is_cooled_by_a_429_under_defaults(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core: Final = make_core(
@@ -192,7 +192,7 @@ async def test_a_lone_deployment_with_a_fallback_group_is_not_cooled_by_a_429_un
 
     await attempt(core)
 
-    assert cooled_down(core, ["a", "z"]) == {}
+    assert set(cooled_down(core, ["a", "z"])) == {"a"}
 
 
 @pytest.mark.asyncio
