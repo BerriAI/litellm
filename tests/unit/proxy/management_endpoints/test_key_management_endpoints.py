@@ -19348,7 +19348,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
     mock_rotate_mcp_user,
     mock_rotate_env_vars,
     mock_rotate_sso,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """Master-key rotation must re-encrypt the SSO identity assertion store alongside
     the sibling per-user encrypted tables, or a salt rotation orphans every stored
