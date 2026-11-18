@@ -31,7 +31,6 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     model_group_from_metadata,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    explicit_effort_fits_thinking_budget,
     reasoning_effort_from_thinking_silently,
 )
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
@@ -64,7 +63,12 @@ from ..context_management.constants import COMPACT_EDIT_TYPE
 from ..context_management.dispatcher import normalize_spec
 from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
-from ..utils import litellm_logging_obj_from_kwargs, local_model_name, responses_gate_refuses_effort_level
+from ..utils import (
+    explicit_effort_goes_out_within_budget,
+    litellm_logging_obj_from_kwargs,
+    local_model_name,
+    responses_gate_refuses_effort_level,
+)
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -337,11 +341,14 @@ def _deployment_output_config(
 ) -> AnthropicOutputConfig | None:
     if output_config is None or thinking is None or thinking.get("type") != "enabled":
         return output_config
-    if not explicit_effort_fits_thinking_budget(
-        output_config.get("effort"), reasoning_effort_from_thinking_silently(thinking, drop_params=True)
-    ):
-        return output_config
-    if not _drops_explicit_effort(
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    if explicit_effort_goes_out_within_budget(
+        output_config.get("effort"),
+        reasoning_effort_from_thinking_silently(thinking, drop_params=True),
+        model=model,
+        custom_llm_provider=provider if isinstance(provider, str) else None,
+        deployment_model_info=forwarded_kwargs.get("model_info"),
+    ) and not _drops_explicit_effort(
         output_config, model=model, forwarded_kwargs=forwarded_kwargs, drop_params=drop_params
     ):
         return output_config

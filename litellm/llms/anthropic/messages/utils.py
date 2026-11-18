@@ -11,6 +11,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
+from litellm.litellm_core_utils.reasoning_effort_utils import explicit_effort_fits_thinking_budget
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
 
@@ -290,6 +291,27 @@ def normalize_reasoning_effort_value(
 
     accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+
+
+def explicit_effort_goes_out_within_budget(
+    explicit_effort: object,
+    budget_effort: str | None,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    deployment_model_info: object,
+) -> bool:
+    outgoing_effort: Final = (
+        normalize_reasoning_effort_value(
+            explicit_effort,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+        )
+        if isinstance(explicit_effort, str)
+        else explicit_effort
+    )
+    return explicit_effort_fits_thinking_budget(outgoing_effort, budget_effort)
 
 
 def responses_gate_refuses_effort_level(

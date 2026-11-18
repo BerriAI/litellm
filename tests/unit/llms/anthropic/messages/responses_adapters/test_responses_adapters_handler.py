@@ -1993,3 +1993,80 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
         )
 
     assert upstream.call_count == 1
+
+
+ROWS_RAISING_MINIMAL_ABOVE_LOW: Final = (
+    pytest.param(
+        {"supports_minimal_reasoning_effort": False, "supports_low_reasoning_effort": False}, id="minimal-low-off"
+    ),
+    pytest.param({"reasoning_effort_levels": ["medium", "high"]}, id="declares-medium-and-high"),
+)
+
+
+async def _bridged_outcome(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, **params: object) -> object:
+    try:
+        return await _bridged_reasoning_sent(respx_mock, monkeypatch, None, **params)
+    except litellm.UnsupportedParamsError as error:
+        return str(error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("row", ROWS_RAISING_MINIMAL_ABOVE_LOW)
+async def test_an_effort_raised_above_the_thinking_budget_sends_what_the_budget_alone_sends_on_the_responses_bridge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, row: Mapping[str, object], drop_params: bool
+) -> None:
+    _with_effort_flags(monkeypatch)
+    monkeypatch.setitem(litellm.model_cost, BRIDGED_MODEL, {**litellm.model_cost[BRIDGED_MODEL], **row})
+    low_budget: Final = {"type": "enabled", "budget_tokens": 1024}
+    budget_outcome: Final = await _bridged_outcome(
+        respx_mock, monkeypatch, thinking=low_budget, drop_params=drop_params
+    )
+
+    explicit_outcome: Final = await _bridged_outcome(
+        respx_mock, monkeypatch, thinking=low_budget, output_config={"effort": "minimal"}, drop_params=drop_params
+    )
+
+    assert explicit_outcome == budget_outcome
+
+
+@pytest.mark.asyncio
+async def test_an_effort_raised_onto_the_model_levels_still_wins_below_the_thinking_budget_on_the_responses_bridge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_effort_flags(monkeypatch, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False)
+
+    sent: Final = await _bridged_reasoning_sent(
+        respx_mock,
+        monkeypatch,
+        None,
+        thinking={"type": "enabled", "budget_tokens": 16384},
+        output_config={"effort": "minimal"},
+        drop_params=True,
+    )
+
+    assert sent == {"effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_an_effort_the_request_model_info_declares_still_wins_below_the_thinking_budget_on_the_responses_bridge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_effort_flags(monkeypatch, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=REASONING_RESPONSE
+    )
+
+    await litellm.anthropic.messages.acreate(
+        messages=MESSAGES,
+        model=f"openai/{BRIDGED_MODEL}",
+        api_key="sk-bridged-effort-test",
+        max_tokens=1024,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        output_config={"effort": "minimal"},
+        model_info={"reasoning_effort_levels": ["minimal", "low", "high"]},
+    )
+
+    assert json.loads(route.calls.last.request.read()).get("reasoning") == {"effort": "minimal"}

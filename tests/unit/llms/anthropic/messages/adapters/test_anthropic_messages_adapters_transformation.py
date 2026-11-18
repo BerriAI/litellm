@@ -7045,3 +7045,100 @@ def test_only_the_reporting_translation_warns_about_a_dropped_effort_beside_a_th
 
     assert dropped == never_sent
     assert len(_chat_adapter_drop_warnings(caplog)) == warning_count
+
+
+_ROWS_RAISING_MINIMAL_ABOVE_LOW: Final = (
+    pytest.param(
+        MappingProxyType({"supports_minimal_reasoning_effort": False, "supports_low_reasoning_effort": False}),
+        id="minimal-and-low-off",
+    ),
+    pytest.param(MappingProxyType({"reasoning_effort_levels": ["medium", "high"]}), id="declares-medium-and-high"),
+)
+
+
+async def _chat_adapter_outcome(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, **params: object
+) -> object:
+    try:
+        return await _chat_adapter_effort_sent(respx_mock, monkeypatch, target, None, **params)
+    except litellm.UnsupportedParamsError as error:
+        return str(error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("row", _ROWS_RAISING_MINIMAL_ABOVE_LOW)
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_an_effort_raised_above_the_thinking_budget_sends_what_the_budget_alone_sends_on_the_chat_adapter(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    target: _ChatAdapterTarget,
+    row: Mapping[str, object],
+    drop_params: bool,
+) -> None:
+    _with_effort_flags(monkeypatch, target.model)
+    monkeypatch.setitem(litellm.model_cost, target.model, {**litellm.model_cost[target.model], **row})
+    low_budget: Final = {"type": "enabled", "budget_tokens": 1024}
+    budget_outcome: Final = await _chat_adapter_outcome(
+        respx_mock, monkeypatch, target, thinking=low_budget, drop_params=drop_params
+    )
+
+    explicit_outcome: Final = await _chat_adapter_outcome(
+        respx_mock,
+        monkeypatch,
+        target,
+        thinking=low_budget,
+        output_config={"effort": "minimal"},
+        drop_params=drop_params,
+    )
+
+    assert explicit_outcome == budget_outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_an_effort_raised_onto_the_model_levels_still_wins_below_the_thinking_budget_on_the_chat_adapter(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
+) -> None:
+    _with_effort_flags(
+        monkeypatch, target.model, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False
+    )
+
+    sent: Final = await _chat_adapter_effort_sent(
+        respx_mock,
+        monkeypatch,
+        target,
+        None,
+        thinking={"type": "enabled", "budget_tokens": 16384},
+        output_config={"effort": "minimal"},
+        drop_params=True,
+    )
+
+    assert sent == "medium"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_an_effort_the_request_model_info_declares_still_wins_below_the_thinking_budget_on_the_chat_adapter(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
+) -> None:
+    _with_effort_flags(
+        monkeypatch, target.model, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False
+    )
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", target.chat_completions_url)
+    route: Final = respx_mock.post(url__regex=target.url).mock(return_value=httpx.Response(200, json=target.reply))
+
+    await litellm.anthropic.messages.acreate(
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=4096,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        output_config={"effort": "minimal"},
+        model_info={"reasoning_effort_levels": ["minimal", "low", "high"]},
+        **target.litellm_params,
+        **target.request_params,
+    )
+
+    assert target.sent_effort(json.loads(route.calls.last.request.read())) == "minimal"

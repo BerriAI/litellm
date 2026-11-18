@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.reasoning_effort_capability import drops_explicit_reasoning_effort
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
+    explicit_effort_goes_out_within_budget,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     local_model_name,
@@ -174,7 +175,6 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     anthropic_image_source_to_openai_url,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    explicit_effort_fits_thinking_budget,
     reasoning_effort_from_thinking,
     reasoning_effort_from_thinking_silently,
 )
@@ -317,18 +317,15 @@ def _refuses_no_level(level: str) -> bool:
     return False
 
 
-def _reasoning_chat_gate(
-    model: str, custom_llm_provider: str | None, base_model: str | None
-) -> Callable[[str], bool] | None:
+def _reasoning_chat_gate(model: str, custom_llm_provider: str, base_model: str | None) -> Callable[[str], bool] | None:
     from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
     from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
     from litellm.utils import ProviderConfigManager
 
-    provider: Final = custom_llm_provider if custom_llm_provider is not None else _inferred_provider(model)
-    llm_provider: Final = next((member for member in LlmProviders if member.value == provider), None)
+    llm_provider: Final = next((member for member in LlmProviders if member.value == custom_llm_provider), None)
     if llm_provider is None:
         return None
-    deployment_model: Final = local_model_name(model, provider)
+    deployment_model: Final = local_model_name(model, custom_llm_provider)
     config: Final = ProviderConfigManager.get_provider_chat_config(
         model=deployment_model, provider=llm_provider, base_model=base_model
     )
@@ -346,7 +343,7 @@ def _reasoning_effort_gate(
     thinking: Mapping[str, object],
     *,
     model: str,
-    custom_llm_provider: str | None,
+    custom_llm_provider: str,
     base_model: str | None,
     deployment_model_info: object,
 ) -> Callable[[str], bool] | None:
@@ -1422,8 +1419,15 @@ class LiteLLMAnthropicMessagesAdapter:
             case "adaptive":
                 return True
             case "enabled" if (
-                not is_claude_target
-                and explicit_effort_fits_thinking_budget(explicit_effort, budget_effort)
+                custom_llm_provider is not None
+                and not is_claude_target
+                and explicit_effort_goes_out_within_budget(
+                    explicit_effort,
+                    budget_effort,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=deployment_model_info,
+                )
                 and (
                     target_refuses_level := _reasoning_effort_gate(
                         thinking,
