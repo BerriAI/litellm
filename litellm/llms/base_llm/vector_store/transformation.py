@@ -4,7 +4,7 @@ from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Protocol, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
@@ -150,6 +150,8 @@ class RouterVectorStoreEmbeddingExecutor:
 
 
 class BaseVectorStoreConfig:
+    pricing_model: ClassVar[str | None] = None
+
     def combine_search_filters(self, registered: object, requested: object) -> object:
         if registered is None:
             return requested
@@ -322,12 +324,6 @@ class BaseVectorStoreConfig:
         litellm_params: Mapping[str, object],
     ) -> VectorStoreSearchOptionalRequestParams | BaseLLMException | None:
         return None
-
-    def calculate_vector_store_cost(
-        self,
-        response: VectorStoreSearchResponse,
-    ) -> tuple[float, float]:
-        return 0.0, 0.0
 
 
 _EMPTY_EMBEDDING_CONFIGURATION: Final[Mapping[str, object]] = MappingProxyType({})

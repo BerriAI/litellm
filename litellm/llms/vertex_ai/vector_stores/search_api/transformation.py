@@ -1,11 +1,10 @@
 from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm import get_model_info
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
@@ -231,6 +230,8 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     This implementation uses the Vertex AI Search API for vector store operations.
     """
 
+    pricing_model: ClassVar[str | None] = "vertex_ai/search_api"
+
     def __init__(self):
         super().__init__()
 
@@ -450,17 +451,6 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         raise NotImplementedError
-
-    def calculate_vector_store_cost(
-        self,
-        response: VectorStoreSearchResponse,
-    ) -> tuple[float, float]:
-        model_info: Final = get_model_info(
-            model="vertex_ai/search_api",
-        )
-
-        input_cost_per_query: Final = model_info.get("input_cost_per_query") or 0.0
-        return input_cost_per_query, 0.0
 
 
 vertex_search_api_vector_store_config: Final = VertexSearchAPIVectorStoreConfig()

@@ -39,10 +39,15 @@ from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     AdjustFacts,
     CallFacts,
+    OcrDocument,
+    RerankDocument,
+    VectorStoreSearchDocument,
     adjusted_cost,
     billed_token_rates,
     price,
+    price_units,
     priced_usage,
+    prompt_and_completion,
     web_search_use,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -135,7 +140,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.rust_bridge._native import NativeReceipt, billable_service_tier
+from litellm.rust_bridge._native import NativeReceipt, NativeUnpriced, billable_service_tier
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import (
     DecisionsResponse,
@@ -419,9 +424,6 @@ def _transcription_duration_for_cost(completion_response: object) -> float:
     return measured_duration if measured_duration is not None and measured_duration > 0 else 0.0
 
 
-OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
-
-
 class OCRPricing(TypedDict, total=False):
     ocr_cost_per_page: ReadOnly[float | None]
     ocr_cost_per_credit: ReadOnly[float | None]
@@ -528,7 +530,7 @@ def cost_per_token(
     response: object | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
-    custom_model_info: OCRPricing | None = None,
+    custom_model_info: OCRPricing | Sequence[Mapping[str, object]] | None = None,
     bedrock_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
@@ -2514,7 +2516,7 @@ def completion_cost(
                     data_residency=data_residency,
                     vertex_location=vertex_location,
                     response=completion_response,
-                    custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                    custom_model_info=_ocr_price_tables(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
                 )
 
@@ -2829,33 +2831,16 @@ def _deployment_model_info(
     )
 
 
-def _ocr_model_info(
+def _ocr_price_tables(
     litellm_logging_obj: LitellmLoggingObject | None,
     custom_pricing: bool | None,
     router_model_id: str | None,
-) -> OCRPricing | None:
+) -> tuple[Mapping[str, object], ...]:
     deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
     litellm_params: Final = (
         litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
     )
-    if litellm_params is None:
-        return deployment_info
-    return _layered_ocr_pricing(litellm_params, deployment_info)
-
-
-def _first_ocr_price(field: OCRPricingField, *sources: Mapping[str, object] | None) -> float | None:
-    return next(
-        (price for source in sources if source is not None and isinstance(price := source.get(field), int | float)),
-        None,
-    )
-
-
-def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
-    return OCRPricing(
-        ocr_cost_per_page=_first_ocr_price("ocr_cost_per_page", *sources),
-        ocr_cost_per_credit=_first_ocr_price("ocr_cost_per_credit", *sources),
-        annotation_cost_per_page=_first_ocr_price("annotation_cost_per_page", *sources),
-    )
+    return tuple(table for table in (litellm_params, deployment_info) if table is not None)
 
 
 def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
@@ -2942,15 +2927,15 @@ def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
     response: object | None = None,
-    model_info: OCRPricing | None = None,
+    model_info: OCRPricing | Sequence[Mapping[str, object]] | None = None,
 ) -> tuple[float, float]:
     """
     Args:
         model: str - model name
         custom_llm_provider: Optional[str] - custom LLM provider
         response: Optional[Any] - response object
-        model_info: Optional[OCRPricing] - deployment-specific OCR pricing; each rate it sets
-            overrides the model cost map's, the rest fall back to the map
+        model_info: Optional[OCRPricing] - deployment-specific OCR pricing, or several such tables in order; each
+            rate the first table sets overrides the later ones and the model cost map's
 
     Returns:
         Tuple[float, float]: cost of OCR processing
@@ -2959,69 +2944,48 @@ def ocr_cost(
     """
     from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
-    #########################################################
-    # validate it's an OCR response
-    #########################################################
     if response is None or not isinstance(response, OCRResponse):
         raise ValueError(f"response must be of type OCRResponse got type={type(response)}")
 
     if response.usage_info is None:
         raise ValueError("OCR response usage_info is None")
 
-    credits: Final = getattr(response.usage_info, "credits", None)
-    pricing: Final = _layered_ocr_pricing(model_info, _cost_map_model_info(model, custom_llm_provider))
-
-    cost_per_credit: Final = pricing.get("ocr_cost_per_credit")
-    if credits is not None and cost_per_credit is not None:
-        return cost_per_credit * credits, 0.0
-
-    ocr_cost_per_page: Final = pricing.get("ocr_cost_per_page")
-    annotation_cost_per_page: Final = pricing.get("annotation_cost_per_page")
-    annotation_rate: Final = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
-
-    pages_processed: Final = response.usage_info.pages_processed
-    annotation_pages: Final = response.usage_info.pages_processed_annotation or 0
-    has_billable_annotation_pages: Final = annotation_rate is not None and annotation_pages > 0
-
-    if pages_processed is None and not has_billable_annotation_pages:
-        if cost_per_credit is not None or ocr_cost_per_page is None:
-            # Surface missing usage data instead of silently under-reporting
-            # cost. The previous behavior raised ValueError; we now return 0.0
-            # for credit-priced or unpriced models, so log a warning to keep
-            # the regression visible to operators.
-            verbose_logger.warning(
-                "OCR cost: model=%s custom_llm_provider=%s response.usage_info."
-                "pages_processed is None and credits=%s; returning 0.0 cost.",
-                model,
-                custom_llm_provider,
-                credits,
-            )
-            return 0.0, 0.0
+    outcome: Final = price_units(
+        OcrDocument(
+            kind="ocr",
+            model=model,
+            provider=custom_llm_provider,
+            pages=response.usage_info.pages_processed,
+            annotation_pages=response.usage_info.pages_processed_annotation or 0,
+            credits=response.usage_info.credits,
+            batch=False,
+            catalog_deferred=False,
+        ),
+        _price_tables(model_info),
+        _cost_map_model_info(model, custom_llm_provider),
+    )
+    if isinstance(outcome, NativeUnpriced) and outcome.reason == "missing_usage":
         raise ValueError("OCR response pages_processed is None")
-
-    if ocr_cost_per_page is None and not has_billable_annotation_pages:
-        # No per-page pricing configured. Either the model is on credit-based
-        # pricing (and credits weren't returned, so the credit branch above did
-        # not match) or the model has no OCR pricing entry at all. Surface a
-        # warning so that missing pricing entries are visible rather than
-        # silently producing zero cost for billable usage.
+    if isinstance(outcome, NativeUnpriced):
         verbose_logger.warning(
-            "OCR cost: model=%s custom_llm_provider=%s reported "
-            "pages_processed=%s but no ocr_cost_per_page is configured; "
-            "returning 0.0 cost.",
-            model,
-            custom_llm_provider,
-            pages_processed,
+            "OCR cost: model=%s custom_llm_provider=%s reported pages_processed=%s credits=%s but no OCR rate "
+            "prices it; returning 0.0 cost.",
+            _single_log_line(model),
+            _single_log_line(custom_llm_provider),
+            response.usage_info.pages_processed,
+            response.usage_info.credits,
         )
-        return 0.0, 0.0
-
-    ocr_pages_cost: Final = (ocr_cost_per_page or 0.0) * (pages_processed or 0)
-    annotation_pages_cost: Final = (annotation_rate or 0.0) * annotation_pages
-    return ocr_pages_cost + annotation_pages_cost, 0.0
+    return prompt_and_completion(outcome)
 
 
-_OCR_BATCH_PAGE_RATE_KEYS: Final = ("ocr_cost_per_page_batches", "ocr_cost_per_page")
-_OCR_BATCH_ANNOTATION_RATE_KEYS: Final = ("annotation_cost_per_page_batches", "annotation_cost_per_page")
+def _price_tables(
+    model_info: Mapping[str, object] | Sequence[Mapping[str, object]] | None,
+) -> tuple[Mapping[str, object], ...]:
+    if model_info is None:
+        return ()
+    if isinstance(model_info, Mapping):
+        return (model_info,)
+    return tuple(model_info)
 
 
 def ocr_batch_cost(
@@ -3033,55 +2997,42 @@ def ocr_batch_cost(
     """Per-page cost of one OCR result inside a batch output file.
 
     Batch OCR is billed per page at the ``*_batches`` rate, falling back to the
-    synchronous per-page rate when a model has no batch price recorded, the same
-    fallback ``batch_cost_calculator`` applies to per-token batch pricing. Each
+    synchronous per-page rate when a model has no batch price recorded. Each
     per-page family (OCR pages, annotation pages) belongs to the deployment's
     ``model_info`` when it prices that family at either rate and to the published
-    cost map otherwise, so a deployment overriding one family keeps the model's
-    published rate for the other, and the cost map is only consulted for a family
-    the deployment leaves out. Returns ``(prompt_cost, completion_cost)`` with the
+    cost map otherwise. Returns ``(prompt_cost, completion_cost)`` with the
     whole cost in the first slot, like ``ocr_cost``.
     """
-    pages_processed: Final = usage_info.pages_processed or 0
-    annotation_pages: Final = usage_info.pages_processed_annotation or 0
-    deployment_page_rate: Final = _first_price(model_info, *_OCR_BATCH_PAGE_RATE_KEYS)
-    deployment_annotation_rate: Final = _first_price(model_info, *_OCR_BATCH_ANNOTATION_RATE_KEYS)
-    needs_published_pricing: Final = (pages_processed > 0 and deployment_page_rate is None) or (
-        annotation_pages > 0 and deployment_annotation_rate is None
+    document: Final = OcrDocument(
+        kind="ocr",
+        model=model,
+        provider=custom_llm_provider,
+        pages=usage_info.pages_processed or 0,
+        annotation_pages=usage_info.pages_processed_annotation or 0,
+        credits=None,
+        batch=True,
+        catalog_deferred=True,
     )
-    published: Final = (
-        _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider)
-        if needs_published_pricing
-        else None
-    )
-    if needs_published_pricing and published is None:
-        verbose_logger.warning(
-            "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; "
-            "billing only the per-page families the deployment prices.",
-            _single_log_line(model),
-            _single_log_line(custom_llm_provider),
+    tables: Final = _price_tables(model_info)
+    deferred: Final = price_units(document, tables)
+    outcome: Final = (
+        price_units(
+            OcrDocument(**{**document, "catalog_deferred": False}),
+            tables,
+            _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider),
         )
-
-    page_rate: Final = (
-        deployment_page_rate
-        if deployment_page_rate is not None
-        else _first_price(published, *_OCR_BATCH_PAGE_RATE_KEYS)
+        if isinstance(deferred, NativeUnpriced) and deferred.reason == "catalog_deferred"
+        else deferred
     )
-    annotation_rate: Final = (
-        deployment_annotation_rate
-        if deployment_annotation_rate is not None
-        else _first_price(published, *_OCR_BATCH_ANNOTATION_RATE_KEYS)
-    )
-    if page_rate is None and pages_processed > 0:
+    if isinstance(outcome, NativeUnpriced):
         verbose_logger.warning(
             "OCR batch cost: model=%s custom_llm_provider=%s reported pages_processed=%s but no "
             "ocr_cost_per_page is configured; returning 0.0 cost for those pages.",
             _single_log_line(model),
             _single_log_line(custom_llm_provider),
-            pages_processed,
+            usage_info.pages_processed,
         )
-    effective_annotation_rate: Final = annotation_rate if annotation_rate is not None else page_rate
-    return (page_rate or 0.0) * pages_processed + (effective_annotation_rate or 0.0) * annotation_pages, 0.0
+    return prompt_and_completion(outcome)
 
 
 def _single_log_line(value: str | None) -> str:
@@ -3093,12 +3044,6 @@ def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> M
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; caller logs and bills 0.0
         return None
-
-
-def _first_price(model_info: ModelInfo | None, *keys: str) -> float | None:
-    if model_info is None:
-        return None
-    return next((price for price in (model_info.get(k) for k in keys) if isinstance(price, (int, float))), None)
 
 
 def vector_store_search_cost(
@@ -3123,13 +3068,16 @@ def vector_store_search_cost(
         provider=LlmProviders(custom_llm_provider),
         api_type=api_type,
     )
-
-    if config is None:
-        verbose_logger.debug("Vector store search is not supported for %s", custom_llm_provider)
+    if config is None or config.pricing_model is None:
+        verbose_logger.debug("Vector store search is not priced for %s", custom_llm_provider)
         return 0.0, 0.0
-
-    return config.calculate_vector_store_cost(
-        response=response,
+    return prompt_and_completion(
+        price_units(
+            VectorStoreSearchDocument(
+                kind="vector_store_search", model=config.pricing_model, provider=custom_llm_provider
+            ),
+            catalog=litellm.get_model_info(model=config.pricing_model),
+        )
     )
 
 
@@ -3143,28 +3091,19 @@ def rerank_cost(
     - float or None: cost of response OR none if error.
     """
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
-
-    try:
-        config: Final = ProviderConfigManager.get_provider_rerank_config(
-            model=model,
-            api_base=None,
-            present_version_params=[],
-            provider=LlmProviders(custom_llm_provider),
+    units: Final = billed_units or RerankBilledUnits()
+    return prompt_and_completion(
+        price_units(
+            RerankDocument(
+                kind="rerank",
+                model=model,
+                provider=LlmProviders(custom_llm_provider).value,
+                search_units=units.get("search_units"),
+                total_tokens=units.get("total_tokens"),
+            ),
+            catalog=_lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider),
         )
-
-        try:
-            model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        except Exception:
-            model_info = None
-
-        return config.calculate_rerank_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            billed_units=billed_units,
-            model_info=model_info,
-        )
-    except Exception as e:
-        raise e
+    )
 
 
 def transcription_cost(model: str, custom_llm_provider: str | None, duration: float) -> tuple[float, float]:

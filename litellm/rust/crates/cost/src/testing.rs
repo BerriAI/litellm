@@ -377,3 +377,76 @@ pub(crate) fn tokens_query(provider: Provider, model: &str, usage: TokenUsage) -
         requested_model: None,
     }
 }
+
+/// A row of a per-unit parity fixture, lowered by hand for the flat keys those fixtures hold
+pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
+    use crate::price::{Channel, Feature};
+    let page = Meter::Feature(Feature::OcrPage);
+    let annotation = Meter::Feature(Feature::AnnotationPage);
+    let price = |key: &str| -> Option<(Meter, Channel)> {
+        Some(match key {
+            "input_cost_per_query" => (
+                Meter::Input(InputUnit::Query { over_results: None }),
+                Channel::Online,
+            ),
+            "input_cost_per_token" => (Meter::TEXT_INPUT, Channel::Online),
+            "output_cost_per_token" => (Meter::TEXT_OUTPUT, Channel::Online),
+            "ocr_cost_per_page" => (page.clone(), Channel::Online),
+            "ocr_cost_per_page_batches" => (page.clone(), Channel::Batch),
+            "annotation_cost_per_page" => (annotation.clone(), Channel::Online),
+            "annotation_cost_per_page_batches" => (annotation.clone(), Channel::Batch),
+            "ocr_cost_per_credit" => (Meter::Feature(Feature::OcrCredit), Channel::Online),
+            _ => return None,
+        })
+    };
+    let rates = fields
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, rate)| {
+            let (meter, channel) = price(key)?;
+            Some((
+                Price {
+                    meter,
+                    channel,
+                    when: When::default(),
+                },
+                UnitPrice::new(rate.as_f64()?)?,
+            ))
+        })
+        .collect();
+    TestRow {
+        prices: Prices::new(rates, None, Billing::default()),
+        ..TestRow::default()
+    }
+}
+
+/// What a per-unit parity case expects: main's `(prompt, completion)`, or that main raised
+pub(crate) fn expected_sides(case: &serde_json::Value) -> Option<(f64, f64)> {
+    let expected = &case["expected"];
+    Some((
+        expected.get("prompt")?.as_f64()?,
+        expected["completion"].as_f64()?,
+    ))
+}
+
+/// A catalog-priced header for one candidate, with no discount or margin
+pub(crate) fn header(provider: &str, model: &str) -> Header {
+    Header {
+        candidates: vec![candidate(
+            provider.parse().expect("every provider name parses"),
+            model,
+        )],
+        source: PriceSource::Catalog,
+        basis: basis(),
+        adjustments: AdjustmentPolicy::None,
+        reported: None,
+    }
+}
+
+pub(crate) fn priced(outcome: crate::receipt::PriceOutcome) -> crate::receipt::Receipt {
+    match outcome {
+        crate::receipt::PriceOutcome::Priced(receipt) => *receipt,
+        crate::receipt::PriceOutcome::Unpriced(unpriced) => panic!("unpriced: {unpriced:?}"),
+    }
+}

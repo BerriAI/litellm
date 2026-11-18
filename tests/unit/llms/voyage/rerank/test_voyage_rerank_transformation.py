@@ -317,29 +317,27 @@ class TestVoyageRerankTransform:
         assert headers["Authorization"] == "Bearer test-api-key"
         assert headers["content-type"] == "application/json"
 
-    def test_calculate_rerank_cost(self):
-        """Test cost calculation for Voyage AI rerank."""
+    def test_rerank_cost_bills_total_tokens_at_the_token_rate(self):
+        """Voyage bills the reported total tokens at the row's input token rate, not per search unit."""
+        import litellm
+        from litellm.cost_calculator import rerank_cost
         from litellm.types.rerank import RerankBilledUnits
 
-        billed_units = RerankBilledUnits(total_tokens=1000)
-        model_info = {"input_cost_per_token": 0.00000005}  # $0.05 per 1M tokens
-
-        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+        rate = litellm.model_cost[f"voyage/{self.model}"]["input_cost_per_token"]
+        prompt_cost, completion_cost = rerank_cost(
             model=self.model,
-            billed_units=billed_units,
-            model_info=model_info,
+            custom_llm_provider="voyage",
+            billed_units=RerankBilledUnits(total_tokens=1000, search_units=7),
         )
 
-        assert abs(prompt_cost - 0.00005) < 1e-10  # 1000 * 0.00000005
+        assert prompt_cost == rate * 1000
         assert completion_cost == 0.0
 
-    def test_calculate_rerank_cost_missing_info(self):
-        """Test cost calculation returns 0 when info is missing."""
-        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
-            model=self.model,
-            billed_units=None,
-            model_info=None,
-        )
+    def test_rerank_cost_without_billed_units_is_zero(self):
+        """Test cost calculation returns 0 when the response reported no units."""
+        from litellm.cost_calculator import rerank_cost
+
+        prompt_cost, completion_cost = rerank_cost(model=self.model, custom_llm_provider="voyage", billed_units=None)
 
         assert prompt_cost == 0.0
         assert completion_cost == 0.0
