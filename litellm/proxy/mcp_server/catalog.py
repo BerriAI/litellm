@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from litellm.proxy.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer
     from litellm.types.mcp_server.tool_registry import MCPTool
 
 _P = ParamSpec("_P")
@@ -398,7 +398,11 @@ class CatalogSnapshots:
             self._staged_routing.reset(routing_token)
 
     async def _stage_servers(
-        self, rows: Sequence[BaseModel], *, reuse_unchanged: bool
+        self,
+        rows: Sequence[BaseModel],
+        *,
+        reuse_unchanged: bool,
+        auth_profiles: Mapping[str, tuple[MCPAuthProfile, ...]] = MappingProxyType({}),
     ) -> dict[str, MCPServer]:  # mutable-ok: assign_unique_short_prefix requires a dict registry
         from litellm.proxy.mcp_server.db import LiteLLM_MCPServerTable
         from litellm.proxy.mcp_server.mcp_server_manager import (
@@ -415,7 +419,9 @@ class CatalogSnapshots:
         # iteration order.
         for row in rows:
             try:
-                server = LiteLLM_MCPServerTable.model_validate(row.model_dump())
+                server = (stored := LiteLLM_MCPServerTable.model_validate(row.model_dump())).model_copy(
+                    update={"additional_auth": auth_profiles.get(stored.server_id)}
+                )
                 existing_server = previous_registry.get(server.server_id)
 
                 if (
@@ -424,6 +430,8 @@ class CatalogSnapshots:
                     and existing_server.updated_at is not None
                     and server.updated_at is not None
                     and existing_server.updated_at == server.updated_at
+                    and {profile.id for profile in existing_server.additional_auth or ()}
+                    == {profile.id for profile in server.additional_auth or ()}
                     and (
                         self.manager.oauth_discovery_slot(server.server_id) is not None
                         or not oauth_endpoints_unresolved(existing_server)
@@ -478,9 +486,10 @@ class CatalogSnapshots:
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         # Load only "active", legacy "approved", and NULL (no approval workflow) rows.
         # Pending/rejected servers are excluded at the DB level so we never load them.
+        from litellm.proxy.mcp_server.auth_profile_db import stored_profiles_by_server
         from litellm.proxy.mcp_server.db import get_runtime_mcp_server_rows
 
-        raw_rows: Final[Sequence[BaseModel]] = await get_runtime_mcp_server_rows(prisma_client)
+        raw_rows: Final = await get_runtime_mcp_server_rows(prisma_client)
         database_identity: Final = hashlib.sha256(
             json.dumps(
                 tuple(sorted(json.dumps(row.model_dump(mode="json"), sort_keys=True, default=str) for row in raw_rows))
@@ -489,7 +498,13 @@ class CatalogSnapshots:
         verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
         previous_registry: Final = self.manager.registry
-        new_registry: Final = await self._stage_servers(raw_rows, reuse_unchanged=reuse_unchanged)
+        new_registry: Final = await self._stage_servers(
+            raw_rows,
+            reuse_unchanged=reuse_unchanged,
+            auth_profiles=await stored_profiles_by_server(
+                prisma_client, [row.server_id for row in raw_rows], use_writer=True
+            ),
+        )
 
         # Assign short prefixes against the full candidate set without
         # publishing the staged registry to concurrent callers.

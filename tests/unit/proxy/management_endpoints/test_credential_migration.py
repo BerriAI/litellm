@@ -462,6 +462,29 @@ async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_scan_counts_auth_profile_secrets_under_their_servers_location(salt_key: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    legacy: Final = _legacy_ct("bot-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    v2: Final = encrypt_value_helper("bot-app")
+
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(credentials={"client_secret": v2}, env_vars=None, static_headers=None, env=None)]
+    )
+    client.db.litellm_mcpauthprofiletable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(credentials={"client_secret": legacy, "client_id": v2})]
+    )
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    reports: Final = await cm._scan_covered_tables(client)
+    by_loc: Final = {r.location: r for r in reports}
+
+    assert [r.location for r in reports].count("mcp_server") == 1
+    assert (by_loc["mcp_server"].legacy, by_loc["mcp_server"].already_v2) == (1, 2)
+
+
+@pytest.mark.asyncio
 async def test_scan_covered_tables_classifies_search_tool_params(salt_key, monkeypatch):
     legacy = _legacy_ct("tvly-legacy", monkeypatch)
     _enable_aes(monkeypatch)

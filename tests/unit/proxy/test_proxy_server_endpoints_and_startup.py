@@ -16583,3 +16583,76 @@ async def test_accounting_window_keys_remember_a_key_without_windows_but_retry_a
         assert await proxy_server_module.accounting_window_keys("unreadable", None) == ()
         assert await proxy_server_module.accounting_window_keys("unreadable", None) == ()
         assert client.db.litellm_verificationtoken.find_unique.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_startup_stops_when_a_stored_mcp_auth_profile_sits_on_a_stdio_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    prisma_client: Final = MagicMock()
+    stdio_server: Final = SimpleNamespace(server_name="local-tools", transport="stdio", is_byok=False, spec_path=None)
+    prisma_client.writer_db.litellm_mcpauthprofiletable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(profile_id="tools-bot", server_id="s1", server=stdio_server)]
+    )
+    mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        pytest.raises(RuntimeError, match="MCP server 'local-tools' is a stdio server"),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+
+@pytest.mark.asyncio
+async def test_startup_skips_the_mcp_auth_profile_check_when_mcp_is_not_loaded_from_the_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy.db.proxy_worker_heartbeat import ProxyWorkerHeartbeat
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    prisma_client: Final = MagicMock()
+    stdio_server: Final = SimpleNamespace(server_name="local-tools", transport="stdio", is_byok=False, spec_path=None)
+    prisma_client.writer_db.litellm_mcpauthprofiletable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(profile_id="tools-bot", server_id="s1", server=stdio_server)]
+    )
+    mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.general_settings", {"supported_db_objects": ["models"]}),
+    ):
+        heartbeat: Final = await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={"supported_db_objects": ["models"]},
+            prisma_client=prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    assert isinstance(heartbeat, ProxyWorkerHeartbeat)

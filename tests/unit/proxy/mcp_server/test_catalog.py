@@ -1098,3 +1098,45 @@ def test_catalog_identity_changes_when_a_profile_is_added_or_edited() -> None:
     }
 
     assert len(identities) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_reload_after_a_failed_profile_read_restores_the_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import NewMCPServerWithProfilesRequest
+    from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles
+    from litellm.proxy.mcp_server.db import create_mcp_server_if_identifier_free
+    from tests.unit.proxy.mcp_prisma_fake import FakeMcpPrisma
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "catalog-test-salt")
+    store: Final = FakeMcpPrisma()
+    profiles: Final = [{"id": "ana-bots", "auth_type": "bearer_token", "authentication_token": "bot-token"}]
+    await create_mcp_server_if_identifier_free(
+        store,
+        NewMCPServerWithProfilesRequest(
+            server_id="analytics", server_name="analytics", url="https://analytics.example/mcp", transport="http"
+        ),
+        "admin",
+        submitted_profiles=SubmittedProfiles(profiles),
+    )
+    store.servers[0]["updated_at"] = datetime(2026, 11, 18, tzinfo=timezone.utc)
+    profile_reads: Final = store.db.litellm_mcpauthprofiletable.find_many
+    failures: Final = [ConnectionError("database is restarting")]
+
+    async def fails_once(**kwargs: object) -> Sequence[object]:
+        if failures:
+            raise failures.pop()
+        return await profile_reads(**kwargs)
+
+    store.db.litellm_mcpauthprofiletable.find_many = fails_once
+    monkeypatch.setattr(proxy_server, "prisma_client", store)
+    manager: Final = MCPServerManager()
+
+    await manager.reload_servers_from_database()
+    first: Final = manager.registry["analytics"].additional_auth
+    await manager.reload_servers_from_database()
+
+    assert first is None
+    assert tuple(profile.id for profile in manager.registry["analytics"].additional_auth or ()) == ("ana-bots",)

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -14,7 +15,7 @@ from litellm.proxy.mcp_server.auth_profiles import (
     UnsupportedOAuth2Flow,
     UnsupportedProfileHost,
 )
-from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles
+from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles, startup_profile_refusal
 from litellm.proxy.mcp_server.db import McpIdentifierConflict, create_mcp_server_if_identifier_free, update_mcp_server
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.types.mcp import MCPTransport
@@ -679,6 +680,55 @@ async def test_a_credentials_only_update_never_touches_the_profiles() -> None:
     assert store.profiles == before
 
 
+async def _registered(store: FakeMcpPrisma, monkeypatch: pytest.MonkeyPatch) -> Mapping[str, MCPServer]:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", store)
+    await global_mcp_server_manager.reload_servers_from_database()
+    return dict(global_mcp_server_manager.registry)
+
+
+@pytest.mark.asyncio
+async def test_registry_reload_decrypts_profile_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    store: Final = FakeMcpPrisma()
+    await _two_profile_server(store)
+
+    server: Final = (await _registered(store, monkeypatch))["analytics"]
+
+    assert server.additional_auth == (
+        MCPAuthProfile.model_validate(_bot("A")),
+        MCPAuthProfile.model_validate(_bot("B")),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reload_with_no_db_servers_reads_no_profiles(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    store: Final = FakeMcpPrisma()
+
+    async def unreadable(**_: object) -> list[object]:
+        raise ConnectionError("database is restarting")
+
+    store.db.litellm_mcpauthprofiletable.find_many = unreadable
+
+    assert await _registered(store, monkeypatch) == {}
+    assert "could not read MCP auth profiles" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_registry_reload_keeps_a_secret_that_was_stored_unencrypted(monkeypatch: pytest.MonkeyPatch) -> None:
+    store: Final = FakeMcpPrisma()
+    await _two_profile_server(store)
+    row: Final = store.profiles[0]
+    row["credentials"] = json.dumps({"client_id": "plain-app", "client_secret": "plain-secret"})
+
+    server: Final = (await _registered(store, monkeypatch))["analytics"]
+
+    assert server.additional_auth is not None
+    assert server.additional_auth[0].client_secret == "plain-secret"
+
+
 @pytest.mark.asyncio
 async def test_two_concurrent_puts_adding_colliding_ids_leave_one_winner_and_one_conflict() -> None:
     store: Final = FakeMcpPrisma()
@@ -891,6 +941,84 @@ async def test_a_host_flip_on_a_server_without_profiles_is_written_as_on_main() 
 
     assert isinstance(updated, LiteLLM_MCPServerTable)
     assert updated.is_byok is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reader_lags", [False, True], ids=["reader-current", "reader-lags"])
+async def test_startup_refuses_a_config_profile_that_collides_with_a_stored_one(reader_lags: bool) -> None:
+    store: Final = FakeMcpPrisma()
+    await _two_profile_server(store)
+    if reader_lags:
+        store.lag_profile_reads()
+    config_server: Final = MCPServer(
+        server_id="yaml-news",
+        name="news",
+        server_name="news",
+        transport=MCPTransport.http,
+        additional_auth=(MCPAuthProfile(id="a", auth_type="api_key", authentication_token="k"),),
+    )
+
+    refusal: Final = await startup_profile_refusal((config_server,), store)
+
+    assert refusal == (
+        "Invalid MCP auth profiles: Profile id 'A' of MCP server 'analytics' collides with profile id 'a' of "
+        "MCP server 'news'. Profile ids are unique across all servers, ignoring case."
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_refuses_stored_profiles_on_a_stdio_server() -> None:
+    store: Final = FakeMcpPrisma()
+    await _two_profile_server(store)
+    store.servers[0]["transport"] = "stdio"
+
+    assert await startup_profile_refusal((), store) == (
+        "Invalid MCP auth profiles: MCP server 'analytics' is a stdio server and cannot have additional_auth "
+        "profiles. Profiles apply only to HTTP and SSE servers."
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_skips_the_profile_check_when_the_table_cannot_be_read(caplog: pytest.LogCaptureFixture) -> None:
+    store: Final = FakeMcpPrisma()
+
+    async def unreadable(**_: object) -> list[object]:
+        raise ConnectionError("database is restarting")
+
+    store.db.litellm_mcpauthprofiletable.find_many = unreadable
+
+    assert await startup_profile_refusal((), store) is None
+    assert "Skipped the MCP auth profile startup check" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_ignores_a_pending_submission_that_shares_a_config_profile_id() -> None:
+    store: Final = FakeMcpPrisma()
+    await _create(store, _new_server("proposal", _bot("ana-bots"), approval_status="pending_review"), "member")
+    config_server: Final = MCPServer(
+        server_id="yaml-news",
+        name="news",
+        server_name="news",
+        transport=MCPTransport.http,
+        additional_auth=(MCPAuthProfile(id="ana-bots", auth_type="api_key", authentication_token="k"),),
+    )
+
+    assert await startup_profile_refusal((config_server,), store) is None
+
+
+@pytest.mark.asyncio
+async def test_startup_accepts_distinct_config_and_stored_profiles() -> None:
+    store: Final = FakeMcpPrisma()
+    await _two_profile_server(store)
+    config_server: Final = MCPServer(
+        server_id="yaml-news",
+        name="news",
+        server_name="news",
+        transport=MCPTransport.http,
+        additional_auth=(MCPAuthProfile(id="news-bots", auth_type="api_key", authentication_token="k"),),
+    )
+
+    assert await startup_profile_refusal((config_server,), store) is None
 
 
 def test_routes_outside_post_put_and_register_drop_additional_auth_as_on_main() -> None:

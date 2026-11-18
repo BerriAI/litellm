@@ -12071,6 +12071,32 @@ def test_a_server_without_profiles_keeps_its_main_statuses_and_body_shape(profil
         assert "additional_auth" not in body
 
 
+def test_a_profiled_server_is_listed_without_its_secrets(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    created: Final = admin.post(
+        "/v1/mcp/server",
+        json=_server_body("analytics", _api_profile("ana-bots", token_endpoint_auth_method="client_secret_basic")),
+    )
+
+    listed: Final = admin.get("/v1/mcp/server")
+    single: Final = admin.get("/v1/mcp/server/analytics")
+
+    expected_profile: Final = {
+        "id": "ana-bots",
+        "auth_type": "oauth2",
+        "oauth2_flow": "client_credentials",
+        "client_id": None,
+        "token_url": "https://auth.example/token",
+        "scopes": None,
+        "token_endpoint_auth_method": "client_secret_basic",
+    }
+    for response in (created, listed, single):
+        assert "bot-secret-value" not in response.text and "bot-app" not in response.text, response.text
+    assert created.json()["additional_auth"] == [expected_profile]
+    assert listed.json()[0]["additional_auth"] == [expected_profile]
+    assert single.json()["additional_auth"] == [expected_profile]
+
+
 def test_non_admin_views_never_carry_profiles(profile_api: _ProfileApi) -> None:
     admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
     admin.post("/v1/mcp/server", json={**_server_body("analytics", _api_profile("ana-bots")), "allow_all_keys": True})

@@ -9,6 +9,8 @@ from typing import Final
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.proxy.mcp_server.db import LOADABLE_MCP_SERVER_FILTER
+
 
 class FakeRow(BaseModel, extra="allow", frozen=True):
     pass
@@ -75,6 +77,14 @@ class _ProfileTable:
     ) -> Sequence[FakeRow]:
         if where is None:
             return [self._with_server(row, include) for row in self._store.profiles]
+        if "server" in where:
+            assert where == {"server": {"is": LOADABLE_MCP_SERVER_FILTER}}, where
+            return [
+                self._with_server(row, include)
+                for row in self._store.profiles
+                if next(s for s in self._store.servers if s["server_id"] == row["server_id"])["approval_status"]
+                in (None, "active", "approved")
+            ]
         assert len(where) == 1, "profile lookups filter on one column"
         column, condition = next(iter(where.items()))
         assert column in ("server_id", "profile_id_normalized"), where
