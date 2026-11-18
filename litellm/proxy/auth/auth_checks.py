@@ -1724,7 +1724,7 @@ async def common_checks(
                 )
                 if valid_token is not None
                 and valid_token.authenticated_by_custom_auth
-                and RouteChecks.is_llm_api_route(route=route)
+                and RouteChecks.runs_inference_checks(route=route)
                 else None,
                 _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
                 _team_soft_budget_check(

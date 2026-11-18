@@ -2964,6 +2964,7 @@ def test_spent_proxy_budget_refuses_chat_routes(monkeypatch: pytest.MonkeyPatch,
     "authenticated_by_custom_auth, route, spend, expect_budget_error",
     [
         pytest.param(True, "/chat/completions", 15.0, True, id="custom-auth-over-budget-llm-route"),
+        pytest.param(True, "/queue/chat/completions", 15.0, True, id="custom-auth-over-budget-queued-route"),
         pytest.param(True, "/chat/completions", 5.0, False, id="custom-auth-under-budget-llm-route"),
         pytest.param(True, "/key/info", 15.0, False, id="custom-auth-over-budget-management-route"),
         pytest.param(False, "/chat/completions", 15.0, False, id="virtual-key-path-checks-before-common-checks"),
