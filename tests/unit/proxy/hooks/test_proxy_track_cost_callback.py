@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,6 +19,7 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
+    _charge_request_cost,
     _get_budget_reservation_from_metadata,
     ProxyDBLogger,
     _should_track_cost_callback,
@@ -32,6 +33,7 @@ from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.videos.main import VideoObject
 
 
 @pytest.mark.asyncio
@@ -1364,14 +1366,16 @@ def _retrieved_batch(status: str, output_file_id: str | None):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged"),
+    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged", "redacted"),
     [
-        ("aretrieve_batch", "in_progress", None, True, False, False),
-        ("aretrieve_batch", "completed", None, True, False, False),
-        ("aretrieve_batch", "completed", "file-out", False, True, False),
-        ("aretrieve_batch", "completed", "file-out", True, True, True),
-        ("aretrieve_batch", "failed", None, True, True, True),
-        ("acreate_batch", "validating", None, True, True, True),
+        ("aretrieve_batch", "in_progress", None, True, False, False, False),
+        ("aretrieve_batch", "completed", None, True, False, False, False),
+        ("aretrieve_batch", "completed", "file-out", False, True, False, False),
+        ("aretrieve_batch", "completed", "file-out", True, True, True, False),
+        ("aretrieve_batch", "failed", None, True, True, True, False),
+        ("acreate_batch", "validating", None, True, True, True, False),
+        ("aretrieve_batch", "in_progress", None, True, False, False, True),
+        ("aretrieve_batch", "completed", "file-out", True, True, True, True),
     ],
     ids=[
         "retrieve_before_final",
@@ -1380,20 +1384,31 @@ def _retrieved_batch(status: str, output_file_id: str | None):
         "retrieve_first_final",
         "retrieve_failed_batch",
         "create_before_final",
+        "redacted_retrieve_before_final",
+        "redacted_retrieve_first_final",
     ],
 )
 async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # test-quality-ok: whether the spend writer runs, whether the counters move, and whether the poll's reservation is handed back is the whole observable contract of the gate
-    call_type, status, output_file_id, row_claimed, spend_written, charged
+    call_type, status, output_file_id, row_claimed, spend_written, charged, redacted
 ):
     """
     A poll before the batch is final used to pin its shared spend row at $0, and every
     completed retrieve after the first charged the key again (LIT-7048). Only retrieves
     are gated, since creating a batch is its own billable request, and a retrieve that
-    charges nothing hands its budget reservation back instead.
+    charges nothing hands its budget reservation back instead. Message redaction replaces
+    the logged batch, so the gate reads the batch logging stamped before redacting it.
     """
+    from litellm.router_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
+
     logger = ProxyDBLogger()
     budget_reservation = None if charged else {"reserved_cost": 0.5, "entries": []}
-    kwargs = _batch_retrieve_kwargs(call_type, reservation=budget_reservation)
+    retrieved: Final = _retrieved_batch(status, output_file_id)
+    stamped: Final = (
+        {POLLED_BATCH_ID_KWARG: retrieved.id, POLLED_BATCH_COST_IS_FINAL_KWARG: status != "in_progress"}
+        if redacted
+        else {}
+    )
+    kwargs = {**_batch_retrieve_kwargs(call_type, reservation=budget_reservation), **stamped}
 
     with (
         patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
@@ -1415,7 +1430,7 @@ async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # 
 
         await logger._PROXY_track_cost_callback(
             kwargs=kwargs,
-            completion_response=_retrieved_batch(status, output_file_id),
+            completion_response={"text": "redacted-by-litellm"} if redacted else retrieved,
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
@@ -2919,18 +2934,8 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert event.response_cost == 0.0125
 
 
-@pytest.mark.asyncio
-async def test_async_log_success_event_keeps_batch_retrieves_in_process():
-    producer = SpendEventProducer(
-        address=UnixAddress(path="/nonexistent/spend.sock"),
-        on_unavailable="drop",
-        buffer_size=10,
-        connect_timeout=1.0,
-        fallback=_no_fallback,
-    )
-    logger = ProxyDBLogger(producer)
-    kwargs = {**_offload_kwargs(), "call_type": CallTypes.aretrieve_batch.value}
-    completed_batch = LiteLLMBatch(
+def _completed_batch() -> LiteLLMBatch:
+    return LiteLLMBatch(
         id="batch_abc",
         completion_window="24h",
         created_at=1,
@@ -2940,6 +2945,29 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
         object="batch",
         status="completed",
     )
+
+
+def _completed_video() -> VideoObject:
+    return VideoObject(id="video_abc", object="video", status="completed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "polled_job"),
+    [(CallTypes.aretrieve_batch.value, _completed_batch), ("avideo_status", _completed_video)],
+)
+async def test_async_log_success_event_keeps_job_polls_in_process(call_type, polled_job):
+    """The spend event leaves out the polled video's status and id, which decide whether the poll charges the job."""
+    producer = SpendEventProducer(
+        address=UnixAddress(path="/nonexistent/spend.sock"),
+        on_unavailable="drop",
+        buffer_size=10,
+        connect_timeout=1.0,
+        fallback=_no_fallback,
+    )
+    logger = ProxyDBLogger(producer)
+    kwargs = {**_offload_kwargs(), "call_type": call_type}
+    completed_job = polled_job()
 
     with (
         patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
@@ -2954,7 +2982,7 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
-        await logger.async_log_success_event(kwargs, completed_batch, datetime.now(), datetime.now())
+        await logger.async_log_success_event(kwargs, completed_job, datetime.now(), datetime.now())
 
     mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
     assert producer.stats().queued == 0
@@ -3388,3 +3416,50 @@ async def test_batch_accounting_does_not_retry_after_a_search_allowance_update(m
     assert sum(counter.totals.values()) == 5
     assert outcome.failed is True
     assert outcome.retryable_failure is False
+
+
+class _RecordedCharges:
+    def __init__(self, outcomes: tuple[bool, ...]) -> None:
+        self.outcomes = outcomes
+        self.calls: tuple[tuple[object, float, dict[str, object] | None], ...] = ()
+
+    async def __call__(
+        self, *, kwargs: dict, response_cost: float, budget_reservation: dict[str, object] | None
+    ) -> bool:
+        self.calls = (*self.calls, (kwargs.get("response_cost"), response_cost, budget_reservation))
+        return self.outcomes[len(self.calls) - 1]
+
+
+_GUARDED_POLL: Final = MappingProxyType(
+    {
+        "call_type": "avideo_status",
+        "response_cost": 0.43,
+        "standard_logging_object": {"guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}]},
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcomes", "poll", "charged", "second_call"),
+    [
+        ((True,), _GUARDED_POLL, 0.43, None),
+        ((False, True), _GUARDED_POLL, 0.01, (0.01, 0.01, None)),
+        ((False, False), _GUARDED_POLL, None, (0.01, 0.01, None)),
+        ((False,), {"response_cost": 0.43}, None, None),
+        ((False,), {**_GUARDED_POLL, "call_type": "aretrieve_batch"}, None, None),
+    ],
+    ids=[
+        "first_poll_pays_the_job",
+        "repeat_poll_pays_its_guardrail",
+        "guardrail_charge_not_written",
+        "repeat_poll_free",
+        "repeat_batch_poll_free_whatever_its_guardrails_cost",
+    ],
+)
+async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails(outcomes, poll, charged, second_call):
+    charge_spend: Final = _RecordedCharges(outcomes)
+    reservation: Final = {"reserved": 0.43}
+
+    assert await _charge_request_cost(charge_spend, dict(poll), 0.43, reservation) == charged
+    assert charge_spend.calls == ((0.43, 0.43, reservation), *(() if second_call is None else (second_call,)))

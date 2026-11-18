@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import math
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
@@ -80,6 +81,12 @@ def allowed_openai_param_names(value: object) -> tuple[str, ...]:
     except ValidationError:
         return ()
     return tuple(entry for entry in entries if isinstance(entry, str))
+
+
+def finite_cost(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return None
+    return float(value)
 
 
 @runtime_checkable
