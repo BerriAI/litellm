@@ -4,7 +4,7 @@ import { Tabs } from "@base-ui/react/tabs";
 import Image from "next/image";
 import Link from "next/link";
 import { useTheme } from "next-themes";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
@@ -23,6 +23,8 @@ import styles from "./catalog.module.css";
 import blueLogo from "./images/litellm-primary-blue.svg";
 import whiteLogo from "./images/litellm-primary-white.svg";
 
+const emptySubscribe = () => () => {};
+
 export function CatalogNavbar({
   title,
   search,
@@ -38,7 +40,12 @@ export function CatalogNavbar({
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
   const inputRef = useRef<HTMLInputElement>(null);
-  const isDark = resolvedTheme === "dark";
+  const mounted = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+  const isDark = mounted && resolvedTheme === "dark";
   const themeLabel = t(isDark ? "themeToggle.switchToLight" : "themeToggle.switchToDark");
 
   useEffect(() => {

@@ -1,14 +1,19 @@
-import { fireEvent, within } from "@testing-library/react";
+import { fireEvent, render, within } from "@testing-library/react";
+import { Tabs } from "@base-ui/react/tabs";
 import userEvent from "@testing-library/user-event";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Plugin } from "@/components/claude_code_plugins/types";
 import type { apiClient } from "@/components/networking";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 
 import { chooseSelectOption, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import PublicAiHub from "./PublicAiHub";
+import { CatalogNavbar } from "./CatalogNavbar";
 
-const { apiGetMock, realGet, navigation, uiSettings, replaceMock, hubInfo } = vi.hoisted(() => ({
+const { apiGetMock, realGet, navigation, uiSettings, replaceMock, hubInfo, theme } = vi.hoisted(() => ({
+  theme: { resolvedTheme: undefined as string | undefined, setTheme: vi.fn() },
   apiGetMock: vi.fn(),
   realGet: {
     current: (..._args: Parameters<typeof apiClient.get>): Promise<unknown> => Promise.reject(new Error("unset")),
@@ -23,6 +28,8 @@ const { apiGetMock, realGet, navigation, uiSettings, replaceMock, hubInfo } = vi
     useful_links: { "Getting started": { url: "https://docs.example.com", index: 0 } },
   },
 }));
+
+vi.mock("next-themes", () => ({ useTheme: () => theme }));
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => navigation.params,
@@ -171,6 +178,7 @@ const tokenExpiringIn = (seconds: number) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  theme.resolvedTheme = undefined;
   testQueryClient.clear();
   uiSettings.values = {};
   navigation.params = new URLSearchParams();
@@ -184,6 +192,33 @@ beforeEach(() => {
 });
 
 describe("PublicAiHub", () => {
+  it.each([
+    { savedTheme: "dark", label: "Switch to light mode" },
+    { savedTheme: "light", label: "Switch to dark mode" },
+  ])("hydrates the theme action consistently with saved $savedTheme mode", ({ savedTheme, label }) => {
+    const navbar = (
+      <ThemeProvider>
+        <Tabs.Root defaultValue="models">
+          <CatalogNavbar title="Model Hub" search="" onSearchChange={vi.fn()} />
+        </Tabs.Root>
+      </ThemeProvider>
+    );
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(navbar);
+    document.body.appendChild(container);
+    theme.resolvedTheme = savedTheme;
+    const consoleError = vi.spyOn(console, "error");
+
+    render(navbar, { container, hydrate: true });
+
+    const toggle = within(container).getByRole("button", { name: label });
+    expect(toggle).toHaveAttribute("title", label);
+    expect(consoleError).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    expect(theme.setTheme).toHaveBeenCalledWith(savedTheme === "dark" ? "light" : "dark");
+    consoleError.mockRestore();
+  });
+
   it.each([
     {
       name: "a configured logo URL",

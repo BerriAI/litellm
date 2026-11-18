@@ -137,18 +137,47 @@ function ModelFilters({ hub }: { hub: HubData }) {
       />
       <fieldset data-slot="catalog-filter-section" className="min-w-0">
         <legend className="mb-3 text-sm font-medium">{t("publicModelHub.catalog.provider")}</legend>
-        <MultiSelect
-          options={facets.providers.map((provider) => ({
-            value: provider,
-            label: providerName(provider),
-            icon: <ProviderAvatar provider={provider} />,
-          }))}
-          value={models.providerValues}
-          onValueChange={models.onProvidersChange}
-          placeholder={t("publicModelHub.catalog.allProviders")}
-          className={styles.providerSelect}
-          contentClassName={styles.typography}
-        />
+        <div className={styles.providerControl}>
+          <svg
+            className={styles.providerControlIcon}
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+          <MultiSelect
+            options={facets.providers.map((provider) => ({
+              value: provider,
+              label: providerName(provider),
+              icon: <ProviderAvatar provider={provider} />,
+            }))}
+            value={models.providerValues}
+            onValueChange={models.onProvidersChange}
+            placeholder={t("publicModelHub.catalog.allProviders")}
+            className={styles.providerSelect}
+            contentClassName={styles.typography}
+          />
+          <svg
+            className={styles.providerControlChevron}
+            width="12"
+            height="12"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
+            <path d="m6 8 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
       </fieldset>
     </CatalogFilters>
   );

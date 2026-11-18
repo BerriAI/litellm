@@ -404,9 +404,31 @@
   box-shadow: none;
 }
 
+.providerControl {
+  position: relative;
+}
+
+.providerControlIcon,
+.providerControlChevron {
+  position: absolute;
+  top: 19px;
+  z-index: 1;
+  color: var(--catalog-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.providerControlIcon {
+  left: 9px;
+}
+
+.providerControlChevron {
+  right: 9px;
+}
+
 .providerSelect {
   min-height: 38px;
-  padding: 8px;
+  padding: 8px 25px 8px 29px;
   gap: 5px;
   background: var(--catalog-surface);
   border: 1px solid var(--catalog-rule);
