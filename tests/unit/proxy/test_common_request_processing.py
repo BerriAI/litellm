@@ -7,6 +7,7 @@ import gc
 import gzip
 import json
 import time
+import traceback
 import weakref
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
@@ -108,6 +109,61 @@ from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, Spec
 from litellm.utils import ModelResponseListIterator
 from tests._support.clock_loops import AutojumpClockLoop
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.asyncio
+async def test_failed_router_request_releases_body_without_cyclic_gc() -> None:
+    class Body(str):
+        pass
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "judge",
+                "litellm_params": {
+                    "model": "openai/judge",
+                    "api_base": "https://failure.example/v1",
+                    "api_key": "fake",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    async def failed_request() -> tuple[Exception, weakref.ReferenceType[Body]]:
+        body: Final = Body("x" * (1024 * 1024))
+        reference: Final = weakref.ref(body)
+        processor: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "judge", "messages": [{"role": "user", "content": body}]}
+        )
+        try:
+            await router.acompletion(**processor.data)
+        except Exception as error:
+            return error, reference
+        pytest.fail("provider failure was not raised")
+
+    gc.disable()
+    try:
+        with respx.mock as upstream:
+            upstream.post("https://failure.example/v1/chat/completions").respond(
+                500, json={"error": {"message": "server failed", "type": "server_error"}}
+            )
+            error, reference = await failed_request()
+            with pytest.raises(ProxyException) as response:
+                await ProxyBaseLLMRequestProcessing(data={}).handle_llm_api_exception(
+                    e=error,
+                    user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+                )
+            assert response.value.code == "500"
+            assert "server failed" in str(response.value)
+            assert "acompletion" in "".join(traceback.format_exception(error))
+            del error, response
+        assert reference() is None
+    finally:
+        gc.enable()
+        router.reset()
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():

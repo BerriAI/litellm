@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import time
+import traceback
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -5260,6 +5261,16 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(e, RouterRateLimitError) and e.cooldown_time > 0:
             headers["retry-after"] = str(math.ceil(e.cooldown_time))
 
+    @staticmethod
+    def _clear_exception_frames(exception: BaseException | None, seen: frozenset[int] = frozenset()) -> None:
+        if exception is None or id(exception) in seen:
+            return
+        traceback.clear_frames(exception.__traceback__)
+        visited: Final = seen | {id(exception)}
+        ProxyBaseLLMRequestProcessing._clear_exception_frames(exception.__cause__, visited)
+        if exception.__context__ is not exception.__cause__:
+            ProxyBaseLLMRequestProcessing._clear_exception_frames(exception.__context__, visited)
+
     async def handle_llm_api_exception(
         self,
         e: Exception,
@@ -5281,6 +5292,9 @@ class ProxyBaseLLMRequestProcessing:
         )
         # Use transformed exception if callback returned one, otherwise use original
         failure: Final = transformed_exception if transformed_exception is not None else answered
+        self._clear_exception_frames(e)
+        self._clear_exception_frames(answered)
+        self._clear_exception_frames(failure)
         litellm_debug_info: Final = getattr(failure, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
             "An error occurred: %s %s",
