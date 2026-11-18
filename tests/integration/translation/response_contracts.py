@@ -230,6 +230,8 @@ RESPONSES_OPTIONAL: Final = MappingProxyType(
                 "top_logprobs",
                 "provider_specific_fields",
                 "access_programs",
+                "image",
+                "input_transformations",
                 "billing",
                 "moderation",
                 "tool_usage",

@@ -266,6 +266,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                 "text_tokens": None,
                 "video_tokens": None,
                 "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
             },
             "output_tokens": 118,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 53, "text_tokens": None},
@@ -296,5 +297,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             "web_search": {"num_requests": 0},
         },
         "top_logprobs": 0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )

@@ -361,13 +361,19 @@ OPENAI_RESPONSES_RESPONSE: Final[Mapping[str, JsonValue]] = {
     "truncation": "disabled",
     "usage": {
         "input_tokens": 309,
-        "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+        "input_tokens_details": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+        },
         "output_tokens": 118,
         "output_tokens_details": {"reasoning_tokens": 53},
         "total_tokens": 427,
     },
     "user": None,
     "metadata": {},
+    "image": {"context_compression": "disabled"},
+    "input_transformations": [],
 }
 
 

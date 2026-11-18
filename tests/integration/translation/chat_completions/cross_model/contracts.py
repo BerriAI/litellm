@@ -108,6 +108,8 @@ PROVIDER_EXTENSIONS: Final = MappingProxyType(
                 "tool_usage",
                 "content_filters",
                 "access_programs",
+                "image",
+                "input_transformations",
                 "frequency_penalty",
                 "presence_penalty",
                 "vertex_ai_grounding_metadata",

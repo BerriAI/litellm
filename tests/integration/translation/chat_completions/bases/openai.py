@@ -384,7 +384,11 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 312,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 141,
             "output_tokens_details": {"reasoning_tokens": 76},
             "total_tokens": 453,
@@ -430,7 +434,12 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 312,
             "total_tokens": 453,
             "completion_tokens_details": {"reasoning_tokens": 76},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "access_programs": {"cyber": "daybreak_blue"},
         "billing": {"payer": "developer"},
@@ -447,6 +456,8 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -600,11 +611,17 @@ GPT_5_4_MINI_TEST_CASE: Final = TranslationTestCase(
         "service_tier": "default",
         "usage": {
             "input_tokens": 448,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+            },
             "output_tokens": 82,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 530,
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
@@ -641,7 +658,12 @@ GPT_5_4_MINI_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 448,
             "total_tokens": 530,
             "completion_tokens_details": {"reasoning_tokens": 0},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "access_programs": {"cyber": "daybreak_blue"},
         "billing": {"payer": "developer"},
@@ -658,6 +680,8 @@ GPT_5_4_MINI_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -701,11 +725,17 @@ GPT_6_SOL_TEST_CASE: Final = TranslationTestCase(
         "service_tier": "default",
         "usage": {
             "input_tokens": 448,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+            },
             "output_tokens": 53,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 501,
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
@@ -741,7 +771,12 @@ GPT_6_SOL_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 448,
             "total_tokens": 501,
             "completion_tokens_details": {"reasoning_tokens": 0},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "access_programs": {"cyber": "daybreak_blue"},
         "billing": {"payer": "developer"},
@@ -758,6 +793,8 @@ GPT_6_SOL_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -853,7 +890,11 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 312,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 166,
             "output_tokens_details": {"reasoning_tokens": 100},
             "total_tokens": 478,
@@ -899,7 +940,12 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 312,
             "total_tokens": 478,
             "completion_tokens_details": {"reasoning_tokens": 100},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
@@ -915,6 +961,8 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -1010,7 +1058,11 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 312,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 135,
             "output_tokens_details": {"reasoning_tokens": 70},
             "total_tokens": 447,
@@ -1056,7 +1108,12 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 312,
             "total_tokens": 447,
             "completion_tokens_details": {"reasoning_tokens": 70},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
@@ -1072,6 +1129,8 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -1169,7 +1228,11 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 312,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 87,
             "output_tokens_details": {"reasoning_tokens": 17},
             "total_tokens": 399,
@@ -1216,7 +1279,12 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 312,
             "total_tokens": 399,
             "completion_tokens_details": {"reasoning_tokens": 17},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "access_programs": {"cyber": "daybreak_blue"},
         "billing": {"payer": "developer"},
@@ -1233,5 +1301,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )

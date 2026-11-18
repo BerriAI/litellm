@@ -1,5 +1,6 @@
 from typing import Final
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
 from integration.translation.templates.openai import OPENAI_RESPONSES_REQUEST_FROM_MESSAGES, OPENAI_RESPONSES_RESPONSE
@@ -191,7 +192,11 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 309,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 140,
             "output_tokens_details": {"reasoning_tokens": 75},
             "total_tokens": 449,

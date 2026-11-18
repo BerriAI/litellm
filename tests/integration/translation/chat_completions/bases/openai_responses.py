@@ -1,6 +1,7 @@
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
 from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
 from integration.translation.templates.openai import (
@@ -225,7 +226,11 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 312,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 166,
             "output_tokens_details": {"reasoning_tokens": 100},
             "total_tokens": 478,
@@ -271,7 +276,12 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             "prompt_tokens": 312,
             "total_tokens": 478,
             "completion_tokens_details": {"reasoning_tokens": 100},
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
         },
         "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
@@ -287,5 +297,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             },
             "web_search": {"num_requests": 0},
         },
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )

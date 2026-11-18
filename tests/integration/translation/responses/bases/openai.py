@@ -1,6 +1,7 @@
 from typing import Final
 from unittest.mock import ANY
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
 from integration.translation.responses.templates import RESPONSES_NATIVE_RESPONSE, RESPONSES_REQUEST
 from integration.translation.templates.openai import OPENAI_RESPONSES_REQUEST, OPENAI_RESPONSES_RESPONSE
@@ -524,7 +525,11 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 309,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 159,
             "output_tokens_details": {"reasoning_tokens": 94},
             "total_tokens": 468,
@@ -622,6 +627,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
                 "text_tokens": None,
                 "video_tokens": None,
                 "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
             },
             "output_tokens": 159,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 94, "text_tokens": None},
@@ -652,6 +658,8 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
             "web_search": {"num_requests": 0},
         },
         "top_logprobs": 0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -761,6 +769,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                 "text_tokens": None,
                 "video_tokens": None,
                 "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
             },
             "output_tokens": 118,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 53, "text_tokens": None},
@@ -791,6 +800,8 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             "web_search": {"num_requests": 0},
         },
         "top_logprobs": 0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -845,7 +856,11 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 309,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 177,
             "output_tokens_details": {"reasoning_tokens": 112},
             "total_tokens": 486,
@@ -943,6 +958,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
                 "text_tokens": None,
                 "video_tokens": None,
                 "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
             },
             "output_tokens": 177,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 112, "text_tokens": None},
@@ -973,6 +989,8 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
             "web_search": {"num_requests": 0},
         },
         "top_logprobs": 0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
 
@@ -1028,7 +1046,11 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         ],
         "usage": {
             "input_tokens": 309,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                **object_value(object_value(OPENAI_RESPONSES_RESPONSE["usage"])["input_tokens_details"]),
+                "cache_write_tokens": 0,
+                "cached_tokens": 0,
+            },
             "output_tokens": 100,
             "output_tokens_details": {"reasoning_tokens": 35},
             "total_tokens": 409,
@@ -1126,6 +1148,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
                 "text_tokens": None,
                 "video_tokens": None,
                 "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
             },
             "output_tokens": 100,
             "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 35, "text_tokens": None},
@@ -1156,5 +1179,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
             "web_search": {"num_requests": 0},
         },
         "top_logprobs": 0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
     },
 )
