@@ -368,11 +368,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "projects",
         page: "projects",
-        label: (
-          <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.projects" /> <BetaBadge />
-          </span>
-        ),
+        label: "shell.nav.items.projects",
         icon: <Folder {...ICON} />,
         roles: [...projectReaderRoles],
       },

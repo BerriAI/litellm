@@ -273,14 +273,25 @@ def no_jwt_signer_left_by_another_test(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def restore_mcp_manager_singleton():
-    """``_reload_mcp_manager_module`` rebinds ``global_mcp_server_manager`` in every MCP module, so
-    without this the next test file inherits a manager that has none of its servers registered."""
+    """``_reload_mcp_manager_module`` rebinds ``global_mcp_server_manager`` in every MCP module and replaces
+    the manager module's classes, so without this the next test file inherits a manager that has none of its
+    servers registered and ``isinstance`` checks against classes other modules imported before the reload fail."""
     bound: Final = tuple(
         (module, module.global_mcp_server_manager)
         for name, module in tuple(sys.modules.items())
         if name.startswith("litellm.proxy.mcp_server.") and hasattr(module, "global_mcp_server_manager")
     )
+    reloaded: Final = tuple(
+        (namespace, dict(namespace))
+        for namespace in (
+            vars(sys.modules["litellm.proxy.mcp_server.utils"]),
+            vars(sys.modules["litellm.proxy.mcp_server.mcp_server_manager"]),
+        )
+    )
     yield
+    for namespace, snapshot in reloaded:
+        namespace.clear()
+        namespace.update(snapshot)
     for module, manager in bound:
         module.global_mcp_server_manager = manager
 

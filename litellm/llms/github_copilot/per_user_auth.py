@@ -38,7 +38,7 @@ from litellm.exceptions import (
 )
 
 from .authenticator import github_api_headers
-from .common_utils import get_copilot_default_headers
+from .common_utils import COPILOT_CLI_INTEGRATION_ID, get_copilot_default_headers
 from .github_host import GithubHostEndpoints, github_host_endpoints, normalized_github_host
 
 GITHUB_COPILOT_USER_SESSION_KWARG_KEY: Final = "github_copilot_user_session"
@@ -157,7 +157,7 @@ class GithubCopilotUserSession:
 
     @property
     def integration_id(self) -> str | None:
-        return "copilot-developer-cli" if self.is_app else None
+        return COPILOT_CLI_INTEGRATION_ID if self.is_app else None
 
     def __repr__(self) -> str:
         return f"GithubCopilotUserSession(api_base={self.api_base!r}, token=REDACTED)"
