@@ -23,6 +23,7 @@ from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_BY_LITELM_STRING
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_base_tags,
     get_datadog_base_url_from_env,
     get_datadog_service,
     get_datadog_tags,
@@ -585,7 +586,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
-                        tags=get_datadog_tags(),
+                        # Datadog copies batch tags onto every span, so DD_TAGS go on each span instead,
+                        # where the request's own team replaces a DD_TAGS team
+                        tags=list(get_datadog_base_tags()),
                         spans=self.log_queue,
                     ),
                 ),

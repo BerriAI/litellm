@@ -13,8 +13,9 @@ import json
 import os
 from datetime import datetime, timedelta
 from typing import Any, Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -98,6 +99,24 @@ def test_dd_tags_are_exported_on_llm_observability_spans(logger: DataDogLLMObsLo
     assert "cost_center:engineering" in payload["tags"]
     assert "team:platform" in payload["tags"]
     assert "request_tag:cost_center:engineering" not in payload["tags"]
+
+
+@pytest.mark.asyncio
+async def test_dd_tags_team_stays_off_a_span_whose_request_has_a_team(logger: DataDogLLMObsLogger) -> None:
+    start: Final = datetime(2026, 9, 1, 12, 0, 0)
+    request: Final = build_payload(metadata={"user_api_key_team_alias": "payments"})
+    accepted: Final = httpx.Response(202, request=httpx.Request("POST", "https://intake.example"))
+    with (
+        patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}),
+        patch.object(logger.async_client, "post", AsyncMock(return_value=accepted)) as post,
+    ):
+        logger.log_queue.append(logger.create_llm_obs_payload(request, start, start + timedelta(seconds=2)))
+        await logger.async_send_batch()
+
+    attributes: Final = json.loads(post.await_args.kwargs["content"])["data"]["attributes"]
+    span_tags: Final = attributes["spans"][0]["tags"]
+    assert [tag for tag in [*attributes["tags"], *span_tags] if tag.startswith("team:")] == ["team:payments"]
+    assert "cost_center:engineering" in span_tags
 
 
 def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMObsLogger) -> None:

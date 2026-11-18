@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.types.utils import StandardLoggingPayload
@@ -68,6 +69,22 @@ def _get_request_team(standard_logging_object: StandardLoggingPayload | None) ->
     )
 
 
+def _get_datadog_base_tag_values() -> Mapping[str, str]:
+    """LiteLLM's own `env`, `service`, `version`, `HOSTNAME` and `POD_NAME` tag values."""
+    return {
+        "env": get_datadog_env(),
+        "service": get_datadog_service(),
+        "version": os.getenv("DD_VERSION", "unknown"),
+        "HOSTNAME": get_datadog_hostname(),
+        "POD_NAME": get_datadog_pod_name(),
+    }
+
+
+def get_datadog_base_tags() -> tuple[str, ...]:
+    """LiteLLM's own tags, without `DD_TAGS` or anything from a request."""
+    return tuple(f"{k}:{v}" for k, v in _get_datadog_base_tag_values().items())
+
+
 def get_datadog_tags(
     standard_logging_object: StandardLoggingPayload | None = None,
 ) -> list[str]:
@@ -78,13 +95,7 @@ def get_datadog_tags(
     comma: ",".join(get_datadog_tags(...)).
     """
 
-    base_tags: Final = {
-        "env": get_datadog_env(),
-        "service": get_datadog_service(),
-        "version": os.getenv("DD_VERSION", "unknown"),
-        "HOSTNAME": get_datadog_hostname(),
-        "POD_NAME": get_datadog_pod_name(),
-    }
+    base_tags: Final = _get_datadog_base_tag_values()
 
     team_tag: Final = _get_request_team(standard_logging_object)
     litellm_tag_keys: Final = frozenset((*base_tags, "team") if team_tag else base_tags)
