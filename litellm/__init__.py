@@ -130,6 +130,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
+    "prefix_block_hashes",
     "generic_api",
     "resend_email",
     "sendgrid_email",
@@ -507,6 +508,22 @@ public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 if TYPE_CHECKING:
+    from .harness.evaluation import (
+        CheckResult as CheckResult,
+        CommandCheck as CommandCheck,
+        EvalCheck as EvalCheck,
+        EvalRun as EvalRun,
+        EvalScorecard as EvalScorecard,
+        EvalStatus as EvalStatus,
+        EvalSummary as EvalSummary,
+        EvalTarget as EvalTarget,
+        EvalTask as EvalTask,
+        JudgeCheck as JudgeCheck,
+        PredicateCheck as PredicateCheck,
+        aagent_eval as aagent_eval,
+        agent_eval as agent_eval,
+    )
+
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
@@ -686,6 +703,7 @@ streamlake_models: Final[Set[str]] = set()
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
+vispark_models: Final[Set[str]] = set()
 morph_models: Set = set()
 opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()
@@ -986,6 +1004,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
+        elif value.get("litellm_provider") == "vispark":
+            vispark_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
         elif value.get("litellm_provider") == "opencode_go":
@@ -1166,6 +1186,7 @@ model_list = list(
     | wally_models
     | zerogpu_models
     | v0_models
+    | vispark_models
     | morph_models
     | opencode_go_models
     | lambda_ai_models
@@ -1298,6 +1319,7 @@ def _build_models_by_provider() -> dict:
         "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
+        "vispark": vispark_models,
         "morph": morph_models,
         "opencode_go": opencode_go_models,
         "lambda_ai": lambda_ai_models,
@@ -1465,6 +1487,7 @@ from .exceptions import (
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
+    RequestOverDeploymentTpmError as RequestOverDeploymentTpmError,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
@@ -1614,6 +1637,7 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
+from .google_genai import generate_content as generate_content  # pyright: ignore[reportUnknownVariableType]  # native request types require the optional google-genai SDK
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Mapping[str, object]] = None
@@ -1795,6 +1819,9 @@ if TYPE_CHECKING:
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
+    )
+    from .llms.vercel_ai_gateway.decisions.transformation import (
+        VercelAIGatewayDecisionsConfig as VercelAIGatewayDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

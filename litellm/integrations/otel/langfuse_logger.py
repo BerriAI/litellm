@@ -4,11 +4,14 @@ from typing import TYPE_CHECKING, Final
 from opentelemetry.sdk.trace import ReadableSpan
 
 from litellm._logging import verbose_logger
+from litellm.integrations.otel.emitter import attribute_budget, carried_keys
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_OBSERVATION_INPUT,
     LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_RELEASE,
     LANGFUSE_TRACE_NAME,
+    LANGFUSE_VERSION,
     LangfuseMapper,
 )
 from litellm.integrations.otel.model.metadata import internal_call_origin
@@ -44,11 +47,16 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
         if root is not None and root.is_recording():
+            stamped: Final = LangfuseMapper.trace_attributes(
+                caller_trace_controls(kwargs),
+                as_str(kwargs.get("call_type")) if self._derives_trace_name(root, kwargs) else None,
+            )
+            room: Final = attribute_budget(root, 0)
+            fits: Final = room is None or len(stamped.keys() - carried_keys(root)) <= room
             root.set_attributes(
-                LangfuseMapper.trace_attributes(
-                    caller_trace_controls(kwargs),
-                    as_str(kwargs.get("call_type")) if self._derives_trace_name(root, kwargs) else None,
-                )
+                stamped
+                if fits
+                else {key: value for key, value in stamped.items() if key not in (LANGFUSE_RELEASE, LANGFUSE_VERSION)}
             )
         super().log_pre_api_call(model, messages, kwargs)
 

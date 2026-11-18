@@ -14,6 +14,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.reasoning_effort_capability import REASONING_EFFORT_ADVERTISEMENT_ORDER
 from litellm.router_core import RouterCore
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, timeout
@@ -485,6 +486,74 @@ async def test_classifier_call_keeps_reasoning_effort_on_a_deployment_with_suppo
         model="g", messages=MESSAGES, reasoning_effort="low", litellm_metadata=dict(CLASSIFIER_METADATA)
     )
     assert _sent(host)["reasoning_effort"] == "low"
+
+
+LEVELED_FOUNDRY_MODEL: Final = "azure_ai/DeepSeek-V4-Flash-0731"
+
+
+def _catalog_levels(model: str) -> tuple[str, ...]:
+    levels: Final = litellm.model_cost[model]["reasoning_effort_levels"]
+    assert isinstance(levels, list) and levels
+    return tuple(str(level) for level in levels)
+
+
+def _unlisted_level(model: str) -> str:
+    return next(level for level in REASONING_EFFORT_ADVERTISEMENT_ORDER if level not in _catalog_levels(model))
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info"),
+    [(LEVELED_FOUNDRY_MODEL, {}), ("azure_ai/litellm-qa-own-name", {"base_model": LEVELED_FOUNDRY_MODEL})],
+    ids=["catalog-model", "base-model"],
+)
+async def test_classifier_call_drops_a_reasoning_effort_level_the_deployment_refuses(
+    make_core: MakeCore, host: EndpointHost, model: str, model_info: dict[str, object]
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model, model_info=model_info)])
+    unlisted: Final = _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    await core.acompletion(
+        model="g",
+        messages=MESSAGES,
+        reasoning_effort=unlisted,
+        litellm_metadata=dict(CLASSIFIER_METADATA),
+        proxy_server_request={"body": {"reasoning_effort": unlisted, "keep": 1}},
+    )
+    sent: Final = _sent(host)
+    assert "reasoning_effort" not in sent
+    assert sent["proxy_server_request"] == {"body": {"keep": 1}}
+
+
+@pytest.mark.parametrize(
+    ("listed", "deployment_params"),
+    [(True, {}), (False, {"allowed_openai_params": ["reasoning_effort"]})],
+    ids=["catalog-level", "allowlisted"],
+)
+async def test_classifier_call_keeps_a_reasoning_effort_level_the_deployment_sends(
+    make_core: MakeCore, host: EndpointHost, listed: bool, deployment_params: dict[str, object]
+):
+    level: Final = (
+        _catalog_levels(LEVELED_FOUNDRY_MODEL)[-1] if listed else _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    )
+    core: Final = make_core(model_list=[deployment("g", "d1", model=LEVELED_FOUNDRY_MODEL, **deployment_params)])
+    await core.acompletion(
+        model="g", messages=MESSAGES, reasoning_effort=level, litellm_metadata=dict(CLASSIFIER_METADATA)
+    )
+    assert _sent(host)["reasoning_effort"] == level
+
+
+async def test_classifier_call_keeps_a_level_the_deployment_declares_itself(make_core: MakeCore, host: EndpointHost):
+    unlisted: Final = _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "g", "d1", model=LEVELED_FOUNDRY_MODEL, model_info={"reasoning_effort_levels": [unlisted, "high"]}
+            )
+        ]
+    )
+    await core.acompletion(
+        model="g", messages=MESSAGES, reasoning_effort=unlisted, litellm_metadata=dict(CLASSIFIER_METADATA)
+    )
+    assert _sent(host)["reasoning_effort"] == unlisted
 
 
 # --- silent experiments ---------------------------------------------------------------------

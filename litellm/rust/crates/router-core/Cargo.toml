@@ -7,6 +7,7 @@ repository.workspace = true
 description = "The router core behind litellm.Router: registry, settings, health, selection and the call loop"
 
 [dependencies]
+litellm-python-compat.workspace = true
 arc-swap.workspace = true
 async-trait.workspace = true
 litellm-cache.workspace = true

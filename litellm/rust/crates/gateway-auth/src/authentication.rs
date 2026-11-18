@@ -3,7 +3,6 @@ use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 use axum::http::{Request, request::Parts};
 use litellm_config::Config;
 use litellm_secret_value::SecretValue;
-use litellm_secrets::source::SecretSource;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -55,10 +54,6 @@ impl IdentityResolver for LocalAdministrator {
         Box::pin(async move {
             let allowed = match identity.authentication.method {
                 AuthenticationMethod::MasterKey => identity.principal == master_principal(),
-                AuthenticationMethod::Session => {
-                    identity.principal.authority() == "litellm:local-ui"
-                        && identity.principal.kind() == PrincipalKind::Human
-                }
                 AuthenticationMethod::External(_) => false,
             };
             if !allowed {
@@ -97,10 +92,9 @@ impl Auth {
         }
     }
 
-    pub fn from_config(config: &Config, secrets: Arc<dyn SecretSource>) -> Self {
+    pub fn from_config(config: &Config) -> Self {
         let master = Arc::new(MasterKeyAuthenticator {
             key: config.general_settings.master_key.clone(),
-            secrets,
         });
         Self {
             extractor: Arc::new(Bearer),
@@ -117,7 +111,9 @@ impl Auth {
 
     pub async fn authenticate_parts(&self, request: &Parts) -> Result<AuthenticatedRequest, Error> {
         let credential = self.extractor.extract(request)?;
-        self.authenticate_request(&credential, request).await
+        self.authenticate_request(&credential, request)
+            .await
+            .map_err(|error| self.extractor.reject(request, error))
     }
 
     pub async fn validate(&self) -> Result<(), Error> {
@@ -174,35 +170,24 @@ pub(crate) async fn resolve(
 
 pub struct MasterKeyAuthenticator {
     key: Option<SecretValue>,
-    secrets: Arc<dyn SecretSource>,
 }
 
 impl MasterKeyAuthenticator {
-    pub fn new(key: Option<SecretValue>, secrets: Arc<dyn SecretSource>) -> Self {
-        Self { key, secrets }
+    pub fn new(key: Option<SecretValue>) -> Self {
+        Self { key }
     }
 
-    async fn key(&self) -> Result<SecretValue, Error> {
-        let configured = self.key.as_ref().ok_or(Error::Unconfigured)?;
-        let resolved = match configured.expose().strip_prefix("os.environ/") {
-            Some(name) if !name.is_empty() => self
-                .secrets
-                .get_secret_str(name)
-                .await?
-                .ok_or(Error::Unconfigured)?,
-            Some(_) => return Err(Error::Unconfigured),
-            None => configured.clone(),
-        };
-        if resolved.expose().trim().is_empty() {
-            return Err(Error::Unconfigured);
-        }
-        Ok(resolved)
+    fn key(&self) -> Result<&SecretValue, Error> {
+        self.key
+            .as_ref()
+            .filter(|key| !key.expose().trim().is_empty())
+            .ok_or(Error::Unconfigured)
     }
 }
 
 impl Authenticator for MasterKeyAuthenticator {
     fn validate(&self) -> AuthFuture<'_, ()> {
-        Box::pin(async { self.key().await.map(|_| ()) })
+        Box::pin(async { self.key().map(|_| ()) })
     }
 
     fn verify<'a>(
@@ -211,7 +196,7 @@ impl Authenticator for MasterKeyAuthenticator {
         _: &'a Parts,
     ) -> AuthFuture<'a, VerifiedIdentity> {
         Box::pin(async move {
-            let expected = self.key().await?;
+            let expected = self.key()?;
             let Credential::Token(credential) = credential else {
                 return Err(Error::InvalidToken);
             };
