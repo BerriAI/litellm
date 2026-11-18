@@ -31,7 +31,7 @@ class BedrockAgentCoreA2AHandler:
         request_id: str,
         params: Mapping[str, object],
         litellm_params: dict[str, object],
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         """
         Handle non-streaming A2A request to AgentCore.
@@ -78,7 +78,7 @@ class BedrockAgentCoreA2AHandler:
         request_id: str,
         params: Mapping[str, object],
         litellm_params: dict[str, object],
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[dict[str, object]]:
         """
         Handle streaming A2A request to AgentCore.

@@ -9,8 +9,9 @@ import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.types.files import (
     AUDIO_FILE_TYPES,
     FILE_EXTENSIONS,
@@ -174,6 +175,11 @@ def normalize_transcription_language_to_bcp47(language: str) -> str:
     return BARE_ISO_639_1_TO_BCP47.get(language.lower(), language)
 
 
+class _NamedFile(Protocol):
+    @property
+    def name(self) -> str: ...
+
+
 def get_audio_file_name(file_obj: FileTypes) -> str:
     """
     Safely get the name of a file-like object or return its string representation.
@@ -184,8 +190,9 @@ def get_audio_file_name(file_obj: FileTypes) -> str:
     Returns:
         str: The name of the file if available, otherwise a string representation of the object.
     """
-    if hasattr(file_obj, "name"):
-        return getattr(file_obj, "name")
+    candidate: Final[object] = file_obj
+    if has_attributes(candidate, _NamedFile, "name"):
+        return candidate.name
     elif hasattr(file_obj, "__str__"):
         return str(file_obj)
     else:

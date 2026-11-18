@@ -8,14 +8,14 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, SupportsFloat, SupportsIndex, TypeVar, overload
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import Buffer, NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
@@ -214,16 +214,6 @@ def _first_match(lookup_keys: Sequence[str], mapping: Mapping[str, _T], default:
 
 
 # --- Response models ---
-
-
-class _GuardrailRunInfo(TypedDict, total=False):
-    guardrail_id: ReadOnly[str | None]
-    guardrail_name: ReadOnly[str | None]
-    guardrail_status: ReadOnly[str | None]
-    duration: ReadOnly[float | None]
-    confidence_score: ReadOnly[float | None]
-    risk_score: ReadOnly[float | None]
-    guardrail_response: ReadOnly[str | Mapping[str, object] | Sequence[Mapping[str, object]] | None]
 
 
 class UsageChartPoint(TypedDict):
@@ -768,20 +758,31 @@ def _build_usage_logs_where(
     return where
 
 
+def _decoded_metadata(metadata: object) -> object:
+    if not isinstance(metadata, str):
+        return metadata
+    try:
+        return _DECODED_JSON.validate_python(json.loads(metadata))
+    except Exception:
+        return {}
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+
+
 def _usage_log_entry_from_row(
     r: "prisma_models.LiteLLM_SpendLogGuardrailIndex",
     sl: "prisma_models.LiteLLM_SpendLogs",
     action_filter: str | None,
 ) -> UsageLogEntry | None:
-    meta = sl.metadata
-    if isinstance(meta, str):
-        try:
-            meta = json.loads(meta)
-        except Exception:
-            meta = {}
-    guardrail_info_list: Final[Sequence[_GuardrailRunInfo]] = (meta or {}).get("guardrail_information") or []
-    entry_for_guardrail: Final[_GuardrailRunInfo | None] = max(
-        (gi for gi in guardrail_info_list if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id),
+    meta: Final = _decoded_metadata(sl.metadata)
+    guardrail_info_list: Final = decoded_json_object(meta or {}).get("guardrail_information") or []
+    run_infos: Final = (decoded_json_object(gi) for gi in iter_items(guardrail_info_list))
+    entry_for_guardrail: Final = max(
+        (gi for gi in run_infos if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id),
         key=lambda gi: _ACTION_SEVERITY[guardrail_status_to_action(gi.get("guardrail_status"))],
         default=None,
     )
@@ -793,10 +794,9 @@ def _usage_log_entry_from_row(
         action_val = guardrail_status_to_action(entry_for_guardrail.get("guardrail_status"))
         duration: Final = entry_for_guardrail.get("duration")
         if duration is not None:
-            latency_val = round(float(duration) * 1000, 0)
-        score_val = entry_for_guardrail.get("confidence_score") or entry_for_guardrail.get("risk_score")
-        if score_val is not None:
-            score_val = round(float(score_val), 2)
+            latency_val = round(_as_float(duration) * 1000, 0)
+        raw_score: Final = entry_for_guardrail.get("confidence_score") or entry_for_guardrail.get("risk_score")
+        score_val = None if raw_score is None else round(_as_float(raw_score), 2)
         resp: Final = entry_for_guardrail.get("guardrail_response")
         if isinstance(resp, str):
             reason_val = resp[:500]

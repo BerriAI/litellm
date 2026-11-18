@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -52,6 +54,11 @@ _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
 )
 
 _BEDROCK_TAGS_ADAPTER: Final[TypeAdapter[list[BedrockTag]]] = TypeAdapter(list[BedrockTag])
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _BatchResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _build_s3_input_config(s3_uri: str, s3_bucket_owner: str | None) -> BedrockS3InputDataConfig:
@@ -591,9 +598,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         from litellm.types.llms.bedrock import BedrockGetBatchResponse
 
         try:
-            response_data: Final[BedrockGetBatchResponse] = raw_response.json()
+            decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
+
+        response_data: Final = BedrockGetBatchResponse(**_BatchResponseFields(**decoded_json_object(decoded_response)))
 
         job_arn: Final = response_data.get("jobArn", "")
         status_str: Final[str] = str(response_data.get("status", "Submitted"))

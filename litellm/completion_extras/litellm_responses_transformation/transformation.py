@@ -6,7 +6,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
     drops_unsupported_params,
+    has_attributes,
     iter_items,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
@@ -983,6 +984,14 @@ def _without_dropped_defer_loading(
         return tool
     kept: Final = _defer_loading_field(tool, {}, tool_search=tool_search, drop_params=drop_params)
     return {**{key: value for key, value in tool.items() if key != "defer_loading"}, **kept}
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _LegacyDictable(Protocol):
+    def dict(self) -> object: ...
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -2196,7 +2205,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     @staticmethod
     def _convert_annotations_to_chat_format(
-        annotations: list[Any] | None,
+        annotations: Iterable[object] | None,
     ) -> list[ChatCompletionAnnotation] | None:
         """
         Convert annotations from Responses API to Chat Completions format.
@@ -2211,9 +2220,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for annotation in annotations:
             try:
                 # Convert Pydantic models to dicts (handles both v1 and v2)
-                if hasattr(annotation, "model_dump"):
+                if has_attributes(annotation, _ModelDumpable, "model_dump"):
                     annotation_dict = annotation.model_dump()
-                elif hasattr(annotation, "dict"):
+                elif has_attributes(annotation, _LegacyDictable, "dict"):
                     annotation_dict = annotation.dict()
                 elif isinstance(annotation, dict):
                     annotation_dict = annotation

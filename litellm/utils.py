@@ -95,6 +95,7 @@ from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
     bind_budget_reservation_to_callbacks,
+    decoded_json_object,
     has_attributes,
     iter_items,
     json_contains,
@@ -9850,10 +9851,13 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 
 
 @lru_cache(maxsize=1)
-def get_bundled_model_cost_map() -> dict[str, Any]:
+def get_bundled_model_cost_map() -> Mapping[str, Mapping[str, object]]:
     try:
         model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
+        bundled_entries: Final = decoded_json_object(
+            _OPAQUE_VALUE.validate_python(json.loads(model_cost_path.read_text()))
+        )
+        return {key: entry for key, value in bundled_entries.items() if (entry := as_str_mapping(value)) is not None}
     except Exception:
         return {}
 

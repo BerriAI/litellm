@@ -104,7 +104,7 @@ class GitLabClient:
                 - base_url: Base GitLab API URL (default: "https://gitlab.com/api/v4")
         """
         project: Final = config.get("project")
-        access_token: Final = config.get("access_token")
+        access_token: Final[object] = config.get("access_token")
         if project is None or access_token is None:
             raise ValueError("project and access_token are required")
 

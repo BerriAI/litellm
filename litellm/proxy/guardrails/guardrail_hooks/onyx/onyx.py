@@ -6,20 +6,19 @@
 # +-------------------------------------------------------------+
 import os
 import uuid
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from collections.abc import Iterator, Mapping
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, runtime_checkable
 
 import httpx
 from fastapi import HTTPException
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -34,9 +33,25 @@ if TYPE_CHECKING:
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-class _OnyxGuardVerdict(TypedDict, total=False):
-    allowed: ReadOnly[bool]
-    violated_rules: ReadOnly[Sequence[str]]
+@runtime_checkable
+class _SupportsIteration(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+@runtime_checkable
+class _SupportsIndexing(Protocol):
+    def __getitem__(self, key: int, /) -> object: ...
+
+
+def _joined_rules(rules: object) -> str:
+    if not isinstance(rules, (_SupportsIteration, _SupportsIndexing)):
+        raise TypeError("can only join an iterable")
+    entries: Final = tuple(iter_items(rules))
+    strings: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    if len(strings) == len(entries):
+        return ", ".join(strings)
+    first_bad: Final = next(position for position, entry in enumerate(entries) if not isinstance(entry, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(entries[first_bad]).__name__} found")
 
 
 class OnyxGuardrail(CustomGuardrail):
@@ -77,7 +92,7 @@ class OnyxGuardrail(CustomGuardrail):
         payload: object,
         input_type: Literal["request", "response"],
         conversation_id: str,
-    ) -> _OnyxGuardVerdict:
+    ) -> Mapping[str, object]:
         """
         Call external Onyx Guard server for validation
         """
@@ -93,11 +108,11 @@ class OnyxGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        result: Final[_OnyxGuardVerdict] = response.json()
-        if not decoded_json_object(_DECODED_JSON.validate_python(result)).get("allowed", True):
+        result: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+        if not result.get("allowed", True):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
-                detection_message = ", ".join(result["violated_rules"])
+                detection_message = _joined_rules(result["violated_rules"])
             verbose_proxy_logger.warning("Request blocked by Onyx Guard. Violations: %s.", detection_message)
             raise HTTPException(
                 status_code=400,

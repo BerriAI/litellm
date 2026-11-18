@@ -421,13 +421,24 @@ def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_mode
     return ModelTableRepository(prisma_client).table
 
 
+@dataclass(frozen=True, slots=True)
+class _DumpedModelRow:
+    fields: Mapping[str, object]
+    deployment: Deployment
+
+
+def _dump_model_row(row: BaseModel, *, exclude_none: bool = False) -> _DumpedModelRow:
+    fields: Final = row.model_dump(exclude_none=True) if exclude_none else row.model_dump()
+    return _DumpedModelRow(fields=fields, deployment=Deployment(**fields))
+
+
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
     db_model: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id})
 
     if not db_model:
         return None
 
-    deployment_pydantic_obj: Final = Deployment(**db_model.model_dump(exclude_none=True))
+    deployment_pydantic_obj: Final = _dump_model_row(db_model, exclude_none=True).deployment
     return deployment_pydantic_obj
 
 
@@ -1542,13 +1553,13 @@ async def _locked_legacy_update_model_info_json(
     row: Final = await table.find_unique(where={"model_id": model_id})
     if row is None:
         return None
-    payload: Final = row.model_dump()
+    dumped: Final = _dump_model_row(row)
     writes: Final = _legacy_update_model_info_writes(
-        Deployment(**payload), incoming_model_info, discovered_model_info, member_marker, listed_row
+        dumped.deployment, incoming_model_info, discovered_model_info, member_marker, listed_row
     )
     if not writes:
         return None
-    stored_model_info: Final[object] = payload.get("model_info")
+    stored_model_info: Final[object] = dumped.fields.get("model_info")
     stored: Final = (
         _STR_OBJECT_DICT.validate_json(stored_model_info)
         if isinstance(stored_model_info, str)
@@ -3086,7 +3097,7 @@ async def delete_model(
                 detail={"error": f"Model with id={model_info.id} not found in db"},
             )
 
-        model_params: Final = Deployment(**model_in_db.model_dump())
+        model_params: Final = _dump_model_row(model_in_db).deployment
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
@@ -3501,7 +3512,7 @@ async def update_model(
                 )
             else:
                 raise Exception("model not found")
-        deployment: Final = Deployment(**_existing_litellm_params.model_dump())
+        deployment: Final = _dump_model_row(_existing_litellm_params).deployment
 
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=deployment,

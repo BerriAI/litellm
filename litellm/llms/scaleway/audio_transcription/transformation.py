@@ -7,8 +7,10 @@ API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -21,6 +23,8 @@ from litellm.types.llms.openai import (
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ScalewayAudioTranscriptionException(BaseLLMException):
@@ -131,7 +135,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return TranscriptionResponse(text=raw_response.text)
 
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise ScalewayAudioTranscriptionException(
                 message="Received non-JSON response from Scaleway audio transcription",
@@ -139,13 +143,18 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text: Final = response_json.get("text") or ""
-        response: Final = TranscriptionResponse(text=text)
+        payload: Final = decoded_json_object(response_json)
+        text: Final = payload.get("text") or ""
+        response: Final = (
+            TranscriptionResponse(text=text)
+            if isinstance(text, str)
+            else TranscriptionResponse.model_validate({"text": text})
+        )
 
-        if "segments" in response_json:
-            response["segments"] = response_json["segments"]
-        if "language" in response_json:
-            response["language"] = response_json["language"]
+        if "segments" in payload:
+            response["segments"] = payload["segments"]
+        if "language" in payload:
+            response["language"] = payload["language"]
 
-        response.hidden_params = response_json
+        response.hidden_params = dict(payload)
         return response

@@ -1567,6 +1567,20 @@ class _CarriesStatusCode(Protocol):
     def status_code(self) -> int: ...
 
 
+class _CarriesResponseHeaders(Protocol):
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
+
+class _CarriesProviderResponseHeaders(Protocol):
+    @property
+    def litellm_response_headers(self) -> Mapping[str, str] | None: ...
+
+
+def _response_headers_of(source: object) -> Mapping[str, str] | None:
+    return source.headers if has_attributes(source, _CarriesResponseHeaders, "headers") else None
+
+
 def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     _, error_obj = sse_error_payload(exc)
     return _sse_error_frames(error_obj)
@@ -2830,7 +2844,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
-        response_headers: httpx.Headers | dict | None,
+        response_headers: Mapping[str, str] | None,
         custom_headers: Mapping[str, str],
     ) -> dict:
         """
@@ -4027,7 +4041,7 @@ class ProxyBaseLLMRequestProcessing:
                     )
 
                 if route_type == "allm_passthrough_route":
-                    upstream_response_headers: Final = getattr(response, "headers", None)
+                    upstream_response_headers: Final = _response_headers_of(response)
                     streaming_headers: Final = (
                         ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
                             response_headers=upstream_response_headers,
@@ -5290,8 +5304,12 @@ class ProxyBaseLLMRequestProcessing:
         headers = getattr(failure, "headers", None) or {}
         if not headers:
             _response: Final = attribute_of(failure, "response")
-            _response_headers: Final = getattr(_response, "headers", None) if _response is not None else None
-            _provider_headers: Final = _response_headers or getattr(failure, "litellm_response_headers", None)
+            _response_headers: Final = _response_headers_of(_response)
+            _provider_headers: Final = _response_headers or (
+                failure.litellm_response_headers
+                if has_attributes(failure, _CarriesProviderResponseHeaders, "litellm_response_headers")
+                else None
+            )
             if _provider_headers:
                 headers = get_response_headers(dict(_provider_headers))
         headers.update(custom_headers)

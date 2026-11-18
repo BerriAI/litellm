@@ -5154,15 +5154,17 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    if _config_field_endpoints(response) is None:
-        response.field_value = [data_dict]
-    elif isinstance(response.field_value, list):
-        response.field_value.append(data_dict)
+    stored_endpoints: Final = _DECODED_JSON.validate_python(_config_field_endpoints(response))
+    endpoints_to_store: Final = [data_dict] if stored_endpoints is None else stored_endpoints
+    if stored_endpoints is None:
+        response.field_value = endpoints_to_store
+    elif isinstance(stored_endpoints, list):
+        stored_endpoints.append(data_dict)
 
     ## Update db
     updated_data: Final = ConfigFieldUpdate(
         field_name="pass_through_endpoints",
-        field_value=response.field_value,
+        field_value=endpoints_to_store,
         config_type="general_settings",
     )
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)

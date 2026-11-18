@@ -13,6 +13,7 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 import os
 from typing import TYPE_CHECKING, Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
+from pydantic import TypeAdapter
 from typing_extensions import Buffer
 
 from litellm import DualCache
@@ -49,6 +50,8 @@ return current
 
 # Default TTL for session iteration counters (1 hour)
 DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
+
+_CACHED_COUNT: Final = TypeAdapter(object)
 
 
 @runtime_checkable
@@ -222,12 +225,14 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     async def _in_memory_increment(self, cache_key: str) -> int:
         """Increment counter in in-memory cache with TTL."""
-        current: Final[int | None] = await self.internal_usage_cache.async_get_cache(
-            key=cache_key,
-            litellm_parent_otel_span=None,
-            local_only=True,
+        current: Final = _CACHED_COUNT.validate_python(
+            await self.internal_usage_cache.async_get_cache(
+                key=cache_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
         )
-        new_value: Final = (int(current) if current is not None else 0) + 1
+        new_value: Final = (_script_count(current) if current is not None else 0) + 1
         await self.internal_usage_cache.async_set_cache(
             key=cache_key,
             value=new_value,

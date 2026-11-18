@@ -13,9 +13,10 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, Protocol, SupportsIndex, SupportsInt, TypeAlias, runtime_checkable
 
 from typing_extensions import (
+    Buffer,
     ReadOnly,
     TypedDict,
     TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
@@ -2425,14 +2426,23 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
-class _ModeledErrorMetadata(TypedDict, total=False):
-    httpStatusCode: ReadOnly[int]
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _modeled_status_int(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 def _modeled_error_status(member: Shape) -> int | None:
-    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    error: Final = decoded_json_object(_JSON_VALUE.validate_python((member.metadata or {}).get("error", {})))
     status: Final = error.get("httpStatusCode")
-    return None if status is None else int(status)
+    return None if status is None else _modeled_status_int(status)
 
 
 def _structure_members(shape: Shape | None) -> Mapping[str, Shape]:

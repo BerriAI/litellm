@@ -232,6 +232,12 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
     return redacted if isinstance(redacted, list) else assessments
 
 
+def _redacted_payload(payload: object) -> object:
+    if isinstance(payload, (dict, list)):
+        return redact_nested_match_and_regex_keys(payload)
+    return payload
+
+
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
 
 
@@ -1318,13 +1324,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code == 200:
-            raw_json_response: Final = httpx_response.json()
+            _json_response: Final[BedrockGuardrailResponse] = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
                 "Bedrock AI response : %s",
-                redact_nested_match_and_regex_keys(raw_json_response),
+                _redacted_payload(_json_response),
             )
-            _json_response: Final[BedrockGuardrailResponse] = raw_json_response
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
                 self._log_apply_guardrail_attempt(

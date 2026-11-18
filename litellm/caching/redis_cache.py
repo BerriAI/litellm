@@ -231,6 +231,12 @@ def _opaque_kwarg_key(value: object) -> str:
 _CLUSTER_ONLY_CONNECTION_KWARGS: Final[frozenset[str]] = frozenset({"response_callbacks"})
 
 
+def _node_connection_kwargs(connection_kwargs: Mapping[str, object]) -> MappingProxyType[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in connection_kwargs.items() if key not in _CLUSTER_ONLY_CONNECTION_KWARGS}
+    )
+
+
 def _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownParameterType]  # redis generics
     cluster: async_redis_cluster_client,  # pyright: ignore[reportUnknownParameterType]  # redis generics
 ) -> async_redis_client:
@@ -240,13 +246,7 @@ def _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownParameterType] 
     node: Final = cluster.get_default_node() or next(iter(cluster.nodes_manager.startup_nodes.values()), None)
     if node is None:  # pyright: ignore[reportUnnecessaryComparison]  # get_default_node is None before cluster init
         raise ValueError("cannot derive a pub/sub client: redis cluster has no default node and no startup nodes")
-    node_kwargs: Final = MappingProxyType(
-        {
-            key: value  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
-            for key, value in cluster.connection_kwargs.items()  # pyright: ignore[reportAny]  # connection_kwargs values are Any in redis stubs
-            if key not in _CLUSTER_ONLY_CONNECTION_KWARGS
-        }
-    )
+    node_kwargs: Final = _node_connection_kwargs(cluster.connection_kwargs)
     pool: Final = ConnectionPool(host=node.host, port=node.port, **node_kwargs)  # pyright: ignore[reportCallIssue, reportArgumentType]  # cluster kwargs validated by redis-py at runtime
     return Redis.from_pool(pool)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # redis generics
 

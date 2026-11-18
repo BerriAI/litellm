@@ -4,9 +4,8 @@ import json
 import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
 from fastapi.responses import PlainTextResponse
@@ -15,7 +14,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -83,6 +82,23 @@ class _RealtimeTokenPayload(TypedDict, total=False):
 
 _REALTIME_TOKEN_PAYLOAD_ADAPTER: Final = TypeAdapter(_RealtimeTokenPayload)
 _UPSTREAM_JSON: Final = TypeAdapter(object)
+_UPSTREAM_REPLY: Final = TypeAdapter(object)
+
+
+class _UpstreamResponse(Protocol):
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def text(self) -> str: ...
+
+    @property
+    def content(self) -> bytes: ...
+
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
+    def json(self) -> object: ...
 
 
 def _coerce_realtime_session_type(session_type: str | None) -> str:
@@ -422,7 +438,7 @@ async def create_realtime_client_secret(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: Final[httpx.Response] = await llm_call
+        upstream_reply: Final = _UPSTREAM_REPLY.validate_python(await llm_call)
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -450,6 +466,7 @@ async def create_realtime_client_secret(
             code=error_status_code(e, 500),
         )
 
+    upstream_resp: Final = require_attributes(upstream_reply, _UpstreamResponse, "status_code")
     if upstream_resp.status_code != 200:
         verbose_proxy_logger.error(
             "WebRTC client_secrets upstream error %s: %s",
@@ -643,7 +660,7 @@ async def proxy_realtime_calls(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: Final[httpx.Response] = await llm_call
+        upstream_reply: Final = _UPSTREAM_REPLY.validate_python(await llm_call)
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -669,6 +686,7 @@ async def proxy_realtime_calls(
             code=error_status_code(e, 500),
         )
 
+    upstream_resp: Final = require_attributes(upstream_reply, _UpstreamResponse, "content")
     return Response(
         content=upstream_resp.content,
         status_code=upstream_resp.status_code,
@@ -756,7 +774,7 @@ async def create_realtime_transcription_session(
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: Final[httpx.Response] = await llm_call
+        upstream_reply: Final = _UPSTREAM_REPLY.validate_python(await llm_call)
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -784,6 +802,7 @@ async def create_realtime_transcription_session(
             code=error_status_code(e, 500),
         )
 
+    upstream_resp: Final = require_attributes(upstream_reply, _UpstreamResponse, "status_code")
     if upstream_resp.status_code != 200:
         verbose_proxy_logger.error(
             "Realtime transcription_sessions upstream error %s: %s",

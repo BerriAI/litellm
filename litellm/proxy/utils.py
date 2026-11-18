@@ -412,6 +412,16 @@ class _TeamMembershipRow(TypedDict):
     team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
 
 
+class _ExpiresSlot(Protocol):
+    expires: datetime | str | None
+
+
+def _expires_slots(rows: Sequence[object] | None) -> Iterator[_ExpiresSlot]:
+    if rows is not None and len(rows) > 0:
+        return (require_attributes(row, _ExpiresSlot, "expires") for row in rows)
+    return iter(())
+
+
 _ROOTED_STREAM_LOGGING_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep tasks alive
 _MAX_BACKGROUND_SERVED_OUTPUT_REBUILDS: Final = 64
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
@@ -6603,41 +6613,41 @@ class PrismaClient:
                             status_code=400,
                             detail={"error": f"No token passed in. Token={token}"},
                         )
-                    response = await VerificationTokenRepository(self).table.find_unique(
+                    token_row: Final = await VerificationTokenRepository(self).table.find_unique(
                         where={"token": hashed_token},
                         include={"litellm_budget_table": True},
                     )
-                    if response is not None:
-                        # for prisma we need to cast the expires time to str
-                        if response.expires is not None and isinstance(response.expires, datetime):
-                            response.expires = response.expires.isoformat()
-                    else:
-                        # Token does not exist.
+                    if token_row is None:
                         raise HTTPException(
                             status_code=status.HTTP_401_UNAUTHORIZED,
                             detail=f"Authentication Error: invalid user key - user key does not exist in db. User Key={token}",
                         )
+                    # for prisma we need to cast the expires time to str
+                    token_expiry: Final = require_attributes(token_row, _ExpiresSlot, "expires")
+                    if isinstance(token_expiry.expires, datetime):
+                        token_expiry.expires = token_expiry.expires.isoformat()
+                    response = token_row
                 elif query_type == "find_all" and user_id is not None:
-                    response = await VerificationTokenRepository(self).table.find_many(
+                    user_tokens: Final = await VerificationTokenRepository(self).table.find_many(
                         where={"user_id": user_id},
                         include={"litellm_budget_table": True},
                     )
-                    if response is not None and len(response) > 0:
-                        for r in response:
-                            if isinstance(r.expires, datetime):
-                                r.expires = r.expires.isoformat()
+                    for r in _expires_slots(user_tokens):
+                        if isinstance(r.expires, datetime):
+                            r.expires = r.expires.isoformat()
+                    response = user_tokens
                 elif query_type == "find_all" and team_id is not None:
-                    response = await VerificationTokenRepository(self).table.find_many(
+                    team_tokens: Final = await VerificationTokenRepository(self).table.find_many(
                         take=limit,
                         where={"team_id": team_id},
                         include={"litellm_budget_table": True},
                     )
-                    if response is not None and len(response) > 0:
-                        for r in response:
-                            if isinstance(r.expires, datetime):
-                                r.expires = r.expires.isoformat()
+                    for r in _expires_slots(team_tokens):
+                        if isinstance(r.expires, datetime):
+                            r.expires = r.expires.isoformat()
+                    response = team_tokens
                 elif query_type == "find_all" and expires is not None and reset_at is not None:
-                    response = await VerificationTokenRepository(self).table.find_many(
+                    budget_reset_tokens: Final = await VerificationTokenRepository(self).table.find_many(
                         take=limit,
                         where={
                             "OR": [
@@ -6648,10 +6658,10 @@ class PrismaClient:
                             "NOT": {"budget_duration": None},
                         },
                     )
-                    if response is not None and len(response) > 0:
-                        for r in response:
-                            if isinstance(r.expires, datetime):
-                                r.expires = r.expires.isoformat()
+                    for r in _expires_slots(budget_reset_tokens):
+                        if isinstance(r.expires, datetime):
+                            r.expires = r.expires.isoformat()
+                    response = budget_reset_tokens
                 elif query_type == "find_all":
                     where_filter: Final[dict[str, dict[str, Sequence[str]]]] = {}
                     if token is not None:

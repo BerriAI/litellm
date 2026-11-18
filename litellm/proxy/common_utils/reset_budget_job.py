@@ -65,7 +65,7 @@ from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, query_raw_rows
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
@@ -614,6 +614,19 @@ class _Lease(Enum):
     LEADER = "leader"
     UNGUARDED = "unguarded"
     FOLLOWER = "follower"
+
+
+def _window_row_id(row: Mapping[str, object], id_column: str) -> str:
+    row_id: Final = row[id_column]
+    if isinstance(row_id, str):
+        return row_id
+    raise TypeError(f"{id_column} must be str, not {type(row_id).__name__}")
+
+
+def _json_document(value: object) -> str | bytes | bytearray:
+    if isinstance(value, (str, bytes, bytearray)):
+        return value
+    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
 
 
 async def _write_key_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
@@ -2030,16 +2043,16 @@ class ResetBudgetJob:
     async def _reset_window_page(
         self,
         source: _WindowSource,
-        cursor: str,
+        cursor: object,
         now: datetime,
         spend_counter_store: SpendCounterStore,
-    ) -> str | None:
+    ) -> object | None:
         """Reset one page of windows; return the next cursor, or None when drained."""
         rows: Final = await self._with_db_retry(
             lambda: db_spanned(
                 "reset_budget_windows",
                 source.table,
-                lambda: self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
+                lambda: query_raw_rows(self.prisma_client.db, source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
             ),
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
@@ -2047,8 +2060,8 @@ class ResetBudgetJob:
             raw = row["budget_limits"]
             if not raw:
                 continue
-            row_id: str = row[source.id_column]
-            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
+            row_id: str = _window_row_id(row, source.id_column)
+            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(_json_document(raw))
             changed = False
             for window in windows:
                 counter_key = source.window_counter(row_id, str(window["budget_duration"]))

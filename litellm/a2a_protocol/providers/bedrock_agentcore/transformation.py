@@ -141,7 +141,7 @@ class BedrockAgentCoreA2ATransformation:
         litellm_params: dict[str, object],
         method: str = "message/send",
         stream: bool = False,
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> tuple[str, dict, bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.

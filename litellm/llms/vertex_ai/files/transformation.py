@@ -134,8 +134,13 @@ class _VertexBatchRowRequest(TypedDict, total=False):
     labels: ReadOnly[Mapping[str, object]]
 
 
+class _VertexBatchRowResponse(TypedDict, total=False):
+    modelVersion: ReadOnly[str]
+
+
 class _VertexBatchRow(TypedDict, total=False):
     request: ReadOnly[_VertexBatchRowRequest]
+    response: ReadOnly[_VertexBatchRowResponse]
     status: ReadOnly[str]
     processed_time: ReadOnly[str]
 
@@ -1789,7 +1794,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             model_response: Final = ModelResponse()
 
             transformed_response = vertex_gemini_config.transform_google_generate_content_to_openai_model_response(
-                completion_response=vertex_response,
+                completion_response=dict(vertex_response),
                 model_response=model_response,
                 model=model,
                 logging_obj=logging_obj,

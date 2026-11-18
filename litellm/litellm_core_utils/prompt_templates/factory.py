@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError, model_validator
@@ -2208,8 +2208,8 @@ def _paused_turn_replay(
 
 def convert_to_anthropic_tool_invoke(
     tool_calls: Sequence[ChatCompletionAssistantToolCall],
-    web_search_results: Sequence[object] | None = None,
-    tool_results: Sequence[object] | None = None,
+    web_search_results: object = None,
+    tool_results: object = None,
     answered_tool_ids: Container[str] = frozenset(),
     server_tool_call_ids: Container[str] = frozenset(),
 ) -> list[_AnthropicToolInvokeItem]:
@@ -3271,11 +3271,11 @@ def anthropic_messages_pt(
             # for server_tool_use reconstruction.
             # Fixes: https://github.com/BerriAI/litellm/issues/17737
             _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
-            _provider_specific_fields: dict[str, Any] = (
-                cast(dict[str, Any], _provider_specific_fields_raw)
+            _provider_specific_fields: Mapping[str, object] = (
+                as_str_mapping(_DECODED_JSON.validate_python(_provider_specific_fields_raw))
                 if isinstance(_provider_specific_fields_raw, dict)
-                else {}
-            )
+                else None
+            ) or {}
             tool_invoke_results = (
                 convert_to_anthropic_tool_invoke(
                     assistant_tool_calls,

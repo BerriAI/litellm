@@ -398,6 +398,7 @@ from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_ty
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
+    attribute_or_none,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
@@ -23131,7 +23132,7 @@ async def get_routes():
 
     routes: Final = []
     for route in app.routes:
-        endpoint_route = getattr(route, "endpoint", None)
+        endpoint_route = attribute_or_none(route, "endpoint")
         if endpoint_route is not None:
             routes.extend(
                 GetRoutes.get_app_routes(
