@@ -18,6 +18,7 @@ pub(crate) enum Named<'a, R: Rows> {
     Resolved {
         hash: KeyHash,
         key: Box<Keyed<R::Key>>,
+        end_user_id: Option<&'a str>,
         master_key: &'a MasterKey,
     },
 }
@@ -40,7 +41,7 @@ pub(crate) fn precheck<'a, R: Rows>(
     let Some(master_key) = settings.master_key.as_ref() else {
         let token = match credential {
             Credential::Presented(token) => token.cloned(),
-            Credential::Resolved(key) => key.record.token.as_ref().map(Token::from_stored),
+            Credential::Resolved { key, .. } => key.record.token.as_ref().map(Token::from_stored),
         };
         return Ok(Prechecked::Decided(Verified::NoMasterKey { token }));
     };
@@ -50,12 +51,13 @@ pub(crate) fn precheck<'a, R: Rows>(
             return Err(KeyDenial::MalformedKey);
         }
         Credential::Presented(Some(token)) => Named::Presented { token, master_key },
-        Credential::Resolved(key) => match key.record.token.clone() {
+        Credential::Resolved { key, end_user_id } => match key.record.token.clone() {
             None => return Err(KeyDenial::MissingKey),
             Some(hash) if hash.as_str().is_empty() => return Err(KeyDenial::MalformedKey),
             Some(hash) => Named::Resolved {
                 hash,
                 key: Box::new(key),
+                end_user_id,
                 master_key,
             },
         },

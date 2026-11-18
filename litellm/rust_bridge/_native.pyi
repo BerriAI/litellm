@@ -610,8 +610,6 @@ class _KeyFacts(Protocol):
     @property
     def project_id(self) -> str | None: ...
     @property
-    def end_user_id(self) -> str | None: ...
-    @property
     def last_refreshed_at(self) -> float | None: ...
 
 class _TeamFacts(Protocol):
@@ -1071,6 +1069,27 @@ class RustDenial:
         def __new__(cls, team_id: str) -> RustDenial.TeamNotFound: ...
         @property
         def team_id(self) -> str: ...
+
+    @final
+    class KeyNotFound(RustDenial):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        def __new__(cls, hash: str) -> RustDenial.KeyNotFound: ...
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class NoMatchingJwtPublicKey(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.NoMatchingJwtPublicKey: ...
+        @property
+        def message(self) -> str: ...
+
+    @final
+    class IdJagNotBearer(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.IdJagNotBearer: ...
+        @property
+        def message(self) -> str: ...
 
 @final
 class RustAuthOutcome:
