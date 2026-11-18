@@ -1,12 +1,12 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
-use litellm_host::interceptors::RetriedRequest;
+//! Claude Platform on AWS (`bedrock/claude_platform/`): plain Anthropic Messages sent to
+//! `aws-external-anthropic.<region>.api.aws`, billed to the workspace named in
+//! `anthropic-workspace-id`, authenticated by an API key, the Bedrock bearer token or SigV4.
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, CredentialPlacement, ParamKind, ParamSpec};
-use litellm_secret_value::SecretValue;
-
+use litellm_auth::{AwsParams, ParamKind, ParamSpec};
 use litellm_auth_aws::{AwsCredentialSource, CallerSigningHeaders, resolve_aws_region};
 use litellm_env::resolve_non_empty;
+use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
@@ -19,7 +19,10 @@ use crate::{
     Error, ErrorDetail,
     anthropic::messages::{
         handler::shape_anthropic_messages_request,
-        transformation::{transform_messages_request, update_headers_with_safeguards_beta},
+        transformation::{
+            retry_anthropic_messages_after_http_error, transform_messages_request,
+            update_headers_with_safeguards_beta,
+        },
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -28,29 +31,47 @@ use crate::{
             transformation::BaseMessagesConfig,
         },
     },
-    bedrock::common_utils::validated_region,
+    bedrock::{common_utils::is_valid_region, messages::mantle_transformation::bearer_environment},
 };
 
 const SERVICE: &str = "aws-external-anthropic";
+const ROUTE: &str = "claude_platform/";
+const PROVIDER: &str = "Claude Platform on AWS";
+const API_KEY_ENV: &str = "ANTHROPIC_AWS_API_KEY";
+const BEARER_ENV: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const BASE_ENVS: &[&str] = &["ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_AWS_API_BASE"];
 const WORKSPACE_ENVS: &[&str] = &["ANTHROPIC_AWS_WORKSPACE_ID", "ANTHROPIC_WORKSPACE_ID"];
-const WORKSPACE_FIELDS: &[&str] = &[
-    "workspace_id",
-    "aws_workspace_id",
-    "anthropic-workspace-id",
-    "anthropic_workspace_id",
-];
+const REGION_ENVS: &[&str] = &["AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"];
 const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
+const DEFAULT_UNSUPPORTED: &[&str] = &["context_management"];
+
+/// The workspace Python's config requires before it builds the call, raising `AuthenticationError`.
 static WORKSPACE: ParamSpec = ParamSpec {
     setting: "workspace_id",
-    kind: ParamKind::Setting,
-    wire: WORKSPACE_FIELDS,
+    kind: ParamKind::Credential,
+    wire: &[
+        "workspace_id",
+        "aws_workspace_id",
+        "anthropic-workspace-id",
+        "anthropic_workspace_id",
+    ],
     module_global: None,
     env: WORKSPACE_ENVS,
 };
-const UNSUPPORTED_OVERRIDE: &str = "claude_platform_unsupported_params";
 
+/// The region Python's config requires to build the default endpoint, raising `AuthenticationError`
+/// once its logger knows the resolved call.
+pub static REGION: ParamSpec = ParamSpec {
+    setting: "region",
+    kind: ParamKind::Credential,
+    wire: &["aws_region_name"],
+    module_global: None,
+    env: REGION_ENVS,
+};
+
+/// The `bedrock/claude_platform/` Messages config, Python's `BedrockClaudePlatformMessagesConfig`.
 pub struct BedrockClaudePlatformMessagesConfig;
+
 pub const BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG: BedrockClaudePlatformMessagesConfig =
     BedrockClaudePlatformMessagesConfig;
 
@@ -79,48 +100,43 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         shape_anthropic_messages_request(request, options)
     }
 
+    /// Python's order: an API key goes out as `x-api-key` unless the caller forwarded one, and
+    /// the call is sent unsigned. Without a key the Bedrock bearer token, then SigV4, authenticate it.
     fn validate_environment(
         &self,
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
-        optional_params: &MessagesOptionalParams,
+        _optional_params: &MessagesOptionalParams,
         params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let workspace = header_value(&headers, WORKSPACE_HEADER)
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                WORKSPACE_FIELDS.iter().find_map(|field| {
-                    workspace_value(optional_params.extra.get(*field))
-                        .or_else(|| workspace_value(params.extra.get(*field)))
-                })
-            });
-        let workspace = resolve_non_empty(workspace, env, WORKSPACE_ENVS)
-            .ok_or_else(|| Error::Auth(WORKSPACE.missing("Claude Platform on AWS")))?;
+        let workspace = resolve_non_empty(
+            params.claude_platform.workspace().as_deref(),
+            env,
+            WORKSPACE_ENVS,
+        )
+        .ok_or_else(|| Error::Auth(WORKSPACE.missing(PROVIDER)))?;
         let headers = with_header(headers, WORKSPACE_HEADER, workspace);
-        let key = resolve_non_empty(api_key, env, &["ANTHROPIC_AWS_API_KEY"]);
-        let headers = without_headers(headers, &["authorization"]);
-        if header_value(&headers, "x-api-key").is_some_and(|value| !value.trim().is_empty()) {
+        let key = resolve_non_empty(api_key.filter(|key| !key.is_empty()), env, &[API_KEY_ENV]);
+        if let Some(key) = key {
+            let headers = match header_value(&headers, "x-api-key") {
+                Some(_) => headers,
+                None => with_header(headers, "x-api-key", key),
+            };
             return Ok(ValidatedEnvironment {
                 headers,
                 auth: AuthScheme::Forwarded,
             });
         }
-        if let Some(key) = key {
-            return Ok(ValidatedEnvironment {
-                headers: without_headers(headers, &["x-api-key"]),
-                auth: AuthScheme::Credential {
-                    placement: CredentialPlacement::Header("x-api-key"),
-                    secret: SecretValue::new(key),
-                },
-            });
+        if let Some(token) = resolve_non_empty(None, env, &[BEARER_ENV]) {
+            return Ok(bearer_environment(headers, &token));
         }
         let base = resolve_non_empty(params.api_base.as_deref(), env, BASE_ENVS);
         Ok(ValidatedEnvironment {
-            headers: without_headers(headers, &["x-api-key"]),
+            headers: without_headers(headers, &["authorization"]),
             auth: AuthScheme::AwsSigV4 {
-                region: platform_region(base.as_deref(), params, env)?,
+                region: signing_region(base.as_deref(), params, env)?,
                 service: SERVICE,
                 credentials: Box::new(AwsCredentialSource::from_params(&params.aws, env)),
                 caller_headers: CallerSigningHeaders::Botocore,
@@ -138,7 +154,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
     ) -> Result<String, Error> {
         let base = resolve_non_empty(
             api_base
-                .filter(|base| !base.trim().is_empty())
+                .filter(|base| !base.is_empty())
                 .or(params.api_base.as_deref()),
             env,
             BASE_ENVS,
@@ -147,15 +163,10 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             Some(base) => base,
             None => format!(
                 "https://{SERVICE}.{}.api.aws",
-                platform_region(None, params, env)?
+                configured_region(params, env)?
             ),
         };
-        let base = base.trim_end_matches('/');
-        Ok(if base.ends_with(MESSAGES_PATH) {
-            base.into()
-        } else {
-            format!("{base}{MESSAGES_PATH}")
-        })
+        Ok(messages_url(&base))
     }
 
     fn transform_anthropic_messages_request(
@@ -163,18 +174,30 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let body = serde_json::to_value(request).map_err(invalid_request)?;
-        let filtered = serde_json::from_value(filter_body(body, false)).map_err(invalid_request)?;
-        transform_messages_request(filtered, context)
+        transform_messages_request(request, context)
+    }
+
+    /// Python's `filter_claude_platform_request_body`: `context_management` by default, or the
+    /// list a deployment names in `claude_platform_unsupported_params`.
+    fn without_rejected_params(
+        &self,
+        request: MessagesRequest,
+        params: &LitellmParams,
+    ) -> Result<MessagesRequest, Error> {
+        let unsupported: Vec<&str> = match params.claude_platform.unsupported_params() {
+            Some(names) => names.iter().map(String::as_str).collect(),
+            None => DEFAULT_UNSUPPORTED.to_vec(),
+        };
+        without_params(request, &unsupported)
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
         static NAMES: LazyLock<Box<[&'static str]>> = LazyLock::new(|| {
-            ["ANTHROPIC_AWS_API_KEY"]
+            [API_KEY_ENV, BEARER_ENV]
                 .into_iter()
                 .chain(BASE_ENVS.iter().copied())
                 .chain(WORKSPACE_ENVS.iter().copied())
-                .chain(["AWS_DEFAULT_REGION"])
+                .chain(REGION_ENVS.iter().copied())
                 .chain(AwsParams::secret_names().iter().copied())
                 .collect()
         });
@@ -186,30 +209,69 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        let headers = match WORKSPACE_FIELDS.iter().find_map(|field| {
-            request
-                .params
-                .extra
-                .get(*field)?
-                .as_str()
-                .filter(|value| !value.trim().is_empty())
-        }) {
-            Some(workspace) => with_header(headers, WORKSPACE_HEADER, workspace.into()),
-            None => headers,
-        };
         update_headers_with_safeguards_beta(headers, request, BetaProvider::Anthropic)
     }
 
+    /// The model keeps its `claude_platform/` route until it is sent, so the call is billed on
+    /// the `bedrock/claude_platform/` rows as Python bills it.
     fn wire_body(&self, body: Value) -> Value {
-        filter_body(body, true)
+        let Value::Object(fields) = body else {
+            return body;
+        };
+        Value::Object(
+            fields
+                .into_iter()
+                .map(|(name, value)| match (name.as_str(), &value) {
+                    ("model", Value::String(model)) => {
+                        let sent = model.strip_prefix(ROUTE).unwrap_or(model).to_string();
+                        (name, Value::String(sent))
+                    }
+                    _ => (name, value),
+                })
+                .collect(),
+        )
     }
 }
 
-fn workspace_value(value: Option<&Value>) -> Option<&str> {
-    value?.as_str().filter(|value| !value.trim().is_empty())
+/// Python's `BedrockModelInfo._explicit_claude_platform_route`, which the route's model keeps
+/// with or without its `bedrock/` provider prefix.
+pub fn is_claude_platform_route(model: &str) -> bool {
+    model.starts_with(ROUTE) || model.contains(&format!("/{ROUTE}"))
 }
 
-fn platform_region(
+/// Whether the call was refused for want of the region its default endpoint is built in.
+pub fn is_missing_region(error: &litellm_auth::Error) -> bool {
+    matches!(error, litellm_auth::Error::MissingParam { spec, .. } if std::ptr::eq(*spec, &REGION))
+}
+
+/// The model Python's handler logs a refused call under: the route's model without `claude_platform/`.
+pub fn logged_model(model: &str) -> &str {
+    let routed = model.strip_prefix("bedrock/").unwrap_or(model);
+    routed.strip_prefix(ROUTE).unwrap_or(routed)
+}
+
+/// Python's `ensure_api_route(base, "v1/messages")`.
+fn messages_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    match base.ends_with(MESSAGES_PATH) {
+        true => base.to_string(),
+        false => format!("{base}{MESSAGES_PATH}"),
+    }
+}
+
+/// Python's `_get_required_aws_region_name`, which only the default endpoint needs.
+fn configured_region(
+    params: &LitellmParams,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, Error> {
+    let region = resolve_non_empty(params.aws.aws_region_name.as_deref(), env, REGION_ENVS)
+        .ok_or_else(|| Error::Auth(REGION.missing(PROVIDER)))?;
+    checked_region(region)
+}
+
+/// The region SigV4 signs in: a public `aws-external-anthropic.<region>.api.aws` base names its
+/// own, as the Mantle routes sign in their host's region; otherwise the configured one.
+fn signing_region(
     base: Option<&str>,
     params: &LitellmParams,
     env: &dyn Fn(&str) -> Option<String>,
@@ -221,51 +283,36 @@ fn platform_region(
             .strip_suffix(".api.aws")
             .map(str::to_string)
     });
-    let region = host_region
-        .or_else(|| resolve_aws_region(None, &params.aws, env))
-        .or_else(|| resolve_non_empty(None, env, &["AWS_DEFAULT_REGION"]))
-        .ok_or_else(|| Error::Auth(AwsParams::REGION.missing("Claude Platform on AWS")))?;
-    validated_region(region)
+    match host_region {
+        Some(region) => checked_region(region),
+        None => resolve_aws_region(None, &params.aws, env)
+            .or_else(|| resolve_non_empty(None, env, &["AWS_DEFAULT_REGION"]))
+            .ok_or_else(|| Error::Auth(REGION.missing(PROVIDER)))
+            .and_then(checked_region),
+    }
 }
 
-fn filter_body(body: Value, strip_connection_fields: bool) -> Value {
-    let Value::Object(fields) = body else {
-        return body;
+fn checked_region(region: String) -> Result<String, Error> {
+    match is_valid_region(&region) {
+        true => Ok(region),
+        false => Err(Error::InvalidRequest(ErrorDetail::InvalidAwsRegion {
+            region,
+        })),
+    }
+}
+
+/// The request without the params the endpoint rejects, which Python drops before its transform.
+fn without_params(request: MessagesRequest, names: &[&str]) -> Result<MessagesRequest, Error> {
+    let kept = match serde_json::to_value(request).map_err(invalid_request)? {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .filter(|(name, _)| !names.contains(&name.as_str()))
+                .collect(),
+        ),
+        other => other,
     };
-    let unsupported: Vec<&str> = fields
-        .get(UNSUPPORTED_OVERRIDE)
-        .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_else(|| vec!["context_management"]);
-    let retained = fields
-        .iter()
-        .filter(|(name, _)| {
-            !unsupported.contains(&name.as_str())
-                && !(strip_connection_fields
-                    && (WORKSPACE_FIELDS.contains(&name.as_str())
-                        || name.starts_with("aws_")
-                        || name.as_str() == UNSUPPORTED_OVERRIDE))
-        })
-        .map(|(name, value)| {
-            let value = if name == "model" {
-                value
-                    .as_str()
-                    .map(|model| {
-                        Value::String(
-                            model
-                                .strip_prefix("claude_platform/")
-                                .unwrap_or(model)
-                                .into(),
-                        )
-                    })
-                    .unwrap_or_else(|| value.clone())
-            } else {
-                value.clone()
-            };
-            (name.clone(), value)
-        })
-        .collect();
-    Value::Object(retained)
+    serde_json::from_value(kept).map_err(invalid_request)
 }
 
 fn invalid_request(error: serde_json::Error) -> Error {
@@ -275,172 +322,302 @@ fn invalid_request(error: serde_json::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use litellm_llms_types::providers::anthropic::AnthropicBeta;
     use rstest::rstest;
     use serde_json::json;
 
-    #[rstest]
-    fn workspace_is_required_before_any_upstream_request() {
-        assert_eq!(
-            BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-                .validate_environment(
-                    vec![],
-                    Some("key"),
-                    "claude-test",
-                    &MessagesOptionalParams::default(),
-                    &LitellmParams::default(),
-                    &|_| None
-                )
-                .unwrap_err(),
-            Error::Auth(WORKSPACE.missing("Claude Platform on AWS"))
-        );
-    }
-
-    #[rstest]
-    #[case::valid("forwarded", true)]
-    #[case::blank(" ", false)]
-    fn forwarded_keys_win_and_blank_keys_fall_back(#[case] key: &str, #[case] forwarded: bool) {
-        let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .validate_environment(
-                vec![
-                    ("X-Api-Key".into(), key.into()),
-                    ("authorization".into(), "stale".into()),
-                ],
-                Some("explicit"),
-                "claude-test",
-                &MessagesOptionalParams::default(),
-                &LitellmParams::default(),
-                &|name| (name == "ANTHROPIC_AWS_WORKSPACE_ID").then(|| "workspace".into()),
-            )
-            .unwrap();
-        assert_eq!(
-            header_value(&environment.headers, WORKSPACE_HEADER),
-            Some("workspace")
-        );
-        assert_eq!(header_value(&environment.headers, "authorization"), None);
-        if forwarded {
-            assert_eq!(header_value(&environment.headers, "x-api-key"), Some(key));
-            assert!(matches!(environment.auth, AuthScheme::Forwarded));
-        } else {
-            assert_eq!(header_value(&environment.headers, "x-api-key"), None);
-            assert!(
-                matches!(environment.auth, AuthScheme::Credential { secret, placement: CredentialPlacement::Header("x-api-key") } if secret.expose() == "explicit")
-            );
-        }
-    }
-
-    #[rstest]
-    #[case::region("us-west-2", true)]
-    #[case::injection("us-east-1.attacker.test/steal?", false)]
-    fn generated_endpoint_regions_are_validated(#[case] region: &str, #[case] valid: bool) {
-        let result = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.get_complete_url(
-            None,
-            "claude-test",
-            &LitellmParams::default(),
-            false,
-            &|name| (name == "AWS_DEFAULT_REGION").then(|| region.into()),
-        );
-        if valid {
-            assert_eq!(
-                result.unwrap(),
-                format!("https://{SERVICE}.{region}.api.aws/v1/messages")
-            );
-        } else {
-            assert!(matches!(result, Err(Error::InvalidRequest(_))));
-        }
-    }
-
-    #[rstest]
-    #[case::explicit_regional_endpoint(
-        "https://aws-external-anthropic.us-west-2.api.aws",
-        "us-east-1",
-        "us-west-2"
-    )]
-    fn public_regional_host_precedes_configured_region(
-        #[case] api_base: &str,
-        #[case] configured_region: &str,
-        #[case] expected_region: &str,
-    ) {
-        let params = LitellmParams {
-            api_base: Some(api_base.into()),
-            aws: AwsParams {
-                aws_region_name: Some(configured_region.into()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let env = |name: &str| (name == "ANTHROPIC_AWS_WORKSPACE_ID").then(|| "workspace".into());
-        let url = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .get_complete_url(None, "claude-test", &params, false, &env)
-            .unwrap();
-        let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .validate_environment(
-                vec![],
-                None,
-                "claude-test",
-                &MessagesOptionalParams::default(),
-                &params,
-                &env,
-            )
-            .unwrap();
-        assert_eq!(
-            url,
-            "https://aws-external-anthropic.us-west-2.api.aws/v1/messages"
-        );
-        assert!(
-            matches!(environment.auth, AuthScheme::AwsSigV4 { region, service: SERVICE, .. } if region == expected_region)
-        );
-    }
-
-    #[rstest]
-    #[case::safeguards(json!([{"type": "dangerous_tool_use"}]), Some("dangerous-tool-use-2026-09-03"))]
-    #[case::null_safeguards(Value::Null, None)]
-    fn safeguards_need_the_dangerous_tool_use_beta(
-        #[case] safeguards: Value,
-        #[case] expected: Option<&str>,
-    ) {
-        let request = serde_json::from_value(json!({"model": "claude-test", "max_tokens": 16, "messages": [], "safeguards": safeguards})).unwrap();
-        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.request_headers(vec![], &request);
-        assert_eq!(
-            header_value(&headers, "anthropic-beta").map(|value| value.to_string()),
-            expected.map(str::to_string)
-        );
-    }
-
-    #[rstest]
-    #[case::default(json!({}), false)]
-    #[case::override_empty(json!({"claude_platform_unsupported_params": []}), true)]
-    fn unsupported_fields_are_filtered_before_beta_selection(
-        #[case] extra: Value,
-        #[case] keep_context: bool,
-    ) {
-        let fields = json!({"model": "claude_platform/claude-test", "max_tokens": 16, "messages": [], "workspace_id": "workspace", "aws_region_name": "us-west-2", "context_management": {"edits": [{"type": "clear_thinking_20251015"}]}});
-        let input = Value::Object(
-            fields
+    fn params(fields: Value) -> LitellmParams {
+        let model = json!({"model": "bedrock/claude_platform/claude-test"});
+        serde_json::from_value(Value::Object(
+            model
                 .as_object()
                 .unwrap()
                 .clone()
                 .into_iter()
-                .chain(extra.as_object().unwrap().clone())
+                .chain(fields.as_object().unwrap().clone())
                 .collect(),
-        );
-        let request = serde_json::from_value(input).unwrap();
-        let transformed = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
-            .unwrap();
-        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.request_headers(vec![], &transformed);
-        let expected_beta = AnthropicBeta::ContextManagement20250627.to_string();
+        ))
+        .unwrap()
+    }
+
+    const BEARER: (&str, &str) = ("AWS_BEARER_TOKEN_BEDROCK", "bearer");
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        }
+    }
+
+    fn validated(
+        headers: &[(&str, &str)],
+        api_key: Option<&str>,
+        fields: Value,
+        pairs: &'static [(&'static str, &'static str)],
+    ) -> Result<ValidatedEnvironment, Error> {
+        BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.validate_environment(
+            headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            api_key,
+            "claude_platform/claude-test",
+            &MessagesOptionalParams::default(),
+            &params(fields),
+            &env(pairs),
+        )
+    }
+
+    #[rstest]
+    #[case::workspace_id(json!({"workspace_id": "a", "aws_workspace_id": "b"}), &[], "a")]
+    #[case::aws_workspace_id(json!({"aws_workspace_id": "b", "anthropic_workspace_id": "d"}), &[], "b")]
+    #[case::header_spelling(json!({"anthropic-workspace-id": "c", "anthropic_workspace_id": "d"}), &[], "c")]
+    #[case::anthropic_workspace_id(json!({"anthropic_workspace_id": "d"}), &[], "d")]
+    #[case::empty_falls_through(json!({"workspace_id": "", "aws_workspace_id": "b"}), &[], "b")]
+    #[case::number(json!({"workspace_id": 123}), &[], "123")]
+    #[case::env(json!({}), &[("ANTHROPIC_AWS_WORKSPACE_ID", "env")], "env")]
+    #[case::second_env(json!({}), &[("ANTHROPIC_WORKSPACE_ID", "env2")], "env2")]
+    #[case::param_over_env(json!({"workspace_id": "a"}), &[("ANTHROPIC_AWS_WORKSPACE_ID", "env")], "a")]
+    fn the_workspace_replaces_any_caller_header(
+        #[case] fields: Value,
+        #[case] pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: &str,
+    ) {
+        let environment =
+            validated(&[(WORKSPACE_HEADER, "caller")], Some("key"), fields, pairs).unwrap();
         assert_eq!(
-            header_value(&headers, "anthropic-beta")
-                .is_some_and(|value| value.split(',').any(|beta| beta == expected_beta)),
-            keep_context
+            header_value(&environment.headers, WORKSPACE_HEADER),
+            Some(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::nothing(&[])]
+    #[case::caller_header_alone(&[(WORKSPACE_HEADER, "caller")])]
+    fn a_call_without_a_configured_workspace_is_a_missing_credential(
+        #[case] headers: &[(&str, &str)],
+    ) {
+        let Err(Error::Auth(error)) = validated(headers, Some("key"), json!({}), &[]) else {
+            panic!("the workspace is required");
+        };
+        assert!(error.is_missing_credential());
+        assert!(!is_missing_region(&error));
+    }
+
+    #[rstest]
+    #[case::explicit_key(&[], Some("key"), &[BEARER], Some("key"))]
+    #[case::env_key(&[], None, &[("ANTHROPIC_AWS_API_KEY", "env-key"), BEARER], Some("env-key"))]
+    #[case::empty_key_reads_env(&[], Some(""), &[("ANTHROPIC_AWS_API_KEY", "env-key"), BEARER], Some("env-key"))]
+    #[case::forwarded_key_wins(&[("x-api-key", "caller")], Some("key"), &[BEARER], Some("caller"))]
+    fn an_api_key_goes_out_unsigned_as_x_api_key(
+        #[case] headers: &[(&str, &str)],
+        #[case] api_key: Option<&str>,
+        #[case] pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let environment = validated(headers, api_key, json!({"workspace_id": "w"}), pairs).unwrap();
+        assert!(matches!(environment.auth, AuthScheme::Forwarded));
+        assert_eq!(header_value(&environment.headers, "x-api-key"), expected);
+        assert_eq!(header_value(&environment.headers, "authorization"), None);
+    }
+
+    #[rstest]
+    fn a_forwarded_authorization_stays_beside_the_api_key() {
+        let environment = validated(
+            &[("authorization", "Bearer caller")],
+            Some("key"),
+            json!({"workspace_id": "w"}),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            header_value(&environment.headers, "authorization"),
+            Some("Bearer caller")
+        );
+    }
+
+    #[rstest]
+    fn without_a_key_the_bedrock_bearer_token_authenticates_the_call() {
+        let environment = validated(
+            &[("x-api-key", "caller")],
+            None,
+            json!({"workspace_id": "w"}),
+            &[("AWS_BEARER_TOKEN_BEDROCK", "bearer")],
+        )
+        .unwrap();
+        assert!(matches!(environment.auth, AuthScheme::Forwarded));
+        assert_eq!(
+            header_value(&environment.headers, "authorization"),
+            Some("Bearer bearer")
+        );
+    }
+
+    #[rstest]
+    #[case::configured_region(json!({"aws_region_name": "eu-west-1"}), "eu-west-1")]
+    #[case::public_host_names_its_region(
+        json!({"aws_region_name": "eu-west-1", "api_base": "https://aws-external-anthropic.us-west-2.api.aws"}),
+        "us-west-2"
+    )]
+    fn without_a_key_or_bearer_sigv4_signs_and_drops_a_forwarded_authorization(
+        #[case] extra: Value,
+        #[case] expected_region: &str,
+    ) {
+        let fields = json!({"workspace_id": "w"})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(extra.as_object().unwrap().clone())
+            .collect();
+        let environment = validated(
+            &[("authorization", "Bearer caller"), ("x-api-key", "caller")],
+            None,
+            Value::Object(fields),
+            &[],
+        )
+        .unwrap();
+        let AuthScheme::AwsSigV4 {
+            region, service, ..
+        } = &environment.auth
+        else {
+            panic!("expected SigV4");
+        };
+        assert_eq!(region, expected_region);
+        assert_eq!(*service, SERVICE);
+        assert_eq!(header_value(&environment.headers, "authorization"), None);
+        assert_eq!(
+            header_value(&environment.headers, "x-api-key"),
+            Some("caller")
+        );
+    }
+
+    fn url(
+        api_base: Option<&str>,
+        fields: Value,
+        pairs: &'static [(&'static str, &'static str)],
+    ) -> Result<String, Error> {
+        BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.get_complete_url(
+            api_base,
+            "claude_platform/claude-test",
+            &params(fields),
+            false,
+            &env(pairs),
+        )
+    }
+
+    #[rstest]
+    #[case::bare("https://gw.example", "https://gw.example/v1/messages")]
+    #[case::trailing_slash("https://gw.example/", "https://gw.example/v1/messages")]
+    #[case::full_route("https://gw.example/v1/messages", "https://gw.example/v1/messages")]
+    #[case::path_prefix("https://gw.example/proxy", "https://gw.example/proxy/v1/messages")]
+    fn a_base_gets_the_messages_route_once(#[case] base: &str, #[case] expected: &str) {
+        assert_eq!(url(Some(base), json!({}), &[]).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::env_base(None, json!({}), &[("ANTHROPIC_AWS_BASE_URL", "https://env.example")], "https://env.example/v1/messages")]
+    #[case::second_env_base(None, json!({}), &[("ANTHROPIC_AWS_API_BASE", "https://env2.example")], "https://env2.example/v1/messages")]
+    #[case::call_base_over_env(Some("https://call.example"), json!({}), &[("ANTHROPIC_AWS_BASE_URL", "https://env.example")], "https://call.example/v1/messages")]
+    #[case::default_endpoint(None, json!({"aws_region_name": "us-west-2"}), &[], "https://aws-external-anthropic.us-west-2.api.aws/v1/messages")]
+    #[case::default_endpoint_env_region(None, json!({}), &[("AWS_DEFAULT_REGION", "eu-west-1")], "https://aws-external-anthropic.eu-west-1.api.aws/v1/messages")]
+    fn the_base_is_the_call_s_then_the_env_s_then_the_regional_endpoint(
+        #[case] api_base: Option<&str>,
+        #[case] fields: Value,
+        #[case] pairs: &'static [(&'static str, &'static str)],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(url(api_base, fields, pairs).unwrap(), expected);
+    }
+
+    #[rstest]
+    fn the_default_endpoint_without_a_region_is_a_missing_region() {
+        let Err(Error::Auth(error)) = url(None, json!({}), &[]) else {
+            panic!("the region is required");
+        };
+        assert!(is_missing_region(&error));
+        assert!(error.is_missing_credential());
+    }
+
+    #[rstest]
+    fn an_injected_region_never_reaches_the_host() {
+        let result = url(
+            None,
+            json!({"aws_region_name": "us-east-1.attacker.test/x?"}),
+            &[],
+        );
+        assert!(matches!(
+            result,
+            Err(Error::InvalidRequest(ErrorDetail::InvalidAwsRegion { .. }))
+        ));
+    }
+
+    fn request(fields: Value) -> MessagesRequest {
+        serde_json::from_value(
+            json!({"model": "claude_platform/claude-test", "max_tokens": 16, "messages": []})
+                .as_object()
+                .unwrap()
+                .clone()
+                .into_iter()
+                .chain(fields.as_object().unwrap().clone())
+                .collect::<serde_json::Map<String, Value>>()
+                .into(),
+        )
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::default_drops_context_management(json!({}), false, true)]
+    #[case::override_keeps_it(json!({"claude_platform_unsupported_params": []}), true, true)]
+    #[case::override_drops_temperature(json!({"claude_platform_unsupported_params": ["temperature"]}), true, false)]
+    #[case::non_list_override_is_ignored(json!({"claude_platform_unsupported_params": "temperature"}), false, true)]
+    fn the_endpoint_s_rejected_params_are_dropped(
+        #[case] fields: Value,
+        #[case] keeps_context_management: bool,
+        #[case] keeps_temperature: bool,
+    ) {
+        let filtered = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .without_rejected_params(
+                request(json!({"temperature": 0.5, "context_management": {"edits": []}})),
+                &params(fields),
+            )
+            .unwrap();
+        let body = serde_json::to_value(filtered).unwrap();
+        assert_eq!(
+            body.get("context_management").is_some(),
+            keeps_context_management
+        );
+        assert_eq!(body.get("temperature").is_some(), keeps_temperature);
+    }
+
+    #[rstest]
+    fn the_route_is_billed_but_never_sent() {
+        let transformed = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                request(json!({})),
+                &MessagesTransformContext::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.logged_model(&transformed.model),
+            "claude_platform/claude-test"
         );
         let wire = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
             .wire_body(serde_json::to_value(transformed).unwrap());
         assert_eq!(wire["model"], "claude-test");
-        assert_eq!(wire.get("context_management").is_some(), keep_context);
-        assert_eq!(wire.get("workspace_id"), None);
-        assert_eq!(wire.get("aws_region_name"), None);
-        assert_eq!(wire.get(UNSUPPORTED_OVERRIDE), None);
+    }
+
+    #[rstest]
+    #[case::provider_prefixed("bedrock/claude_platform/claude-test", true, "claude-test")]
+    #[case::routed("claude_platform/claude-test", true, "claude-test")]
+    #[case::invoke("bedrock/us.anthropic.claude-test", false, "us.anthropic.claude-test")]
+    #[case::mantle("bedrock/mantle/claude-test", false, "mantle/claude-test")]
+    fn the_route_is_recognised_with_or_without_its_provider(
+        #[case] model: &str,
+        #[case] platform: bool,
+        #[case] logged: &str,
+    ) {
+        assert_eq!(is_claude_platform_route(model), platform);
+        assert_eq!(logged_model(model), logged);
     }
 }

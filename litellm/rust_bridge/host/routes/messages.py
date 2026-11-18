@@ -1283,7 +1283,7 @@ def map_failure(
     if getattr(error, "messages_missing_credential", False):
         return _raised_like_python(
             litellm.AuthenticationError(
-                message=_MISSING_KEY,
+                message=optional_str(getattr(error, "messages_missing_param", None)) or _MISSING_KEY,
                 llm_provider=request_provider,
                 model=str(request["model"]).removeprefix(f"{request_provider}/"),
             ),

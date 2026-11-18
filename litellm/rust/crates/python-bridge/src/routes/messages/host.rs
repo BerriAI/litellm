@@ -25,6 +25,9 @@ use litellm_llms::{
     },
     base_llm::messages::context::MessagesModelCapabilities,
     bedrock::chat::invoke_handler::BedrockStreamRaise,
+    bedrock::claude_platform::messages::transformation::{
+        is_claude_platform_route, is_missing_region, logged_model as claude_platform_logged_model,
+    },
     bedrock_mantle::messages::transformation::{mantle_capability_lookup, mantle_logged_model},
 };
 use litellm_llms_types::headers::ProviderSpecificHeaders;
@@ -746,8 +749,11 @@ impl MessagesPythonHost {
             .and_then(|provider| mantle_capability_lookup(provider, &model));
         // Python's Bedrock invoke transform shapes the caller's own tool dicts in place; Rust logs
         // the tools it shapes for the Mantle routes instead.
-        let shapes_invoke_tools =
-            custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) && mantle.is_none();
+        let claude_platform = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER)
+            && is_claude_platform_route(&model);
+        let shapes_invoke_tools = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER)
+            && mantle.is_none()
+            && !claude_platform;
         let mut fields = self.body_params(py, arguments, shapes_invoke_tools)?;
         let prepared = fields.remove("messages");
         let presanitized = prepared.is_some();
@@ -857,6 +863,13 @@ impl MessagesPythonHost {
         let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
             module_global(py, name)
         })?;
+        // Python's Claude Platform config falls back to `litellm.api_base` before its env bases.
+        let api_base = match (api_base, claude_platform) {
+            (None, true) => module_global(py, "api_base")?
+                .and_then(|base| base.extract::<String>().ok())
+                .filter(|base| !base.is_empty()),
+            (api_base, _) => api_base,
+        };
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
                 body,
@@ -926,6 +939,20 @@ impl MessagesPythonHost {
             &py.import(MODEL_CAPABILITIES_MODULE)?
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
+        )
+    }
+
+    /// The model Python's handler logs a refused `bedrock/claude_platform/` call under.
+    fn claude_platform_model(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let Some(model) = self.view.request(py)?.get_item("model")? else {
+            return Ok(None);
+        };
+        let Ok(model) = model.extract::<String>() else {
+            return Ok(None);
+        };
+        Ok(
+            (self.provider(py) == BEDROCK_PROVIDER && is_claude_platform_route(&model))
+                .then(|| claude_platform_logged_model(&model).to_string()),
         )
     }
 
@@ -1076,6 +1103,10 @@ impl MessagesPythonHost {
         }
         let unresolved_provider = refused_resolving_provider(&error);
         let bad_request = raises_bad_request(&error);
+        let missing_platform_region = matches!(
+            &error,
+            Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth)) if is_missing_region(auth)
+        );
         route_failure(py, error, RequestMarker::Messages, |native| {
             if self.stream_opened {
                 native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
@@ -1086,6 +1117,18 @@ impl MessagesPythonHost {
                 value.setattr(MESSAGES_PROVIDER, "")?;
                 if let Some(model) = self.view.request(py)?.get_item("model")? {
                     value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                }
+            } else if let Some(model) = self.claude_platform_model(py)? {
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                if missing_platform_region {
+                    value.setattr(crate::errors::MESSAGES_LATE_REJECTION, true)?;
+                }
+                if value
+                    .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)?
+                    .is_some_and(|kind| kind.eq(REPLAYED_CREDENTIAL_FAILURE).unwrap_or(false))
+                {
+                    value.setattr(MESSAGES_CREDENTIAL_FAILURE, UNAVAILABLE_CREDENTIALS)?;
                 }
             } else if let Some(models) = self.mantle_models(py)? {
                 let value = native.value(py);
