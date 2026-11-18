@@ -360,9 +360,9 @@ def _map_openai_exception(
         else str(original_exception)
     )
     normalized_message: Final = (
-        _name_json_provider_key_env(provider_message, custom_llm_provider)
-        .replace("OPENAI", custom_llm_provider.upper())
-        .replace("openai.OpenAIError", f"{custom_llm_provider}.{custom_llm_provider}Error")
+        provider_message.replace("OPENAI", custom_llm_provider.upper()).replace(
+            "openai.OpenAIError", f"{custom_llm_provider}.{custom_llm_provider}Error"
+        )
         if provider_message is not None and isinstance(provider_message, str)
         else provider_message
     )
@@ -2707,21 +2707,6 @@ def provider_origin_status(error: BaseException) -> int | None:
     """The provider's own HTTP status for an error mapped from its response, or None when litellm raised it."""
     status: Final = getattr(error, PROVIDER_ORIGIN_STATUS_ATTRIBUTE, None)
     return status if isinstance(status, int) and not isinstance(status, bool) else None
-
-
-def _name_json_provider_key_env(message: str, custom_llm_provider: str) -> str:
-    """Name a JSON provider's own key variable in the OpenAI SDK's missing-key message.
-
-    The generic rewrite below turns OPENAI_API_KEY into <SLUG>_API_KEY, which is not the
-    variable a JSON provider reads when its api_key_env differs from that (e.g. "0g" reads
-    OG_API_KEY; 0G_API_KEY is not even a valid shell variable name).
-    """
-    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
-    if json_provider is None:
-        return message
-    return message.replace("OPENAI_API_KEY", json_provider.api_key_env)
 
 
 def exception_type(

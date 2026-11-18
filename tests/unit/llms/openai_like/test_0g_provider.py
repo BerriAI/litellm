@@ -212,14 +212,34 @@ async def test_0g_anthropic_messages_request_is_bridged_to_chat_completions(monk
     assert any(block.get("text") == "Hello from 0G" for block in response["content"])
 
 
-def test_0g_missing_key_error_names_og_api_key(monkeypatch: pytest.MonkeyPatch):
-    # "0G_API_KEY" (the slug upper-cased) is not a valid shell variable name; the
-    # provider reads OG_API_KEY, so that is the name the error must give.
+_MISSING_KEY_CALLS: Final = {
+    "chat": lambda: litellm.completion(model="0g/glm-5.3-flash", messages=[{"role": "user", "content": "hi"}]),
+    "text_completion": lambda: litellm.text_completion(model="0g/glm-5.3-flash", prompt="hi"),
+    "responses": lambda: litellm.responses(model="0g/glm-5.3-flash", input="hi"),
+}
+
+
+@pytest.mark.parametrize("openai_key", [None, "sk-openai-not-for-0g"])
+@pytest.mark.parametrize("call", list(_MISSING_KEY_CALLS))
+def test_0g_missing_key_never_falls_back_to_openai_key(
+    call: str, openai_key: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    # Without OG_API_KEY, the OpenAI-compatible path would fall back to OPENAI_API_KEY and
+    # send that unrelated credential to 0G. The call must fail before any request instead,
+    # and name OG_API_KEY ("0G_API_KEY", the slug upper-cased, is not a valid variable name).
     monkeypatch.delenv("OG_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    if openai_key is None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", openai_key)
 
-    with pytest.raises(litellm.AuthenticationError) as excinfo:
-        litellm.completion(model="0g/glm-5.3-flash", messages=[{"role": "user", "content": "hi"}])
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route(host="router-api.0g.ai").respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            _MISSING_KEY_CALLS[call]()
 
+    assert route.call_count == 0
     assert "OG_API_KEY" in str(excinfo.value)
     assert "0G_API_KEY" not in str(excinfo.value)
