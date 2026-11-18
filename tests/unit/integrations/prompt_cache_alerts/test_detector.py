@@ -349,14 +349,17 @@ async def _call(
     )
     if isinstance(response, litellm.CustomStreamWrapper):
         _ = [chunk async for chunk in response]
-        return None
-    assert isinstance(response, litellm.ModelResponse)
-    return response
+    await _drain_logging()
+    return response if isinstance(response, litellm.ModelResponse) else None
+
+
+async def _drain_logging() -> None:
+    await drain_logging_tasks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=_GUARD_SECONDS)
 
 
 async def _settle(script: _Script, count: int) -> None:
-    await drain_logging_tasks()
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=_GUARD_SECONDS)
+    await _drain_logging()
     await script.until(count)
 
 
@@ -382,10 +385,12 @@ async def test_a_real_completion_reads_the_raw_counters_and_leaves_the_response_
     expected: str,
 ) -> None:
     """Normalized usage reports 0 cache tokens either way, so only the raw body can tell them apart."""
-    observed: Final = await _call(respx_mock, _anthropic_reply(usage))
-    await _settle(watched, 1)
+    observers: Final = litellm.callbacks
     monkeypatch.setattr(litellm, "callbacks", [])
     unobserved: Final = await _call(respx_mock, _anthropic_reply(usage))
+    monkeypatch.setattr(litellm, "callbacks", observers)
+    observed: Final = await _call(respx_mock, _anthropic_reply(usage))
+    await _settle(watched, 1)
     assert watched.events() == [expected]
     assert observed is not None and unobserved is not None
     assert observed.choices[0].model_dump() == unobserved.choices[0].model_dump()
