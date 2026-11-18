@@ -199,9 +199,26 @@ class RawCounts(TypedDict):
     search_queries: ReadOnly[int]
 
 
+ReportSource = Literal["usage.cost", "llm_provider-x-litellm-response-cost", "upstream_usage_cost"]
+
+
 class ReportedCost(TypedDict):
-    source: ReadOnly[str]
+    """A cost a provider or the gateway in front of it reported, named by the source that stated it, whose policy
+    Rust applies."""
+
+    source: ReadOnly[ReportSource]
     usd: ReadOnly[float]
+
+
+class PricedSides(TypedDict):
+    prompt: ReadOnly[float]
+    completion: ReadOnly[float]
+
+
+class _ReportedDocument(TypedDict):
+    reported: ReadOnly[ReportedCost]
+    split_by: ReadOnly[PricedSides | None]
+    adjust: ReadOnly[AdjustFacts | None]
 
 
 class CustomRates(TypedDict):
@@ -827,6 +844,14 @@ def custom_receipt(
     if priced is None:
         raise ValueError(f"Custom pricing left model={model} unpriced")
     return priced
+
+
+def price_reported(
+    reported: ReportedCost, split_by: PricedSides | None, adjust: AdjustFacts | None = None
+) -> NativeReceipt | NativeUnpriced:
+    """``reported`` billed by its source's policy: the discount and margin it takes and the billed total split
+    between prompt and completion in the ratio ``split_by`` prices them, all on the completion without one."""
+    return model_cost_inputs.price_reported(_ReportedDocument(reported=reported, split_by=split_by, adjust=adjust))
 
 
 def price_tools(document: ToolsOfCall | OneToolOnly, rows: ToolRows) -> float | None:

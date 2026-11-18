@@ -98,6 +98,7 @@ pub(super) fn price<S: RowSource>(
         margin: Default::default(),
         parts: extras.parts,
         cache_savings: None,
+        reported: None,
         basis: query.header.basis.clone(),
         total: 0.0,
     };
