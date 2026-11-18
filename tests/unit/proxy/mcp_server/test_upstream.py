@@ -190,3 +190,64 @@ async def test_upstream_client_ignores_the_setting_where_the_call_already_lists_
     )
 
     assert client.skip_tool_output_validation is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile_fields", "grants", "expected"),
+    [
+        ({"auth_type": MCPAuth.bearer_token}, ("ana-bots",), 503),
+        ({"auth_type": MCPAuth.api_key}, ("ana-bots",), 503),
+        (
+            {
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "client_credentials",
+                "client_id": "bot-app",
+                "token_url": "https://idp.example/bot-token",
+            },
+            ("ana-bots",),
+            503,
+        ),
+        ({"auth_type": MCPAuth.bearer_token}, (), "Bearer caller-chosen-token"),
+    ],
+    ids=["static-without-token", "api-key-without-token", "client-credentials-without-secret", "no-grant-default"],
+)
+async def test_a_profile_without_a_credential_is_refused_and_never_sends_the_callers_header(
+    profile_fields: Mapping[str, object], grants: tuple[str, ...], expected: int | str
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile
+    from tests.unit.proxy.mcp_server.auth_profile_fakes import (
+        AnalyticsUpstream,
+        BotTokenEndpoint,
+        profile_aware_manager,
+        profiled_analytics_server,
+    )
+
+    upstream: Final = AnalyticsUpstream()
+    server: Final = profiled_analytics_server(
+        auth_type=MCPAuth.bearer_token,
+        oauth2_flow=None,
+        additional_auth=(MCPAuthProfile.model_validate({"id": "ana-bots", **profile_fields}),),
+    )
+    manager: Final = profile_aware_manager(server, upstream, BotTokenEndpoint(), *grants)
+
+    async def call() -> object:
+        return await manager.call_tool(
+            server_name="analytics",
+            name="get_issue",
+            arguments={},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-bot-key"),
+            mcp_auth_header="Bearer caller-chosen-token",
+        )
+
+    if isinstance(expected, int):
+        with pytest.raises(HTTPException) as refusal:
+            await call()
+        assert refusal.value.status_code == expected, refusal.value.detail
+        assert upstream.requests == ()
+    else:
+        await call()
+        assert upstream.calls("tools/call") == (expected,), upstream.requests
