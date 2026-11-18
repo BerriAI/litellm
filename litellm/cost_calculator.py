@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.decisions_pricing import (
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+    AdjustedCost,
     AdjustFacts,
     CallFacts,
     OcrDocument,
@@ -2299,7 +2300,7 @@ def completion_cost(
                         search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
                         completion_tokens = search_units
                 elif call_type in _SEARCH_CALL_TYPES:
-                    from litellm.search import search_provider_cost_per_query
+                    from litellm.search.cost_calculator import search_cost
 
                     # Extract number_of_queries from optional_params or default to 1
                     number_of_queries = 1
@@ -2316,36 +2317,37 @@ def completion_cost(
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
 
-                    (
-                        prompt_cost,
-                        completion_cost_result,
-                    ) = (
-                        (number_of_queries * configured_cost_per_query, 0.0)
-                        if configured_cost_per_query is not None
-                        else search_provider_cost_per_query(
-                            model=search_model,
-                            custom_llm_provider=custom_llm_provider,
-                            number_of_queries=number_of_queries,
-                            optional_params=optional_params,
-                        )
+                    search_region: Final = region_name if isinstance(region_name, str) else None
+                    searched: Final = search_cost(
+                        model=search_model,
+                        custom_llm_provider=custom_llm_provider,
+                        number_of_queries=number_of_queries,
+                        optional_params=optional_params,
+                        adjust=AdjustFacts(provider=custom_llm_provider, model=model, region=search_region),
+                        configured_cost_per_query=configured_cost_per_query,
                     )
-
-                    # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
-                    _final_cost = prompt_cost + completion_cost_result
-
-                    search_adjusted: Final = adjusted_cost(
-                        _final_cost,
-                        custom_llm_provider,
-                        model,
-                        region_name if isinstance(region_name, str) else None,
+                    search_adjusted: Final = (
+                        AdjustedCost(
+                            cost=searched.total,
+                            discount_percent=searched.discount_percent,
+                            discount_amount=searched.discount_amount,
+                            margin_percent=searched.margin_percent,
+                            margin_fixed_amount=searched.margin_fixed_amount,
+                            margin_total_amount=searched.margin_total_amount,
+                        )
+                        if isinstance(searched, NativeReceipt)
+                        else adjusted_cost(searched, custom_llm_provider, model, search_region)
+                    )
+                    search_prompt_cost: Final = (
+                        searched.prompt_cost if isinstance(searched, NativeReceipt) else searched
                     )
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
-                        prompt_tokens_cost_usd_dollar=prompt_cost,
-                        completion_tokens_cost_usd_dollar=completion_cost_result,
+                        prompt_tokens_cost_usd_dollar=search_prompt_cost,
+                        completion_tokens_cost_usd_dollar=0.0,
                         cost_for_built_in_tools_cost_usd_dollar=0.0,
                         total_cost_usd_dollar=search_adjusted.cost,
-                        original_cost=_final_cost,
+                        original_cost=search_prompt_cost,
                         discount_percent=search_adjusted.discount_percent,
                         discount_amount=search_adjusted.discount_amount,
                         margin_percent=search_adjusted.margin_percent,

@@ -1,0 +1,128 @@
+{
+ "source": "Captured once from main's Python (8388e4f60f, LITELLM_LOCAL_MODEL_COST_MAP=True). `row` holds the cost fields the calculator read, `expected` what main returned or the exception it raised",
+ "cases": [
+  {
+   "name": "tavily_basic",
+   "model": "tavily/search",
+   "provider": "tavily",
+   "queries": 1,
+   "params": {},
+   "row": {
+    "input_cost_per_query": 0.008
+   },
+   "expected": {
+    "prompt": 0.008,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "tavily_advanced_depth",
+   "model": "tavily/search-advanced",
+   "provider": "tavily",
+   "queries": 3,
+   "params": {
+    "search_depth": "advanced"
+   },
+   "row": {
+    "input_cost_per_query": 0.016
+   },
+   "expected": {
+    "prompt": 0.048,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "linkup_deep",
+   "model": "linkup/search-deep",
+   "provider": "linkup",
+   "queries": 2,
+   "params": {
+    "depth": "deep"
+   },
+   "row": {
+    "input_cost_per_query": 0.05867
+   },
+   "expected": {
+    "prompt": 0.11734,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "serper_queries",
+   "model": "serper/search",
+   "provider": "serper",
+   "queries": 7,
+   "params": {},
+   "row": {
+    "input_cost_per_query": 0.001
+   },
+   "expected": {
+    "prompt": 0.007,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "parallel_default_results",
+   "model": "parallel_ai/search",
+   "provider": "parallel_ai",
+   "queries": 1,
+   "params": {
+    "max_results": 25
+   },
+   "row": {
+    "input_cost_per_query": 0.005
+   },
+   "expected": {
+    "prompt": 0.02,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "parallel_fast_usage",
+   "model": "parallel_ai/search-fast",
+   "provider": "parallel_ai",
+   "queries": 1,
+   "params": {
+    "mode": "fast",
+    "_parallel_ai_usage": [
+     {
+      "name": "sku_search",
+      "count": 3
+     },
+     {
+      "name": "sku_search_additional_results",
+      "count": 12
+     }
+    ]
+   },
+   "row": {
+    "input_cost_per_query": 0.001
+   },
+   "expected": {
+    "prompt": 0.015,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "parallel_usage_without_extra_results",
+   "model": "parallel_ai/search",
+   "provider": "parallel_ai",
+   "queries": 1,
+   "params": {
+    "_parallel_ai_usage": [
+     {
+      "name": "sku_search",
+      "count": 2
+     }
+    ]
+   },
+   "row": {
+    "input_cost_per_query": 0.005
+   },
+   "expected": {
+    "prompt": 0.01,
+    "completion": 0.0
+   }
+  }
+ ]
+}
