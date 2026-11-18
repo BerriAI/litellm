@@ -398,8 +398,11 @@ async def test_a_streamed_request_between_misses_resets_the_deployment_those_mis
     """Streamed attempts log an empty API key, so they cannot share the assessed configuration. The reset lands on
     the deployment key every assessed streak on it reads."""
     await _call(respx_mock, _anthropic_reply(_usage(0, 2048)))
+    await _settle(watched, 1)
     await _call(respx_mock, _anthropic_reply(_ZEROS))
+    await _settle(watched, 2)
     await _call(respx_mock, _anthropic_stream(_usage(512, 0)), stream=True)
+    await _settle(watched, 3)
     await _call(respx_mock, _anthropic_reply(_ZEROS))
     await _settle(watched, 4)
     assert watched.events() == ["proof", "miss", "reset", "miss"]
