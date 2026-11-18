@@ -1425,7 +1425,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             keep_system_order=marked_a_system_string,
             preserve_system_instructions=(
                 preserve_system_instructions
-                or optional_params.get("store") is not False
+                or request_params.get("store") is not False
                 or provider not in _SYSTEM_INPUT_PROVIDERS
             ),
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
