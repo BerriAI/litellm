@@ -6456,6 +6456,18 @@ def _relay_client_request(method: str = "GET", headers: Mapping[str, str] | None
     return cast(Request, mock_request)
 
 
+def _configured_route_request(method: str = "GET", headers: Mapping[str, str] | None = None) -> Request:
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+    def configured_route_endpoint() -> None:
+        return None
+
+    setattr(configured_route_endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    request: Final = _relay_client_request(method=method, headers=headers)
+    request.scope = {"endpoint": configured_route_endpoint}
+    return request
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("span_source", ["auth_parent_span", "ambient_span"])
 async def test_pass_through_request_propagates_active_trace_context(span_source: str):
@@ -6659,8 +6671,7 @@ async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
     try:
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, {})
-            request: Final = _relay_client_request(method="POST")
-            request.headers = Headers(inbound_headers)
+            request: Final = _configured_route_request(method="POST", headers=inbound_headers)
             response: Final = await pass_through_request(
                 request=request,
                 target="http://internal-api.test/v1/messages",
@@ -6680,12 +6691,15 @@ async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("route_headers", "inbound_headers", "model", "custom_llm_provider", "sent_profile_id"),
+    ("configured_route", "route_headers", "inbound_headers", "model", "custom_llm_provider", "sent_profile_id"),
     [
-        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", None, ["uprof_key"], id="claude-body-gets-the-pin"),
-        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "Claude-Opus-5-5", None, ["uprof_key"], id="claude-in-any-case"),
-        pytest.param(_SERVER_ANTHROPIC_KEY, {}, "gpt-5.5", None, [], id="other-model-gets-nothing"),
         pytest.param(
+            True, _SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", None, ["uprof_key"], id="claude-body-gets-the-pin"
+        ),
+        pytest.param(True, _SERVER_ANTHROPIC_KEY, {}, "Claude-Opus-5-5", None, ["uprof_key"], id="claude-in-any-case"),
+        pytest.param(True, _SERVER_ANTHROPIC_KEY, {}, "gpt-5.5", None, [], id="other-model-gets-nothing"),
+        pytest.param(
+            True,
             {},
             {"x-api-key": "caller-anthropic-key"},
             "claude-haiku-5-5",
@@ -6694,9 +6708,16 @@ async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
             id="caller-credential-gets-no-pin",
         ),
         pytest.param(
-            _SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", "azure_ai", ["uprof_key"], id="foundry-route-gets-the-pin"
+            False,
+            _SERVER_ANTHROPIC_KEY,
+            {},
+            "claude-haiku-5-5",
+            "azure_ai",
+            ["uprof_key"],
+            id="foundry-route-gets-the-pin",
         ),
         pytest.param(
+            False,
             {"Authorization": "Bearer server-openrouter-key"},
             {},
             "anthropic/claude-haiku-5-5",
@@ -6705,6 +6726,7 @@ async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
             id="vendor-route-gets-no-pin",
         ),
         pytest.param(
+            False,
             {"Authorization": "Bearer server-openrouter-key"},
             {"anthropic-user-profile-id": "uprof_caller"},
             "anthropic/claude-haiku-5-5",
@@ -6712,10 +6734,29 @@ async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
             ["uprof_caller"],
             id="vendor-route-keeps-the-callers-id",
         ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-mistral-key"},
+            {},
+            "claude-haiku-5-5",
+            None,
+            [],
+            id="built-in-route-without-a-provider-gets-no-pin",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-mistral-key"},
+            {"anthropic-user-profile-id": "uprof_caller"},
+            "claude-haiku-5-5",
+            None,
+            ["uprof_caller"],
+            id="built-in-route-without-a-provider-keeps-the-callers-id",
+        ),
     ],
 )
 async def test_pass_through_request_adds_the_pin_to_a_claude_request_without_a_profile_id(
     monkeypatch: pytest.MonkeyPatch,
+    configured_route: bool,
     route_headers: dict[str, str],
     inbound_headers: dict[str, str],
     model: str,
@@ -6735,7 +6776,9 @@ async def test_pass_through_request_adds_the_pin_to_a_claude_request_without_a_p
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, body)
             response: Final = await pass_through_request(
-                request=_relay_client_request(method="POST", headers=inbound_headers),
+                request=(_configured_route_request if configured_route else _relay_client_request)(
+                    method="POST", headers=inbound_headers
+                ),
                 target="http://internal-api.test/v1/messages",
                 custom_headers=dict(route_headers),
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=_PINNED_KEY_METADATA),

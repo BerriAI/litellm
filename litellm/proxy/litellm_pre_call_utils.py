@@ -3148,7 +3148,7 @@ async def add_litellm_data_to_request(
         data["api_version"] = dynamic_api_version
 
     _warn_on_unusable_profile_pins(user_api_key_dict)
-    caller_body_profile: Final = anthropic_user_profile_id_in_headers(_REQUEST_FIELDS.validate_python(data))
+    caller_body_profile: Final = _caller_anthropic_user_profile_id(_REQUEST_FIELDS.validate_python(data))
     if anthropic_user_profile_id(user_api_key_dict, {}) is not None:
         for field in ("extra_headers", "headers"):
             if field in data:
@@ -4915,19 +4915,27 @@ _NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
-_CALLER_API_KEY_PROVIDERS: Final = frozenset(
-    (
-        LlmProviders.ANTHROPIC.value,
-        LlmProviders.AZURE_AI.value,
-        LlmProviders.BEDROCK.value,
-        LlmProviders.BEDROCK_MANTLE.value,
-    )
+_BEDROCK_PROVIDERS: Final = frozenset((LlmProviders.BEDROCK.value, LlmProviders.BEDROCK_MANTLE.value))
+_PROVIDERS_A_CALLER_CREDENTIAL_FIELD_AUTHENTICATES: Final = MappingProxyType(
+    {
+        "api_key": _BEDROCK_PROVIDERS | {LlmProviders.ANTHROPIC.value, LlmProviders.AZURE_AI.value},
+        "aws_access_key_id": _BEDROCK_PROVIDERS,
+    }
 )
 
 
-def _carries_a_caller_api_key(data: Mapping[str, object]) -> bool:
-    api_key: Final = data.get("api_key")
-    return isinstance(api_key, str) and bool(api_key.strip())
+def _is_filled_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _providers_on_caller_credentials(data: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        itertools.chain.from_iterable(
+            providers
+            for field, providers in _PROVIDERS_A_CALLER_CREDENTIAL_FIELD_AUTHENTICATES.items()
+            if _is_filled_string(data.get(field))
+        )
+    )
 
 
 def anthropic_user_profile_id_in_headers(params: Mapping[str, object]) -> str | None:
@@ -4936,6 +4944,45 @@ def anthropic_user_profile_id_in_headers(params: Mapping[str, object]) -> str | 
             if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER and isinstance(value, str):
                 return value
     return None
+
+
+def _user_profile_id_body_field(fields: Mapping[str, object]) -> str | None:
+    values: Final = (
+        fields.get("user_profile_id"),
+        _request_fields(fields.get("additionalModelRequestFields")).get("user_profile_id"),
+    )
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
+def _caller_anthropic_user_profile_id(params: Mapping[str, object]) -> str | None:
+    return (
+        anthropic_user_profile_id_in_headers(params)
+        or _user_profile_id_body_field(params)
+        or _user_profile_id_body_field(_request_fields(params.get("extra_body")))
+    )
+
+
+_PROVIDER_SPECIFIC_HEADER: Final = TypeAdapter(ProviderSpecificHeader)
+
+
+def _valid_provider_specific_header(entry: object) -> ProviderSpecificHeader | None:
+    try:
+        return _PROVIDER_SPECIFIC_HEADER.validate_python(entry)
+    except PydanticValidationError:
+        return None
+
+
+def _without_user_profile_id_header(header: ProviderSpecificHeader) -> ProviderSpecificHeader:
+    return _PROVIDER_SPECIFIC_HEADER.validate_python(
+        {
+            **header,
+            "extra_headers": {
+                name: value
+                for name, value in header["extra_headers"].items()
+                if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+            },
+        }
+    )
 
 
 def _user_profile_id_header(
@@ -4970,11 +5017,7 @@ def add_provider_specific_headers_to_request(
     chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
     caller_credential_providers: Final = (
         ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_bearer_oauth else frozenset[str]()
-    ) | (
-        _CALLER_API_KEY_PROVIDERS
-        if _carries_a_caller_api_key(_REQUEST_FIELDS.validate_python(data))
-        else frozenset[str]()
-    )
+    ) | _providers_on_caller_credentials(_REQUEST_FIELDS.validate_python(data))
     caller_profile: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER, caller_user_profile_id)
 
     typesafe_danger_zone_headers: Final = {
@@ -5015,8 +5058,14 @@ def add_provider_specific_headers_to_request(
         if scoped_header["extra_headers"]
     ]
 
+    caller_entries: Final = tuple(
+        _without_user_profile_id_header(entry) if user_profile_id else entry
+        for entry in map(_valid_provider_specific_header, _request_entries(data.get("provider_specific_header")))
+        if entry is not None
+    )
+    entries: Final = [*caller_entries, *scoped_headers]
     if scoped_headers:
-        data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
+        data["provider_specific_header"] = entries[0] if len(entries) == 1 else entries
     return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
 
 

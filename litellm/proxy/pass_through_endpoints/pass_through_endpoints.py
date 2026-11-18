@@ -1334,13 +1334,12 @@ def _profile_pin_for_generic_routes(
     request_headers: Mapping[str, str],
     route_headers: Mapping[str, object],
     custom_llm_provider: str | None,
+    configured_route: bool,
 ) -> Callable[[Mapping[str, str], Mapping[str, object] | None], Mapping[str, str]]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
 
-    vendor_route: Final = (
-        custom_llm_provider is not None and custom_llm_provider not in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
-    )
-    if upstream_headers_filter is not None or vendor_route:
+    claude_route: Final = configured_route or custom_llm_provider in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
+    if upstream_headers_filter is not None or not claude_route:
         return _headers_unchanged
     route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
     caller_credentials: Final[Mapping[str, str]] = (
@@ -1712,6 +1711,7 @@ async def pass_through_request(
             safe_get_request_headers(request),
             custom_headers,
             custom_llm_provider,
+            configured_route=not builtin_provider_route,
         )
 
         requested_query_params: dict | None = (
