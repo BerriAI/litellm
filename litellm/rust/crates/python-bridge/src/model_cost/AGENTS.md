@@ -13,7 +13,7 @@
 - `install` touches no state until `CostMap::read` succeeds. `NativeRejected` means nothing changed
 - `register` keeps a registration only after its pass finished, so an exception in a host call keeps nothing
 - `rows=None` writes each entry into whichever table is published at that moment and never reports a swap
-- `cost_snapshot` is the pricing view of the published table, a model-catalog `Snapshot` over the same name index. `host::generation` reads the table and its generation in one call, and the snapshot is rebuilt only when that moves
+- `cost_snapshot` is the pricing view of the published table, a model-catalog `Snapshot` over the same name index. `host::generation` reads the table, its generation and the Python-held state pricing reads (the discount and margin configs and the `fallback_generalizations` rules) in one call, and the snapshot is rebuilt only when the generation moves
   - `LiveRow` is the `TableRow`. Its identity is the row object's address, and the snapshot cache holds the row so the address is not reused
   - `invalidate` also forgets the cached rows, so `changed_in_place()` and every registration pass reread them
   - Tests that install a fake host module hold `HOST_MODULE`, since Python can switch threads while one runs

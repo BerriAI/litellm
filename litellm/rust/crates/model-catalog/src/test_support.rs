@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::snapshot::{Generation, KnownNames, Snapshot, SnapshotInputs, TableRow};
+use crate::snapshot::{CostConfig, Generation, KnownNames, Snapshot, SnapshotInputs, TableRow};
 use crate::store::{Rows, Store};
 use crate::wire::Fields;
 use crate::{CapabilityRules, CostMap};
@@ -97,13 +97,13 @@ pub(crate) const GENERATION: Generation = Generation {
     table: 1,
     size: 1,
     writes: 0,
-    discount: 0,
-    margin: 0,
+    rules: 0,
 };
 
 pub(crate) fn snapshot(rows: TestRows, names: KnownNames) -> Snapshot<Store<TestRows>> {
     Snapshot::new(
         GENERATION,
+        CostConfig::default(),
         SnapshotInputs {
             table: Store::new(rows),
             rules: Arc::new(bundled_rules()),
