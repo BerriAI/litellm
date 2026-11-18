@@ -40,6 +40,13 @@ def generation() -> tuple[
     )
 
 
+def inputs() -> object:
+    """The ``NativeModelCostMap`` behind ``litellm.model_cost``, whose snapshot a Rust route prices its call over."""
+    from litellm.litellm_core_utils.get_model_cost_map import model_cost_inputs
+
+    return model_cost_inputs
+
+
 def known_names() -> tuple[frozenset[str], frozenset[str]]:
     """Every provider name, and the model names ``get_model_info`` renames before it looks one up."""
     import litellm

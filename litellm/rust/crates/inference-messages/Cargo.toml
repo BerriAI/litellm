@@ -16,6 +16,8 @@ litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
 litellm-cache-response.workspace = true
 litellm-core-utils.workspace = true
+litellm-cost.workspace = true
+litellm-framer = { workspace = true, features = ["sse"] }
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
@@ -29,11 +31,12 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio.workspace = true
+tokio-util = { version = "0.7", features = ["codec"] }
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-cost = { workspace = true, features = ["serde", "test-support"] }
 litellm-error.workspace = true
-litellm-framer = { workspace = true, features = ["sse"] }
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
