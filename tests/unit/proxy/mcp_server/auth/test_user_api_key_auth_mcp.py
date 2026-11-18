@@ -9082,7 +9082,12 @@ class TestUserSubjectTeamUnion:
         one cross-team user drain several teams' buckets on a single call, blocking their other
         members for access those teams did not provide. Exactly one source is charged, and it is the
         SAME source billing picks — one owner for both, so they cannot disagree."""
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            PROXY_MaxParallelRequestsHandler_v3,
+            _mcp_scope,
+            run_scoped,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         t1 = _make_team("t1", ["srv1"])
         t1.metadata = {"mcp_rpm_limit": {"srv1": 5}}
@@ -9095,10 +9100,14 @@ class TestUserSubjectTeamUnion:
         assert auth.mcp_source_team_rpm_limits == {"t1": {"srv1": 5}}, "t2's shared bucket is untouched"
         assert billed is not None and billed.team_id == "t1", "throttling and billing pick the same source"
 
-        descriptors: list = []
+        server = MCPServer(server_id="srv1", name="srv1", server_name="srv1", transport="http")
         limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-        limiter._add_mcp_per_team_rate_limit_descriptor(auth, "srv1", descriptors)
-        charged = {d["value"]: d["rate_limit"]["requests_per_unit"] for d in descriptors}
+        scoped = await run_scoped(
+            limiter, auth, {}, {"kind": "mcp", **_mcp_scope(auth, server)}, {"kind": "build"}, lookups=False
+        )
+        charged = {
+            d["value"]: d["rate_limit"]["requests_per_unit"] for d in scoped.descriptors if d["key"] == "mcp_per_team"
+        }
         assert charged == {"t1:srv1": 5}, "only the attributing team's bucket is charged"
 
     async def test_direct_user_grant_charges_no_team_bucket(self):
@@ -12483,7 +12492,8 @@ async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         PROXY_MaxParallelRequestsHandler_v3,
-        RateLimitDescriptor,
+        _mcp_scope,
+        run_scoped,
     )
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
@@ -12506,9 +12516,11 @@ async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
     assert limits == {"team-b": {"srv-b": 3}}
 
     stamped: Final = personal_key_owner_teams.model_copy(update={"mcp_source_team_rpm_limits": limits})
-    descriptors: list[RateLimitDescriptor] = []
     limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    limiter._add_mcp_per_team_rate_limit_descriptor(stamped, server_b.name, descriptors)
+    scoped: Final = await run_scoped(
+        limiter, stamped, {}, {"kind": "mcp", **_mcp_scope(stamped, server_b)}, {"kind": "build"}, lookups=False
+    )
+    descriptors: Final = [d for d in scoped.descriptors if d["key"] == "mcp_per_team"]
     assert len(descriptors) == 1
     assert descriptors[0]["key"] == "mcp_per_team"
     assert descriptors[0]["value"] == f"team-b:{server_b.name}"

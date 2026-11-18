@@ -14,7 +14,7 @@ import math
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -33,6 +33,7 @@ from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SESSION_KEY_PREFIX,
+    CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -112,9 +113,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_tags_from_request_body,
     safe_get_request_headers,
     safe_get_request_query_params,
 )
@@ -374,16 +377,6 @@ class _PrismaTagRow(Protocol):
 
 
 def _tag_table(repo: _PrismaTableHolder[_PrismaTagRow]) -> _PrismaAuthTable[_PrismaTagRow]:
-    return repo.table
-
-
-class _PrismaEndUserRow(Protocol):
-    user_id: str
-
-    def dict(self) -> Mapping[str, object]: ...
-
-
-def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthTable[_PrismaEndUserRow]:
     return repo.table
 
 
@@ -1269,6 +1262,71 @@ def request_skips_budget_checks(
     return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
+_OPAQUE_CONTROL_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _opaque_control_items(value: object) -> Iterable[object]:
+    return _OPAQUE_CONTROL_ITEMS.validate_python(value) if isinstance(value, (list, tuple)) else ()
+
+
+def check_opaque_inference_controls(value: object, *, depth: int = 0) -> None:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify control nesting beyond the limit")
+    fields: Final = as_str_mapping(value)
+    if fields is None:
+        for item in _opaque_control_items(value):
+            check_opaque_inference_controls(item, depth=depth + 1)
+        return
+    for name, control in fields.items():
+        if control in (None, {}, [], ()):
+            continue
+        if name in {"models", "team_models", "allowed_models"} and "*" not in (_opaque_control_items(control)):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce model restrictions")
+        if name.endswith(("tpm_limit", "tpd_limit", "max_budget", "model_rpm_limit")) or name in {
+            "tpm_limit_per_model",
+            "rpm_limit_per_model",
+            "allowed_model_region",
+            "allowed_tools",
+            "guardrails",
+            "policies",
+        }:
+            raise HTTPException(status_code=403, detail=f"Opaque inference cannot enforce {name}")
+        check_opaque_inference_controls(control, depth=depth + 1)
+
+
+async def _check_opaque_team_member_budget(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    membership: LiteLLM_TeamMembership | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    check_opaque_inference_controls({"model_max_budget": valid_token.team_member_model_max_budget})
+    if team_object is None or valid_token.user_id is None:
+        return
+    metadata: Final = _KEY_METADATA_ADAPTER.validate_python(team_object.model_dump().get("metadata"))
+    budget_id: Final = metadata.get("team_member_budget_id") if metadata is not None else None
+    if not isinstance(budget_id, str):
+        return
+    try:
+        default_budget: Final = await get_team_member_default_budget(
+            budget_id=budget_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            raise_on_lookup_error=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify default member policies") from exc
+    if default_budget is None:
+        raise HTTPException(status_code=403, detail="Opaque inference cannot verify default member policies")
+    effective_budget: Final = resolve_effective_team_member_budget(
+        member_budget=membership.litellm_budget_table if membership is not None else None,
+        team_default_budget=default_budget,
+        now=get_utc_datetime(),
+    )
+    check_opaque_inference_controls(default_budget.model_copy(update={"max_budget": effective_budget}).model_dump())
+
+
 async def common_checks(
     request_body: dict[str, object],
     team_object: LiteLLM_TeamTable | None,
@@ -1304,6 +1362,7 @@ async def common_checks(
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Final[str | list[str] | None] = get_model_from_request(
@@ -1328,8 +1387,11 @@ async def common_checks(
         )
     )
 
+    opaque_cursor: Final = route.startswith(f"{CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX}/")
     membership_user_id: Final = (
-        valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
+        valid_token.user_id
+        if valid_token is not None and (bool(_model) or not skip_all_budget_checks or opaque_cursor)
+        else None
     )
     team_membership_loaded: Final = team_object is not None and membership_user_id is not None
     loaded_team_membership: Final = (
@@ -1343,6 +1405,69 @@ async def common_checks(
         if team_object is not None and membership_user_id is not None
         else None
     )
+
+    if opaque_cursor and valid_token is not None:
+        if customer_usage_requested({}, customer_usage_key_fields(valid_token)):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce customer-bound key policies")
+        for customer_models in valid_token.customer_model_scopes:
+            check_opaque_inference_controls({"allowed_models": customer_models})
+        if valid_token.agent_id is not None:
+            raise HTTPException(
+                status_code=403, detail="Opaque inference does not support keys bound to LiteLLM agents"
+            )
+        if personal_key_team_model_access_applies(valid_token):
+            raise HTTPException(status_code=403, detail="Opaque inference cannot enforce inherited personal-key models")
+        if valid_token.user_id is not None and user_object is None:
+            raise HTTPException(status_code=403, detail="Opaque inference cannot verify the key owner's policies")
+        org_id: Final = valid_token.org_id or (team_object.organization_id if team_object is not None else None)
+        org_object: Final = (
+            await get_org_object(
+                org_id=org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if org_id is not None
+            else None
+        )
+        missing_project: Final = valid_token.project_id is not None and project_object is None
+        missing_org: Final = org_id is not None and org_object is None
+        if missing_project or missing_org:
+            raise HTTPException(status_code=403, detail="Opaque inference cannot verify inherited policies")
+        for source in (
+            valid_token,
+            team_object,
+            user_object,
+            project_object,
+            end_user_object,
+            loaded_team_membership,
+            org_object,
+        ):
+            if source is not None:
+                check_opaque_inference_controls(source.model_dump())
+        await _check_opaque_team_member_budget(
+            valid_token=valid_token,
+            team_object=team_object,
+            membership=loaded_team_membership,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        opaque_tags: Final = tuple(
+            dict.fromkeys(
+                (
+                    *get_tags_from_request_body(_typed_request_body(request_body)),
+                    *LiteLLMProxyRequestSetup.get_inherited_tags(valid_token),
+                )
+            )
+        )
+        if prisma_client is not None and opaque_tags:
+            opaque_tag_objects: Final = await read_tag_objects_batch(
+                tag_names=opaque_tags, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+            )
+            if isinstance(opaque_tag_objects, Exception):
+                raise HTTPException(status_code=403, detail="Opaque inference cannot verify tag policies")
+            for tag_object in opaque_tag_objects.values():
+                check_opaque_inference_controls(tag_object.model_dump())
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
@@ -1559,8 +1684,6 @@ async def common_checks(
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
-
         if valid_token is not None:
             for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_body):
                 LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
@@ -2096,27 +2219,6 @@ async def check_end_user_budget(
 _check_end_user_budget: Final = check_end_user_budget
 
 
-#: Columns whose non-null value makes an end-user row restrict something auth enforces. ``blocked``
-#: is separate: it restricts when true rather than when merely set.
-_RESTRICTED_COLUMNS: Final = ("budget_id", "allowed_model_region", "default_model", "object_permission_id")
-
-
-def _column_is_set(column: str) -> Mapping[str, object]:
-    """``column IS NOT NULL`` as a plain dict, which is the only shape prisma's builder accepts."""
-    return {column: {"not": None}}
-
-
-def _array_is_not_empty(column: str) -> Mapping[str, object]:
-    """``column`` holds at least one element, as a plain dict for prisma's builder."""
-    return {column: {"is_empty": False}}
-
-
-def _restricted_end_user_where() -> Mapping[str, object]:
-    """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    restrictions: Final = (*map(_column_is_set, _RESTRICTED_COLUMNS), _array_is_not_empty("models"))
-    return {"OR": [{"blocked": True}, *restrictions]}
-
-
 class _RegistryNotCached:
     """No cached registry answer, as distinct from the cached answer ``None`` (registry unusable)."""
 
@@ -2244,11 +2346,7 @@ async def _load_end_user_restricted_registry(
     """The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        restricted_rows: Final = await _end_user_table(EndUserRepository(prisma_client)).find_many(
-            where=_restricted_end_user_where(),
-            take=END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1,
-        )
-        return tuple(row.user_id for row in restricted_rows)
+        return await EndUserRepository(prisma_client).find_restricted_ids(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)
 
     return await _load_bounded_registry(
         cache_key=end_user_restricted_registry_cache_key(),

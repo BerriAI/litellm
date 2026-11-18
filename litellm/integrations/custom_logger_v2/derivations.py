@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -13,6 +13,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     BudgetPlan,
     BudgetReservation,
     Cost,
+    CustomerScope,
     Deployment,
     EstimatedOutputTokens,
     GuardrailEntry,
@@ -39,6 +40,9 @@ from litellm.types.integrations.custom_logger_v2 import (
     coerce_record,
     coerce_value,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 
 _ABSENT: Final = object()
 _TAGS: Final[TypeAdapter[tuple[str | int | float | bool | Stringified | None, ...]]] = TypeAdapter(
@@ -70,11 +74,19 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _customer_hierarchy(auth: object) -> "CustomerHierarchyAuth | None":
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+
+    hierarchy: Final[object] = getattr(auth, "customer_hierarchy", None)
+    return hierarchy if isinstance(hierarchy, CustomerHierarchyAuth) else None
+
+
 def key_identity(args: HookArgs) -> KeyIdentity | None:
     auth: Final = auth_of(args)
     if auth is None:
         return None
     team_metadata: Final = getattr(auth, "team_metadata", None)
+    hierarchy: Final = _customer_hierarchy(auth)
     return coerce_record(
         KeyIdentity,
         {
@@ -95,6 +107,9 @@ def key_identity(args: HookArgs) -> KeyIdentity | None:
             "invoked_agent_id": getattr(auth, "invoked_agent_id", None),
             "team_priority": _metadata_value(team_metadata, "priority"),
             "key_priority": _metadata_value(getattr(auth, "metadata", None), "priority"),
+            "customer_org_id": None if hierarchy is None else hierarchy.customer_org_id,
+            "customer_team_id": None if hierarchy is None else hierarchy.customer_team_id,
+            "customer_member_id": None if hierarchy is None else hierarchy.customer_member_id,
         },
     )
 
@@ -242,6 +257,33 @@ def _agent_policy(policy: object) -> AgentPolicy | None:
     return coerce_record(AgentPolicy, {name: getattr(policy, name, None) for name in _AGENT_POLICY_LIMITS})
 
 
+_CUSTOMER_SCOPE_MEMBERS: Final = ("key", "entity_id", "rpm_limit", "tpm_limit", "model_rpm_limit", "model_tpm_limit")
+
+
+def _customer_org_borrows() -> bool:
+    import litellm
+
+    settings: Final = litellm.priority_reservation_settings
+    return settings is not None and "customer_organization" in settings.model_limit_borrowing_entities
+
+
+def _customer_scopes(auth: object) -> tuple[CustomerScope, ...] | None:
+    hierarchy: Final = _customer_hierarchy(auth)
+    if hierarchy is None:
+        return None
+    borrows: Final = _customer_org_borrows()
+    return tuple(
+        coerce_record(
+            CustomerScope,
+            {
+                **{name: getattr(scope, name) for name in _CUSTOMER_SCOPE_MEMBERS},
+                "borrows": borrows and scope.key == "customer_org",
+            },
+        )
+        for scope in hierarchy.scopes
+    )
+
+
 def key_limits(args: HookArgs) -> KeyLimits | None:
     auth: Final = auth_of(args)
     if auth is None:
@@ -257,6 +299,7 @@ def key_limits(args: HookArgs) -> KeyLimits | None:
             "estimated_output_tokens": _estimated_output_tokens(auth, model if isinstance(model, str) else None),
             "managed_agent_policy": _agent_policy(getattr(auth, "managed_agent_policy", None)),
             "invoked_agent_policy": _agent_policy(getattr(auth, "invoked_agent_policy", None)),
+            "customer_scopes": _customer_scopes(auth),
         },
     )
 
@@ -400,13 +443,26 @@ def _socket_session(args: HookArgs) -> UsageRecord | None:
     return usage_record(socket_session_usage(mapping(args.request) or {}, args.result))
 
 
+def _response_usage(result: object) -> object:
+    reported: Final = member(result, "usage")
+    if member(reported, "prompt_tokens") is not None or None in (
+        member(reported, "input_tokens"),
+        member(reported, "output_tokens"),
+    ):
+        return reported
+    from litellm.cost_calculator import get_usage_object
+
+    converted: Final = get_usage_object(result)
+    return reported if converted is None else converted
+
+
 def usage(args: HookArgs) -> Usage | None:
     request: Final = args.request
     streamed: Final = member(request, "async_complete_streaming_response")
     return coerce_record(
         Usage,
         {
-            "response": usage_record(member(args.result, "usage")),
+            "response": usage_record(_response_usage(args.result)),
             "streamed": usage_record(member(streamed, "usage")),
             "combined": usage_record(member(request, "combined_usage_object")),
             "upstream": usage_record(member(request, "_litellm_upstream_reported_usage")),

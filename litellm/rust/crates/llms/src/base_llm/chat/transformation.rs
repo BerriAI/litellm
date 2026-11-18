@@ -24,6 +24,18 @@ pub struct ProviderChatResponseData {
 
 pub const STREAM_PARAM: &str = "stream";
 
+const STOP_PARAM: &str = "stop";
+
+const UNRECOGNIZED_PARAM: &str = "unrecognized request parameter";
+
+const SAMPLING_PARAMS: [&str; 2] = ["temperature", "top_p"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropParams {
+    Off,
+    On { model_rejects_sampling: bool },
+}
+
 /// Message fields that carry no meaning for the upstream body, so their
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
@@ -35,6 +47,19 @@ pub trait BaseConfig: Sync {
 
     /// Supported OpenAI parameter names paired with their provider names.
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
+
+    fn map_openai_params(
+        &self,
+        _model: &str,
+        params: Map<String, Value>,
+        _drop_params: DropParams,
+    ) -> Result<Map<String, Value>, Decline> {
+        map_openai_param_names(
+            self.supported_openai_param_mappings(),
+            self.caller_config_params(),
+            params,
+        )
+    }
 
     fn get_complete_url(
         &self,
@@ -84,6 +109,10 @@ pub trait BaseConfig: Sync {
         &[]
     }
 
+    fn caller_config_params(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
@@ -96,6 +125,98 @@ pub trait BaseConfig: Sync {
         )
         .or_else(|| messages.iter().find_map(unsupported_message))
     }
+}
+
+pub fn map_openai_param_names(
+    supported: &'static [(&'static str, &'static str)],
+    caller_config: &'static [&'static str],
+    params: Map<String, Value>,
+) -> Result<Map<String, Value>, Decline> {
+    let superseded = superseded_openai_names(supported, &params);
+    let (openai_named, provider_named): (Vec<_>, Vec<_>) = params
+        .into_iter()
+        .filter(|(name, value)| !value.is_null() && !superseded.contains(&name.as_str()))
+        .partition(|(name, _)| supported.iter().any(|(openai_name, _)| openai_name == name));
+    openai_named
+        .into_iter()
+        .chain(provider_named)
+        .map(|(name, value)| {
+            provider_param_name(supported, caller_config, name)
+                .map(|provider_name| (provider_name, value))
+                .ok_or(Decline::new(UNRECOGNIZED_PARAM))
+        })
+        .collect()
+}
+
+/// When two OpenAI names map to one provider name, the later table entry wins
+/// whatever the body order, as Python's `get_optional_params` argument order does.
+fn superseded_openai_names(
+    supported: &'static [(&'static str, &'static str)],
+    params: &Map<String, Value>,
+) -> Vec<&'static str> {
+    supported
+        .iter()
+        .enumerate()
+        .filter(|(position, (_, provider_name))| {
+            supported[position + 1..]
+                .iter()
+                .any(|(later_name, later_provider_name)| {
+                    later_provider_name == provider_name
+                        && params
+                            .get(*later_name)
+                            .is_some_and(|value| !value.is_null())
+                })
+        })
+        .map(|(_, (openai_name, _))| *openai_name)
+        .collect()
+}
+
+fn provider_param_name(
+    supported: &'static [(&'static str, &'static str)],
+    caller_config: &'static [&'static str],
+    name: String,
+) -> Option<String> {
+    if name == STREAM_PARAM || caller_config.contains(&name.as_str()) {
+        return Some(name);
+    }
+    supported
+        .iter()
+        .find(|(openai_name, _)| *openai_name == name)
+        .map(|(_, provider_name)| (*provider_name).to_string())
+        .or_else(|| {
+            supported
+                .iter()
+                .any(|(_, provider_name)| *provider_name == name)
+                .then_some(name)
+        })
+}
+
+pub fn without_rejected_sampling_params(
+    params: Map<String, Value>,
+    drop_params: DropParams,
+) -> Map<String, Value> {
+    match drop_params {
+        DropParams::On {
+            model_rejects_sampling: true,
+        } => params
+            .into_iter()
+            .filter(|(name, _)| !SAMPLING_PARAMS.contains(&name.as_str()))
+            .collect(),
+        DropParams::On { .. } | DropParams::Off => params,
+    }
+}
+
+pub fn map_openai_stop(
+    params: Map<String, Value>,
+    to_provider_stop: fn(Value) -> Option<Value>,
+) -> Map<String, Value> {
+    params
+        .into_iter()
+        .filter_map(|(name, value)| match name.as_str() {
+            STOP_PARAM => to_provider_stop(value).map(|value| (name, value)),
+            _ => Some((name, value)),
+        })
+        .collect()
 }
 
 pub fn unsupported_param(
@@ -119,7 +240,7 @@ pub fn unsupported_param(
                     .any(|(_, provider_name)| *provider_name == key)
                 && !config.contains(&key.as_str())
         })
-        .then_some(Decline::new("unrecognized request parameter"))
+        .then_some(Decline::new(UNRECOGNIZED_PARAM))
 }
 
 /// Message shapes the core can translate faithfully: text content, either a

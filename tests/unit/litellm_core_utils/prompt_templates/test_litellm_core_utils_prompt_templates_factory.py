@@ -60,6 +60,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_anthropic_tool_use_id,
     sanitize_messages_for_tool_calling,
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
@@ -85,6 +86,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelRe
 from litellm.utils import (
     Rules,
     function_setup,
+    messages_without_foreign_thought_signatures,
     validate_and_fix_openai_messages,
 )
 from litellm.litellm_core_utils.model_cost_table import publish
@@ -210,8 +212,8 @@ def test_encode_tool_call_id_with_signature(thought_signature, expected):
             "function-signature",
         ),
         (
-            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
-            "embedded-signature",
+            {"id": encode_tool_call_id_with_signature("call_123", "ZW1iZWRkZWQtc2lnbmF0dXJl")},
+            "ZW1iZWRkZWQtc2lnbmF0dXJl",
         ),
         ({}, None),
     ],
@@ -321,7 +323,11 @@ def test_ollama_pt_consecutive_user_messages():
 
 
 def _ollama_tool_turn(*results: object) -> list[dict]:
-    call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
     return [
         {"role": "user", "content": "Weather in Paris?"},
         {"role": "assistant", "content": None, "tool_calls": [call]},
@@ -1377,7 +1383,6 @@ def test_anthropic_messages_pt_sends_a_signed_block_once_when_thinking_blocks_ho
     assert result[1] == {"role": "assistant", "content": [signed, redacted, {"type": "text", "text": "hello"}]}
 
 
-
 def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_carry_it():
     signed: Final = {"type": "thinking", "thinking": "Let me look this up.", "signature": "sig-abc"}
     redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
@@ -1396,6 +1401,7 @@ def test_anthropic_messages_pt_sends_a_block_once_when_two_assistant_messages_ca
             {"type": "tool_use", "id": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}},
         ],
     }
+
 
 @REASONING_PLACEMENTS
 @pytest.mark.parametrize("drop_params", [False, True])
@@ -2185,7 +2191,11 @@ def test_convert_to_gemini_tool_call_invoke_drops_unusable_arguments_under_drop_
 
     function: Final = {"name": "get_weather", "arguments": arguments}
     message: Final = (
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": function}]}
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": function}],
+        }
         if shape == "tool_calls"
         else {"role": "assistant", "content": None, "function_call": function}
     )
@@ -2429,10 +2439,11 @@ def test_gemini_tool_media_keeps_vertex_reference_when_inline_data_is_absent(
     ]
 
 
-
 def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
     message: Final = ChatCompletionToolMessage(
-        role="tool", name="lookup", content=[
+        role="tool",
+        name="lookup",
+        content=[
             {"type": "text", "text": '{"ok":true}'},
             {"type": "image_url", "image_url": {"url": "https://8.8.8.8/unavailable.png"}},
         ],
@@ -2441,6 +2452,7 @@ def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
         router.get("https://8.8.8.8/unavailable.png").respond(404)
         result: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
     assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
+
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
     """
@@ -6749,181 +6761,74 @@ def test_empty_content():
     )
 
 
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_for_non_gemini():
-    """
-    Test that thought signatures are removed from tool call IDs when sending to non-Gemini models
-    """
-    rules_obj = Rules()
-
-    # Create messages with thought signatures (as would come from Gemini)
-    messages = [
+def _signed_tool_turn(*call_ids: str) -> Sequence[Mapping[str, object]]:
+    return [
         {"role": "user", "content": "What's the weather?"},
         {
             "role": "assistant",
             "tool_calls": [
                 {
-                    "id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "SF"}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_123{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-            "content": "Sunny, 72°F",
-        },
-    ]
-
-    # Call function_setup with OpenAI model (non-Gemini)
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="gpt-4",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="openai",
-    )
-
-    # Verify thought signatures were removed
-    processed_messages = kwargs["messages"]
-    assert processed_messages[1]["tool_calls"][0]["id"] == "call_123"
-    assert processed_messages[2]["tool_call_id"] == "call_123"
-    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
-    assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_preserved_for_gemini():
-    """
-    Test that thought signatures are preserved when sending to Gemini models
-    """
-    rules_obj = Rules()
-
-    # Create messages with thought signatures
-    messages = [
-        {"role": "user", "content": "What's the weather?"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "NYC"}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_456{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-            "content": "Rainy, 65°F",
-        },
-    ]
-
-    # Call function_setup with Gemini model
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="gemini-1.5-pro",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="vertex_ai",
-    )
-
-    # Verify thought signatures were preserved (messages should be unchanged)
-    processed_messages = kwargs["messages"]
-    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[1]["tool_calls"][0]["id"]
-    assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[2]["tool_call_id"]
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_thought_signature_removal_with_multiple_tool_calls():
-    """
-    Test that thought signatures are removed from multiple tool calls
-    """
-    rules_obj = Rules()
-
-    messages = [
-        {"role": "user", "content": "Get weather and time"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
+                    "id": f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}sig{index}",
                     "type": "function",
                     "function": {"name": "get_weather", "arguments": "{}"},
-                },
-                {
-                    "id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-                    "type": "function",
-                    "function": {"name": "get_time", "arguments": "{}"},
-                },
+                }
+                for index, call_id in enumerate(call_ids)
             ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}sig1",
-            "content": "Sunny",
-        },
-        {
-            "role": "tool",
-            "tool_call_id": f"call_2{THOUGHT_SIGNATURE_SEPARATOR}sig2",
-            "content": "3:00 PM",
-        },
+        *(
+            {"role": "tool", "tool_call_id": f"{call_id}{THOUGHT_SIGNATURE_SEPARATOR}sig{index}", "content": "Sunny"}
+            for index, call_id in enumerate(call_ids)
+        ),
     ]
 
-    logging_obj, kwargs = function_setup(
-        original_function="acompletion",
-        rules_obj=rules_obj,
-        start_time=datetime.now(),
-        model="claude-3-opus",
-        messages=messages,
-        litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="anthropic",
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gpt-4", "openai"), ("claude-3-opus", "anthropic"), ("openai/gpt-4", None)],
+)
+def test_thought_signatures_are_cut_from_every_tool_call_id_for_a_non_gemini_target(model, custom_llm_provider):
+    stripped = messages_without_foreign_thought_signatures(
+        "acompletion", model, _signed_tool_turn("call_1", "call_2"), custom_llm_provider
     )
 
-    processed_messages = kwargs["messages"]
+    assert stripped is not None
+    assert [call["id"] for call in stripped[1]["tool_calls"]] == ["call_1", "call_2"]
+    assert [message["tool_call_id"] for message in stripped[2:]] == ["call_1", "call_2"]
 
-    # Check all tool call IDs are cleaned
-    assert processed_messages[1]["tool_calls"][0]["id"] == "call_1"
-    assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
-    assert processed_messages[2]["tool_call_id"] == "call_1"
-    assert processed_messages[3]["tool_call_id"] == "call_2"
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gemini-1.5-pro", "vertex_ai"), ("vertex_ai/gemini-3.8-flash", None), ("gemini/gemini-3.8-flash", None)],
+)
+def test_thought_signatures_are_kept_for_a_gemini_target(model, custom_llm_provider):
+    assert (
+        messages_without_foreign_thought_signatures(
+            "acompletion", model, _signed_tool_turn("call_1"), custom_llm_provider
+        )
+        is None
+    )
+
+
+def test_messages_without_signed_tool_call_ids_are_left_alone_for_a_non_gemini_target():
+    messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}]
+
+    assert messages_without_foreign_thought_signatures("acompletion", "gpt-4", messages, "openai") is None
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
-def test_messages_without_tool_calls_unchanged():
-    """
-    Test that messages without tool calls pass through unchanged
-    """
-    rules_obj = Rules()
+def test_proxy_request_setup_keeps_signatures_for_a_model_name_without_gemini_in_it():
+    messages = _signed_tool_turn("call_1")
 
-    messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there!"},
-    ]
-
-    logging_obj, kwargs = function_setup(
+    _, kwargs = function_setup(
         original_function="acompletion",
-        rules_obj=rules_obj,
+        rules_obj=Rules(),
         start_time=datetime.now(),
-        model="gpt-4",
+        model="g38flash",
         messages=messages,
         litellm_call_id=str(uuid.uuid4()),
-        custom_llm_provider="openai",
     )
 
-    # Messages should be unchanged
-    assert kwargs["messages"] == messages
+    assert kwargs["messages"] is messages, "the proxy alias must not decide signature stripping before routing"
 
 
 def test_llama_3_prompt():
@@ -8990,7 +8895,6 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
     ], f"Expected order but got: {types}"
 
 
-
 def _paused_web_search_turn(
     thinking_blocks: list[dict[str, str]] | None, content: str | list[dict[str, str]] = "Step 1 is Tokyo."
 ) -> dict[str, object]:
@@ -9453,7 +9357,11 @@ TEMPLATE_INITIAL = "<start>"
 TEMPLATE_FINAL = "<end>"
 
 PARTIAL_TEMPLATE = {"roles": TEMPLATE_ROLES}
-FULL_TEMPLATE = {"roles": TEMPLATE_ROLES, "initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
+FULL_TEMPLATE = {
+    "roles": TEMPLATE_ROLES,
+    "initial_prompt_value": TEMPLATE_INITIAL,
+    "final_prompt_value": TEMPLATE_FINAL,
+}
 ROLELESS_TEMPLATE = {"initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
 
 
@@ -9675,7 +9583,9 @@ def test_template_wraps_only_the_roles_it_defines_across_a_conversation(monkeypa
         pytest.param({"roles": {"user": {**TEMPLATE_ROLES["user"], "priority": 1}}}, id="extra-role-key"),
         pytest.param({"roles": {**TEMPLATE_ROLES, "tool": {"pre_message": 5}}}, id="unused-role-wrong-type"),
         pytest.param({"roles": {**TEMPLATE_ROLES, 1: {"pre_message": "x"}}}, id="unused-non-string-role"),
-        pytest.param({"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"),
+        pytest.param(
+            {"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"
+        ),
     ],
 )
 def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):
@@ -9768,3 +9678,174 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+def _history_with_concatenated_tool_arguments(
+    *payloads: dict[str, object], sibling_id: str = "call_1__concat_1", truncated_tail: str = ""
+) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List files in /a and /b"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": _concatenated_json(*payloads) + truncated_tail},
+                },
+                {
+                    "id": sibling_id,
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": '{"path": "/c"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+        {"role": "tool", "tool_call_id": sibling_id, "content": "c.txt"},
+    ]
+
+
+_UNSPLIT_TURN_REUSING_CALL_1 = (
+    {"role": "user", "content": "List files in /z"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/z"}'}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "z.txt"},
+)
+
+
+async def _bedrock_converse_messages(messages: list[dict[str, object]], use_async: bool) -> list[dict[str, object]]:
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, model, "bedrock")
+    return _bedrock_converse_messages_pt(messages, model, "bedrock")
+
+
+def _bedrock_tool_use_ids(message: dict[str, object]) -> list[str]:
+    return [block["toolUse"]["toolUseId"] for block in message["content"] if "toolUse" in block]
+
+
+def _bedrock_results_by_id(message: dict[str, object]) -> dict[str, object]:
+    return {
+        block["toolResult"]["toolUseId"]: block["toolResult"]["content"]
+        for block in message["content"]
+        if "toolResult" in block
+    }
+
+
+def test_anthropic_messages_pt_splits_concatenated_tool_arguments_and_answers_every_tool_use():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"})
+
+    _, assistant, tool_results = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    tool_uses = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = [block["id"] for block in tool_uses]
+    assert len(set(tool_use_ids)) == 3
+    results_by_id = {block["tool_use_id"]: block["content"] for block in tool_results["content"]}
+    assert results_by_id == {tool_use_ids[0]: "a.txt", tool_use_ids[1]: "a.txt", tool_use_ids[2]: "c.txt"}
+
+
+def test_anthropic_messages_pt_rejects_truncated_concatenated_tool_arguments():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, truncated_tail='{"path": ')
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'ls'"):
+        anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_every_tool_use_split_from_concatenated_arguments(use_async: bool):
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, sibling_id="call_1_1")
+
+    _, assistant, tool_results = await _bedrock_converse_messages(messages, use_async)
+
+    tool_uses = [block["toolUse"] for block in assistant["content"] if "toolUse" in block]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = _bedrock_tool_use_ids(assistant)
+    assert len(set(tool_use_ids)) == 3
+    assert _bedrock_results_by_id(tool_results) == {
+        tool_use_ids[0]: [{"text": "a.txt"}],
+        tool_use_ids[1]: [{"text": "a.txt"}],
+        tool_use_ids[2]: [{"text": "c.txt"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_copies_results_only_into_the_turn_that_split(use_async: bool):
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = await _bedrock_converse_messages(
+        messages, use_async
+    )
+
+    assert _bedrock_results_by_id(unsplit_results) == {_bedrock_tool_use_ids(unsplit_assistant)[0]: [{"text": "z.txt"}]}
+    assert set(_bedrock_results_by_id(split_results)) == set(_bedrock_tool_use_ids(split_assistant))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_rejects_more_split_tool_uses_than_the_cap(use_async: bool):
+    payloads = [{"path": f"/{index}"} for index in range(MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS + 1)]
+    messages = _history_with_concatenated_tool_arguments(*payloads)
+
+    with pytest.raises(litellm.BadRequestError, match="concatenated JSON argument objects"):
+        await _bedrock_converse_messages(messages, use_async)
+
+
+_CALL_1_SPLIT_IN_TWO = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {"id": "call.1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/a"}{"path": "/b"}'}}
+    ],
+}
+_CALL_1_REPEATED_IN_ONE_TURN = (
+    {"role": "user", "content": "List files in /a and /b"},
+    _CALL_1_SPLIT_IN_TWO,
+    _CALL_1_SPLIT_IN_TWO,
+    {"role": "tool", "tool_call_id": "call.1", "content": "a.txt"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_a_split_call_repeated_in_one_turn(use_async: bool):
+    _, assistant, tool_results = await _bedrock_converse_messages(list(_CALL_1_REPEATED_IN_ONE_TURN), use_async)
+
+    assert set(_bedrock_results_by_id(tool_results)) == set(_bedrock_tool_use_ids(assistant))
+
+
+def test_anthropic_messages_pt_answers_a_split_call_with_an_unsanitized_id_repeated_in_one_turn():
+    _, assistant, tool_results = anthropic_messages_pt(
+        list(_CALL_1_REPEATED_IN_ONE_TURN), model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    tool_use_ids = {block["id"] for block in assistant["content"] if block["type"] == "tool_use"}
+    assert len(tool_use_ids) == 2
+    assert {block["tool_use_id"] for block in tool_results["content"]} == tool_use_ids
+
+
+def test_anthropic_messages_pt_copies_results_only_into_the_turn_that_split():
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assert [block["tool_use_id"] for block in unsplit_results["content"] if block["type"] == "tool_result"] == [
+        block["id"] for block in unsplit_assistant["content"] if block["type"] == "tool_use"
+    ]
+    assert {block["tool_use_id"] for block in split_results["content"]} == {
+        block["id"] for block in split_assistant["content"] if block["type"] == "tool_use"
+    }

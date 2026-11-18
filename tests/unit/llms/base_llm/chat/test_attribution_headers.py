@@ -9,12 +9,13 @@ transport that records what would have been sent, because the default path
 """
 
 import json
-from collections.abc import AsyncIterable, Iterable
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from typing import Final, cast
 
 import httpx
 import openai
 import pytest
+import respx
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
@@ -68,13 +69,23 @@ class _HeaderCapturingTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
         return self.sent[-1].get_list(header)
 
 
-def _client(transport: _HeaderCapturingTransport, path: str, is_async: bool) -> object:
+def _client(
+    transport: _HeaderCapturingTransport, path: str, is_async: bool, default_headers: Mapping[str, str] | None = None
+) -> object:
     if path == "sdk":
         if is_async:
             return openai.AsyncOpenAI(
-                api_key="k", base_url=_API_BASE, http_client=httpx.AsyncClient(transport=transport)
+                api_key="k",
+                base_url=_API_BASE,
+                http_client=httpx.AsyncClient(transport=transport),
+                default_headers=default_headers,
             )
-        return openai.OpenAI(api_key="k", base_url=_API_BASE, http_client=httpx.Client(transport=transport))
+        return openai.OpenAI(
+            api_key="k",
+            base_url=_API_BASE,
+            http_client=httpx.Client(transport=transport),
+            default_headers=default_headers,
+        )
     if is_async:
         return AsyncHTTPHandler(transport=transport)
     return HTTPHandler(client=httpx.Client(transport=transport))
@@ -169,6 +180,46 @@ def test_caller_header_overrides_attribution_any_casing(
 
     assert transport.last(header) == ["my-app"]
     assert caller_headers == {header.upper(): "my-app"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("spell", [str.title, str.upper], ids=["attribution_spelling", "other_spelling"])
+async def test_caller_client_default_header_overrides_attribution(
+    transport: _HeaderCapturingTransport, model: str, header: str, is_async: bool, spell: Callable[[str], str]
+) -> None:
+    client: Final = _client(transport, "sdk", is_async, default_headers={spell(header): "my-client"})
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    if is_async:
+        await litellm.acompletion(model=model, messages=messages, api_base=_API_BASE, api_key="k", client=client)
+    else:
+        litellm.completion(model=model, messages=messages, api_base=_API_BASE, api_key="k", client=client)
+
+    assert transport.last(header) == ["my-client"]
+
+
+@pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
+def test_sdk_client_headers_ignored_when_http_handler_drops_the_client(
+    transport: _HeaderCapturingTransport, monkeypatch: pytest.MonkeyPatch, model: str, header: str
+) -> None:
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    sdk_client: Final = openai.OpenAI(api_key="k", base_url=_API_BASE, default_headers={header: "my-client"})
+
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(f"{_API_BASE}/chat/completions").mock(
+            return_value=httpx.Response(200, content=_COMPLETION_BODY, headers={"content-type": "application/json"})
+        )
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=_API_BASE,
+            api_key="k",
+            client=sdk_client,
+        )
+
+    assert route.calls.last.request.headers.get_list(header) == ["litellm"]
 
 
 def test_provider_without_attribution_sends_none(transport: _HeaderCapturingTransport, handler_path: str) -> None:

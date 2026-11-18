@@ -98,6 +98,7 @@ from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.videos.utils import encode_video_id_with_provider
 from tests._master_key import MASTER_KEY
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
 
 JWKS_URL: Final = "https://idp.example/jwks"
@@ -1442,7 +1443,7 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
     )
     mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
 
     user_api_key_cache: Final = UserApiKeyCache()
@@ -3787,7 +3788,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
         return _end_user_budget_row(budget_id, budgets[budget_id]) if budget_id in budgets else None
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
     prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
@@ -5099,7 +5100,7 @@ def _unrestricted_end_user_prisma(spend: float):
     end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
@@ -11706,6 +11707,7 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
         patch("litellm.proxy.proxy_server.premium_user", premium),
         patch("litellm.proxy.proxy_server.master_key", "sk-fixture-master"),
         patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.database_url_configured", True),
         patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
         patch("httpx.AsyncClient.send", side_effect=AssertionError("OAuth2 must not run for this request")) as network,
     ):
@@ -12105,7 +12107,7 @@ async def test_rate_limited_cached_key_is_refused_before_the_body_is_read() -> N
 
     api_key: Final = "sk-flooding-key"
     cached_key: Final = UserAPIKeyAuth(token=hash_token(api_key), rpm_limit=1, models=["gpt-5.6"])
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
         UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
         DualCache(),
@@ -12139,7 +12141,7 @@ async def test_exhausted_cached_key_is_only_refused_before_the_body_where_a_mete
     from litellm.proxy.utils import hash_token
 
     api_key: Final = "sk-exhausted-key"
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
         UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),
         DualCache(),
@@ -12200,7 +12202,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
     from litellm.proxy.utils import hash_token
 
     api_key: Final = "sk-team-limited-key"
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     await limiter.async_pre_call_hook(
         UserAPIKeyAuth(api_key=hash_token(api_key), team_id=team_id, rpm_limit=key_rpm_limit, team_rpm_limit=1000),
         DualCache(),
@@ -12299,7 +12301,7 @@ async def test_preflight_rejection_preserves_failure_logging_context(body_mode: 
         user_api_key_cache=cache,
         proxy_logging_obj=None,
     )
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     if not blocked:
         await limiter.async_pre_call_hook(
             UserAPIKeyAuth(api_key=hash_token(api_key), rpm_limit=1),

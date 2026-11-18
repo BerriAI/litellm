@@ -72,7 +72,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.pricing_currency import ReferenceRateLookup
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.caching import LiteLLMCacheType
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, PROMPT_MANAGEMENT_APPLIED_FIELD
 from litellm.types.utils import CredentialItem
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -1592,6 +1592,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
+        "_session_deployment_affinity_conversation": "forged-conversation",
         "internal_call_origin": "autorouter_classifier",
         "_managed_background_response": True,
         "_guardrail_pipelines": [{"name": "spoofed"}],
@@ -1653,6 +1654,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "routing_decision",
         "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
+        "_session_deployment_affinity_conversation",
         "internal_call_origin",
         "_managed_background_response",
         "_guardrail_pipelines",
@@ -1719,6 +1721,7 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
         "logger_fn",
         "litellm_disabled_callbacks",
         *AGENTIC_LOOP_KWARG_NAMES,
+        PROMPT_MANAGEMENT_APPLIED_FIELD,
     ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
@@ -1759,6 +1762,7 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "_websearch_interception_stream_options": {"include_usage": True},
         "_headroom_interception_converted_stream": True,
         "max_agentic_loops": 9999,
+        PROMPT_MANAGEMENT_APPLIED_FIELD: True,
     }
     sample_value: Final = sample_values.get(control_field, "forged")
 

@@ -52,10 +52,7 @@ export default function CustomerMemberSpend({
   return (
     <section className="border-b pb-6" aria-label={t("customerPortal.analytics.memberSpend")}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.memberSpend")}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{t("customerPortal.analytics.memberSpendHint")}</p>
-        </div>
+        <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.memberSpend")}</h2>
         <div className="relative w-full sm:w-56">
           <Search aria-hidden="true" className="absolute top-2.5 left-3 size-3.5 text-muted-foreground" />
           <Input
