@@ -6,12 +6,13 @@ import { useTranslation } from "react-i18next";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { loadApps, appSpend } from "./appApi";
+import { loadApps } from "./appApi";
 import { appBudgetFields, appBudgetValue, type App, type AppMember } from "./appForms";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppBudgetLimits from "./AppBudgetLimits";
+import { appBudgetWindows } from "./appBudgetPresentation";
+import { customerBudgetPeriod } from "../../customers/_components/customerBudgetUsage";
 
 const BUDGET_SOURCES = {
   member_override: "apps.memberOverride",
@@ -36,9 +37,6 @@ export default function CustomerMemberApps({ memberId }: { memberId: string }) {
             <TableRow>
               <TableHead className="border-b py-3 text-xs font-medium text-muted-foreground">
                 {t("apps.alias")}
-              </TableHead>
-              <TableHead className="border-b py-3 text-xs font-medium text-muted-foreground">
-                {t("apps.spend")}
               </TableHead>
               <TableHead className="border-b py-3 text-xs font-medium text-muted-foreground">
                 {t("apps.memberBudget")}
@@ -75,7 +73,7 @@ function MemberAppRow({ app, memberId }: { app: App; memberId: string }) {
     return (
       <TableRow>
         <TableCell className="py-4 font-medium">{app.alias}</TableCell>
-        <TableCell colSpan={3}>
+        <TableCell colSpan={2}>
           <p role="status">{t("apps.loading")}</p>
         </TableCell>
       </TableRow>
@@ -84,28 +82,38 @@ function MemberAppRow({ app, memberId }: { app: App; memberId: string }) {
     return (
       <TableRow>
         <TableCell className="py-4 font-medium">{app.alias}</TableCell>
-        <TableCell colSpan={3}>
+        <TableCell colSpan={2}>
           <p role="alert">{extractProxyErrorMessage(member.error)}</p>
-          <Button onClick={() => void member.refetch()}>{t("apps.retry")}</Button>
+          <Button variant="ghost" size="xs" onClick={() => void member.refetch()}>
+            {t("apps.retry")}
+          </Button>
         </TableCell>
       </TableRow>
     );
+  const { primary } = appBudgetWindows(member.data?.effective_budget, member.data?.budget_usage);
+  const period = customerBudgetPeriod(primary?.budget_duration ?? null);
+  const periodLabel = period === "other" ? primary?.budget_duration : t(`apps.${period}`);
+  const sourceLabel = t(BUDGET_SOURCES[member.data?.budget_source ?? "none"]);
   return (
     <>
       <TableRow>
-        <TableCell className="py-4 font-medium">{app.alias}</TableCell>
-        <TableCell className="py-4 tabular-nums">
-          {appSpend(member.data?.spend ?? 0)}
-          <span className="block text-xs text-muted-foreground">{t("apps.cumulative")}</span>
+        <TableCell className="py-4">
+          <span className="font-medium">{app.alias}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            {[sourceLabel, periodLabel].filter(Boolean).join(" · ")}
+          </span>
         </TableCell>
         <TableCell className="py-4">
-          <AppBudgetLimits budget={member.data?.effective_budget} usage={member.data?.budget_usage} />
-          <Badge variant="secondary">{t(BUDGET_SOURCES[member.data?.budget_source ?? "none"])}</Badge>
+          <AppBudgetLimits
+            budget={member.data?.effective_budget}
+            usage={member.data?.budget_usage}
+            cumulativeSpend={member.data?.spend}
+          />
         </TableCell>
         <TableCell>
           <Button
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="xs"
             aria-label={t("apps.editMemberBudget", { alias: app.alias })}
             onClick={() => setEditing(!editing)}
           >
@@ -115,7 +123,7 @@ function MemberAppRow({ app, memberId }: { app: App; memberId: string }) {
       </TableRow>
       {editing && member.data && (
         <TableRow>
-          <TableCell colSpan={4}>
+          <TableCell colSpan={3}>
             <MemberBudgetForm
               app={app}
               row={member.data}

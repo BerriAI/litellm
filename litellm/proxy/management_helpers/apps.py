@@ -20,6 +20,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     organization_budget_group_ids,
     related_budget,
 )
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
@@ -270,11 +271,11 @@ class AppStore:
         rows: Final = await table.find_many(skip=offset, take=limit, order={order: "asc"})
         resolved: Final = await asyncio.gather(*(self.resource_response(selected, row) for row in rows))
         resources: Final = tuple(resource for resource in resolved if resource is not None)
-        bindings: Final = await self.apps.find_many(
-            where={
-                "resource_type": selected.value,
-                "resource_id": {"in": tuple(resource.resource_id for resource in resources)},
-            }
+        bindings: Final = await find_many_in(
+            self.apps,
+            "resource_id",
+            (resource.resource_id for resource in resources),
+            where={"resource_type": selected.value},
         )
         apps: Final = {
             app.resource_id: app.app_id for app in (App.model_validate(row.model_dump()) for row in bindings)

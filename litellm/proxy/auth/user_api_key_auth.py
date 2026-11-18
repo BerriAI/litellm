@@ -297,6 +297,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _normalize_claude_model(
@@ -3208,8 +3209,9 @@ async def _authorize_authenticated_request_checks(
             user_model,
         )
 
+        request_headers: Final = _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request))
         customer_identity: Final = customer_identity_from_request(
-            safe_get_request_headers(request),  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+            request_headers,
             user_api_key_auth_obj.jwt_claims,
             litellm_jwtauth,
         )
@@ -3243,10 +3245,10 @@ async def _authorize_authenticated_request_checks(
             getattr(user_api_key_auth_obj, "metadata", None) or {}
         )
         if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):
-            user_api_key_auth_obj.customer_hierarchy = (
-                await resolve_app_hierarchy(  # rebind-ok: trusted request auth state
+            try:
+                app_hierarchy: Final = await resolve_app_hierarchy(
                     user_api_key_auth_obj.customer_hierarchy,
-                    request.headers,
+                    request_headers,
                     app_metadata,
                     prisma_client,
                     user_api_key_cache,
@@ -3261,7 +3263,10 @@ async def _authorize_authenticated_request_checks(
                     route,
                     user_api_key_auth_obj,
                 )
-            )
+            except CustomerBudgetExceededError as error:
+                user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
+                raise
+            user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)

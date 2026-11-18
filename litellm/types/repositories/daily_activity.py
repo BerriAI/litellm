@@ -42,8 +42,11 @@ class DailyActivityScope:
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
     team_ids: tuple[str, ...] | None = None
+    app_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.app_id is not None and self.table is not DailyActivityTable.CUSTOMER_MEMBER:
+            raise ValueError("App filtering is supported only on customer hierarchy activity")
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
 

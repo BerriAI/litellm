@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,11 +11,13 @@ import { useTranslation } from "react-i18next";
 import { $api, fetchClient } from "@/lib/http/api";
 import { ApiError, extractProxyErrorMessage } from "@/lib/http/client";
 import { uiHref } from "@/utils/uiHref";
-import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources, loadApps, appSpend } from "./appApi";
+import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources, loadApps } from "./appApi";
 import { appBudgetFields, appBudgetValue, type App, type AppResource, type AppOrganization } from "./appForms";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppProfileSelect from "./AppProfileSelect";
 import AppBudgetLimits from "./AppBudgetLimits";
+import { appBudgetWindows } from "./appBudgetPresentation";
+import { customerBudgetPeriod } from "../../customers/_components/customerBudgetUsage";
 
 const organizationAppKey = (appId: string | null, organizationId: string) =>
   ["app-organization", appId, organizationId] as const;
@@ -34,17 +36,19 @@ const loadOrganizationApp = async (appId: string, organizationId: string) => {
 export default function CustomerOrganizationApps({
   organizationId,
   organizationAlias,
+  onAppSelect,
 }: {
   organizationId: string;
   organizationAlias?: string | null;
+  onAppSelect?: (appId: string) => void;
 }) {
   const { t } = useTranslation();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<AppResource | null>(null);
   const { definition, resourceType, groups, resources, rows, loading, error, noRows, ready, setupNeeded } =
-    useOrganizationApps(organizationId, adding);
+    useOrganizationApps(organizationId);
   return (
-    <section className="space-y-4 border-t pt-6" aria-label={t("apps.organizationTitle")}>
+    <section id="app-budgets" className="space-y-4 border-t pt-6" aria-label={t("apps.organizationTitle")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold">{t("apps.organizationTitle")}</h2>
@@ -71,6 +75,7 @@ export default function CustomerOrganizationApps({
         <OrganizationAppsTable
           rows={rows}
           groups={groups.data?.default_budgets ?? []}
+          onAppSelect={onAppSelect}
           onEdit={(resource) => {
             setAdding(false);
             setEditing(resource);
@@ -140,7 +145,7 @@ function AddAppBudgetAction({
   );
 }
 
-function useOrganizationApps(organizationId: string, adding: boolean) {
+function useOrganizationApps(organizationId: string) {
   const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition });
   const resourceType = definition.data?.resource_type ?? null;
   const apps = useQuery({ queryKey: ["apps"], queryFn: () => loadApps(), enabled: resourceType !== null });
@@ -160,16 +165,28 @@ function useOrganizationApps(organizationId: string, adding: boolean) {
   const resources = useQuery({
     queryKey: appResourcesKey(resourceType),
     queryFn: () => loadAppResources(resourceType!),
-    enabled: resourceType !== null && adding,
+    enabled: resourceType !== null,
   });
+  const aliases = useMemo(
+    () =>
+      new Map(
+        (resources.data ?? []).flatMap((resource) =>
+          resource.app_id ? [[resource.app_id, resource.alias] as const] : [],
+        ),
+      ),
+    [resources.data],
+  );
   const rows = (apps.data ?? []).flatMap((app, index) => {
     const association = associations[index];
-    return association?.data ? [{ app, row: association.data }] : [];
+    return association?.data
+      ? [{ app: { ...app, alias: aliases.get(app.app_id) ?? app.alias }, row: association.data }]
+      : [];
   });
-  const loadingAssociations = apps.isPending || associations.some((query) => query.isPending);
+  const loadingAssociations = apps.isPending || resources.isPending || associations.some((query) => query.isPending);
   const loading = definition.isPending || (resourceType !== null && loadingAssociations);
   const failedAssociation = associations.find((query) => query.isError);
-  const error = definition.error ?? apps.error ?? failedAssociation?.error;
+  const catalogError = definition.error ?? resources.error;
+  const error = catalogError ?? apps.error ?? failedAssociation?.error;
   const noRows = resourceType !== null && rows.length === 0;
   const ready = !loading && !error;
   const setupNeeded = Boolean(definition.data) && resourceType === null;
@@ -180,32 +197,36 @@ function OrganizationAppsTable({
   rows,
   groups,
   onEdit,
+  onAppSelect,
 }: {
   rows: { app: App; row: AppOrganization }[];
   groups: { budget_id: string; name: string }[];
   onEdit: (resource: AppResource) => void;
+  onAppSelect?: (appId: string) => void;
 }) {
   const { t } = useTranslation();
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm" aria-label={t("apps.organizationTitle")}>
-        <thead>
-          <tr className="border-b text-left text-xs text-muted-foreground">
-            <th className="py-3 font-medium">{t("apps.alias")}</th>
-            <th className="py-3 font-medium">{t("apps.spend")}</th>
-            <th className="py-3 font-medium">{t("apps.effectiveBudget")}</th>
-            <th className="py-3 font-medium">{t("apps.source")}</th>
-            <th className="py-3 font-medium">{t("apps.actions")}</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table className="w-full text-sm" aria-label={t("apps.organizationTitle")}>
+        <TableHeader>
+          <TableRow className="border-b text-left text-xs text-muted-foreground">
+            <TableHead className="py-3 font-medium">{t("apps.alias")}</TableHead>
+            <TableHead className="py-3 font-medium">{t("apps.effectiveBudget")}</TableHead>
+            <TableHead className="py-3 font-medium">{t("apps.actions")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map(({ app, row }) => {
             const profileId = row.tier_budget_id ?? app.default_tier_budget_id;
             const profileName = groups.find((group) => group.budget_id === profileId)?.name;
             let sourceLabel = t("apps.appDefault");
             if (row.budget_override_id) sourceLabel = t("apps.customBudget");
             else if (row.tier_budget_id) sourceLabel = profileName ?? t("apps.profile");
-            const inheritedProfile = !row.budget_override_id && !row.tier_budget_id;
+            const { primary } = appBudgetWindows(row.effective_budget, row.budget_usage);
+            const period = customerBudgetPeriod(primary?.budget_duration ?? null);
+            const periodLabel = period === "other" ? primary?.budget_duration : t(`apps.${period}`);
+            if (!row.budget_override_id && !row.tier_budget_id && profileName)
+              sourceLabel = `${profileName} · ${sourceLabel}`;
             const resource: AppResource = {
               resource_type: app.resource_type,
               resource_id: app.resource_id,
@@ -213,31 +234,43 @@ function OrganizationAppsTable({
               alias: app.alias,
             };
             return (
-              <tr key={app.app_id} className="border-b">
-                <td className="py-4 font-medium">{app.alias}</td>
-                <td className="py-4 tabular-nums">
-                  {appSpend(row.spend ?? 0)}
-                  <span className="mt-1 block text-xs text-muted-foreground">{t("apps.cumulative")}</span>
-                </td>
-                <td className="py-4 tabular-nums">
-                  <AppBudgetLimits budget={row.effective_budget} usage={row.budget_usage} />
-                </td>
-                <td className="py-4">
-                  <Badge variant="outline">{sourceLabel}</Badge>
-                  {inheritedProfile && profileName && (
-                    <span className="mt-1 block text-xs text-muted-foreground">{profileName}</span>
+              <TableRow key={app.app_id} className="border-b">
+                <TableCell className="py-3">
+                  <span className="block font-medium">{app.alias}</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {[sourceLabel, periodLabel].filter(Boolean).join(" · ")}
+                  </span>
+                </TableCell>
+                <TableCell className="py-3">
+                  <AppBudgetLimits budget={row.effective_budget} usage={row.budget_usage} cumulativeSpend={row.spend} />
+                </TableCell>
+                <TableCell className="py-3 text-right">
+                  {onAppSelect && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onAppSelect(app.app_id)}
+                      aria-label={t("apps.viewUsageFor", { alias: app.alias })}
+                    >
+                      {t("apps.viewUsage")}
+                    </Button>
                   )}
-                </td>
-                <td className="py-4">
-                  <Button onClick={() => onEdit(resource)} aria-label={t("apps.editBudgetFor", { alias: app.alias })}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onEdit(resource)}
+                    aria-label={t("apps.editBudgetFor", { alias: app.alias })}
+                  >
                     {t("apps.edit")}
                   </Button>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

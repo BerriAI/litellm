@@ -24,5 +24,4 @@ export const loadApps = async (offset = 0): Promise<App[]> => {
   return page.length === 100 ? [...page, ...(await loadApps(offset + 100))] : page;
 };
 
-export const appSpend = (spend: number) =>
-  new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 8 }).format(spend);
+export { appSpend } from "./appBudgetPresentation";

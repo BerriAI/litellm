@@ -29,6 +29,7 @@ class DailyRecord(SpendMetrics):
     customer_org_id: str
     customer_team_id: str
     customer_member_id: str
+    app_id: str = ""
     api_key: str
     model: str | None = None
     model_group: str | None = None
@@ -85,6 +86,11 @@ class Table:
         )
         return ordered[skip:] if take is None else ordered[skip : skip + take]
 
+    async def find_unique(
+        self, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Record | DailyRecord | None:
+        return next((row for row in self.rows if matches(row.model_dump(), where)), None)
+
     async def count(self, where: Mapping[str, object] | None = None) -> int:
         return len(await self.find_many(where=where))
 
@@ -113,6 +119,12 @@ class Database:
             Record(token="hash-b", key_alias="Search", team_id=None, user_id=None, metadata=None),
         )
     )
+    litellm_apptable: Table = Table(
+        (
+            Record(app_id="chat", resource_type="team", resource_id="chat-team"),
+            Record(app_id="search", resource_type="team", resource_id="search-team"),
+        )
+    )
     litellm_deletedverificationtoken: Table = Table()
     litellm_usertable: Table = Table()
 
@@ -134,6 +146,7 @@ def usage_row(
     model_group: str = "alias-a",
     provider: str = "provider-a",
     spend: float = 2.0,
+    app_id: str = "",
 ) -> DailyRecord:
     return DailyRecord(
         id=id,
@@ -141,6 +154,7 @@ def usage_row(
         customer_org_id=customer_org_id,
         customer_team_id=customer_team_id,
         customer_member_id=customer_member_id,
+        app_id=app_id,
         api_key=api_key,
         model=model,
         model_group=model_group,
@@ -289,9 +303,12 @@ RANGE: Final = {"start_date": "2024-01-01", "end_date": "2024-01-31"}
 @dataclass(frozen=True, slots=True)
 class ActivityDatabase(Database):
     organization_id: str = "org-a"
+    app_id: str | None = None
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         if [self.organization_id] not in args:
+            return ()
+        if self.app_id is not None and self.app_id not in args:
             return ()
         if "GROUPING SETS" in query:
             values: Final = {
@@ -378,3 +395,63 @@ def test_duplicate_filters_are_rejected() -> None:
         "?start_date=2024-01-01&start_date=2024-01-02&end_date=2024-01-31&customer_org_ids=org-a"
     )
     assert response.status_code == 400, response.text
+
+
+@pytest.mark.parametrize("resource,parameter,excluded,first,second,label", SCOPES)
+def test_app_filter_keeps_the_customer_scope_and_all_apps_remain_the_default(
+    resource: str, parameter: str, excluded: str, first: str, second: str, label: str
+) -> None:
+    rows: Final = (
+        usage_row(app_id="chat", spend=2),
+        usage_row(id="search", app_id="search", spend=5),
+        usage_row(id="legacy", spend=3),
+        usage_row(
+            id="other-customer",
+            app_id="chat",
+            spend=99,
+            customer_org_id="org-b",
+            customer_team_id="team-b",
+            customer_member_id="member-b",
+        ),
+    )
+    http: Final = client(rows)
+    path: Final = f"/management/v1/{resource}/daily/activity"
+    global_response: Final = http.get(path, params={**DATES, parameter: first})
+    selected: Final = http.get(path, params={**DATES, parameter: first, "app_id": "chat"})
+    search: Final = http.get(path, params={**DATES, parameter: first, "app_id": "search"})
+    assert global_response.status_code == selected.status_code == search.status_code == 200
+    assert global_response.json()["metadata"]["total_spend"] == 10
+    assert selected.json()["metadata"]["total_spend"] == 2
+    assert search.json()["metadata"]["total_spend"] == 5
+    assert set(selected.json()["results"][0]["breakdown"]["entities"]) == {first}
+
+
+@pytest.mark.parametrize("resource,parameter,excluded,first,second,label", SCOPES)
+@pytest.mark.parametrize("app_id,expected_status", (("", 422), ("unknown", 404)))
+def test_daily_activity_rejects_empty_or_unknown_app_filters(
+    resource: str, parameter: str, excluded: str, first: str, second: str, label: str, app_id: str, expected_status: int
+) -> None:
+    response: Final = client((usage_row(),)).get(
+        f"/management/v1/{resource}/daily/activity", params={**DATES, parameter: first, "app_id": app_id}
+    )
+    assert response.status_code == expected_status
+
+
+def test_aggregated_customer_usage_applies_the_app_filter_before_rollups() -> None:
+    http: Final = client(database=ActivityDatabase(Table(), app_id="chat"))
+    path: Final = "/management/v1/customer_organizations/daily/activity/aggregated"
+    selected: Final = http.get(path, params={**RANGE, "customer_org_id": "org-a", "app_id": "chat"})
+    other_app: Final = http.get(path, params={**RANGE, "customer_org_id": "org-a", "app_id": "search"})
+    other_customer: Final = http.get(path, params={**RANGE, "customer_org_id": "org-b", "app_id": "chat"})
+    assert selected.status_code == other_app.status_code == other_customer.status_code == 200
+    assert selected.json()["metadata"]["total_spend"] == 500
+    assert other_app.json()["metadata"]["total_spend"] == other_customer.json()["metadata"]["total_spend"] == 0
+
+
+@pytest.mark.parametrize("app_id,expected_status", (("", 422), ("unknown", 404)))
+def test_aggregated_customer_usage_rejects_empty_or_unknown_apps(app_id: str, expected_status: int) -> None:
+    response: Final = client(database=ActivityDatabase(Table())).get(
+        "/management/v1/customer_organizations/daily/activity/aggregated",
+        params={**RANGE, "customer_org_id": "org-a", "app_id": app_id},
+    )
+    assert response.status_code == expected_status

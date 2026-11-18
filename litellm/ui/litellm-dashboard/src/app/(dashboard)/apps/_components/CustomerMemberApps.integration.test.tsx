@@ -38,7 +38,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customer member apps", () => {
-  it("should show member spend rather than app totals and saves an app-specific override", async () => {
+  it("should show a compact member budget row and save an app-specific override", async () => {
     const requests: Request[] = [];
     fetchMock.mockImplementation(async (input) => {
       const request = input as Request;
@@ -59,6 +59,7 @@ describe("customer member apps", () => {
     render(<CustomerMemberApps memberId="member-1" />);
     expect(await screen.findByText("$2.50")).toBeInTheDocument();
     expect(screen.getByText("Customer member default")).toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader")).toHaveLength(3);
     expect(screen.queryByText("$100.00")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit member budget for Assistant" }));
     act(() => {
@@ -72,6 +73,43 @@ describe("customer member apps", () => {
     const request = requests.find((row) => row.method === "PUT");
     expect(new URL(request!.url).pathname).toBe("/management/v1/apps/app-1/customer_members/member-1");
     expect(await request?.json()).toMatchObject({ budget_override: { max_budget: 5 } });
+  });
+
+  it("should distinguish tiny positive member spend from zero", async () => {
+    fetchMock.mockImplementation(async (input) =>
+      json(
+        new URL((input as Request).url).pathname.endsWith("/apps")
+          ? [app]
+          : {
+              app_id: "app-1",
+              customer_member_id: "member-1",
+              spend: 0.00001234,
+              budget_source: "none",
+              effective_budget: null,
+            },
+      ),
+    );
+    render(<CustomerMemberApps memberId="member-1" />);
+    expect(await screen.findByText("<$0.01")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
+  it("should identify the primary budget period alongside its inherited source", async () => {
+    const member = {
+      app_id: "app-1",
+      customer_member_id: "member-1",
+      spend: 99,
+      budget_source: "app_default",
+      effective_budget: { max_budget: 10, budget_duration: "1mo" },
+      budget_usage: [{ source: "scalar", max_budget: 10, spend: 2, budget_duration: "1mo", reset_at: null }],
+    };
+    fetchMock.mockImplementation(async (input) =>
+      json(new URL((input as Request).url).pathname.endsWith("/apps") ? [app] : member),
+    );
+    render(<CustomerMemberApps memberId="member-1" />);
+    expect(await screen.findByText("App member default · Monthly")).toBeInTheDocument();
+    expect(screen.getByText("$2.00 of $10.00 used")).toBeInTheDocument();
+    expect(screen.queryByText("$99.00")).not.toBeInTheDocument();
   });
 
   it("should clear an existing override to restore inherited member defaults", async () => {

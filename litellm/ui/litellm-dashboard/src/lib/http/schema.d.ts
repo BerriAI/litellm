@@ -9965,7 +9965,7 @@ export interface paths {
         };
         /**
          * Customer Member Daily Activity
-         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. Proxy admins only.
+         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
         put?: never;
@@ -10081,7 +10081,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity
-         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. Proxy admins only.
+         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
         put?: never;
@@ -10101,7 +10101,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key/app filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
@@ -10261,7 +10261,7 @@ export interface paths {
         };
         /**
          * Customer Team Daily Activity
-         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. Proxy admins only.
+         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
         put?: never;
@@ -70819,6 +70819,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_member_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71105,6 +71107,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_org_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71145,6 +71149,8 @@ export interface operations {
                 customer_org_id?: string | null;
                 model?: string | null;
                 api_key?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71538,6 +71544,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_team_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
