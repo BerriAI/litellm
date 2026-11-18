@@ -48,7 +48,10 @@ mod model;
 mod model_info;
 mod register;
 mod resolve;
+mod snapshot;
 mod store;
+#[cfg(test)]
+mod test_support;
 mod vocabulary;
 pub mod wire;
 
@@ -62,6 +65,7 @@ pub use model::*;
 pub use model_info::*;
 pub use register::*;
 pub use resolve::*;
+pub use snapshot::*;
 pub use store::*;
 pub use vocabulary::*;
 
