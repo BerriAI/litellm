@@ -22,6 +22,7 @@ import litellm
 from litellm import Router
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
@@ -874,7 +875,15 @@ def _team_wildcard_router() -> Router:
 _ONE_MODEL_TEAM_KEY: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=["openai/gpt-5.4-mini"])
 
 
-def test_rag_ingest_registers_the_upload_under_the_model_a_restricted_key_reaches_the_team_wildcard_by(client_team_a):
+def _key_model_allows(model: str, key_model: str) -> bool:
+    return model == key_model or model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=[key_model])
+
+
+@pytest.mark.parametrize("key_model", [*_ONE_MODEL_TEAM_KEY.models, "openai/gpt-4o*"])
+def test_rag_ingest_registers_the_upload_under_the_model_a_restricted_key_reaches_the_team_wildcard_by(
+    client_team_a, key_model: str
+):
+    caller: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=[key_model])
     managed_file_id: Final = _managed_file_id("file_123")
     hook: Final = _ManagedFilesHookStub(managed_file_id=managed_file_id)
     aingest_patch, registry_patch = _patched_ingest_boundary(
@@ -886,7 +895,7 @@ def test_rag_ingest_registers_the_upload_under_the_model_a_restricted_key_reache
         aingest_patch as aingest,
         registry_patch,
         patch("litellm.proxy.proxy_server.llm_router", _team_wildcard_router()),
-        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: _ONE_MODEL_TEAM_KEY}),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: caller}),
         _patched_prisma_client(None),
         _installed_managed_files_hook(hook),
     ):
@@ -895,7 +904,9 @@ def test_rag_ingest_registers_the_upload_under_the_model_a_restricted_key_reache
     assert response.status_code == 200, response.json()
     assert response.json()["file_id"] == managed_file_id
     (registration,) = hook.registrations
-    assert registration.deployment.public_model_name == _ONE_MODEL_TEAM_KEY.models[0]
+    registered_model: Final = registration.deployment.public_model_name
+    assert "*" not in registered_model
+    assert _key_model_allows(registered_model, key_model)
     assert aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
 
 

@@ -785,29 +785,50 @@ async def test_the_team_wildcard_deployment_is_usable_only_by_a_key_wildcard_rea
         ({"api_key": "sk-for warded"}, "sk-for warded", "https://team.example/v1"),
     ],
 )
-def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_own_key(
+@pytest.mark.asyncio
+async def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_own_key(
     request_credentials: dict[str, object], sent_api_key: str, sent_api_base: str
 ):
     data: Final[dict[str, object]] = dict(request_credentials)
 
-    _apply_team_a_openai_credentials(data)
+    await _apply_team_a_openai_credentials(data, _team_a_caller(["gpt-4o"], ["openai/*"]))
 
     assert (data.get("api_key"), data.get("api_base")) == (sent_api_key, sent_api_base)
 
 
 @pytest.mark.parametrize("api_key", ["sk-forwarded\n", " sk-forwarded", "\u200b", "sk-forwarded\u00a0"])
-def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: str):
+@pytest.mark.asyncio
+async def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: str):
     data: Final[dict[str, object]] = {"api_key": api_key}
 
     with pytest.raises(HTTPException) as refused:
-        _apply_team_a_openai_credentials(data)
+        await _apply_team_a_openai_credentials(data, _team_a_caller(["gpt-4o"], ["openai/*"]))
 
     assert refused.value.status_code == 400
     assert api_key not in str(refused.value.detail)
 
 
-def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
-    apply_team_provider_credentials(
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_models, gets_the_team_key", [(["openai/*"], True), (["claude-opus-4-6"], False)])
+async def test_a_wildcard_key_gets_the_team_key_only_when_its_team_allows_the_model_it_reaches(
+    team_models: list[str], gets_the_team_key: bool
+):
+    key_wildcard: Final = _family_wildcard_of_a_model_in(litellm.open_ai_chat_completion_models)
+    data: Final[dict[str, object]] = {}
+
+    await _apply_team_a_openai_credentials(data, _team_a_caller([key_wildcard], team_models))
+
+    assert (data.get("api_key") == "team-openai-key") is gets_the_team_key
+
+
+def _team_a_caller(key_models: list[str], team_models: list[str]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="test-key", user_id="test-user", team_id="team-a", team_models=team_models, models=key_models
+    )
+
+
+async def _apply_team_a_openai_credentials(data: dict[str, object], caller: UserAPIKeyAuth) -> None:
+    await apply_team_provider_credentials(
         data=data,
         llm_router=Router(
             model_list=[
@@ -822,9 +843,7 @@ def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
                 }
             ]
         ),
-        user_api_key_dict=UserAPIKeyAuth(
-            api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
-        ),
+        user_api_key_dict=caller,
         custom_llm_provider="openai",
     )
 

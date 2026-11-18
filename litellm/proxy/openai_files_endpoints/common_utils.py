@@ -1,5 +1,6 @@
 import base64
 import fnmatch
+import functools
 import itertools
 import logging
 import mimetypes
@@ -612,25 +613,33 @@ async def team_deployment_the_caller_may_use(
         return None
     return (
         deployment
-        if await caller_may_use_model(deployment.public_model_name, custom_llm_provider, llm_router, user_api_key_dict)
+        if await caller_may_use_team_model(
+            deployment.public_model_name, custom_llm_provider, llm_router, user_api_key_dict
+        )
         else None
     )
 
 
-async def caller_may_use_model(
+async def caller_may_use_team_model(
     public_model_name: str,
     custom_llm_provider: str,
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
 ) -> bool:
+    return await caller_may_use_model(
+        model_the_caller_reaches_deployment_by(public_model_name, custom_llm_provider, llm_router, user_api_key_dict),
+        llm_router,
+        user_api_key_dict,
+    )
+
+
+async def caller_may_use_model(
+    model: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
     try:
-        await authorize_model_for_key(
-            model_the_caller_reaches_deployment_by(
-                public_model_name, custom_llm_provider, llm_router, user_api_key_dict
-            ),
-            llm_router,
-            user_api_key_dict,
-        )
+        await authorize_model_for_key(model, llm_router, user_api_key_dict)
     except ProxyException:
         return False
     return True
@@ -718,7 +727,8 @@ def _model_the_key_allowlist_reaches(
         (
             key_model
             for key_model in key_model_allowlist
-            if model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
+            if "*" not in key_model
+            and model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
         ),
         None,
     )
@@ -867,6 +877,7 @@ def _resolve_provider_credentials(
     model_access_groups: Final = registry.access_groups()
     key_model_allowlist: Final = _key_model_allowlist(llm_router, user_api_key_dict)
 
+    @functools.cache
     def _key_may_use(public_model_name: str) -> bool:
         return (
             not key_model_allowlist
@@ -1002,7 +1013,7 @@ def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str
     return MappingProxyType({"api_key": api_key, "api_base": api_base})
 
 
-def apply_team_provider_credentials(
+async def apply_team_provider_credentials(
     data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
@@ -1013,23 +1024,43 @@ def apply_team_provider_credentials(
     """
     Resolve credentials for a provider-only request (no model pinned) via
     ``get_team_provider_credentials`` and merge them into ``data`` in-place.
+    A key with its own model allowlist gets a team deployment only when the
+    model it reaches that deployment by passes the key, team, org and project
+    checks a chat request would get.
     Leaves ``data`` untouched when no authorized deployment matches, so the
     caller falls back to environment-variable credentials exactly as before.
     An ``api_key`` the request carries itself (a provider key forwarded with
     ``forward_llm_provider_auth_headers``) replaces the deployment's, and the
     request's ``api_base`` replaces the deployment's only alongside that key.
     """
-    credentials: Final = get_team_provider_credentials(
-        llm_router=llm_router,
-        user_api_key_dict=user_api_key_dict,
-        custom_llm_provider=custom_llm_provider,
+    resolved: Final = _resolve_provider_credentials(
+        llm_router, user_api_key_dict, custom_llm_provider, include_accessible_deployments=True
     )
-    if credentials is None:
+    if resolved is None or not await _restricted_key_may_use(
+        resolved, custom_llm_provider, llm_router, user_api_key_dict
+    ):
         return
     prepare_data_with_credentials(
         data=data,
-        credentials={**credentials, **explicit_request_credentials(data)},
+        credentials={**resolved.credentials, **explicit_request_credentials(data)},
         keep_request_buckets=keep_request_buckets,
+    )
+
+
+async def _restricted_key_may_use(
+    resolved: TeamProviderDeployment | _AccessibleProviderCredentials,
+    custom_llm_provider: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
+    if (
+        llm_router is None
+        or not isinstance(resolved, TeamProviderDeployment)
+        or not _key_model_allowlist(llm_router, user_api_key_dict)
+    ):
+        return True
+    return await caller_may_use_team_model(
+        resolved.public_model_name, custom_llm_provider, llm_router, user_api_key_dict
     )
 
 

@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
     caller_may_use_model,
+    caller_may_use_team_model,
     carries_explicit_credentials,
     explicit_request_credentials,
     get_credentials_for_model,
@@ -222,6 +223,29 @@ def _deployment_provider(deployment: Deployment) -> str:
     )
 
 
+async def _caller_may_use_deployment_by(
+    model_name: str,
+    deployment: Deployment,
+    llm_router: Optional["Router"],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    if deployment.model_info.team_id is None:
+        return await caller_may_use_model(model_name, llm_router, user_api_key_dict)
+    return await caller_may_use_team_model(model_name, _deployment_provider(deployment), llm_router, user_api_key_dict)
+
+
+async def _caller_may_use_credentials_of(
+    model_name: str,
+    team_id: str | None,
+    llm_router: "Router",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    deployment: Final = llm_router.registry().credentials(model_name, form="deployment", team_id=team_id)
+    return deployment is not None and await _caller_may_use_deployment_by(
+        model_name, deployment, llm_router, user_api_key_dict
+    )
+
+
 def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, team_id: str | None) -> str | None:
     public_model_name: Final = deployment.model_info.team_public_model_name or deployment.model_name
     reachable_ids: Final = frozenset(
@@ -321,9 +345,9 @@ async def _update_request_data_with_managed_file_id(
                 if raw_vector_store_id is not None
                 and stored_deployment is not None
                 and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
-                and await caller_may_use_model(
+                and await _caller_may_use_deployment_by(
                     stored_deployment.model_info.team_public_model_name or stored_deployment.model_name,
-                    _deployment_provider(stored_deployment),
+                    stored_deployment,
                     llm_router,
                     user_api_key_dict,
                 )
@@ -562,7 +586,7 @@ async def _update_request_data_with_model_routing_hint(
         [
             team_credentials
             for model_name, team_credentials in openai_team_models
-            if await caller_may_use_model(model_name, LlmProviders.OPENAI.value, llm_router, user_api_key_dict)
+            if await _caller_may_use_credentials_of(model_name, caller_team_id, llm_router, user_api_key_dict)
         ]
     )
     if len(usable_openai_credentials) > 1:

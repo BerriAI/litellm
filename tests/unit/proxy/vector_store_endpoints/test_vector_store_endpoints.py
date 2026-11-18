@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
 )
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
@@ -458,7 +459,7 @@ def _family_wildcard_of_a_model_in(known_models: set[str]) -> str:
     return f"{family}-*"
 
 
-def _team_openai_deployment(public_model_name: str, model: str, api_key: str) -> dict:
+def _team_openai_deployment(public_model_name: str, model: str, api_key: str) -> DeploymentTypedDict:
     return {
         "model_name": public_model_name,
         "litellm_params": {"model": model, "api_key": api_key},
@@ -467,8 +468,8 @@ def _team_openai_deployment(public_model_name: str, model: str, api_key: str) ->
 
 
 async def _list_fallback_data_for_a_key_wildcard_over(
-    key_provider_models: set[str], other_team_deployments: tuple[dict, ...] = ()
-) -> dict:
+    key_provider_models: set[str], other_team_deployments: tuple[DeploymentTypedDict, ...] = ()
+) -> dict[str, object]:
     llm_router: Final = litellm.Router(
         model_list=[*other_team_deployments, _team_openai_deployment("openai/*", "openai/*", "sk-team-openai")]
     )
@@ -508,6 +509,26 @@ async def test_vector_store_file_list_refuses_the_team_openai_wildcard_to_a_key_
 
     with pytest.raises(ProxyException):
         await _list_fallback_data_for_a_key_wildcard_over(litellm.anthropic_models)
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_refuses_the_proxy_openai_wildcard_to_a_key_that_does_not_name_it():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    proxy_openai_wildcard: Final[DeploymentTypedDict] = {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*", "api_key": "sk-proxy-openai"},
+    }
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data={"vector_store_id": "vs_123"},
+            request=Request(scope={"type": "http", "query_string": b"", "headers": []}),
+            llm_router=litellm.Router(model_list=[proxy_openai_wildcard]),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test-key", team_id="team-a", team_models=["openai/*"], models=["gpt-4o-mini"]
+            ),
+        )
 
 
 @pytest.mark.asyncio
