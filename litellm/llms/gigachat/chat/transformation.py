@@ -14,8 +14,12 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
 from litellm.secret_managers.main import get_secret_str
@@ -26,9 +30,8 @@ from ..authenticator import get_access_token
 from ..file_handler import upload_file_sync
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -36,6 +39,16 @@ else:
 
 
 _EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
+_JSON_VALUE: Final = TypeAdapter(object)
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_data(part: Mapping[str, object]) -> str | None:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            return file_data
+        case _:
+            return None
 
 
 def is_valid_json(value: str) -> bool:
@@ -81,9 +94,17 @@ class GigaChatConfig(BaseConfig):
         repetition_penalty: float | None = None,
         profanity_check: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        config_params: Final[Mapping[str, float | int | bool | None]] = MappingProxyType(
+            {
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "repetition_penalty": repetition_penalty,
+                "profanity_check": profanity_check,
+            }
+        )
+        for key, value in config_params.items():
+            if value is not None:
                 setattr(self.__class__, key, value)
         # Instance variables for current request context
         self._current_credentials: str | None = None
@@ -99,8 +120,7 @@ class GigaChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         """Get complete API URL for chat completions."""
-        base: Final = get_api_base(api_base)
-        return f"{base}/chat/completions"
+        return join_api_base(get_api_base(api_base), "chat/completions")
 
     def validate_environment(
         self,
@@ -129,7 +149,7 @@ class GigaChatConfig(BaseConfig):
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns list
         """Return list of supported OpenAI parameters."""
-        return [  # mutable-ok: base class contract returns list
+        return [
             "stream",
             "temperature",
             "top_p",
@@ -151,7 +171,10 @@ class GigaChatConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:  # mutable-ok: base class contract returns dict
         """Map OpenAI parameters to GigaChat parameters."""
-        for param, value in non_default_params.items():
+        request_params: Final = tool_params_without_hosted_mcp(
+            dict(non_default_params), model=model, route="gigachat", drop_params=drop_params
+        )
+        for param, value in request_params.items():
             if param == "stream":
                 optional_params["stream"] = value
             elif param == "temperature":
@@ -188,7 +211,7 @@ class GigaChatConfig(BaseConfig):
                     schema_name = json_schema.get("name", "structured_output")
                     schema = json_schema.get("schema", {})
 
-                    function_def = {  # mutable-ok: request payload for httpx
+                    function_def = {
                         "name": schema_name,
                         "description": f"Output structured response: {schema_name}",
                         "parameters": schema,
@@ -203,7 +226,7 @@ class GigaChatConfig(BaseConfig):
                         ),
                         function_def,
                     ]
-                    optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
+                    optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
 
         return optional_params
@@ -264,7 +287,7 @@ class GigaChatConfig(BaseConfig):
         # Default to None (don't set function_call)
         return None
 
-    def _upload_image(self, image_url: str) -> str | None:
+    def _upload_image(self, image_url: str) -> object:
         """
         Upload image to GigaChat and return file_id.
 
@@ -284,9 +307,9 @@ class GigaChatConfig(BaseConfig):
             verbose_logger.error("Failed to upload image: %s", e)
             return None
 
-    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[str]]:
+    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[object]]:
         """
-        Extract text and image attachments from a multimodal message content list.
+        Extract text, image and file attachments from a multimodal message content list.
 
         Args:
             content: List of content parts (OpenAI multimodal format)
@@ -295,7 +318,7 @@ class GigaChatConfig(BaseConfig):
             Tuple of (combined text, list of attachment file ids)
         """
         texts: Final[list[str]] = []  # mutable-ok: accumulator
-        attachments: Final[list[str]] = []  # mutable-ok: accumulator
+        attachments: Final[list[object]] = []  # mutable-ok: accumulator
         for part in content:
             if isinstance(part, dict):
                 if part.get("type") == "text":
@@ -311,6 +334,10 @@ class GigaChatConfig(BaseConfig):
                         file_id = self._upload_image(upload_url)
                         if file_id:
                             attachments.append(file_id)
+                elif (file_data := _file_part_data(_CONTENT_PART.validate_python(part))) and (
+                    uploaded_file_id := self._upload_image(file_data)
+                ):
+                    attachments.append(uploaded_file_id)
         text: Final = "\n".join(texts) if texts else ""
         return text, attachments
 
@@ -385,7 +412,7 @@ class GigaChatConfig(BaseConfig):
                 args = func.get("arguments", "{}")
                 if isinstance(args, str):
                     try:
-                        args = json.loads(args)
+                        args = _JSON_VALUE.validate_python(json.loads(args))
                     except json.JSONDecodeError:
                         args = {}
                 message["function_call"] = {
@@ -408,7 +435,7 @@ class GigaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: tiktoken.Encoding | None,
+        encoding: Tokenizer | None,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -426,36 +453,37 @@ class GigaChatConfig(BaseConfig):
         choices: Final[list[Choices]] = []  # mutable-ok: accumulator for building response choices
         for choice in response_json.get("choices", []):
             message_data = choice.get("message", {})
-            finish_reason = choice.get("finish_reason", "stop")
+            finish_reason = _JSON_VALUE.validate_python(choice.get("finish_reason", "stop"))
 
-            if finish_reason == "function_call" and message_data.get("function_call"):
-                func_call = message_data["function_call"]
+            function_call = (
+                decoded_json_object(_JSON_VALUE.validate_python(message_data)).get("function_call")
+                if finish_reason == "function_call"
+                else None
+            )
+            if function_call:
+                func_call = decoded_json_object(function_call)
                 args = func_call.get("arguments", {})
+                args_mapping = as_str_mapping(args)
 
                 if is_structured_output:
-                    if isinstance(args, dict):
-                        content = json.dumps(args, ensure_ascii=False)
-                    else:
-                        content = str(args)
-                    message_data["content"] = content
-                    message_data.pop("function_call", None)
-                    message_data.pop("functions_state_id", None)
+                    message_data["content"] = (
+                        json.dumps(args_mapping, ensure_ascii=False) if args_mapping is not None else str(args)
+                    )
                     finish_reason = "stop"
                 else:
-                    if isinstance(args, dict):
-                        args = json.dumps(args, ensure_ascii=False)
+                    arguments = json.dumps(args_mapping, ensure_ascii=False) if args_mapping is not None else args
                     message_data["tool_calls"] = [
                         {
                             "id": f"call_{uuid.uuid4().hex[:24]}",
                             "type": "function",
                             "function": {
                                 "name": func_call.get("name", ""),
-                                "arguments": args,
+                                "arguments": arguments,
                             },
                         }
                     ]
-                    message_data.pop("function_call", None)
                     finish_reason = "tool_calls"
+                message_data.pop("function_call", None)
 
             message_data.pop("functions_state_id", None)
 

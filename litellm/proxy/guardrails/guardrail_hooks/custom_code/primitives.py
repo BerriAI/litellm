@@ -5,6 +5,7 @@ These functions are injected into the custom code execution environment
 and provide safe, sandboxed functionality for common guardrail operations.
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -12,12 +13,16 @@ from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, validate_url
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # =============================================================================
 # Result Types - Used by Starlark code to return guardrail decisions
@@ -197,7 +202,7 @@ class JsonSchemaNode(TypedDict, total=False):
     properties: ReadOnly[Mapping[str, "JsonSchemaNode"]]
 
 
-def json_parse(text: str) -> JsonValue:
+def json_parse(text: str) -> object:
     """
     Parse a JSON string into a Python object.
 
@@ -208,7 +213,7 @@ def json_parse(text: str) -> JsonValue:
         Parsed Python object, or None if parsing fails
     """
     try:
-        return json.loads(text)
+        return _DECODED_JSON.validate_python(json.loads(text))
     except (json.JSONDecodeError, TypeError) as e:
         verbose_proxy_logger.debug("Starlark json_parse error: %s", e)
         return None
@@ -393,6 +398,8 @@ _HTTP_DEFAULT_TIMEOUT: Final = 30.0
 # Maximum allowed timeout (in seconds)
 _HTTP_MAX_TIMEOUT: Final = 60.0
 
+_HTTP_ALLOWED_METHODS: Final = ("GET", "POST", "PUT", "DELETE", "PATCH")
+
 
 class HttpResponseResult(TypedDict):
     """Outcome of an HTTP primitive call, as handed back to custom code."""
@@ -463,6 +470,11 @@ async def http_request(
     Uses LiteLLM's global cached AsyncHTTPHandler for connection pooling
     and better performance.
 
+    Destinations go through LiteLLM's SSRF validation: private, link-local,
+    loopback and cloud-metadata addresses are refused (every redirect hop
+    included) unless the host is listed in ``litellm_settings.user_url_allowed_hosts``
+    or ``litellm_settings.user_url_validation`` is turned off.
+
     Args:
         url: The URL to request
         method: HTTP method (GET, POST, PUT, DELETE, PATCH). Defaults to GET.
@@ -492,35 +504,35 @@ async def http_request(
             body={"text": "content to check"}
         )
     """
-    # Validate URL
     if not is_valid_url(url):
         return _http_error_response(f"Invalid URL: {url}")
 
-    # Validate and normalize method
-    method = method.upper()
-    allowed_methods: Final = {"GET", "POST", "PUT", "DELETE", "PATCH"}
-    if method not in allowed_methods:
-        return _http_error_response(f"Invalid HTTP method: {method}. Allowed: {', '.join(allowed_methods)}")
+    normalized_method: Final = method.upper()
+    if normalized_method not in _HTTP_ALLOWED_METHODS:
+        return _http_error_response(
+            f"Invalid HTTP method: {normalized_method}. Allowed: {', '.join(_HTTP_ALLOWED_METHODS)}"
+        )
 
-    # Apply timeout limits
-    if timeout is None:
-        timeout = _HTTP_DEFAULT_TIMEOUT
-    else:
-        timeout = min(max(0.1, timeout), _HTTP_MAX_TIMEOUT)
+    effective_timeout: Final = _HTTP_DEFAULT_TIMEOUT if timeout is None else min(max(0.1, timeout), _HTTP_MAX_TIMEOUT)
 
-    # Get the global cached async HTTP client
     client: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.GuardrailCallback,
-        params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
+        params={
+            "timeout": httpx.Timeout(timeout=effective_timeout, connect=5.0),
+            "follow_redirects": not litellm.user_url_validation,
+        },
     )
 
     try:
-        response: Final = await _execute_http_request(client, method, url, headers, body, timeout)
+        response: Final = await _execute_http_request(client, normalized_method, url, headers, body, effective_timeout)
         return _http_success_response(response)
 
+    except SSRFError as e:
+        verbose_proxy_logger.warning("Custom code http_request blocked: %s", e)
+        return _http_error_response(f"Blocked URL: {e}")
     except httpx.TimeoutException as e:
         verbose_proxy_logger.warning("Custom code http_request timeout: %s", e)
-        return _http_error_response(f"Request timeout after {timeout}s")
+        return _http_error_response(f"Request timeout after {effective_timeout}s")
     except httpx.HTTPStatusError as e:
         # Return the response even for non-2xx status codes
         return _http_success_response(e.response)
@@ -542,19 +554,45 @@ async def _execute_http_request(
 ) -> httpx.Response:
     """Execute the HTTP request using the appropriate client method."""
     json_body, data_body = _prepare_http_body(body)
+    outbound_headers: Final = _caller_headers(headers)
 
     if method == "GET":
-        return await client.get(url=url, headers=headers)
-    elif method == "POST":
-        return await client.post(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await async_safe_get(client, url, headers=outbound_headers)
+
+    destination_url, destination_headers = await _validated_destination(url, outbound_headers)
+    if method == "POST":
+        return await client.post(
+            url=destination_url, headers=destination_headers, json=json_body, data=data_body, timeout=timeout
+        )
     elif method == "PUT":
-        return await client.put(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await client.put(
+            url=destination_url, headers=destination_headers, json=json_body, data=data_body, timeout=timeout
+        )
     elif method == "DELETE":
-        return await client.delete(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await client.delete(
+            url=destination_url, headers=destination_headers, json=json_body, data=data_body, timeout=timeout
+        )
     elif method == "PATCH":
-        return await client.patch(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await client.patch(
+            url=destination_url, headers=destination_headers, json=json_body, data=data_body, timeout=timeout
+        )
     else:
         raise ValueError(f"Unsupported HTTP method: {method}")
+
+
+def _caller_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    if headers is None:
+        return {}
+    if not litellm.user_url_validation:
+        return headers
+    return {name: value for name, value in headers.items() if name.lower() != "host"}
+
+
+async def _validated_destination(url: str, headers: dict[str, str]) -> tuple[str, dict[str, str]]:
+    if not litellm.user_url_validation:
+        return url, headers
+    destination_url, host_header = await asyncio.to_thread(validate_url, url)
+    return destination_url, {**headers, "Host": host_header}
 
 
 async def http_get(

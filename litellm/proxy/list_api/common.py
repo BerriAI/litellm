@@ -8,8 +8,8 @@ from fastapi import Request
 from fastapi.dependencies.utils import get_flat_params
 from fastapi.params import ParamTypes
 from fastapi.responses import JSONResponse
-from typing_extensions import ReadOnly, TypedDict
 
+from litellm.proxy.common_utils.validation_error_body import ValidationErrorDetail
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListLinks,
     PageLinks,
@@ -56,14 +56,6 @@ def _declared_query_params(request: Request) -> frozenset[str]:
 def escape_like(value: str) -> str:
     """Escape LIKE/ILIKE metacharacters. Ids routinely contain `_`, which is a wildcard unescaped."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-class ValidationErrorDetail(TypedDict):
-    """The keys of a pydantic/FastAPI validation error a problem document needs."""
-
-    type: ReadOnly[str]
-    loc: ReadOnly[tuple[int | str, ...]]
-    msg: ReadOnly[str]
 
 
 def _is_length_error_of_rejected_items(error: ValidationErrorDetail, errors: Sequence[ValidationErrorDetail]) -> bool:

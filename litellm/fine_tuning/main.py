@@ -173,6 +173,7 @@ def create_fine_tuning_job(
     try:
         _is_async: Final = kwargs.pop("acreate_fine_tuning_job", False) is True
         optional_params: Final = GenericLiteLLMParams(**kwargs)
+        provider_model: Final = model.removeprefix(f"{custom_llm_provider}/")
 
         # handle hyperparameters
         hyperparameters = hyperparameters or {}  # original hyperparameters
@@ -218,7 +219,7 @@ def create_fine_tuning_job(
             )
 
             create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
-                model,
+                provider_model,
                 training_file,
                 _oai_hyperparameters,
                 suffix,
@@ -239,6 +240,7 @@ def create_fine_tuning_job(
                 client=kwargs.get(
                     "client", None
                 ),  # note, when we add this to `GenericLiteLLMParams` it impacts a lot of other tests + linting
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -262,7 +264,7 @@ def create_fine_tuning_job(
             extra_body = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
 
             create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
-                model,
+                provider_model,
                 training_file,
                 _oai_hyperparameters,
                 suffix,
@@ -297,7 +299,7 @@ def create_fine_tuning_job(
             response = vertex_fine_tuning_apis_instance.create_fine_tuning_job(
                 _is_async=_is_async,
                 create_fine_tuning_job_data=_build_fine_tuning_job_data(
-                    model,
+                    provider_model,
                     training_file,
                     _oai_hyperparameters,
                     suffix,
@@ -436,6 +438,7 @@ def cancel_fine_tuning_job(
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
                 client=kwargs.get("client", None),
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -591,6 +594,7 @@ def list_fine_tuning_jobs(
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
                 client=kwargs.get("client", None),
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
@@ -730,6 +734,7 @@ def retrieve_fine_tuning_job(
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
                 client=kwargs.get("client", None),
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":

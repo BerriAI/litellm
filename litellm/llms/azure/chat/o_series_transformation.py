@@ -109,7 +109,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         headers: dict,
     ) -> dict:
         model = model.replace("o_series/", "")  # handle o_series/my-random-deployment-name
-        flattened_params: Final = {  # mutable-ok: transform_request's contract takes a plain JSON params dict
+        flattened_params: Final = {
             **optional_params,
             **sanitized_tools_update(optional_params),
         }

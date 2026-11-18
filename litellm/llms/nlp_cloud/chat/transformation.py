@@ -1,8 +1,10 @@
 import json
 import time
+from collections.abc import Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -14,13 +16,21 @@ from litellm.utils import ModelResponse, Usage
 from ..common_utils import NLPCloudError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 class NLPCloudConfig(BaseConfig):
@@ -80,7 +90,7 @@ class NLPCloudConfig(BaseConfig):
         num_beams: int | None = None,
         num_return_sequences: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -175,7 +185,7 @@ class NLPCloudConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -199,7 +209,7 @@ class NLPCloudConfig(BaseConfig):
             )
         else:
             try:
-                if len(completion_response["generated_text"]) > 0:
+                if _json_len(_DECODED_JSON.validate_python(completion_response["generated_text"])) > 0:
                     model_response.choices[0].message.content = completion_response["generated_text"]
             except Exception:
                 raise NLPCloudError(

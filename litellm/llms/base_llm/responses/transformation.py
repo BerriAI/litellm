@@ -1,6 +1,7 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast, get_args
 
 import httpx
 
@@ -25,6 +26,22 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
+ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
+ReasoningFieldValues: TypeAlias = Mapping[str, frozenset[str | None] | None]
+REASONING_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
+SUMMARY_ONLY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {"summary": REASONING_SUMMARY_VALUES}
+)
+STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {**SUMMARY_ONLY_REASONING_FIELD_VALUES, "mode": frozenset({"standard"})}
+)
+STANDARD_MODE_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {**STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES, "context": None}
+)
+ANY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {**SUMMARY_ONLY_REASONING_FIELD_VALUES, "mode": None, "context": None}
+)
+
 
 class BaseResponsesAPIConfig(ABC):
     def __init__(self):
@@ -37,9 +54,10 @@ class BaseResponsesAPIConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -65,6 +83,9 @@ class BaseResponsesAPIConfig(ABC):
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 
+    def supports_streamed_retrieval(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI)
+
     def sign_request(
         self,
         headers: dict,
@@ -88,6 +109,22 @@ class BaseResponsesAPIConfig(ABC):
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
+
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        """The ``reasoning.summary`` LiteLLM's opt-in auto summary asks this provider for."""
+        return "detailed"
+
+    def reasoning_field_values(self) -> ReasoningFieldValues | None:
+        return None
+
+    def deployment_names_wrap_openai_models(self) -> bool:
+        return False
+
+    def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:
+        return None
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return False
 
     @abstractmethod
     def map_openai_params(
@@ -129,6 +166,22 @@ class BaseResponsesAPIConfig(ABC):
         headers: dict,
     ) -> dict:
         pass
+
+    async def async_transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        return self.transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @abstractmethod
     def transform_response_api_response(
@@ -185,7 +238,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         pass
 
     @abstractmethod
@@ -242,6 +295,9 @@ class BaseResponsesAPIConfig(ABC):
         custom_llm_provider: str | None = None,
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False
+
+    def may_answer_stream_with_json(self) -> bool:
         return False
 
     def supports_native_websocket(self) -> bool:
@@ -340,13 +396,22 @@ class BaseResponsesAPIConfig(ABC):
         """
         if not isinstance(input, list):
             return input
-        out: Final[list[Any]] = []
+        out: Final[list[object]] = []
         for item in input:
             if isinstance(item, dict) and item.get("type") == "custom_tool_call":
                 out.append({k: v for k, v in item.items() if k != "namespace"})
             else:
                 out.append(item)
         return cast(ResponseInputParam, out)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return extra_body
 
     @staticmethod
     def normalize_responses_api_request_dict(data: dict[str, Any]) -> dict[str, Any]:

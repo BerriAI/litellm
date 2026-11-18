@@ -11,11 +11,11 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import KeyManagementSystem
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 
@@ -191,7 +191,7 @@ class HashicorpSecretManager(BaseSecretManager):
         headers: Final = self._get_login_headers()
 
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             resp: Final = client.post(
                 url=login_url,
                 headers=headers,
@@ -436,7 +436,7 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
-        sync_client: Final = _get_httpx_client()
+        sync_client: Final = get_httpx_client()
         try:
             target: Final = self._build_secret_target(secret_name, optional_params)
             cached_body: Final = self.cache.get_cache(target["url"])

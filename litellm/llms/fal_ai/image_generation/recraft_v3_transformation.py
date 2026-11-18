@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
@@ -8,13 +10,15 @@ from litellm.types.utils import ImageObject, ImageResponse
 from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FalAIRecraftV3Config(FalAIBaseConfig):
@@ -90,7 +94,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: str) -> Any:
+    def _map_image_size(self, size: str) -> str | Mapping[str, int]:
         """
         Map OpenAI size format to Recraft v3 image_size format.
 
@@ -172,7 +176,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -192,7 +196,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         }
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -204,7 +208,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Recraft v3 response format
-        images: Final = response_data.get("images", [])
+        images: Final = _JSON_OBJECT.validate_python(response_data).get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):

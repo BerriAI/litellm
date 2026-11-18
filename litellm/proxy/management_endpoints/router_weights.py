@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, BeforeValidator, ValidationError
 
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 
@@ -30,17 +31,23 @@ class _PrismaClient(Protocol):
         pass
 
 
-class _Router(Protocol):
+class _RouterRegistry(Protocol):
     @abstractmethod
-    def get_deployment(self, model_id: str) -> object | None:
+    def deployment(self, id: str) -> object | None:
         pass
 
 
-class _RouterWeightSettings(BaseModel):
+class _Router(Protocol):
+    @abstractmethod
+    def registry(self) -> _RouterRegistry:
+        pass
+
+
+class _RouterWeightSettings(LiteLLMBaseModel):
     weights: RouterWeights | None = None
 
 
-class _RouterWeightModelInfo(BaseModel):
+class _RouterWeightModelInfo(LiteLLMBaseModel):
     team_id: str | None = None
     db_model: bool | None = None
     team_public_model_name: str | None = None
@@ -52,7 +59,7 @@ def _router_weight_model_info(value: object) -> _RouterWeightModelInfo:
     return _RouterWeightModelInfo.model_validate(value or {}, from_attributes=True)
 
 
-class _RouterWeightDeployment(BaseModel):
+class _RouterWeightDeployment(LiteLLMBaseModel):
     model_name: str
     model_info: Annotated[_RouterWeightModelInfo, BeforeValidator(_router_weight_model_info)]
 
@@ -125,5 +132,5 @@ async def validate_router_settings_weights(
                 deployment_id,
                 team_id,
                 stored_by_id.get(deployment_id),
-                llm_router.get_deployment(model_id=deployment_id) if llm_router is not None else None,
+                llm_router.registry().deployment(deployment_id) if llm_router is not None else None,
             )

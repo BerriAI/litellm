@@ -1,0 +1,4 @@
+import litellm.proxy.mcp_server as _mcp_server
+from litellm.litellm_core_utils.deprecated_package import alias_deprecated_package
+
+alias_deprecated_package(__name__, _mcp_server)

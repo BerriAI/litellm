@@ -1,10 +1,13 @@
 import os
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.images.fan_out import image_request_count
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -12,25 +15,31 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_web_search_requests,
     map_gemini_image_tools_params,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size, pop_vertex_request_labels
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ImageObject,
     ImageResponse,
-    ImageUsage,
-    ImageUsageInputTokensDetails,
 )
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -64,6 +73,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "web_search_options",
         ]
 
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        return image_request_count(optional_params.get("n"), model=model, llm_provider="vertex_ai")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -79,10 +91,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 if k in supported_params:
                     # Map OpenAI parameters to Gemini format
                     if k == "n":
-                        mapped_params["candidate_count"] = v
+                        mapped_params["n"] = v
                     elif k == "size":
-                        # Map OpenAI size format to Gemini aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        continue
                     elif k in ("aspectRatio", "aspect_ratio"):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
@@ -95,21 +106,22 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     elif k not in ("tools", "web_search_options", "imageConfig"):
                         mapped_params[k] = v
 
+        if "size" in non_default_params and "size" not in optional_params:
+            image_params: Final = _JSON_OBJECT.validate_python(mapped_params)
+            image_config: Final = _JSON_OBJECT.validate_python(image_params.get("imageConfig", {}))
+            size_params: Final = {
+                key: value
+                for key, value in (
+                    map_vertex_image_size(non_default_params["size"], model) or {"aspectRatio": "1:1"}
+                ).items()
+                if key not in image_config
+            }
+            return map_gemini_image_tools_params(
+                _JSON_OBJECT.validate_python(non_default_params), {**size_params, **image_params}
+            )
+
         mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """
-        Map OpenAI size format to Gemini aspect ratio format
-        """
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -207,21 +219,23 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         prompt: str,
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         """
         Transform the image generation request to Gemini format
 
         Uses generateContent API with responseModalities: ["IMAGE"]
         """
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         # Prepare messages with the prompt
         contents: Final = [{"role": "user", "parts": [{"text": prompt}]}]
 
         # Prepare generation config
-        generation_config: Final[dict[str, Any]] = {"responseModalities": ["IMAGE"]}
+        generation_config: Final[dict[str, object]] = {"responseModalities": ["IMAGE"]}
 
         # Seed from user-supplied imageConfig dict; flat params are overlaid for backward compat.
-        image_config: Final[dict[str, Any]] = dict(optional_params.get("imageConfig") or {})
+        image_config: Final[dict[str, object]] = dict(optional_params.get("imageConfig") or {})
 
         if "aspectRatio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspectRatio"]
@@ -236,44 +250,23 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if image_config:
             generation_config["imageConfig"] = image_config
 
-        # Handle candidate_count (n parameter)
         if "candidate_count" in optional_params:
             generation_config["candidateCount"] = optional_params["candidate_count"]
-        elif "n" in optional_params:
-            generation_config["candidateCount"] = optional_params["n"]
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "contents": contents,
             "generationConfig": generation_config,
         }
 
-        if tools := optional_params.get("tools"):
-            request_body["tools"] = tools
-        if tool_config := optional_params.get("toolConfig"):
-            request_body["toolConfig"] = tool_config
-
-        return request_body
-
-    def _transform_image_usage(self, usage: dict) -> ImageUsage:
-        input_tokens_details: Final = ImageUsageInputTokensDetails(
-            image_tokens=0,
-            text_tokens=0,
-        )
-        tokens_details: Final = usage.get("promptTokensDetails", [])
-        for details in tokens_details:
-            if isinstance(details, dict) and (modality := details.get("modality")):
-                token_count = details.get("tokenCount", 0)
-                if modality == "TEXT":
-                    input_tokens_details.text_tokens += token_count
-                elif modality == "IMAGE":
-                    input_tokens_details.image_tokens += token_count
-
-        return ImageUsage(
-            input_tokens=usage.get("promptTokenCount", 0),
-            input_tokens_details=input_tokens_details,
-            output_tokens=usage.get("candidatesTokenCount", 0),
-            total_tokens=usage.get("totalTokenCount", 0),
-        )
+        params: Final = _JSON_OBJECT.validate_python(optional_params)
+        optional_fields: Final = {
+            "tools": params.get("tools"),
+            "toolConfig": params.get("toolConfig"),
+            "labels": pop_vertex_request_labels(optional_params, litellm_params)
+            if vertex_request_label_fields()
+            else None,
+        }
+        return {**request_body, **{key: value for key, value in optional_fields.items() if value}}
 
     def transform_image_generation_response(
         self,
@@ -284,7 +277,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -292,7 +285,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         Transform Gemini image generation response to litellm ImageResponse format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -304,28 +297,47 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             model_response.data = []
 
         # Gemini image generation models return in candidates format
-        candidates: Final = response_data.get("candidates", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        candidates: Final = _JSON_CONTAINER.validate_python(response_object.get("candidates", []))
         for candidate in candidates:
-            content = candidate.get("content", {})
-            parts = content.get("parts", [])
-            for part in parts:
+            content = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(candidate).get("content", {}))
+            parts = _JSON_CONTAINER.validate_python(content.get("parts", []))
+            for raw_part in parts:
+                part = raw_part if isinstance(raw_part, str) else _JSON_CONTAINER.validate_python(raw_part)
                 # Look for inlineData with image
                 if "inlineData" in part:
-                    inline_data = part["inlineData"]
+                    part_object = _JSON_OBJECT.validate_python(part)
+                    inline_data = _JSON_CONTAINER.validate_python(part_object["inlineData"])
                     if "data" in inline_data:
-                        thought_sig = part.get("thoughtSignature")
+                        thought_sig = part_object.get("thoughtSignature")
                         model_response.data.append(
                             ImageObject(
-                                b64_json=inline_data["data"],
+                                b64_json=_JSON_OBJECT.validate_python(inline_data)["data"],
                                 url=None,
                                 provider_specific_fields=({"thought_signature": thought_sig} if thought_sig else None),
                             )
                         )
 
-        if usage_metadata := response_data.get("usageMetadata", None):
-            model_response.usage = self._transform_image_usage(usage_metadata)
+        if usage_metadata := response_object.get("usageMetadata", None):
+            normalized_usage_metadata: Final = _JSON_DICT.validate_python(usage_metadata)
+            model_response.usage = transform_gemini_image_usage(normalized_usage_metadata)
+            traffic_type: Final = normalized_usage_metadata.get("trafficType")
+            if isinstance(traffic_type, str) and traffic_type:
+                hidden_params: Final = model_response.hidden_params
+                provider_specific_fields: Final[dict[str, object]] = (
+                    _JSON_DICT.validate_python(hidden_params.get("provider_specific_fields"))
+                    if isinstance(hidden_params.get("provider_specific_fields"), Mapping)
+                    else {}
+                )
+                model_response.hidden_params = {  # rebind-ok: transformation fills the caller-owned response metadata
+                    **hidden_params,
+                    "provider_specific_fields": {
+                        **provider_specific_fields,
+                        "traffic_type": traffic_type,
+                    },
+                }
 
-        web_search_requests: Final = get_gemini_image_web_search_requests(response_data)
+        web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
         if web_search_requests and model_response.usage is not None:
             setattr(model_response.usage, "web_search_requests", web_search_requests)
 

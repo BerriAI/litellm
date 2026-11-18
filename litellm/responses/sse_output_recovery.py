@@ -11,9 +11,12 @@ import json
 from collections.abc import Mapping
 from typing import Final, SupportsInt, TypeAlias, cast  # noqa: TID251  # int() re-checks the cast below at runtime
 
+from pydantic import TypeAdapter
+
 from litellm.constants import STREAM_SSE_DONE_STRING
 
 _MAX_CONTENT_INDEX: Final = 1024
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _ConvertibleToInt: TypeAlias = SupportsInt | str
 
@@ -29,11 +32,11 @@ def parse_sse_json_chunk(chunk: str) -> dict[str, object] | None:
     # Import locally to avoid a circular import with the streaming handler.
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-    stripped_chunk: Final = (CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip()) or "").strip()
+    stripped_chunk: Final = (CustomStreamWrapper.strip_sse_data_from_chunk(chunk.strip()) or "").strip()
     if not stripped_chunk or stripped_chunk == STREAM_SSE_DONE_STRING or stripped_chunk.startswith("event:"):
         return None
     try:
-        parsed_chunk: Final[object] = json.loads(stripped_chunk)
+        parsed_chunk: Final = _DECODED_JSON.validate_python(json.loads(stripped_chunk))
     except json.JSONDecodeError:
         return None
     if not isinstance(parsed_chunk, dict):

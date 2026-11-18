@@ -7,8 +7,8 @@ the app directly, so they call ``DatabaseURLSettings.from_env().apply_to_env()``
 to do the same thing before importing ``proxy_server``.
 
 The env var names this module reads are exactly the ones emitted by the
-``helm/litellm`` chart's ``litellm.serverEnv`` block
-(``helm/litellm/templates/_helpers.tpl``). Both auth styles and both
+``litellm/deploy/helm/litellm`` chart's ``litellm.serverEnv`` block
+(``litellm/deploy/helm/litellm/templates/_helpers.tpl``). Both auth styles and both
 endpoints are covered:
 
   * Token auth (``IAM_TOKEN_DB_AUTH`` truthy for AWS RDS IAM, or
@@ -142,7 +142,7 @@ PEM_CERT_HEADER: Final = b"-----BEGIN CERTIFICATE-----"
 PG_SSL_REQUEST: Final = struct.pack("!ii", 8, 80877103)
 TLS_PROBE_TIMEOUT_SECONDS: Final = 10.0
 
-RootCertResolver: TypeAlias = Callable[[str, str, int], str]  # mutable-ok: Callable parameter syntax
+RootCertResolver: TypeAlias = Callable[[str, str, int], str]
 
 
 class _VerifiedChainSource(Protocol):
@@ -254,6 +254,61 @@ def translate_libpq_ssl_params(url: str, resolve_root_cert: RootCertResolver = p
     return urllib.parse.urlunsplit(parsed._replace(query=query))
 
 
+PRISMA_APPLICATION_NAME: Final = "litellm-prisma"
+NATIVE_APPLICATION_NAME: Final = "litellm-native"
+
+
+def prisma_default_params(
+    lifetime_params: Mapping[str, str | int | float], native_connections: int
+) -> Mapping[str, str | int | float]:
+    """Prisma's URL defaults, tagged ``PRISMA_APPLICATION_NAME`` only once a native pool shares the database."""
+    if native_connections == 0:
+        return lifetime_params
+    return MappingProxyType({**lifetime_params, "application_name": PRISMA_APPLICATION_NAME})
+
+
+def postgres_connection_budget_message(
+    writer_limit: str, rust_writer_limit: int, reader_limit: str | None, rust_reader_limit: int, num_workers: str
+) -> str:
+    """The startup line that states this pod's worst-case Postgres connection demand.
+
+    Prisma's ``connection_limit`` is per query engine, and every uvicorn worker
+    owns one engine per configured database (writer, plus the reader when
+    ``DATABASE_URL_READ_REPLICA`` is set) plus a Rust pool beside each whose
+    share (``connection_budget``) is above 0. The limits are read off the final URLs,
+    so a reader that pins its own ``connection_limit`` or an operator override in
+    ``database_extra_connection_params`` is counted at its real value. The
+    server-side cap is shared by every pod, so the number an operator has to keep
+    under ``max_connections`` minus ``superuser_reserved_connections`` is
+    pods x workers x the per-worker sum, not one engine's limit.
+    """
+    try:
+        workers: Final = max(1, int(num_workers))
+        writer: Final = int(writer_limit)
+        reader: Final = int(reader_limit) if reader_limit is not None else 0
+    except ValueError:
+        return (
+            "LiteLLM Proxy: Postgres connection budget per pod = workers x (writer connection_limit + "
+            f"{'rust writer pool + ' if rust_writer_limit else ''}reader connection_limit"
+            f"{' + rust reader pool' if rust_reader_limit else ''}) "
+            f"(workers={num_workers!r}, writer={writer_limit!r}, reader={reader_limit!r}); "
+            "keep pods x that figure under max_connections minus superuser_reserved_connections"
+        )
+    rust_reader: Final = rust_reader_limit if reader_limit is not None else 0
+    terms: Final = (
+        f"writer connection_limit {writer}",
+        *((f"rust writer pool {rust_writer_limit}",) if rust_writer_limit else ()),
+        *((f"reader connection_limit {reader}",) if reader_limit is not None else ()),
+        *((f"rust reader pool {rust_reader}",) if rust_reader else ()),
+    )
+    engines: Final = terms[0] if len(terms) == 1 else f"({' + '.join(terms)})"
+    per_pod: Final = workers * (writer + rust_writer_limit + reader + rust_reader)
+    return (
+        f"LiteLLM Proxy: Postgres connection budget per pod = {workers} worker(s) x {engines} = up to {per_pod} "
+        "connections; keep pods x that figure under max_connections minus superuser_reserved_connections"
+    )
+
+
 def reader_shareable_params(params: Mapping[str, str | int | float]) -> Mapping[str, str | int | float]:
     """Return the subset of ``params`` the read replica is allowed to inherit."""
     return MappingProxyType({key: value for key, value in params.items() if key in CONNECTION_PARAM_KEYS})
@@ -266,16 +321,26 @@ def connection_params_from_url(url: str) -> Mapping[str, str | int | float]:
     )
 
 
+# A re-minted token URL replaces a URL to the same database, so unlike the
+# reader allowlist it may also carry ``options``: that is where the server-side
+# timeouts (statement, lock, idle-in-transaction) live, and a refresh that
+# dropped them would leave the replacement engine's sessions unbounded.
+TOKEN_REFRESH_PARAM_KEYS: Final[frozenset[str]] = CONNECTION_PARAM_KEYS | PRISMA_TLS_PARAM_KEYS | frozenset({"options"})
+
+
 def token_refresh_params_from_url(url: str) -> Mapping[str, str | int | float]:
     """Return the params a re-minted token URL carries over from the URL it replaces.
 
-    The pool and timeout params plus Prisma's TLS params (already translated from
-    libpq spelling), so a refreshed URL keeps verifying the server the way the
-    first one did.
+    The pool and timeout params, Prisma's TLS params (already translated from
+    libpq spelling) and the ``options`` string, so a refreshed URL keeps verifying
+    the server and bounding its sessions the way the first one did.
     """
-    kept: Final = CONNECTION_PARAM_KEYS | PRISMA_TLS_PARAM_KEYS
     return MappingProxyType(
-        {key: value for key, value in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query) if key in kept}
+        {
+            key: value
+            for key, value in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)
+            if key in TOKEN_REFRESH_PARAM_KEYS
+        }
     )
 
 
@@ -361,13 +426,14 @@ class DatabaseURLSettings(BaseSettings):
         """Load the settings from ``os.environ`` (read at call time)."""
         return cls()
 
-    def token_auth(self) -> DatabaseTokenAuth | None:
+    def token_auth(self, *, read_replica: bool = False) -> DatabaseTokenAuth | None:
         """The token strategy the toggles ask for, or ``None`` for password auth.
 
         Raises ``RuntimeError`` when both toggles are on, since the password can only
         come from one source.
         """
         return build_database_token_auth(
+            read_replica=read_replica,
             iam_token_db_auth=self.iam_token_db_auth,
             azure_postgresql_auth=self.azure_postgresql_auth,
         )
@@ -473,7 +539,7 @@ class DatabaseURLSettings(BaseSettings):
         schema: Final = self.database_schema_read_replica or self.database_schema
         password: Final = self.database_password_read_replica or self.database_password
 
-        auth: Final = self.token_auth()
+        auth: Final = self.token_auth(read_replica=True)
         if auth is not None:
             missing: Final = tuple(
                 env

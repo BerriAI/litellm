@@ -15,16 +15,23 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-import json
-from collections.abc import Mapping
-from typing import Any, Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
+from types import MappingProxyType
+from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoint_for_wire,
+)
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
+from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
@@ -59,32 +66,9 @@ _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
 
-_CODEX_AGENT_MESSAGE_INPUT_ITEM_TYPE: Final = "agent_message"
-_CODEX_CONTEXT_COMPACTION_INPUT_ITEM_TYPE: Final = "context_compaction"
-_CODEX_LOCAL_SHELL_CALL_INPUT_ITEM_TYPE: Final = "local_shell_call"
 
-
-class _RewrittenOutputTextBlock(TypedDict):
-    type: ReadOnly[str]
-    text: ReadOnly[str]
-
-
-class _RewrittenAssistantMessageItem(TypedDict):
-    type: ReadOnly[str]
-    role: ReadOnly[str]
-    content: ReadOnly[tuple[_RewrittenOutputTextBlock, ...]]
-
-
-class _RewrittenCompactionItem(TypedDict):
-    type: ReadOnly[str]
-    encrypted_content: ReadOnly[str]
-
-
-class _RewrittenFunctionCallItem(TypedDict):
-    type: ReadOnly[str]
-    call_id: ReadOnly[str]
-    name: ReadOnly[str]
-    arguments: ReadOnly[str]
+def _prompt_cache_breakpoint_as_sent_or_none(marker: object) -> object:
+    return marker if chat_completion_prompt_cache_breakpoint_for_wire(marker, drop_params=True) == marker else None
 
 
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
@@ -92,14 +76,22 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         self,
         aws_signer: BaseAWSLLM | None = None,
         use_openai_path: bool = True,
+        encrypted_agent_messages: bool = False,
     ):
         super().__init__()
         self._aws_signer = aws_signer or BaseAWSLLM()
         self.use_openai_path = use_openai_path
+        self.encrypted_agent_messages = encrypted_agent_messages
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
+
+    def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
+        return "auto" if self.use_openai_path else super().auto_reasoning_summary()
+
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.use_openai_path and self.encrypted_agent_messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
@@ -124,16 +116,51 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         if MANTLE_HOST_RE.match(base):
             base = f"https://bedrock-mantle.{region}.api.aws"
         path: Final = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
-        return f"{base}{path}"
+        return join_api_base(base, path)
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        bearer: Final = self._resolve_bearer_token(litellm_params.api_key)
-        if bearer:
-            headers["Authorization"] = f"Bearer {bearer}"
-        if litellm_params.aws_bedrock_project_id:
-            headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
-        return headers
+        params: Final = litellm_params or GenericLiteLLMParams()
+        return {**headers, **self._pinned_headers(params.api_key, params.aws_bedrock_project_id)}
+
+    def sign_request(
+        self,
+        headers: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, object], bytes | None]:  # mutable-ok: the shared HTTP handler sends the returned headers dict
+        pinned: Final = self._pinned_headers(api_key, optional_params.get("aws_bedrock_project_id"))
+        pinned_names: Final = frozenset(name.lower() for name in pinned)
+        return super().sign_request(
+            headers={**{name: value for name, value in headers.items() if name.lower() not in pinned_names}, **pinned},
+            optional_params=dict(optional_params),
+            request_data=dict(request_data),
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+
+    def _pinned_headers(self, api_key: str | None, project_id: object) -> Mapping[str, str]:
+        bearer: Final = self._resolve_bearer_token(api_key)
+        return MappingProxyType(
+            {
+                **({"Authorization": f"Bearer {bearer}"} if bearer else {}),
+                **({"OpenAI-Project": project_id} if isinstance(project_id, str) and project_id else {}),
+            }
+        )
+
+    def _prompt_cache_breakpoint_to_wire(
+        self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
+    ) -> Callable[[object], object]:
+        if reads_breakpoints or known_support is True:
+            return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
+        return _prompt_cache_breakpoint_as_sent_or_none
 
     def supports_native_file_search(self) -> bool:
         return False
@@ -142,28 +169,16 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return False
 
     @staticmethod
-    def _filter_unsupported_tools(tools: list[Any]) -> list[Any]:
+    def _filter_unsupported_tools(tools: "Sequence[object]") -> "list[object]":
         """Keep only tool types Mantle's Responses API accepts."""
-        kept: Final[list[Any]] = []
-        dropped_types: Final[list[str]] = []
-        for tool in tools:
-            if not isinstance(tool, dict):
-                kept.append(tool)
-                continue
-            tool_type = tool.get("type")
-            if tool_type in _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES:
-                kept.append(tool)
-            else:
-                dropped_types.append(str(tool_type))
-
+        kept, dropped_types = drop_unsupported_tools(tools, _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES)
         if dropped_types:
             verbose_logger.warning(
                 "Bedrock Mantle Responses API: dropping unsupported tool type(s) %s (supported: %s).",
-                sorted(set(dropped_types)),
+                list(dropped_types),
                 sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
             )
-
-        return kept
+        return list(kept)
 
     @staticmethod
     def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:
@@ -213,15 +228,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             summary,
             sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
         )
-        stripped: Final = {  # mutable-ok: map_openai_params contract returns a plain dict
-            key: value for key, value in reasoning.items() if key != "summary"
-        }
+        stripped: Final = {key: value for key, value in reasoning.items() if key != "summary"}
         return (
-            {**params, "reasoning": stripped}  # mutable-ok: map_openai_params contract returns a plain dict
+            {**params, "reasoning": stripped}
             if stripped
-            else {  # mutable-ok: map_openai_params contract returns a plain dict
-                key: value for key, value in params.items() if key != "reasoning"
-            }
+            else {key: value for key, value in params.items() if key != "reasoning"}
         )
 
     def transform_responses_api_request(
@@ -235,8 +246,17 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
             "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
         )
-        hoisted: Final = hoist_additional_tools(input, params.get("tools"))
-        normalized_input: Final = self._normalize_codex_input_items(hoisted.input)
+        hoisted: Final = hoist_additional_tools(
+            input, params.get("tools"), drop_params=drops_unsupported_params(litellm_params.drop_params)
+        )
+        normalized_input, rewritten_types = normalize_codex_input_items(
+            hoisted.input, keep_encrypted_agent_messages=self.supports_encrypted_agent_messages()
+        )
+        if rewritten_types:
+            verbose_logger.warning(
+                "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
+                list(rewritten_types),
+            )
         request_params: Final = (
             self._params_with_hoisted_tools(params, hoisted)
             if hoisted.hoisted
@@ -258,91 +278,6 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         if supported_tools:
             return {**params, "tools": supported_tools}
         return {key: value for key, value in params.items() if key != "tools"}
-
-    @staticmethod
-    def _agent_message_text(item: "Mapping[str, object]") -> str:
-        content: Final = item.get("content")
-        if not isinstance(content, list):
-            return ""
-        return "".join(
-            str(block.get("text") or block.get("encrypted_content") or "")
-            for block in content
-            if isinstance(block, dict)
-        )
-
-    @classmethod
-    def _normalize_agent_message_item(cls, item: "Mapping[str, object]") -> "_RewrittenAssistantMessageItem | None":
-        text: Final = cls._agent_message_text(item)
-        if not text:
-            return None
-        rewritten: Final[_RewrittenAssistantMessageItem] = {
-            "type": "message",
-            "role": "assistant",
-            "content": ({"type": "output_text", "text": text},),
-        }
-        return rewritten
-
-    @staticmethod
-    def _normalize_context_compaction_item(item: "Mapping[str, object]") -> "_RewrittenCompactionItem | None":
-        encrypted_content: Final = item.get("encrypted_content")
-        if not isinstance(encrypted_content, str) or not encrypted_content:
-            return None
-        rewritten: Final[_RewrittenCompactionItem] = {"type": "compaction", "encrypted_content": encrypted_content}
-        return rewritten
-
-    @staticmethod
-    def _normalize_local_shell_call_item(item: "Mapping[str, object]") -> "_RewrittenFunctionCallItem | None":
-        call_id: Final = item.get("call_id")
-        if not isinstance(call_id, str) or not call_id:
-            return None
-        action: Final = item.get("action")
-        rewritten: Final[_RewrittenFunctionCallItem] = {
-            "type": "function_call",
-            "call_id": call_id,
-            "name": "local_shell",
-            "arguments": json.dumps(action) if isinstance(action, dict) else "{}",
-        }
-        return rewritten
-
-    @classmethod
-    def _normalize_codex_input_item(cls, item: object) -> "tuple[object, str | None]":
-        """Returns (normalized item or None to drop it, original type when rewritten)."""
-        if not isinstance(item, dict):
-            return item, None
-        item_type: Final = item.get("type")
-        if item_type == _CODEX_AGENT_MESSAGE_INPUT_ITEM_TYPE:
-            return cls._normalize_agent_message_item(item), item_type
-        if item_type == _CODEX_CONTEXT_COMPACTION_INPUT_ITEM_TYPE:
-            return cls._normalize_context_compaction_item(item), item_type
-        if item_type == _CODEX_LOCAL_SHELL_CALL_INPUT_ITEM_TYPE:
-            return cls._normalize_local_shell_call_item(item), item_type
-        return item, None
-
-    @classmethod
-    def _normalize_codex_input_items(
-        cls,
-        input: "str | ResponseInputParam",
-    ) -> "str | ResponseInputParam":
-        """Rewrite Codex history item types Mantle rejects with 400 "Invalid
-        'input': value did not match any expected variant" into supported
-        equivalents. `agent_message` (Codex multi-agent traffic; its
-        encrypted_content slot carries the plaintext payload when the model
-        never issued encrypted args) becomes an assistant message,
-        `context_compaction` becomes the `compaction` spelling Mantle accepts,
-        and `local_shell_call` becomes the function_call its recorded
-        function_call_output already pairs with.
-        """
-        if not isinstance(input, list):
-            return input
-        normalized: Final = tuple(cls._normalize_codex_input_item(item) for item in input)
-        rewritten_types: Final = sorted(frozenset(item_type for _, item_type in normalized if item_type is not None))
-        if rewritten_types:
-            verbose_logger.warning(
-                "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
-                rewritten_types,
-            )
-        kept: Final = [item for item, _ in normalized if item is not None]  # mutable-ok: ResponseInputParam is a list
-        return kept  # pyright: ignore[reportReturnType]  # Codex passthrough items sit outside the OpenAI input union
 
     @staticmethod
     def _model_map_lookup_name(model: str) -> str:

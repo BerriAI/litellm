@@ -14,13 +14,16 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES,
     MAX_S3_OBJECT_KEY_BYTES,
+    MAX_S3_OBJECT_KEY_FILENAME_BYTES,
     S3_BOUNDED_OBJECT_KEY_HEAD_BYTES,
     S3_LOG_PROMPTS_ONLY_ENV_VAR,
     S3_PREFIX_DIGEST_CHARS,
 )
+from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.utils import StandardLoggingPayload
 
-_S3_LOG_PROMPTS_ONLY: Final = TypeAdapter(bool)
+_S3_BOOL: Final = TypeAdapter(bool)
+_UPLOAD_BOUND: Final = TypeAdapter(int)
 
 
 def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] | None = None) -> bool:
@@ -29,10 +32,58 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
     if raw is None or raw == "":
         return False
     try:
-        return _S3_LOG_PROMPTS_ONLY.validate_python(raw.strip() if isinstance(raw, str) else raw)
+        return _S3_BOOL.validate_python(raw.strip() if isinstance(raw, str) else raw)
     except ValidationError:
         verbose_logger.warning("s3 logging: s3_log_prompts_only=%r is not a boolean, logging prompts only", raw)
         return True
+
+
+def _resolve_positive_int(setting: str, configured: object, fallback: int, *, reject_bool: bool) -> int:
+    if configured is None or configured == "":
+        return fallback
+    if reject_bool and isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: %s=%r is a boolean, not an integer, using %s", setting, configured, fallback
+        )
+        return fallback
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning("s3 logging: %s=%r is not an integer, using %s", setting, configured, fallback)
+        return fallback
+    if bound < 1:
+        verbose_logger.warning("s3 logging: %s=%r must be at least 1, using %s", setting, configured, fallback)
+        return fallback
+    return bound
+
+
+def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_queue_size", configured, fallback, reject_bool=True)
+
+
+def resolve_s3_max_retry_age_seconds(configured: object, fallback: int | None) -> int | None:
+    if configured is None or configured == "":
+        return None
+    if isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r is a boolean, not an integer, falling back to %r",
+            configured,
+            fallback,
+        )
+        return fallback
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r is not an integer, falling back to %r", configured, fallback
+        )
+        return fallback
+    if bound < 0:
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r must be at least 0, falling back to %r", configured, fallback
+        )
+        return fallback
+    return bound or None
 
 
 def prompts_only_payload(payload: StandardLoggingPayload) -> StandardLoggingPayload:
@@ -276,25 +327,33 @@ def get_s3_object_key(
     prefix: str,
     start_time: datetime,
     s3_file_name: str,
+    partition_granularity: S3PartitionGranularity = "day",
 ) -> str:
-    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_")
+    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_").replace(":", "_")
     configured_prefix: Final = (s3_path.rstrip("/") + "/" if s3_path else "") + prefix
-    date_segment: Final = start_time.strftime("%Y-%m-%d") + "/"
+    date_segment: Final = start_time.strftime("%Y-%m-%d/%H/" if partition_granularity == "hour" else "%Y-%m-%d/")
+    extension: Final = ".json"
+    file_name_budget: Final = MAX_S3_OBJECT_KEY_FILENAME_BYTES - len(extension.encode("utf-8"))
     # we need the s3 key to include the time, so we log cache hits too
-    s3_object_key: Final = configured_prefix + date_segment + sanitized_s3_file_name + ".json"
-    if len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES:
+    s3_object_key: Final = configured_prefix + date_segment + sanitized_s3_file_name + extension
+    if (
+        len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+        and len(sanitized_s3_file_name.encode("utf-8")) <= file_name_budget
+    ):
         return s3_object_key
 
     # shorten the response id first and only trim the configured prefix if that is what does not
     # fit, so prefix scoped IAM policies and lifecycle rules keep matching
-    budget: Final = MAX_S3_OBJECT_KEY_BYTES - len(date_segment.encode("utf-8")) - len(b".json")
+    budget: Final = MAX_S3_OBJECT_KEY_BYTES - len(date_segment.encode("utf-8")) - len(extension.encode("utf-8"))
     prefix_bytes: Final = len(configured_prefix.encode("utf-8"))
     if prefix_bytes + S3_MIN_BOUNDED_FILE_NAME_BYTES <= budget:
-        bounded_file_name: Final = _bounded_s3_file_name(s3_file_name, sanitized_s3_file_name, budget - prefix_bytes)
-        return configured_prefix + date_segment + bounded_file_name + ".json"
+        bounded_file_name: Final = _bounded_s3_file_name(
+            s3_file_name, sanitized_s3_file_name, min(file_name_budget, budget - prefix_bytes)
+        )
+        return configured_prefix + date_segment + bounded_file_name + extension
 
     shortest_file_name: Final = _bounded_s3_file_name(
         s3_file_name, sanitized_s3_file_name, S3_MIN_BOUNDED_FILE_NAME_BYTES
     )
     bounded_prefix: Final = _bounded_s3_prefix(configured_prefix, budget - len(shortest_file_name.encode("utf-8")))
-    return bounded_prefix + date_segment + shortest_file_name + ".json"
+    return bounded_prefix + date_segment + shortest_file_name + extension

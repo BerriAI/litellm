@@ -6,6 +6,8 @@ from litellm.repositories.autorouter_session_repository import AutoRouterSession
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
@@ -30,6 +32,7 @@ from litellm.repositories.table_repositories import (
     ConfigOverridesRepository,
     DailyGuardrailMetricsRepository,
     DailyGuardrailUsageUnitsRepository,
+    DailyModelUsageRepository,
     DailyPolicyMetricsRepository,
     DailyTagSpendRepository,
     DailyToolSpendRepository,
@@ -40,8 +43,6 @@ from litellm.repositories.table_repositories import (
     GuardrailsRepository,
     HealthCheckRepository,
     InvitationLinkRepository,
-    JWTKeyMappingRepository,
-    ManagedFileRepository,
     ManagedObjectRepository,
     ManagedVectorStoreIndexRepository,
     ManagedVectorStoresRepository,
@@ -105,6 +106,7 @@ __all__ = [
     "CredentialsRepository",
     "DailyGuardrailMetricsRepository",
     "DailyGuardrailUsageUnitsRepository",
+    "DailyModelUsageRepository",
     "DailyPolicyMetricsRepository",
     "DailyTagSpendRepository",
     "DailyToolSpendRepository",

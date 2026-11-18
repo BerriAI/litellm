@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +23,13 @@ from litellm.types.llms.vertex_ai import (
     ResponseTuningJob,
 )
 from litellm.types.utils import LiteLLMFineTuningJob
+
+_JSON_VALUE: Final = TypeAdapter(object)
+
+
+def _response_tuning_job(response: httpx.Response) -> ResponseTuningJob:
+    tuning_job: Final[ResponseTuningJob] = response.json()
+    return ResponseTuningJob(**tuning_job)
 
 
 class VertexFineTuningAPI(VertexLLM):
@@ -180,11 +188,11 @@ class VertexFineTuningAPI(VertexLLM):
                     f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
                 )
 
-            verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
-
-            vertex_response: Final = ResponseTuningJob(
-                **response.json(),
+            verbose_logger.debug(
+                "got response from creating fine tuning job: %s", _JSON_VALUE.validate_python(response.json())
             )
+
+            vertex_response: Final = _response_tuning_job(response)
 
             verbose_logger.debug("vertex_response %s", vertex_response)
             open_ai_response: Final = self.convert_vertex_response_to_open_ai_response(vertex_response)
@@ -264,10 +272,10 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
-        vertex_response: Final = ResponseTuningJob(
-            **response.json(),
+        verbose_logger.debug(
+            "got response from creating fine tuning job: %s", _JSON_VALUE.validate_python(response.json())
         )
+        vertex_response: Final = _response_tuning_job(response)
 
         verbose_logger.debug("vertex_response %s", vertex_response)
         open_ai_response: Final = self.convert_vertex_response_to_open_ai_response(vertex_response)
@@ -280,7 +288,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_location: str,
         vertex_credentials: str,
         request_route: str,
-    ):
+    ) -> object:
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -341,5 +349,4 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        response_json: Final = response.json()
-        return response_json
+        return _JSON_VALUE.validate_python(response.json())

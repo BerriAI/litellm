@@ -28,6 +28,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         fail_on_error=litellm_params.fail_on_error,
         skip_unscannable_attachments=litellm_params.skip_unscannable_attachments,
         sanitize_error_detail=litellm_params.sanitize_error_detail,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_model_armor_callback)
 

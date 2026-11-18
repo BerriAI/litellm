@@ -4,10 +4,12 @@ import re
 from abc import abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CallTypes
 
 from ..base_utils import BaseLLMModelInfo
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
+    from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
     from litellm.types.rerank import RerankResponse
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
@@ -27,9 +29,11 @@ if TYPE_CHECKING:
 
 
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
+_NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-class PassthroughMetadata(BaseModel):
+class PassthroughMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model_group: str = ""
@@ -70,7 +74,7 @@ def relayed_json_object(httpx_response: Response) -> Mapping[str, object] | None
 
 def relayed_body(httpx_response: Response) -> str | dict:
     try:
-        body: Final[object] = httpx_response.json()
+        body: Final = _DECODED_JSON.validate_python(httpx_response.json())
     except ValueError:
         return httpx_response.text
     return body if isinstance(body, dict) else httpx_response.text
@@ -95,9 +99,7 @@ def logged_relay_shape(
         parsed: Final = shape.parse(body)
     except ValidationError:
         return None
-    logging_obj.call_type = (
-        shape.call_type.value
-    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    logging_obj.call_type = shape.call_type.value
     return parsed
 
 
@@ -123,7 +125,7 @@ class RawBytesStreamCollector:
         self._raw_bytes.append(chunk)
 
     def build_logged_response(self, litellm_logging_obj: LiteLLMLoggingObj) -> LoggedRelayResponse | None:
-        all_chunks: Final = self._provider_config._convert_raw_bytes_to_str_lines(self._raw_bytes)
+        all_chunks: Final = self._provider_config.convert_raw_bytes_to_str_lines(self._raw_bytes)
         return self._provider_config.handle_logging_collected_chunks(
             all_chunks=all_chunks,
             litellm_logging_obj=litellm_logging_obj,
@@ -133,12 +135,22 @@ class RawBytesStreamCollector:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class LoggedPassthroughRequest:
+    messages: tuple[AllMessageValues, ...]
+    model_parameters: Mapping[str, object]
+
+
 class BasePassthroughConfig(BaseLLMModelInfo):
     @abstractmethod
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         """
         Check if the request is a streaming request
         """
+
+    def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+        """The prompt and settings of a provider-native request body, for providers whose body shape is known."""
+        return None
 
     def format_url(
         self,
@@ -236,7 +248,12 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         return None
 
     def create_stream_collector(
-        self, model: str, custom_llm_provider: str, endpoint: str
+        self,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+        *,
+        response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
     ) -> PassthroughStreamCollector:
         return RawBytesStreamCollector(
             provider_config=self, model=model, custom_llm_provider=custom_llm_provider, endpoint=endpoint
@@ -259,3 +276,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         lines: Final = [line.strip() for line in combined_str.split("\n") if line.strip()]
 
         return lines
+
+    def convert_raw_bytes_to_str_lines(
+        self,
+        raw_bytes: list[bytes],  # mutable-ok: mirrors override contract
+    ) -> list[str]:  # mutable-ok: mirrors override contract
+        return self._convert_raw_bytes_to_str_lines(raw_bytes)

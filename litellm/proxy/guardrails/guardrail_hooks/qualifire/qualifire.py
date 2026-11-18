@@ -7,16 +7,20 @@
 
 import json
 import os
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -29,6 +33,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 GUARDRAIL_NAME: Final = "qualifire"
 DEFAULT_QUALIFIRE_API_BASE: Final = "https://proxy.qualifire.ai"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class QualifireGuardrail(CustomGuardrail):
@@ -178,8 +183,8 @@ class QualifireGuardrail(CustomGuardrail):
                 api_message["tool_call_id"] = tool_call_id
 
             # Handle tool calls if present
-            tool_calls = msg.get("tool_calls")
-            if tool_calls and isinstance(tool_calls, list):
+            tool_calls = [*anthropic_server_tool_call_params(msg), *(msg.get("tool_calls") or [])]
+            if tool_calls:
                 api_tool_calls = []
                 for tc in tool_calls:
                     if isinstance(tc, dict):
@@ -188,7 +193,7 @@ class QualifireGuardrail(CustomGuardrail):
                         args = function_info.get("arguments", {})
                         if isinstance(args, str):
                             try:
-                                args = json.loads(args)
+                                args = _DECODED_JSON.validate_python(json.loads(args))
                             except json.JSONDecodeError:
                                 args = {}
                         api_tool_calls.append(
@@ -244,7 +249,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_tools if api_tools else None
 
-    def _check_if_flagged(self, result: dict[str, Any]) -> bool:
+    def _check_if_flagged(self, result: Mapping[str, object]) -> bool:
         """
         Check if the Qualifire evaluation result indicates flagged content.
 
@@ -252,12 +257,12 @@ class QualifireGuardrail(CustomGuardrail):
         A high score (close to 100) indicates GOOD content, low score indicates problems.
         """
         # Check evaluation results for any flagged items
-        evaluation_results: Final = result.get("evaluationResults", []) or []
+        evaluation_results: Final = result.get("evaluationResults") or ()
 
-        for eval_result in evaluation_results:
-            results = eval_result.get("results", []) or []
-            for r in results:
-                if r.get("flagged"):
+        for eval_result in iter_items(evaluation_results):
+            results = decoded_json_object(eval_result).get("results") or ()
+            for r in iter_items(results):
+                if decoded_json_object(r).get("flagged"):
                     return True
 
         return False
@@ -378,12 +383,13 @@ class QualifireGuardrail(CustomGuardrail):
                 url=url,
                 headers=headers,
                 json=payload,
+                timeout=self.timeout,
             )
             response.raise_for_status()
-            result: Final = response.json()
+            result: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
 
             # Extract response info for logging
-            qualifire_response: Final = {
+            qualifire_response: Final[dict[str, object]] = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }
@@ -418,6 +424,9 @@ class QualifireGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.exception("Qualifire Guardrail error: %s", e)
             raise
+
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(

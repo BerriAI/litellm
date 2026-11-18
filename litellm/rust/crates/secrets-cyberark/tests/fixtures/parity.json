@@ -1,0 +1,32 @@
+{
+  "endpoint": "http://conjur.test:8080",
+  "account": "acct",
+  "username": "admin",
+  "api_key": "k3y",
+  "authenticate_path": "/authn/acct/admin/authenticate",
+  "token_json": "{\"protected\":\"p\",\"payload\":\"q\",\"signature\":\"s\"}",
+  "authorization_header": "Token token=\"eyJwcm90ZWN0ZWQiOiJwIiwicGF5bG9hZCI6InEiLCJzaWduYXR1cmUiOiJzIn0=\"",
+  "policy_path": "/policies/acct/policy/root",
+  "secrets": [
+    {
+      "name": "OPENAI_API_KEY",
+      "path": "/secrets/acct/variable/OPENAI_API_KEY",
+      "policy_body": "- !variable \"OPENAI_API_KEY\"\n"
+    },
+    {
+      "name": "team/app/key",
+      "path": "/secrets/acct/variable/team%2Fapp%2Fkey",
+      "policy_body": "- !variable \"team/app/key\"\n"
+    },
+    {
+      "name": "a b+c.d-e_f~g",
+      "path": "/secrets/acct/variable/a%20b%2Bc.d-e_f~g",
+      "policy_body": "- !variable \"a b+c.d-e_f~g\"\n"
+    },
+    {
+      "name": "needs \"quote\"",
+      "path": "/secrets/acct/variable/needs%20%22quote%22",
+      "policy_body": "- !variable \"needs \\\"quote\\\"\"\n"
+    }
+  ]
+}

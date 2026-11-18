@@ -6,28 +6,43 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypedDict
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
+from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
 from litellm.proxy.management_helpers.object_permission_utils import (
-    handle_update_object_permission_common,
+    prepare_object_permission_upsert,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
-from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
+from litellm.repositories.table_repositories import (
+    AgentsRepository,
+    ObjectPermissionRepository,
+    RetiredAgentIdentityRepository,
+)
+from litellm.types.agents import AgentConfig, AgentKillSwitchConfig, AgentResponse, PatchAgentRequest
+from litellm.types.proxy.agent_identity import AgentIdentityFailure
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+    from prisma.types import LiteLLM_RetiredAgentIdentityWhereUniqueInput
 
 
 class AgentObjectPermissionRecord(Protocol):
     def model_dump(self) -> dict[str, object]: ...
 
     def dict(self) -> dict[str, object]: ...
+
+
+class AgentIdWhere(TypedDict):
+    agent_id: ReadOnly[str]
 
 
 class AgentRecordDump(TypedDict):
@@ -37,6 +52,8 @@ class AgentRecordDump(TypedDict):
     agent_card_params: dict[str, object]
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    kill_switch: ReadOnly[AgentKillSwitchConfig | None]
+    access_group_ids: ReadOnly[Sequence[str] | None]
     object_permission: dict[str, object] | None
     spend: float
     tpm_limit: int | None
@@ -64,6 +81,12 @@ class AgentRecord(Protocol):
 
     @property
     def object_permission(self) -> AgentObjectPermissionRecord | None: ...
+
+    @property
+    def access_group_ids(self) -> Sequence[str] | None: ...
+
+    @property
+    def kill_switch(self) -> Mapping[str, object] | None: ...
 
     @property
     def spend(self) -> float: ...
@@ -121,6 +144,56 @@ def object_permission_table(
     return table
 
 
+class AgentPermissionWrite(TypedDict, total=False):
+    create: ReadOnly[Mapping[str, object]]
+    update: ReadOnly[Mapping[str, object]]
+
+
+async def _permission_write(
+    incoming: Mapping[str, object],
+    existing_id: str | None,
+    client: PrismaClient,
+) -> AgentPermissionWrite | None:
+    raw: Final = incoming.get("object_permission")
+    if raw is None:
+        return None
+    permission: Final = _AGENT_PARAMS_ADAPTER.validate_python(raw)
+    prepared: Final = await prepare_object_permission_upsert(permission, existing_id, client)
+    if existing_id is None:
+        created: Final[AgentPermissionWrite] = {"create": prepared.record}
+        return created
+    updated: Final[AgentPermissionWrite] = {"update": prepared.record}
+    return updated
+
+
+async def _managed_fields(
+    incoming: Mapping[str, object],
+    existing: AgentResponse | None,
+    updated_by: str,
+    client: PrismaClient,
+) -> Mapping[str, object]:
+    result: Final = managed_write_fields(incoming, existing, updated_by)
+    if isinstance(result, AgentIdentityFailure):
+        raise_identity_failure(result, 400)
+    history: Final = result.get("retired_identities")
+    if history is None:
+        return result
+    entry: Final = history["create"]
+    where: Final[LiteLLM_RetiredAgentIdentityWhereUniqueInput] = {
+        "provider_tenant_id_client_id": {
+            "provider": entry["provider"],
+            "tenant_id": entry["tenant_id"],
+            "client_id": entry["client_id"],
+        }
+    }
+    prior: Final = await RetiredAgentIdentityRepository(client, use_writer=True).table.find_unique(where=where)
+    if prior is None:
+        return result
+    if existing is None or prior.agent_id != existing.agent_id:
+        raise HTTPException(409, "Entra application was already registered to another agent")
+    return MappingProxyType({key: value for key, value in result.items() if key != "retired_identities"})
+
+
 def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
     model_dump: Final[Callable[[], dict[str, object]] | None] = getattr(raw, "model_dump", None)
     if model_dump is not None:
@@ -130,9 +203,7 @@ def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
 
 _AGENT_PARAMS_MASKER: Final = SensitiveDataMasker()
 _REDACT_AGENT_PARAMS_MAX_DEPTH: Final = 10
-_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
-    dict[str, object]
-)  # mutable-ok: safe_dumps() and AgentResponse.litellm_params both require a real dict, not a Mapping
+_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _AGENT_PARAMS_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -184,7 +255,7 @@ def _redact_agent_params_tree(value: object, _depth: int) -> object:
             else _redact_agent_params_tree(nested_value, _depth + 1)
         )
         for key, nested_value in typed_params.items()
-    }  # mutable-ok: consumed by json.dumps()/AgentResponse.litellm_params, both of which require a real dict
+    }
 
 
 def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
@@ -206,6 +277,29 @@ def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
         except ValidationError:
             return _EMPTY_LITELLM_PARAMS
     return _EMPTY_LITELLM_PARAMS
+
+
+_KILL_SWITCH_ADAPTER: Final[TypeAdapter[AgentKillSwitchConfig | None]] = TypeAdapter(AgentKillSwitchConfig | None)
+
+
+def parse_agent_kill_switch(value: object) -> AgentKillSwitchConfig | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            return _KILL_SWITCH_ADAPTER.validate_json(value)
+        return _KILL_SWITCH_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def serialize_agent_kill_switch(incoming: object, existing: object) -> str:
+    """prisma-client-py drops ``None`` from update data, so a cleared kill switch is stored as the JSON literal
+    ``null`` (read back as ``None``), the same convention ``memory_endpoints`` uses for ``Json?`` columns."""
+    restored: Final = restore_kill_switch(
+        _KILL_SWITCH_ADAPTER.validate_python(incoming), parse_agent_kill_switch(existing)
+    )
+    return safe_dumps(restored.model_dump() if restored is not None else None)
 
 
 _MISSING_AGENT_PARAM: Final = object()
@@ -284,6 +378,18 @@ def _resolved_agent_param_value(
     return _MISSING_AGENT_PARAM
 
 
+def _patched_access_group_ids(agent: PatchAgentRequest) -> Mapping[str, object]:
+    if "access_group_ids" not in agent:
+        return MappingProxyType({})
+    return MappingProxyType({"access_group_ids": tuple(dict.fromkeys(agent.get("access_group_ids") or ()))})
+
+
+def _patched_kill_switch(agent: PatchAgentRequest, existing: object) -> Mapping[str, object]:
+    if "kill_switch" not in agent:
+        return MappingProxyType({})
+    return MappingProxyType({"kill_switch": serialize_agent_kill_switch(agent.get("kill_switch"), existing)})
+
+
 def _restore_redacted_litellm_params(
     incoming: Mapping[str, object],
     existing: Mapping[str, object],
@@ -307,7 +413,7 @@ def _restore_redacted_litellm_params(
         key: value
         for key in all_keys
         if (value := _resolved_agent_param_value(key, incoming, existing, _depth)) is not _MISSING_AGENT_PARAM
-    }  # mutable-ok: fed to safe_dumps() for JSON-column storage, which requires a real dict
+    }
 
 
 class GrantMigrationResult(NamedTuple):
@@ -505,22 +611,20 @@ class AgentRegistry:
             agent_card_params_dict: Final[dict[str, object]] = _dump_agent_params(agent_card_params_obj)
             agent_card_params: Final[str] = safe_dumps(agent_card_params_dict)
 
-            # Handle object_permission (MCP tool access for agent)
-            object_permission_id: str | None = None
-            if agent.get("object_permission") is not None:
-                agent_copy: Final = dict(agent)
-                object_permission_id = await handle_update_object_permission_common(agent_copy, None, prisma_client)
+            permission_write: Final = await _permission_write(agent, None, prisma_client)
 
             # Serialize static_headers
             static_headers_obj: Final = agent.get("static_headers")
             static_headers_val: Final[str | None] = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
 
             extra_headers_val: Final = agent.get("extra_headers")
+            access_group_ids_val: Final = agent.get("access_group_ids")
 
             create_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
                 "agent_card_params": agent_card_params,
+                "kill_switch": serialize_agent_kill_switch(agent.get("kill_switch"), None),
                 "created_by": created_by,
                 "updated_by": created_by,
                 "created_at": datetime.now(timezone.utc),
@@ -532,8 +636,10 @@ class AgentRegistry:
                 create_data["static_headers"] = static_headers_val
             if extra_headers_val is not None:
                 create_data["extra_headers"] = extra_headers_val
-            if object_permission_id is not None:
-                create_data["object_permission_id"] = object_permission_id
+            if access_group_ids_val is not None:
+                create_data["access_group_ids"] = tuple(dict.fromkeys(access_group_ids_val))
+            if permission_write is not None:
+                create_data["object_permission"] = permission_write
 
             for rate_field in (
                 "tpm_limit",
@@ -547,31 +653,46 @@ class AgentRegistry:
 
             # Create agent in DB
             created_agent: Final = await agents_table(prisma_client).create(
-                data=create_data,
-                include={"object_permission": True},
+                data={**create_data, **await _managed_fields(agent, None, created_by, prisma_client)},
+                include={"object_permission": True, "identity": True},
             )
 
-            created_agent_dict: Final = created_agent.model_dump()
-            if created_agent.object_permission is not None:
-                try:
-                    created_agent_dict["object_permission"] = created_agent.object_permission.model_dump()
-                except Exception:
-                    created_agent_dict["object_permission"] = created_agent.object_permission.dict()
-            return AgentResponse(**created_agent_dict)
+            return AgentResponse.model_validate(created_agent.model_dump())
+        except HTTPException:
+            raise
         except Exception as e:
-            raise Exception(f"Error adding agent to DB: {e}")
+            if is_unique_violation(e):
+                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+            raise
 
     async def delete_agent_from_db(self, agent_id: str, prisma_client: PrismaClient) -> Mapping[str, object]:
         """
         Delete an agent from the database
         """
-        try:
-            deleted_agent: Final = await agents_table(prisma_client).delete(where={"agent_id": agent_id})
+        from prisma.types import (
+            LiteLLM_AgentsTableWhereUniqueInput,
+            LiteLLM_RetiredAgentCreateInput,
+            LiteLLM_RetiredAgentUpsertInput,
+            LiteLLM_RetiredAgentWhereUniqueInput,
+            LiteLLM_VerificationTokenWhereInput,
+        )
+
+        where: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id}
+        async with prisma_client.tx() as tx:
+            existing: Final = await tx.litellm_agentstable.find_unique(where=where)
+            if existing is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
+            if existing.identity_managed:
+                history_where: Final[LiteLLM_RetiredAgentWhereUniqueInput] = {"original_agent_id": agent_id}
+                history_create: Final = LiteLLM_RetiredAgentCreateInput(original_agent_id=agent_id)
+                history_data: Final[LiteLLM_RetiredAgentUpsertInput] = {"create": history_create, "update": {}}
+                await tx.litellm_retiredagent.upsert(where=history_where, data=history_data)
+                keys_where: Final[LiteLLM_VerificationTokenWhereInput] = {"agent_id": agent_id}
+                await tx.litellm_verificationtoken.delete_many(where=keys_where)
+            deleted_agent: Final = await tx.litellm_agentstable.delete(where=where)
             if deleted_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            return dict(deleted_agent)
-        except Exception as e:
-            raise Exception(f"Error deleting agent from DB: {e}")
+            return deleted_agent.model_dump()
 
     async def patch_agent_in_db(
         self,
@@ -595,13 +716,18 @@ class AgentRegistry:
             The patched agent
         """
         try:
-            existing_record: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+            existing_record: Final = await agents_table(prisma_client).find_unique(
+                where={"agent_id": agent_id}, include={"identity": True}
+            )
             if existing_record is None:
                 raise Exception(f"Agent with ID {agent_id} not found")
             existing_agent: Final[Mapping[str, object]] = dict(existing_record)
 
             augment_agent: Final = {**existing_agent, **agent}
-            update_data: Final[dict[str, object]] = {}
+            update_data: Final[dict[str, object]] = {
+                **_patched_access_group_ids(agent),
+                **_patched_kill_switch(agent, existing_agent.get("kill_switch")),
+            }
             if augment_agent.get("agent_name"):
                 update_data["agent_name"] = augment_agent.get("agent_name")
             if "litellm_params" in agent:
@@ -629,37 +755,33 @@ class AgentRegistry:
             if "extra_headers" in agent:
                 extra_headers_value: Final = agent.get("extra_headers")
                 update_data["extra_headers"] = extra_headers_value if extra_headers_value is not None else []
-            if agent.get("object_permission") is not None:
-                agent_copy: Final = dict(augment_agent)
-                existing_object_permission_id: Final = existing_record.object_permission_id
-                object_permission_id: Final = await handle_update_object_permission_common(
-                    agent_copy,
-                    existing_object_permission_id,
-                    prisma_client,
-                )
-                if object_permission_id is not None:
-                    update_data["object_permission_id"] = object_permission_id
+            permission_write: Final = await _permission_write(
+                agent, existing_record.object_permission_id, prisma_client
+            )
+            if permission_write is not None:
+                update_data["object_permission"] = permission_write
             # Patch agent in DB
             patched_agent: Final = await agents_table(prisma_client).update(
                 where={"agent_id": agent_id},
                 data={
                     **update_data,
+                    **await _managed_fields(
+                        agent, AgentResponse.model_validate(existing_record.model_dump()), updated_by, prisma_client
+                    ),
                     "updated_by": updated_by,
                     "updated_at": datetime.now(timezone.utc),
                 },
-                include={"object_permission": True},
+                include={"object_permission": True, "identity": True},
             )
             if patched_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            patched_agent_dict: Final = patched_agent.model_dump()
-            if patched_agent.object_permission is not None:
-                try:
-                    patched_agent_dict["object_permission"] = patched_agent.object_permission.model_dump()
-                except Exception:
-                    patched_agent_dict["object_permission"] = patched_agent.object_permission.dict()
-            return AgentResponse(**patched_agent_dict)
+            return AgentResponse.model_validate(patched_agent.model_dump())
+        except HTTPException:
+            raise
         except Exception as e:
-            raise Exception(f"Error patching agent in DB: {e}")
+            if is_unique_violation(e):
+                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+            raise
 
     async def update_agent_in_db(
         self,
@@ -671,6 +793,13 @@ class AgentRegistry:
         """
         Update an agent in the database
         """
+        if "agent_card_params" not in agent:
+            return await self.patch_agent_in_db(
+                agent_id=agent_id,
+                agent=PatchAgentRequest(**agent),
+                prisma_client=prisma_client,
+                updated_by=updated_by,
+            )
         try:
             agent_name: Final = agent.get("agent_name")
 
@@ -679,7 +808,7 @@ class AgentRegistry:
             # caller echoed back redacted (or omitted) rather than persisting
             # the marker -- or nothing -- over the real stored credential.
             existing_row: Final = await agents_table(prisma_client).find_unique(
-                where={"agent_id": agent_id}  # mutable-ok: prisma's query builder rejects a Mapping/MappingProxyType
+                where={"agent_id": agent_id}, include={"identity": True}
             )
             existing_litellm_params: Final = parse_agent_litellm_params(
                 existing_row.litellm_params if existing_row is not None else None
@@ -703,6 +832,10 @@ class AgentRegistry:
                 safe_dumps(dict(static_headers_obj_u)) if static_headers_obj_u is not None else safe_dumps({})
             )
             extra_headers_val_u: Final = agent.get("extra_headers") or []
+            access_group_ids_val_u: Final = tuple(dict.fromkeys(agent.get("access_group_ids") or ()))
+            kill_switch_val_u: Final = serialize_agent_kill_switch(
+                agent.get("kill_switch"), existing_row.kill_switch if existing_row is not None else None
+            )
 
             update_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
@@ -710,6 +843,8 @@ class AgentRegistry:
                 "agent_card_params": agent_card_params,
                 "static_headers": static_headers_val_u,
                 "extra_headers": extra_headers_val_u,
+                "kill_switch": kill_switch_val_u,
+                "access_group_ids": access_group_ids_val_u,
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -724,37 +859,36 @@ class AgentRegistry:
                 if _val is not None:
                     update_data[rate_field] = _val
 
-            if agent.get("object_permission") is not None:
-                existing_object_permission_id: Final = (
-                    existing_row.object_permission_id if existing_row is not None else None
-                )
-                agent_copy: Final = dict(agent)
-                object_permission_id: Final = await handle_update_object_permission_common(
-                    agent_copy,
-                    existing_object_permission_id,
-                    prisma_client,
-                )
-                if object_permission_id is not None:
-                    update_data["object_permission_id"] = object_permission_id
+            permission_write: Final = await _permission_write(
+                agent, existing_row.object_permission_id if existing_row is not None else None, prisma_client
+            )
+            if permission_write is not None:
+                update_data["object_permission"] = permission_write
 
             # Update agent in DB
             updated_agent: Final = await agents_table(prisma_client).update(
                 where={"agent_id": agent_id},
-                data=update_data,
-                include={"object_permission": True},
+                data={
+                    **update_data,
+                    **await _managed_fields(
+                        agent,
+                        AgentResponse.model_validate(existing_row.model_dump()) if existing_row else None,
+                        updated_by,
+                        prisma_client,
+                    ),
+                },
+                include={"object_permission": True, "identity": True},
             )
 
             if updated_agent is None:
                 raise ValueError(f"Agent not found, passed agent_id={agent_id}")
-            updated_agent_dict: Final = updated_agent.model_dump()
-            if updated_agent.object_permission is not None:
-                try:
-                    updated_agent_dict["object_permission"] = updated_agent.object_permission.model_dump()
-                except Exception:
-                    updated_agent_dict["object_permission"] = updated_agent.object_permission.dict()
-            return AgentResponse(**updated_agent_dict)
+            return AgentResponse.model_validate(updated_agent.model_dump())
+        except HTTPException:
+            raise
         except Exception as e:
-            raise Exception(f"Error updating agent in DB: {e}")
+            if is_unique_violation(e):
+                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+            raise
 
     @staticmethod
     async def get_all_agents_from_db(
@@ -766,12 +900,12 @@ class AgentRegistry:
         try:
             agents_from_db: Final = await agents_table(prisma_client).find_many(
                 order={"created_at": "desc"},
-                include={"object_permission": True},
+                include={"object_permission": True, "identity": True},
             )
 
             agents: Final[list[dict[str, object]]] = []
             for agent in agents_from_db:
-                agent_dict = dict(agent)
+                agent_dict = agent.model_dump()
                 # object_permission is eagerly loaded via include above
                 if agent.object_permission is not None:
                     try:

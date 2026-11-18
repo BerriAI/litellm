@@ -4,14 +4,22 @@ Utilities for mapping exceptions to Anthropic error format.
 Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthropic response format.
 """
 
+import json
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-from .exceptions import AnthropicErrorResponse, AnthropicErrorType
+from .exceptions import AnthropicErrorDetail, AnthropicErrorResponse, AnthropicErrorType
+
+_PARSED_ERROR_BODY: Final = TypeAdapter(object)
+_ERROR_DETAILS: Final = TypeAdapter(Mapping[str, object])
+_JSON_DECODER: Final = json.JSONDecoder()
 
 # HTTP status code -> Anthropic error type
-# Source: https://docs.anthropic.com/en/api/errors
+# Source: https://platform.claude.com/docs/en/api/errors
 ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     400: "invalid_request_error",
     401: "authentication_error",
@@ -41,6 +49,7 @@ class AnthropicExceptionMapping:
         status_code: int,
         message: str,
         request_id: str | None = None,
+        error_type: AnthropicErrorType | None = None,
     ) -> AnthropicErrorResponse:
         """
         Create an Anthropic-formatted error response dict.
@@ -52,12 +61,10 @@ class AnthropicExceptionMapping:
             "request_id": "req_..."
         }
         """
-        error_type: Final = AnthropicExceptionMapping.get_error_type(status_code)
-
         response: Final[AnthropicErrorResponse] = {
             "type": "error",
             "error": {
-                "type": error_type,
+                "type": error_type or AnthropicExceptionMapping.get_error_type(status_code),
                 "message": message,
             },
         }
@@ -78,7 +85,7 @@ class AnthropicExceptionMapping:
         - Generic: {"message": "..."}
         - Plain strings
         """
-        parsed: Final = safe_json_loads(raw_message)
+        parsed: Final = _PARSED_ERROR_BODY.validate_python(safe_json_loads(raw_message))
         if isinstance(parsed, dict):
             # Bedrock format
             if "detail" in parsed and isinstance(parsed["detail"], dict):
@@ -126,6 +133,7 @@ class AnthropicExceptionMapping:
         status_code: int,
         raw_message: str,
         request_id: str | None = None,
+        error_type: AnthropicErrorType | None = None,
     ) -> AnthropicErrorResponse:
         """
         Transform an error message to Anthropic format.
@@ -139,14 +147,14 @@ class AnthropicExceptionMapping:
             status_code: HTTP status code
             raw_message: Raw error message (may be JSON string or plain text)
             request_id: Optional request ID to include
+            error_type: Anthropic error type to use instead of the one the status maps to
 
         Returns:
             AnthropicErrorResponse dict
         """
         # Try to parse as JSON once
-        parsed: dict | None = safe_json_loads(raw_message)
-        if not isinstance(parsed, dict):
-            parsed = None
+        decoded: Final = _PARSED_ERROR_BODY.validate_python(safe_json_loads(raw_message))
+        parsed: Final[dict[str, object] | None] = decoded if isinstance(decoded, dict) else None
 
         # If parsed and already in Anthropic format - passthrough
         if parsed is not None and AnthropicExceptionMapping._is_anthropic_error_dict(parsed):
@@ -161,8 +169,71 @@ class AnthropicExceptionMapping:
         else:
             message = raw_message
 
-        return AnthropicExceptionMapping.create_error_response(
+        response: Final = AnthropicExceptionMapping.create_error_response(
             status_code=status_code,
             message=message,
             request_id=request_id,
+            error_type=error_type,
         )
+        details: Final = AnthropicExceptionMapping.embedded_error_details(raw_message)
+        if details is None:
+            return response
+        with_details: Final[AnthropicErrorResponse] = {**response, "error": {**response["error"], "details": details}}
+        return with_details
+
+    @staticmethod
+    def embedded_error_details(raw_message: str) -> Mapping[str, object] | None:
+        """
+        ``error.details`` of the Anthropic error body quoted inside ``raw_message``, when there is one.
+
+        litellm wraps an upstream error as ``"<Exception> - {upstream json}\n\nLiteLLM: ..."``. Anthropic
+        puts machine-readable codes such as ``thread_not_found`` under ``error.details``, and the SDKs
+        branch on them, so the code is lifted next to the wrapped message instead of staying only inside it.
+        """
+        start: Final = raw_message.find("{")
+        if start < 0:
+            return None
+        try:
+            embedded, _ = _JSON_DECODER.raw_decode(raw_message, start)
+        except ValueError:
+            return None
+        try:
+            envelope: Final = _ERROR_DETAILS.validate_python(embedded, strict=True)
+            error: Final = _ERROR_DETAILS.validate_python(envelope.get("error"), strict=True)
+            details: Final = _ERROR_DETAILS.validate_python(error.get("details"), strict=True)
+        except ValidationError:
+            return None
+        return details if envelope.get("type") == "error" else None
+
+
+class AnthropicErrorSseFrame(str):
+    """One `event: error` frame, for a stream that fails once the response headers are out.
+
+    Anthropic clients pick stream events by the `event:` name, so a frame carrying only a `data:`
+    line is skipped and the failure never reaches the caller. The frame remembers the status and
+    body it was built from, so a stream that fails before its first byte can still answer as a
+    JSON error with that exact status instead of a 200 that only says `api_error`
+    """
+
+    status_code: int
+    error_response: AnthropicErrorResponse
+
+    def __new__(cls, status_code: int, error_response: AnthropicErrorResponse) -> "AnthropicErrorSseFrame":
+        frame: Final = super().__new__(cls, f"event: error\ndata: {json.dumps(error_response)}\n\n")
+        frame.status_code = status_code
+        frame.error_response = error_response
+        return frame
+
+    def json_body(self, call_id: str | None) -> AnthropicErrorResponse:
+        if call_id is None:
+            return self.error_response
+        detail: Final[AnthropicErrorDetail] = {**self.error_response["error"], "litellm_call_id": call_id}
+        body: Final[AnthropicErrorResponse] = {**self.error_response, "error": detail}
+        return body
+
+
+def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
+    return AnthropicErrorSseFrame(
+        status_code,
+        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
+    )

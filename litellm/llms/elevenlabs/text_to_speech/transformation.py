@@ -11,14 +11,14 @@ import httpx
 from httpx import Headers
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import is_litellm_owned_kwarg
 
 from ..common_utils import ElevenLabsException
 
@@ -37,8 +37,11 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
     """
 
+    supports_streaming = True
+
     TTS_BASE_URL = "https://api.elevenlabs.io"
     TTS_ENDPOINT_PATH = "/v1/text-to-speech"
+    TTS_STREAM_PATH_SUFFIX = "/stream"
     DEFAULT_OUTPUT_FORMAT = "pcm_44100"
     VOICE_MAPPINGS = {
         "alloy": "21m00Tcm4TlvDq8ikWAM",  # Rachel
@@ -56,13 +59,14 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     # Response format mappings from OpenAI to ElevenLabs
     FORMAT_MAPPINGS = {
         "mp3": "mp3_44100_128",
-        "pcm": "pcm_44100",
+        "pcm": "pcm_24000",
         "opus": "opus_48000_128",
-        # ElevenLabs does not support WAV, AAC, or FLAC formats.
+        "wav": "wav_24000",
     }
 
     ELEVENLABS_QUERY_PARAMS_KEY = "__elevenlabs_query_params__"
     ELEVENLABS_VOICE_ID_KEY = "__elevenlabs_voice_id__"
+    ELEVENLABS_STREAM_KEY = "__elevenlabs_stream__"
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -241,7 +245,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 continue
             mapped_params[key] = value
 
-        reserved_kwarg_keys: Final = set(all_litellm_params) | {
+        reserved_kwarg_keys: Final = {
             self.ELEVENLABS_QUERY_PARAMS_KEY,
             self.ELEVENLABS_VOICE_ID_KEY,
             "voice",
@@ -260,7 +264,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 mapped_params[key] = value
 
         for key in list(kwargs.keys()):
-            if key in reserved_kwarg_keys:
+            if key in reserved_kwarg_keys or is_litellm_owned_kwarg(key):
                 continue
             value = kwargs[key]
             if value is None:
@@ -297,15 +301,15 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Construct the ElevenLabs endpoint URL, including path voice_id and query params.
         """
-        base_url = api_base or get_secret_str("ELEVENLABS_API_BASE") or self.TTS_BASE_URL
-        base_url = base_url.rstrip("/")
+        base_url: Final = api_base or get_secret_str("ELEVENLABS_API_BASE") or self.TTS_BASE_URL
 
         voice_id: Final = litellm_params.get(self.ELEVENLABS_VOICE_ID_KEY)
         if not isinstance(voice_id, str) or not voice_id.strip():
             raise ValueError("ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`.")
 
         encoded_voice_id: Final = encode_url_path_segment(voice_id, field_name="voice_id")
-        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}"
+        stream_suffix: Final = self.TTS_STREAM_PATH_SUFFIX if self.ELEVENLABS_STREAM_KEY in litellm_params else ""
+        url = join_api_base(base_url, f"{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}{stream_suffix}")
 
         query_params: Final = litellm_params.get(self.ELEVENLABS_QUERY_PARAMS_KEY, {})
         if query_params:

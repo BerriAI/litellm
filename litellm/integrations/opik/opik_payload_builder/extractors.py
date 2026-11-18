@@ -2,9 +2,26 @@
 
 import json
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any, Final, Protocol
+
+from pydantic import TypeAdapter
 
 from litellm import _logging
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _SpanIdentifiers(Protocol):
+    @property
+    def trace_id(self) -> str | None: ...
+
+    @property
+    def id(self) -> str | None: ...
+
+
+def _trace_and_span_ids(span: _SpanIdentifiers) -> tuple[str | None, str | None]:
+    return span.trace_id, span.id
 
 
 def normalize_provider_name(provider: str | None) -> str | None:
@@ -73,7 +90,7 @@ def extract_opik_metadata(
 
 
 def extract_span_identifiers(
-    current_span_data: Any,
+    current_span_data: object,
 ) -> tuple[str | None, str | None]:
     """
     Extract trace_id and parent_span_id from current_span_data.
@@ -91,7 +108,7 @@ def extract_span_identifiers(
         return (current_span_data.get("trace_id"), current_span_data.get("id"))
 
     try:
-        return current_span_data.trace_id, current_span_data.id
+        return _trace_and_span_ids(require_attributes(current_span_data, _SpanIdentifiers, "trace_id", "id"))
     except AttributeError:
         _logging.verbose_logger.warning("Unexpected current_span_data format: %s", type(current_span_data))
         return None, None
@@ -149,7 +166,7 @@ def apply_proxy_header_overrides(
             thread_id = value
         elif param_key == "tags":
             try:
-                parsed_tags: object = json.loads(value)
+                parsed_tags = _DECODED_JSON.validate_python(json.loads(value))
                 if isinstance(parsed_tags, list):
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):
