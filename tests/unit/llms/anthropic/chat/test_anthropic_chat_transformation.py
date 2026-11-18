@@ -5184,6 +5184,51 @@ def test_an_unreadable_provider_specific_entry_drops_both_uplifts():
     ) == (1000 * 5e-06, 1000 * 2.5e-05)
 
 
+def test_a_reported_web_search_keeps_the_speed_uplift_of_an_overriding_row(monkeypatch: pytest.MonkeyPatch):
+    """``cost_per_token`` never bills the search fee, so a web search the usage reports must not change the price,
+    even when the catalog row the model names lists no search price."""
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import ModelInfo, Usage
+
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "claude-probe-unsearched": _FAST_MODE_ROW})
+    row: Final = cast(ModelInfo, {**_FAST_MODE_ROW, "provider_specific_entry": {"fast": 6.0}})
+
+    plain: Final = cost_per_token(
+        model="claude-probe-unsearched", usage=Usage(prompt_tokens=1000, completion_tokens=1000), model_info=row
+    )
+    searched: Final = cost_per_token(
+        model="claude-probe-unsearched",
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, speed="fast", server_tool_use={"web_search_requests": 2}),
+        model_info=row,
+    )
+
+    assert searched == pytest.approx((plain[0] * 6.0, plain[1] * 6.0), rel=1e-12)
+
+
+def test_a_model_rust_leaves_to_python_still_bills_its_speed_uplift():
+    """A model only a ``fallback_generalizations`` rule prices is left to Python, which applies the rule's uplift."""
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+    from litellm.types.utils import Usage
+
+    previous: Final = list(get_fallback_generalization_rules())
+    rule: Final = {key: value for key, value in _FAST_MODE_ROW.items() if key != "litellm_provider"}
+    set_fallback_generalizations([{"name": "probe", "pattern": "^claude-probe-rule-", "model_info": rule}])
+    try:
+        plain: Final = cost_per_token(model="claude-probe-rule-1", usage=Usage(prompt_tokens=1000, completion_tokens=1000))
+        fast: Final = cost_per_token(
+            model="claude-probe-rule-1", usage=Usage(prompt_tokens=1000, completion_tokens=1000, speed="fast")
+        )
+    finally:
+        set_fallback_generalizations(previous)
+
+    assert plain[0] > 0
+    assert fast == pytest.approx((plain[0] * 1.1, plain[1] * 1.1), rel=1e-12)
+
+
 def test_calculate_usage_captures_service_tier():
     """
     Anthropic returns the assigned service tier on the response usage object

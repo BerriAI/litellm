@@ -183,11 +183,7 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
         prices_by_results: fields
             .get("tiered_pricing")
             .and_then(Value::as_array)
-            .is_some_and(|tiers| {
-                tiers
-                    .iter()
-                    .any(|tier| tier.get("max_results_range").is_some())
-            }),
+            .is_some_and(|tiers| !tiers.is_empty()),
     }
 }
 
@@ -462,12 +458,10 @@ mod tests {
 
     #[rstest]
     #[case::result_tiers(json!({"tiered_pricing": [{"max_results_range": [0, 25], "input_cost_per_query": 0.005}]}), true)]
-    #[case::token_tiers(json!({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 1e-6}]}), false)]
+    #[case::token_tiers(json!({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 1e-6}]}), true)]
+    #[case::no_tiers(json!({"tiered_pricing": []}), false)]
     #[case::flat_query_rate(json!({"input_cost_per_query": 0.005}), false)]
-    fn a_row_prices_by_results_only_through_result_tiers(
-        #[case] row: Value,
-        #[case] expected: bool,
-    ) {
+    fn a_row_prices_by_results_whenever_it_lists_tiers(#[case] row: Value, #[case] expected: bool) {
         assert_eq!(row_facts(&fields(row)).prices_by_results, expected);
     }
 

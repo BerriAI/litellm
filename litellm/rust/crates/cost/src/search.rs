@@ -39,7 +39,7 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &SearchQuery) -> PriceOutco
     let priced = layers.iter().find_map(|(at, row)| {
         units::listed(*row, &QUERY, Channel::Online).map(|rate| (at, *row, rate))
     });
-    if priced.is_none() && layers.iter().any(|(_, row)| row.facts().prices_by_results) {
+    if layers.iter().any(|(_, row)| row.facts().prices_by_results) {
         return Unpriced::NotPorted(Kind::Search).into();
     }
     let parallel = query
@@ -183,14 +183,17 @@ mod tests {
         assert!(receipt.total < receipt.original());
     }
 
+    /// Main reads a row's result tiers ahead of its flat query rate
     #[rstest]
-    fn a_row_priced_by_requested_results_is_not_ported() {
+    #[case::tiers_only(TestRow::default())]
+    #[case::tiers_beside_a_flat_rate(rated(0.01))]
+    fn a_row_priced_by_requested_results_is_not_ported(#[case] row: TestRow) {
         let tiered = TestRow {
             facts: RowFacts {
                 prices_by_results: true,
                 ..RowFacts::default()
             },
-            ..TestRow::default()
+            ..row
         };
         let source = TestSource::with_row("exa_ai/search", tiered);
         assert_eq!(

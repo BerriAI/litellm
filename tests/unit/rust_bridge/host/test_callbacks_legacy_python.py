@@ -599,7 +599,7 @@ def test_a_route_priced_messages_call_is_logged_as_main_prices_it_and_never_repr
             provider_response_model=None,
             hidden_model=None,
         ),
-        priced_usage(usage),
+        priced_usage(usage, web_search=None),
         requested_model="claude-opus-5-5",
         adjust=AdjustFacts(provider="anthropic", model=None, region=None),
     )

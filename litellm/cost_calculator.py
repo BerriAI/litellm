@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     price_units,
     priced_usage,
     prompt_and_completion,
+    web_search_use,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -1827,6 +1828,9 @@ def _rust_priced_cost(
     tools_params: Final[Mapping[str, object]] = standard_built_in_tools_params or _NO_HIDDEN_PARAMS
     web_search_options: Final[object] = tools_params.get("web_search_options")
     web_search_requests: Final = _web_search_requests_for_rust(response, usage)
+    search_context: Final[object] = (as_str_mapping(web_search_options) or _NO_HIDDEN_PARAMS).get(
+        "search_context_size"
+    )
     if hidden_params.get("custom_llm_provider", custom_llm_provider) != custom_llm_provider:
         return None
     if not (hidden_region is None or isinstance(hidden_region, str)) or web_search_requests is False:
@@ -1856,8 +1860,10 @@ def _rust_priced_cost(
         ),
         priced_usage(
             usage,
-            web_search_requests,
-            (as_str_mapping(web_search_options) or _NO_HIDDEN_PARAMS).get("search_context_size"),
+            web_search_use(
+                web_search_requests if web_search_requests is not None else get_web_search_requests_from_usage(usage),
+                search_context if isinstance(search_context, str) else None,
+            ),
         ),
         service_tier=service_tier,
         data_residency=data_residency,

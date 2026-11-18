@@ -7,9 +7,12 @@ from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import ValidationError
 
+import litellm
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import price_model
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
+    get_provider_specific_geo_multiplier,
+    get_provider_specific_speed_multiplier,
     get_web_search_requests_from_usage,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -32,13 +35,31 @@ def cost_per_token(
     )
     if priced is not None:
         return priced
-    return generic_cost_per_token(
+    return _python_cost_per_token(model, usage, service_tier, model_info)
+
+
+def _python_cost_per_token(
+    model: str, usage: "Usage", service_tier: str | None, model_info: "ModelInfo | None"
+) -> tuple[float, float]:
+    """Main's pricing, for a call the Rust core leaves to Python."""
+    prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider="anthropic",
         service_tier=service_tier,
         model_info=model_info,
     )
+    try:
+        effective_info: Final = (
+            model_info
+            if model_info is not None
+            else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+        )
+        geo: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
+        speed: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
+    except Exception:  # noqa: BLE001  # copied from main: an unreadable uplift prices the call without either uplift
+        return prompt_cost, completion_cost
+    return prompt_cost * speed * geo, completion_cost * speed * geo
 
 
 class _AnthropicServerToolUseProbe(LiteLLMBaseModel):

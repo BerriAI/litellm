@@ -18,7 +18,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     BilledUsage,
     billed_usage,
-    get_web_search_requests_from_usage,
 )
 from litellm.rust_bridge._native import NativeRateCard, NativeReceipt, NativeUnpriced
 from litellm.types.utils import Usage
@@ -173,31 +172,27 @@ class AdjustedCost:
     margin_total_amount: float
 
 
-def priced_usage(
-    usage: Usage,
-    web_search_requests: int | None = None,
-    search_context_size: object = None,
-) -> PricedUsage:
-    """``usage``'s billed quantities with the web search count and the speed and geo the provider reported."""
+def web_search_use(requests: int | None, search_context_size: str | None = None) -> WebSearchUse | None:
+    """The web searches a call reports, at the context size it asked for, ``None`` when it reports no count."""
+    if requests is None:
+        return None
+    return WebSearchUse(requests=max(requests, 0), context=_search_context(search_context_size))
+
+
+def priced_usage(usage: Usage, web_search: WebSearchUse | None) -> PricedUsage:
+    """``usage``'s billed quantities with ``web_search`` and the speed and geo the provider reported."""
     billed: Final = billed_usage(usage)
-    requests: Final = (
-        web_search_requests if web_search_requests is not None else get_web_search_requests_from_usage(usage)
-    )
     speed: Final[object] = getattr(usage, "speed", None)
     geo: Final[object] = getattr(usage, "inference_geo", None)
     return PricedUsage(
         **billed,
-        web_search=(
-            WebSearchUse(requests=max(requests, 0), context=_search_context(search_context_size))
-            if isinstance(requests, int) and not isinstance(requests, bool)
-            else None
-        ),
+        web_search=web_search,
         speed="fast" if speed == "fast" else None,
         inference_geo=geo if isinstance(geo, str) else None,
     )
 
 
-def _search_context(size: object) -> SearchContextSize | None:
+def _search_context(size: str | None) -> SearchContextSize | None:
     if size == "low":
         return "low"
     if size == "medium":
@@ -245,10 +240,11 @@ def price_model(
     row: Mapping[str, object] | None = None,
 ) -> tuple[float, float] | None:
     """``cost_per_token``'s prompt and completion cost of ``usage`` on ``model``, ``None`` when Rust leaves it to
-    Python. ``row`` is a price row the caller resolved for this call."""
+    Python. ``row`` is a price row the caller resolved for this call. ``cost_per_token`` never bills the web search
+    fee, ``completion_cost`` adds it, so the search count stays out of the price."""
     receipt: Final = price(
         ModelFacts(by="model", model=model, provider=provider, region=None),
-        priced_usage(usage),
+        priced_usage(usage, web_search=None),
         service_tier=service_tier,
         row=row,
     )
