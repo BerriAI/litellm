@@ -3,10 +3,16 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
+
+_MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_STR_ADAPTER: Final = TypeAdapter(str)
 
 
 class SimpleProviderConfig:
@@ -14,7 +20,7 @@ class SimpleProviderConfig:
 
     def __init__(self, slug: str, data: dict):
         self.slug = slug
-        self.base_url = data["base_url"]
+        self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
         self.api_key_env = data["api_key_env"]
         self.api_base_env = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
@@ -22,6 +28,14 @@ class SimpleProviderConfig:
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
         self.supported_endpoints = data.get("supported_endpoints", [])
+        self.model_base_urls: Mapping[str, str] = _MODEL_BASE_URLS_ADAPTER.validate_python(
+            data.get("model_base_urls", {})
+        )
+
+    def default_base_url(self, model: str | None) -> str:
+        if model is None:
+            return self.base_url
+        return self.model_base_urls.get(model.removeprefix(f"{self.slug}/"), self.base_url)
 
 
 class JSONProviderRegistry:

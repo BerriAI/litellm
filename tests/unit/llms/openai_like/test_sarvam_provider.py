@@ -35,19 +35,33 @@ def _sarvam_response(model: str, cached_tokens: int) -> ModelResponse:
     )
 
 
-def test_sarvam_provider_resolution() -> None:
+@pytest.mark.parametrize(
+    ("model", "api_base", "expected_api_base"),
+    [
+        pytest.param("sarvam/sarvam-105b", None, "https://api.sarvam.ai/v1", id="sarvam_105b_stays_on_v1"),
+        pytest.param(
+            "sarvam/sarvam-105b-conversations", None, "https://api.sarvam.ai/v1", id="conversations_stays_on_v1"
+        ),
+        pytest.param("sarvam/glm5.3", None, "https://api.sarvam.ai/v2", id="token_factory_model_uses_v2"),
+        pytest.param("sarvam/unlisted-model", None, "https://api.sarvam.ai/v2", id="unlisted_model_uses_v2"),
+        pytest.param(
+            "sarvam/sarvam-105b", "https://api.sarvam.ai/v2", "https://api.sarvam.ai/v2", id="deployment_api_base_wins"
+        ),
+    ],
+)
+def test_sarvam_provider_resolution(model: str, api_base: str | None, expected_api_base: str) -> None:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-    model, provider, api_key, api_base = get_llm_provider(
-        model="sarvam/sarvam-105b",
+    resolved_model, provider, _, resolved_api_base = get_llm_provider(
+        model=model,
         custom_llm_provider=None,
-        api_base=None,
+        api_base=api_base,
         api_key=None,
     )
 
-    assert model == "sarvam-105b"
+    assert resolved_model == model.removeprefix("sarvam/")
     assert provider == "sarvam"
-    assert api_base == "https://api.sarvam.ai/v2"
+    assert resolved_api_base == expected_api_base
 
 
 def test_sarvam_listed_in_add_model_provider_fields() -> None:
@@ -65,15 +79,22 @@ def test_sarvam_listed_in_add_model_provider_fields() -> None:
     assert "api_base" in field_keys
 
 
-def test_sarvam_chat_completion_request() -> None:
+@pytest.mark.parametrize(
+    ("model", "url"),
+    [
+        pytest.param("sarvam-105b", "https://api.sarvam.ai/v1/chat/completions", id="sarvam_105b_on_v1"),
+        pytest.param("glm5.3", "https://api.sarvam.ai/v2/chat/completions", id="glm_on_v2"),
+    ],
+)
+def test_sarvam_chat_completion_request(model: str, url: str) -> None:
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(
+        route: Final = upstream.post(url).respond(
             200,
             json={
                 "id": "chatcmpl_sarvam",
                 "object": "chat.completion",
                 "created": 1,
-                "model": "sarvam-105b",
+                "model": model,
                 "choices": [
                     {
                         "index": 0,
@@ -85,7 +106,7 @@ def test_sarvam_chat_completion_request() -> None:
             },
         )
         response: Final = litellm.completion(
-            model="sarvam/sarvam-105b",
+            model=f"sarvam/{model}",
             messages=[{"role": "user", "content": "Say hello"}],
             api_key="sarvam-test-key",
             max_completion_tokens=200,
@@ -94,10 +115,10 @@ def test_sarvam_chat_completion_request() -> None:
     request: Final = route.calls.last.request
     body: Final = json.loads(request.content)
     assert route.call_count == 1
-    assert str(request.url) == "https://api.sarvam.ai/v2/chat/completions"
+    assert str(request.url) == url
     assert request.headers["authorization"] == "Bearer sarvam-test-key"
     assert body == {
-        "model": "sarvam-105b",
+        "model": model,
         "messages": [{"role": "user", "content": "Say hello"}],
         "max_tokens": 200,
     }
@@ -106,7 +127,7 @@ def test_sarvam_chat_completion_request() -> None:
 
 def test_sarvam_responses_request_is_bridged_to_chat_completions() -> None:
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(
+        route: Final = upstream.post("https://api.sarvam.ai/v1/chat/completions").respond(
             200,
             json={
                 "id": "chatcmpl_sarvam_bridge",
@@ -151,7 +172,7 @@ class TestSarvamCostMap:
     def test_cached_tokens_bill_at_the_cached_rate(self) -> None:
         cached_tokens: Final = 800
         with respx.mock() as upstream:
-            route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(
+            route: Final = upstream.post("https://api.sarvam.ai/v1/chat/completions").respond(
                 200,
                 json={
                     "id": "chatcmpl_sarvam_cache",

@@ -82,6 +82,10 @@
   },
   "sarvam": {
     "base_url": "https://api.sarvam.ai/v2",
+    "model_base_urls": {
+      "sarvam-105b": "https://api.sarvam.ai/v1",
+      "sarvam-105b-conversations": "https://api.sarvam.ai/v1"
+    },
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
     "supported_endpoints": ["/v1/chat/completions"]

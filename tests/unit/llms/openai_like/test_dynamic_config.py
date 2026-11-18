@@ -1,7 +1,8 @@
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -20,7 +21,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
@@ -105,12 +105,9 @@ class TestGetCompleteUrl:
             == "https://explicit/v1/responses"
         )
 
-    def test_no_base_anywhere_raises_naming_the_provider(self):
-        provider = _provider("url_none")
-        provider.base_url = None
-        config = create_responses_config_class(provider)()
-        with pytest.raises(ValueError, match="url_none"):
-            config.get_complete_url(api_base=None, litellm_params={})
+    def test_a_provider_without_a_base_url_is_rejected_at_load(self):
+        with pytest.raises(ValidationError):
+            _provider("url_none", base_url=None)
 
 
 class TestForceStoreFalse:
@@ -139,3 +136,35 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+class TestModelBaseUrls:
+    _LEGACY = {"legacy-model": "https://api.example.com/v0"}
+
+    @pytest.mark.parametrize(
+        ("model", "api_base", "expected"),
+        [
+            pytest.param("legacy-model", None, "https://api.example.com/v0", id="listed_model"),
+            pytest.param("mb/legacy-model", None, "https://api.example.com/v0", id="listed_model_with_prefix"),
+            pytest.param("new-model", None, "https://api.example.com/v1", id="unlisted_model"),
+            pytest.param("legacy-model", "https://explicit/v1", "https://explicit/v1", id="explicit_api_base_wins"),
+        ],
+    )
+    def test_model_base_url_resolution(self, monkeypatch, model, api_base, expected):
+        monkeypatch.delenv("MB_UNSET_BASE", raising=False)
+        config = create_config_class(_provider("mb", model_base_urls=self._LEGACY, api_base_env="MB_UNSET_BASE"))()
+        assert config.get_model_provider_info(model, api_base, "sk-test")[0] == expected
+
+    def test_api_base_env_wins_over_the_model_base_url(self, monkeypatch):
+        monkeypatch.setenv("MB_ENV_BASE", "https://from-env/v1")
+        config = create_config_class(_provider("mb_env", model_base_urls=self._LEGACY, api_base_env="MB_ENV_BASE"))()
+        assert config.get_model_provider_info("legacy-model", None, "sk-test")[0] == "https://from-env/v1"
+
+    def test_chat_url_without_api_base_uses_the_model_base_url(self):
+        config = create_config_class(_provider("mb_url", model_base_urls=self._LEGACY))()
+        assert (
+            config.get_complete_url(
+                api_base=None, api_key=None, model="legacy-model", optional_params={}, litellm_params={}
+            )
+            == "https://api.example.com/v0/chat/completions"
+        )
