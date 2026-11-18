@@ -189,6 +189,10 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
             .get("guardrail_cost_per_unit")
             .and_then(Value::as_object)
             .is_some_and(|rates| rates.values().all(|rate| float_of(rate).is_ok())),
+        provider: fields
+            .get("litellm_provider")
+            .and_then(Value::as_str)
+            .map(Into::into),
         legacy_search_query_rate: fields
             .get("search_queries_cost_per_query")
             .filter(|rate| rate.is_number())
@@ -313,6 +317,7 @@ mod tests {
             characters: None,
             embedding: false,
             raw: Default::default(),
+            decisions: false,
         }))
     }
 

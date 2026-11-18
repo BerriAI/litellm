@@ -232,6 +232,7 @@ class _PriceDocument(TypedDict):
     raw: ReadOnly[RawCounts | None]
     reported: ReadOnly[ReportedCost | None]
     custom: ReadOnly[CustomPricing | None]
+    decisions: ReadOnly[bool]
 
 
 class BatchLineDocument(TypedDict):
@@ -360,6 +361,7 @@ class BranchFacts:
     raw: RawCounts | None = None
     reported: ReportedCost | None = None
     custom: CustomPricing | None = None
+    decisions: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,6 +473,7 @@ def price(
         raw=facts.raw,
         reported=facts.reported,
         custom=facts.custom,
+        decisions=facts.decisions,
     )
     return model_cost_inputs.price(document, row)
 
@@ -511,11 +514,25 @@ def branch_cost(
             raw=raw_counts(usage),
             reported=facts.reported,
             custom=facts.custom,
+            decisions=facts.decisions,
         ),
     )
     if receipt is None:
         raise ValueError(f"No price for model={model}, custom_llm_provider={provider}")
     return receipt.prompt_cost, receipt.completion_cost
+
+
+def decisions_request_cost(provider: str, row: Mapping[str, object]) -> float:
+    """What one Decisions request bills before its tokens on ``row``: the query price of a provider that bills per
+    request, 0.0 for every other row."""
+    prompt_cost, _ = branch_cost(
+        "decisions",
+        provider,
+        Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        row,
+        branch=BranchFacts(rules="generic", decisions=True),
+    )
+    return prompt_cost
 
 
 def custom_pricing_usage(
