@@ -472,31 +472,18 @@ last_fetched_at_keys: Final = None
 in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
 
 _ORIGINAL_RESPONSE_NOT_RETAINED: Final = '{"litellm_note":"raw response not retained"}'
-_ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset(
-    {
-        "agentops",
-        "arize",
-        "arize_phoenix",
-        "athina",
-        "langfuse_otel",
-        "langtrace",
-        "levo",
-        "logfire",
-        "opentelemetry",
-        "otel",
-        "sentry",
-        "signoz",
-        "wandb",
-        "weave_otel",
-    }
-)
+_ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset({"athina", "sentry", "wandb"})
+_FIRST_PARTY_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
+
+
+def _is_first_party_module(module: object) -> bool:
+    return isinstance(module, str) and module.partition(".")[0] in _FIRST_PARTY_PACKAGES and module in sys.modules
 
 
 def _callback_may_read_original_response(callback: object) -> bool:
     if isinstance(callback, str):
         return callback in _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES
-    module: Final[object] = getattr(callback, "__module__", None)
-    if not isinstance(module, str) or not (module == "litellm" or module.startswith("litellm.")):
+    if not _is_first_party_module(getattr(callback, "__module__", None)):
         return True
     return isinstance(callback, CustomLogger) and callback.reads_original_response
 
@@ -2314,13 +2301,9 @@ class Logging(LiteLLMLoggingBaseClass):
             or any(
                 _callback_may_read_original_response(callback)
                 for callback in itertools.chain(
-                    litellm.callbacks,
+                    litellm.logging_callback_manager.get_all_callbacks(),
                     litellm.input_callback,
-                    litellm.success_callback,
-                    litellm.failure_callback,
                     litellm._async_input_callback,  # pyright: ignore[reportPrivateUsage]  # no public accessor
-                    litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # no public accessor
-                    litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # no public accessor
                     self.dynamic_input_callbacks or (),
                     self.dynamic_success_callbacks or (),
                     self.dynamic_async_success_callbacks or (),

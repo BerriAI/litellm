@@ -16,6 +16,7 @@ import tracemalloc
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
+from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import ClassVar, Final, Literal, TypeAlias, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -60,9 +61,9 @@ from litellm.types.integrations.custom_logger_v2 import UsageRecord as V2UsageRe
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.prompt_cache_alerts.detector import PromptCacheAlertLogger
 from litellm.litellm_core_utils import litellm_logging, streaming_handler
-from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.litellm_logging import (
@@ -78,6 +79,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import upda
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
 from litellm.proxy.mcp_server.operations import fire_mcp_tool_call_failure_logging
 from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
@@ -782,134 +784,7 @@ def test_pre_call_tolerates_missing_api_base(logging_obj):
     assert logging_obj.model_call_details["litellm_params"]["api_base"] == ""
 
 
-def test_post_call_serializes_dict_with_datetime(logging_obj):
-    import datetime
-
-    response = {
-        "status": "InProgress",
-        "submitTime": datetime.datetime(2026, 5, 11, 23, 49, 13, 132000),
-    }
-    logging_obj.logger_fn = lambda _details: None
-    logging_obj.post_call(original_response=response)
-    serialized = logging_obj.model_call_details["original_response"]
-    assert isinstance(serialized, str)
-    assert "2026-05-11" in serialized
-
-
-def _no_raw_response_readers(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    for name in (
-        "callbacks",
-        "success_callback",
-        "failure_callback",
-        "input_callback",
-        "_async_success_callback",
-        "_async_failure_callback",
-        "_async_input_callback",
-    ):
-        monkeypatch.setattr(litellm, name, [])
-    monkeypatch.setattr(litellm, "set_verbose", False)
-    monkeypatch.setattr("litellm._logging.set_verbose", False)
-    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
-
-
-def test_post_call_does_not_hold_a_serialized_copy_of_a_large_dict_response(
-    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _no_raw_response_readers(monkeypatch, caplog)
-    image_size: Final = 8 * 1024 * 1024
-    response: Final = {"created": 1, "data": [{"b64_json": "A" * image_size}]}
-
-    tracemalloc.start()
-    try:
-        allocated_before: Final = tracemalloc.get_traced_memory()[0]
-        logging_obj.post_call(original_response=response)
-        held_bytes: Final = tracemalloc.get_traced_memory()[0] - allocated_before
-    finally:
-        tracemalloc.stop()
-
-    stored: Final = logging_obj.model_call_details["original_response"]
-    assert isinstance(stored, str)
-    assert len(stored) < image_size / 100, f"{len(stored)} characters held for a {image_size} byte image"
-    assert held_bytes < image_size / 10, f"post_call retained {held_bytes} bytes"
-
-
-def test_post_call_keeps_a_response_that_is_already_text(
-    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _no_raw_response_readers(monkeypatch, caplog)
-    text: Final = json.dumps({"data": "A" * (1024 * 1024)})
-
-    logging_obj.post_call(original_response=text)
-
-    assert logging_obj.model_call_details["original_response"] is text
-
-
-@pytest.mark.parametrize(
-    "response",
-    [CallToolResult(content=[TextContent(type="text", text="tool output")]), object()],
-    ids=["mcp-tool-result", "stream-handle"],
-)
-def test_post_call_leaves_values_that_are_not_json_objects_untouched(
-    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, response: object
-) -> None:
-    _no_raw_response_readers(monkeypatch, caplog)
-
-    logging_obj.post_call(original_response=response)
-
-    assert logging_obj.model_call_details["original_response"] is response
-
-
-class _RawResponseRecorder(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.received: tuple[object, ...] = ()
-
-    def record(self, details: Mapping[str, object]) -> None:
-        self.received = (*self.received, details["original_response"])
-
-    def log_post_api_call(
-        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
-    ) -> None:
-        self.record(kwargs)
-
-
-def test_post_call_gives_logger_fn_the_serialized_response(
-    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    _no_raw_response_readers(monkeypatch, caplog)
-    recorder: Final = _RawResponseRecorder()
-    logging_obj.update_environment_variables(litellm_params={"logger_fn": recorder.record}, optional_params={})
-    response: Final = {"id": "resp-1", "submitted": datetime.datetime(2026, 5, 11, 23, 49, 13)}
-
-    logging_obj.post_call(original_response=response)
-
-    assert recorder.received == (json.dumps(response, default=str),)
-
-
-@pytest.mark.parametrize("scope", ["global", "request"])
-def test_post_call_gives_input_callbacks_the_serialized_response(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, scope: str
-) -> None:
-    _no_raw_response_readers(monkeypatch, caplog)
-    recorder: Final = _RawResponseRecorder()
-    monkeypatch.setattr(litellm, "input_callback", [recorder] if scope == "global" else [])
-    request_logging: Final = LitellmLogging(
-        model="gpt-image-2.6-sunburst",
-        messages=[],
-        stream=False,
-        call_type="image_generation",
-        start_time=time.time(),
-        litellm_call_id="raw-response-input-callback",
-        function_id="raw-response-input-callback",
-        dynamic_input_callbacks=[recorder] if scope == "request" else None,
-    )
-    request_logging.update_environment_variables(litellm_params={}, optional_params={})
-    response: Final = {"id": "resp-1", "data": [{"b64_json": "A" * (1024 * 1024)}]}
-
-    request_logging.post_call(original_response=response)
-
-    assert recorder.received == (json.dumps(response, default=str),)
-
+_Callback: TypeAlias = str | Callable[..., object] | CustomLogger
 
 _GLOBAL_CALLBACK_LISTS: Final = (
     "callbacks",
@@ -927,15 +802,73 @@ _DYNAMIC_CALLBACK_LISTS: Final = (
     "dynamic_failure_callbacks",
     "dynamic_async_failure_callbacks",
 )
+_RETENTION_MODEL: Final = "raw-response-retention-model"
 _LARGE_IMAGE_BYTES: Final = 16 * 1024 * 1024
 _SMALL_RESPONSE: Final = {"data": [{"b64_json": "aGVsbG8="}]}
+_CONFIG_LOADED_CALLBACKS: Final = """
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class QaLogger(CustomLogger):
+    pass
+
+
+logger_instance = QaLogger()
+
+
+def function_handler(kwargs, response, start, end):
+    return None
+"""
 
 
 class _UserDefinedLogger(CustomLogger):
     pass
 
 
-def _user_defined_callback(*_args: object, **_kwargs: object) -> None:
+class _ModulelessCallback:
+    def __getattribute__(self, name: str) -> object:
+        if name == "__module__":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
+class _RawResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received: tuple[object, ...] = ()
+
+    def record(self, details: Mapping[str, object]) -> None:
+        self.received = (*self.received, details["original_response"])
+
+    def log_post_api_call(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.record(kwargs)
+
+
+class _RecordingHttpClient:
+    def __init__(self) -> None:
+        self.bodies: tuple[str, ...] = ()
+
+    def post(self, _url: str, headers: Mapping[str, object], data: str) -> httpx.Response:
+        self.bodies = (*self.bodies, data)
+        return httpx.Response(200)
+
+
+class _RecordingHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: tuple[str, ...] = ()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages = (*self.messages, record.getMessage())
+
+
+def _user_defined_callback(_kwargs: object, _response: object, _start: object, _end: object) -> None:
+    return None
+
+
+def _ignore_details(_details: Mapping[str, object]) -> None:
     return None
 
 
@@ -943,9 +876,36 @@ def _without_init(logger_class: type[CustomLogger]) -> CustomLogger:
     return logger_class.__new__(logger_class)
 
 
-def _retained_response(logging_obj: LitellmLogging) -> str:
-    logging_obj.post_call(original_response=_SMALL_RESPONSE)
-    retained = logging_obj.model_call_details["original_response"]
+def _request_logging(
+    callback_list: str = "",
+    callback: _Callback = "",
+    logger_fn: object = None,
+    request_debug: bool = False,
+) -> LitellmLogging:
+    request_logging: Final = LitellmLogging(
+        model=_RETENTION_MODEL,
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="completion",
+        start_time=dt_object(2026, 1, 1),
+        litellm_call_id="raw-response-retention",
+        function_id="raw-response-retention",
+        dynamic_input_callbacks=[callback] if callback_list == "dynamic_input_callbacks" else None,
+        dynamic_success_callbacks=[callback] if callback_list == "dynamic_success_callbacks" else None,
+        dynamic_async_success_callbacks=[callback] if callback_list == "dynamic_async_success_callbacks" else None,
+        dynamic_failure_callbacks=[callback] if callback_list == "dynamic_failure_callbacks" else None,
+        dynamic_async_failure_callbacks=[callback] if callback_list == "dynamic_async_failure_callbacks" else None,
+    )
+    request_logging.update_environment_variables(
+        litellm_params={"logger_fn": logger_fn, "litellm_request_debug": request_debug},
+        optional_params={},
+    )
+    return request_logging
+
+
+def _retained_response(request_logging: LitellmLogging) -> str:
+    request_logging.post_call(original_response=_SMALL_RESPONSE)
+    retained: Final = request_logging.model_call_details["original_response"]
     assert isinstance(retained, str)
     return retained
 
@@ -957,62 +917,108 @@ def _assert_not_retained(retained: str) -> None:
     json.loads(retained)
 
 
-@pytest.fixture
-def no_response_readers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    for name in _GLOBAL_CALLBACK_LISTS:
-        monkeypatch.setattr(litellm, name, [])
-    monkeypatch.setattr(litellm_logger_settings, "set_verbose", False)
-    monkeypatch.setattr(litellm, "set_verbose", False)
-    previous_level: Final = verbose_logger.level
-    verbose_logger.setLevel(logging.WARNING)
-    yield
-    verbose_logger.setLevel(previous_level)
-
-
-def _traced_peak_of_post_call(logging_obj: LitellmLogging, response: object) -> int:
+def _traced_peak_of_post_call(request_logging: LitellmLogging, response: object) -> int:
     tracemalloc.start()
     try:
-        logging_obj.post_call(original_response=response)
+        request_logging.post_call(original_response=response)
         return tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
 
 
+@pytest.fixture
+def no_response_readers(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    for name in _GLOBAL_CALLBACK_LISTS:
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm_logger_settings, "set_verbose", False)
+    monkeypatch.setattr(litellm, "set_verbose", False)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+
+
+def test_post_call_serializes_dict_with_datetime() -> None:
+    response: Final = {
+        "status": "InProgress",
+        "submitTime": datetime.datetime(2026, 5, 11, 23, 49, 13, 132000),
+    }
+    request_logging: Final = _request_logging(logger_fn=_ignore_details)
+
+    request_logging.post_call(original_response=response)
+
+    serialized: Final = request_logging.model_call_details["original_response"]
+    assert isinstance(serialized, str)
+    assert "2026-05-11" in serialized
+
+
 @pytest.mark.usefixtures("no_response_readers")
-def test_post_call_does_not_copy_a_large_dict_response_nobody_reads(logging_obj):
+def test_post_call_does_not_copy_a_large_dict_response_nobody_reads() -> None:
+    request_logging: Final = _request_logging()
     response: Final = {"data": [{"b64_json": "A" * _LARGE_IMAGE_BYTES}]}
 
-    peak: Final = _traced_peak_of_post_call(logging_obj, response)
+    peak: Final = _traced_peak_of_post_call(request_logging, response)
 
     assert peak < _LARGE_IMAGE_BYTES / 10
-    _assert_not_retained(logging_obj.model_call_details["original_response"])
+    _assert_not_retained(request_logging.model_call_details["original_response"])
 
 
 @pytest.mark.usefixtures("no_response_readers")
-def test_post_call_keeps_a_non_dict_response_without_formatting_it_for_a_silent_debug_line(logging_obj):
+def test_post_call_keeps_a_non_dict_response_without_formatting_it_for_a_silent_debug_line() -> None:
+    request_logging: Final = _request_logging()
     response: Final = "A" * _LARGE_IMAGE_BYTES
 
-    peak: Final = _traced_peak_of_post_call(logging_obj, response)
+    peak: Final = _traced_peak_of_post_call(request_logging, response)
 
     assert peak < _LARGE_IMAGE_BYTES / 10
-    assert logging_obj.model_call_details["original_response"] is response
+    assert request_logging.model_call_details["original_response"] is response
 
 
 @pytest.mark.usefixtures("no_response_readers")
-def test_post_call_keeps_the_json_for_verbose_kwargs_dumps(logging_obj, monkeypatch):
+@pytest.mark.parametrize(
+    "response",
+    [CallToolResult(content=[TextContent(type="text", text="tool output")]), object()],
+    ids=["mcp-tool-result", "stream-handle"],
+)
+def test_post_call_leaves_values_that_are_not_json_objects_untouched(response: object) -> None:
+    request_logging: Final = _request_logging()
+
+    request_logging.post_call(original_response=response)
+
+    assert request_logging.model_call_details["original_response"] is response
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_gives_logger_fn_the_serialized_response() -> None:
+    recorder: Final = _RawResponseRecorder()
+    response: Final = {"id": "resp-1", "submitted": datetime.datetime(2026, 5, 11, 23, 49, 13)}
+
+    _request_logging(logger_fn=recorder.record).post_call(original_response=response)
+
+    assert recorder.received == (json.dumps(response, default=str),)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_does_not_keep_the_json_for_a_logger_fn_it_cannot_call() -> None:
+    _assert_not_retained(_retained_response(_request_logging(logger_fn="not-callable")))
+
+
+@pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize("scope", ["global", "request"])
+def test_post_call_gives_input_callbacks_the_serialized_response(monkeypatch: pytest.MonkeyPatch, scope: str) -> None:
+    recorder: Final = _RawResponseRecorder()
+    monkeypatch.setattr(litellm, "input_callback", [recorder] if scope == "global" else [])
+    request_logging: Final = (
+        _request_logging("dynamic_input_callbacks", recorder) if scope == "request" else _request_logging()
+    )
+
+    request_logging.post_call(original_response=_SMALL_RESPONSE)
+
+    assert recorder.received == (json.dumps(_SMALL_RESPONSE),)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_keeps_the_json_for_verbose_kwargs_dumps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "set_verbose", True)
 
-    assert _retained_response(logging_obj) == json.dumps(_SMALL_RESPONSE)
-
-
-@pytest.mark.usefixtures("no_response_readers")
-def test_post_call_gives_logger_fn_the_exact_json(logging_obj):
-    seen: Final[list[object]] = []
-    logging_obj.logger_fn = lambda details: seen.append(details["original_response"])
-
-    logging_obj.post_call(original_response=_SMALL_RESPONSE)
-
-    assert seen == [json.dumps(_SMALL_RESPONSE)]
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
 
 
 @pytest.mark.usefixtures("no_response_readers")
@@ -1026,17 +1032,16 @@ def test_post_call_gives_logger_fn_the_exact_json(logging_obj):
         pytest.param(_without_init(ArizeLogger), id="arize-subclass"),
         pytest.param(_without_init(PromptCacheAlertLogger), id="prompt-cache-alerts"),
         pytest.param("sentry", id="sentry-name"),
-        pytest.param("otel", id="otel-name"),
-        pytest.param("arize", id="arize-name"),
-        pytest.param("langfuse_otel", id="langfuse-otel-name"),
         pytest.param("athina", id="athina-name"),
         pytest.param("wandb", id="wandb-name"),
     ],
 )
-def test_post_call_keeps_the_json_for_a_global_reader(logging_obj, monkeypatch, list_name, callback):
+def test_post_call_keeps_the_json_for_a_global_reader(
+    monkeypatch: pytest.MonkeyPatch, list_name: str, callback: _Callback
+) -> None:
     monkeypatch.setattr(litellm, list_name, [callback])
 
-    assert _retained_response(logging_obj) == json.dumps(_SMALL_RESPONSE)
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
 
 
 @pytest.mark.usefixtures("no_response_readers")
@@ -1049,67 +1054,106 @@ def test_post_call_keeps_the_json_for_a_global_reader(logging_obj, monkeypatch, 
         pytest.param("sentry", id="sentry-name"),
     ],
 )
-def test_post_call_keeps_the_json_for_a_per_request_reader(logging_obj, list_name, callback):
-    setattr(logging_obj, list_name, [callback])
-
-    assert _retained_response(logging_obj) == json.dumps(_SMALL_RESPONSE)
+def test_post_call_keeps_the_json_for_a_per_request_reader(list_name: str, callback: _Callback) -> None:
+    assert _retained_response(_request_logging(list_name, callback)) == json.dumps(_SMALL_RESPONSE)
 
 
 @pytest.mark.usefixtures("no_response_readers")
 @pytest.mark.parametrize(
     "callback",
-    [pytest.param(CustomLogger(), id="first-party-logger"), pytest.param("prometheus", id="non-reader-name")],
+    [
+        pytest.param(CustomLogger(), id="first-party-logger"),
+        pytest.param(litellm.completion, id="first-party-function"),
+        pytest.param(_without_init(OpenTelemetryV2), id="otel-v2"),
+    ],
 )
-def test_post_call_drops_the_json_when_only_non_readers_are_registered(logging_obj, monkeypatch, callback):
+def test_post_call_drops_the_json_when_only_non_readers_are_registered(
+    monkeypatch: pytest.MonkeyPatch, callback: _Callback
+) -> None:
     monkeypatch.setattr(litellm, "success_callback", [callback])
-    logging_obj.dynamic_success_callbacks = [callback]
 
-    _assert_not_retained(_retained_response(logging_obj))
-
-
-@pytest.mark.usefixtures("no_response_readers")
-def test_every_callback_name_backed_by_a_reader_class_keeps_the_json(logging_obj, monkeypatch):
-    reader_names: Final = tuple(
-        name
-        for name, logger_class in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE.items()
-        if getattr(logger_class, "reads_original_response", False)
-    )
-    assert reader_names
-
-    for name in reader_names:
-        monkeypatch.setattr(litellm, "success_callback", [name])
-        assert _retained_response(logging_obj) == json.dumps(_SMALL_RESPONSE), name
-
-
-class _RecordingHttpClient:
-    def __init__(self) -> None:
-        self.bodies: Final[list[str]] = []
-
-    def post(self, _url: str, headers: Mapping[str, object], data: str) -> httpx.Response:
-        self.bodies.append(data)
-        return httpx.Response(200)
+    _assert_not_retained(_retained_response(_request_logging("dynamic_success_callbacks", callback)))
 
 
 @pytest.mark.usefixtures("no_response_readers")
-def test_athina_still_receives_the_full_json_it_forwards(monkeypatch):
+@pytest.mark.parametrize("name", ["prometheus", "otel", "arize", "langfuse_otel"])
+def test_post_call_drops_the_json_for_a_callback_name_with_no_logger_behind_it(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setattr(litellm, "input_callback", [name])
+
+    _assert_not_retained(_retained_response(_request_logging()))
+
+
+@pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize(
+    ("module_name", "class_name"),
+    [
+        ("litellm_enterprise.proxy.hooks.managed_files", "_PROXY_LiteLLMManagedFiles"),
+        ("litellm_enterprise.proxy.hooks.managed_vector_stores", "_PROXY_LiteLLMManagedVectorStores"),
+    ],
+)
+def test_post_call_drops_the_json_for_enterprise_hooks(
+    monkeypatch: pytest.MonkeyPatch, module_name: str, class_name: str
+) -> None:
+    hook_class: Final = getattr(pytest.importorskip(module_name), class_name)
+    monkeypatch.setattr(litellm, "callbacks", [_without_init(hook_class)])
+
+    _assert_not_retained(_retained_response(_request_logging()))
+
+
+@pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize("module_name", ["litellm_callbacks.hooks", "litellm_enterprise_extras"])
+def test_post_call_keeps_the_json_for_a_package_that_only_shares_our_prefix(
+    monkeypatch: pytest.MonkeyPatch, module_name: str
+) -> None:
+    monkeypatch.setitem(sys.modules, module_name, ModuleType(module_name))
+    hook_class: Final = type("PrefixedHook", (CustomLogger,), {"__module__": module_name})
+    monkeypatch.setattr(litellm, "callbacks", [hook_class()])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize("attribute", ["logger_instance", "function_handler"])
+def test_post_call_keeps_the_json_for_a_callback_loaded_from_a_litellm_config_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, attribute: str
+) -> None:
+    (tmp_path / "litellm").mkdir()
+    (tmp_path / "litellm" / "qa_cb.py").write_text(_CONFIG_LOADED_CALLBACKS)
+    callback: Final = get_instance_fn(f"litellm.qa_cb.{attribute}", str(tmp_path / "config.yaml"))
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize(
+    "callback",
+    [
+        pytest.param(_ModulelessCallback(), id="no-module-attribute"),
+        pytest.param(type("NoneModule", (), {"__module__": None})(), id="module-is-none"),
+    ],
+)
+def test_post_call_keeps_the_json_for_a_callback_without_a_module(
+    monkeypatch: pytest.MonkeyPatch, callback: object
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_athina_still_receives_the_full_json_it_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     client: Final = _RecordingHttpClient()
     monkeypatch.setattr(litellm, "module_level_client", client)
     monkeypatch.setattr(litellm, "success_callback", ["athina"])
     monkeypatch.setattr(litellm_logging, "athinaLogger", AthinaLogger())
-    call_logging: Final = LitellmLogging(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": "Hey"}],
-        stream=False,
-        call_type="completion",
-        start_time=time.time(),
-        litellm_call_id="athina-call",
-        function_id="athina-function",
-    )
-    call_logging.update_environment_variables(litellm_params={}, optional_params={})
+    request_logging: Final = _request_logging()
 
-    call_logging.post_call(original_response=_SMALL_RESPONSE)
-    call_logging.success_handler(
-        result=litellm.ModelResponse(model="gpt-4o"),
+    request_logging.post_call(original_response=_SMALL_RESPONSE)
+    request_logging.success_handler(
+        result=litellm.ModelResponse(model=_RETENTION_MODEL),
         start_time=dt_object(2026, 1, 1, 0, 0, 0),
         end_time=dt_object(2026, 1, 1, 0, 0, 1),
     )
@@ -1117,24 +1161,14 @@ def test_athina_still_receives_the_full_json_it_forwards(monkeypatch):
     assert [json.loads(body)["request"]["original_response"] for body in client.bodies] == [json.dumps(_SMALL_RESPONSE)]
 
 
-class _RecordingHandler(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.messages: Final[list[str]] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
-
-
 @pytest.mark.usefixtures("no_response_readers")
 @pytest.mark.parametrize("request_debug", [False, True], ids=["debug-level", "request-debug"])
-def test_post_call_debug_line_shows_the_full_json(logging_obj, request_debug):
+def test_post_call_debug_line_shows_the_full_json(caplog: pytest.LogCaptureFixture, request_debug: bool) -> None:
     handler: Final = _RecordingHandler()
     verbose_logger.addHandler(handler)
-    logging_obj.litellm_request_debug = request_debug
-    verbose_logger.setLevel(logging.WARNING if request_debug else logging.DEBUG)
+    caplog.set_level(logging.WARNING if request_debug else logging.DEBUG, logger=verbose_logger.name)
     try:
-        logging_obj.post_call(original_response=_SMALL_RESPONSE)
+        _request_logging(request_debug=request_debug).post_call(original_response=_SMALL_RESPONSE)
     finally:
         verbose_logger.removeHandler(handler)
 
