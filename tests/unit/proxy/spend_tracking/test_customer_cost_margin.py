@@ -44,6 +44,10 @@ def test_the_configured_margin_only_applies_to_requests_with_a_customer() -> Non
         assert customer_cost_margin(request_has_customer({"user_api_key_customer_org_id": "org-1"})) == 0.02
         assert customer_cost_margin(request_has_customer({"user_api_key_customer_org_id": None})) is None
         assert customer_cost_margin(request_has_customer({"user_api_key_team_id": "team-1"})) is None
+        bound: Final = {"user_api_key_customer_usage": '{"customer_org_id": "org-1"}'}
+        assert customer_cost_margin(request_has_customer(bound)) == 0.02
+        assert customer_cost_margin(request_has_customer({"user_api_key_customer_usage": "{}"})) is None
+        assert customer_cost_margin(request_has_customer({"user_api_key_customer_usage": "not json"})) is None
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "other"])
