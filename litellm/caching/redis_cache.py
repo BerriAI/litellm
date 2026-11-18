@@ -160,6 +160,7 @@ _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 _GETRANGE_REPLY: Final[TypeAdapter[bytes | str]] = TypeAdapter(bytes | str)
 _SET_GET_REPLY: Final[TypeAdapter[bytes | str | None]] = TypeAdapter(bytes | str | None)
+_PIPELINE_REPLIES: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
@@ -459,14 +460,26 @@ async def _set_existing_reply(commands: _AsyncRedisCommands, name: str, value: s
         return await _getset_existing_before_redis_6_2(commands, name, value, ttl)
 
 
+def _transaction_or_cluster_pipeline(commands: _AsyncRedisCommands) -> "Pipeline[bytes]":
+    from redis.exceptions import RedisClusterException
+
+    try:
+        return commands.pipeline(transaction=True)
+    except RedisClusterException:
+        return commands.pipeline(transaction=False)
+
+
 async def _getset_existing_before_redis_6_2(
     commands: _AsyncRedisCommands, name: str, value: str, ttl: int | None
 ) -> object:
-    previous: Final = await commands.getset(name, value)
+    async with _transaction_or_cluster_pipeline(commands) as pipe:
+        pipe.getset(name, value)
+        if ttl is not None:
+            pipe.expire(name, ttl)
+        replies: Final = _PIPELINE_REPLIES.validate_python(await pipe.execute())
+    previous: Final = replies[0]
     if previous is None:
         await commands.delete(name)
-    elif ttl is not None:
-        await commands.expire(name, ttl)
     return previous
 
 

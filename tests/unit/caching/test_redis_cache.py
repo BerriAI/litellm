@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fakeredis import FakeServer
 from fakeredis.aioredis import FakeRedis
-from redis.exceptions import ResponseError
+from redis.asyncio.client import Pipeline
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisClusterException, ResponseError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -109,7 +111,27 @@ class _FakeRedisBefore62(FakeRedis):
         return await super().set(name, value, *args, **kwargs)
 
 
-@pytest.mark.parametrize("redis_type", [FakeRedis, _FakeRedisBefore62])
+class _FakeRedisBefore62LosingTheLinkAfterEachWrite(_FakeRedisBefore62):
+    async def expire(self, name: str, time: int | timedelta, *args: object, **kwargs: object) -> bool:
+        raise RedisConnectionError("connection lost")
+
+
+class _FakeRedisBefore62RefusingTransactionsLikeACluster(_FakeRedisBefore62):
+    def pipeline(self, transaction: bool = True, shard_hint: str | None = None) -> Pipeline:
+        if transaction:
+            raise RedisClusterException("transaction is deprecated in cluster mode")
+        return super().pipeline(transaction=False, shard_hint=shard_hint)
+
+
+@pytest.mark.parametrize(
+    "redis_type",
+    [
+        FakeRedis,
+        _FakeRedisBefore62,
+        _FakeRedisBefore62LosingTheLinkAfterEachWrite,
+        _FakeRedisBefore62RefusingTransactionsLikeACluster,
+    ],
+)
 @pytest.mark.parametrize("decode_responses", [False, True])
 @pytest.mark.asyncio
 async def test_async_set_existing_returning_previous_replaces_only_a_key_that_exists(
