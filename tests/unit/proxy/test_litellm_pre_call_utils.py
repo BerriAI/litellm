@@ -1467,10 +1467,8 @@ async def test_malformed_stored_team_profile_is_skipped() -> None:
         ({"api_key": "caller-bedrock-key"}, {}, {}, "bedrock", "uprof_client"),
         ({"api_key": "caller-bedrock-key"}, {}, {}, "bedrock_mantle", "uprof_client"),
         ({"api_key": "caller-key"}, {}, {}, "vertex_ai", "uprof_key"),
-        (_CALLER_AWS_KEYS, {}, {}, "bedrock", "uprof_client"),
-        (_CALLER_AWS_KEYS, {}, {}, "bedrock_mantle", "uprof_client"),
-        (_CALLER_AWS_KEYS, {}, {}, "anthropic", "uprof_key"),
-        ({**_CALLER_AWS_KEYS, "aws_access_key_id": " "}, {}, {}, "bedrock_mantle", "uprof_key"),
+        (_CALLER_AWS_KEYS, {}, {}, "bedrock", "uprof_key"),
+        (_CALLER_AWS_KEYS, {}, {}, "bedrock_mantle", "uprof_key"),
     ],
     ids=[
         "body-api-key-on-anthropic",
@@ -1483,8 +1481,6 @@ async def test_malformed_stored_team_profile_is_skipped() -> None:
         "body-api-key-on-vertex-ai",
         "body-aws-keys-on-bedrock",
         "body-aws-keys-on-bedrock-mantle",
-        "body-aws-keys-on-anthropic",
-        "blank-body-aws-key",
     ],
 )
 async def test_a_caller_credential_keeps_its_own_profile_id_where_the_provider_uses_it(
@@ -1558,35 +1554,51 @@ async def test_a_caller_credential_keeps_the_profile_id_it_sent_in_a_body_field(
         provider_specific_header=updated.get("provider_specific_header"),
         custom_llm_provider="bedrock_mantle",
     )
-    assert forwarded.get(USER_PROFILE_ID_HEADER) == ("uprof_client" if credential else "uprof_key")
+    assert forwarded.get(USER_PROFILE_ID_HEADER) == ("uprof_client" if "api_key" in credential else "uprof_key")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("user_api_key_dict", "custom_llm_provider", "model", "expected"),
+    ("user_api_key_dict", "caller_providers", "custom_llm_provider", "model", "expected"),
     [
-        (_PINNED_KEY, "openai", "gpt-5.5", {"x-trace": "t1"}),
+        (_PINNED_KEY, "anthropic,openai", "openai", "gpt-5.5", {"x-trace": "t1"}),
+        (_PINNED_KEY, "openai", "openai", "gpt-5.5", {"x-trace": "t1", "Authorization": "Bearer caller-token"}),
         (
             _PINNED_KEY,
+            "anthropic,openai",
             "anthropic",
             "claude-sonnet-5-5",
             {"x-trace": "t1", "anthropic-beta": "beta-1", USER_PROFILE_ID_HEADER: "uprof_key"},
         ),
         (
             UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
+            "anthropic,openai",
             "anthropic",
             "claude-sonnet-5-5",
-            {"x-trace": "t1", "Anthropic-User-Profile-Id": "uprof_client", "anthropic-beta": "beta-1"},
+            {
+                "x-trace": "t1",
+                "Authorization": "Bearer caller-token",
+                "Anthropic-User-Profile-Id": "uprof_client",
+                "anthropic-beta": "beta-1",
+            },
         ),
     ],
-    ids=["pinned-key-other-model", "pinned-key-claude", "unpinned-key"],
+    ids=["pinned-key-other-model", "pinned-key-other-provider-only", "pinned-key-claude", "unpinned-key"],
 )
 async def test_a_callers_own_provider_specific_headers_reach_the_provider_beside_the_proxys(
-    user_api_key_dict: UserAPIKeyAuth, custom_llm_provider: str, model: str, expected: dict[str, str]
+    user_api_key_dict: UserAPIKeyAuth,
+    caller_providers: str,
+    custom_llm_provider: str,
+    model: str,
+    expected: dict[str, str],
 ) -> None:
     caller_header: Final = {
-        "custom_llm_provider": "anthropic,openai",
-        "extra_headers": {"x-trace": "t1", "Anthropic-User-Profile-Id": "uprof_client"},
+        "custom_llm_provider": caller_providers,
+        "extra_headers": {
+            "x-trace": "t1",
+            "Authorization": "Bearer caller-token",
+            "Anthropic-User-Profile-Id": "uprof_client",
+        },
     }
     updated: Final = await _request_data_added_by_the_proxy(
         {"provider_specific_header": caller_header}, {"anthropic-beta": "beta-1"}, {}, user_api_key_dict

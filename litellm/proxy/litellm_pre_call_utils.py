@@ -4915,12 +4915,13 @@ _NATIVE_MESSAGES_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 _CHATGPT_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.CHATGPT.value
-_BEDROCK_PROVIDERS: Final = frozenset((LlmProviders.BEDROCK.value, LlmProviders.BEDROCK_MANTLE.value))
-_PROVIDERS_A_CALLER_CREDENTIAL_FIELD_AUTHENTICATES: Final = MappingProxyType(
-    {
-        "api_key": _BEDROCK_PROVIDERS | {LlmProviders.ANTHROPIC.value, LlmProviders.AZURE_AI.value},
-        "aws_access_key_id": _BEDROCK_PROVIDERS,
-    }
+_PROVIDERS_A_CALLER_API_KEY_AUTHENTICATES: Final = frozenset(
+    (
+        LlmProviders.ANTHROPIC.value,
+        LlmProviders.AZURE_AI.value,
+        LlmProviders.BEDROCK.value,
+        LlmProviders.BEDROCK_MANTLE.value,
+    )
 )
 
 
@@ -4929,13 +4930,7 @@ def _is_filled_string(value: object) -> bool:
 
 
 def _providers_on_caller_credentials(data: Mapping[str, object]) -> frozenset[str]:
-    return frozenset(
-        itertools.chain.from_iterable(
-            providers
-            for field, providers in _PROVIDERS_A_CALLER_CREDENTIAL_FIELD_AUTHENTICATES.items()
-            if _is_filled_string(data.get(field))
-        )
-    )
+    return _PROVIDERS_A_CALLER_API_KEY_AUTHENTICATES if _is_filled_string(data.get("api_key")) else frozenset()
 
 
 def anthropic_user_profile_id_in_headers(params: Mapping[str, object]) -> str | None:
@@ -4972,7 +4967,12 @@ def _valid_provider_specific_header(entry: object) -> ProviderSpecificHeader | N
         return None
 
 
-def _without_user_profile_id_header(header: ProviderSpecificHeader) -> ProviderSpecificHeader:
+def _reaches_any_provider(header: ProviderSpecificHeader, providers: frozenset[str]) -> bool:
+    return not providers.isdisjoint(provider.strip() for provider in header["custom_llm_provider"].split(","))
+
+
+def _without_pin_overrides(header: ProviderSpecificHeader, pinned_providers: frozenset[str]) -> ProviderSpecificHeader:
+    strips_credentials: Final = _reaches_any_provider(header, pinned_providers)
     return _PROVIDER_SPECIFIC_HEADER.validate_python(
         {
             **header,
@@ -4980,6 +4980,7 @@ def _without_user_profile_id_header(header: ProviderSpecificHeader) -> ProviderS
                 name: value
                 for name, value in header["extra_headers"].items()
                 if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+                and not (strips_credentials and _is_credential_header(name))
             },
         }
     )
@@ -5059,7 +5060,9 @@ def add_provider_specific_headers_to_request(
     ]
 
     caller_entries: Final = tuple(
-        _without_user_profile_id_header(entry) if user_profile_id else entry
+        _without_pin_overrides(entry, ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers)
+        if user_profile_id
+        else entry
         for entry in map(_valid_provider_specific_header, _request_entries(data.get("provider_specific_header")))
         if entry is not None
     )
