@@ -251,7 +251,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
                   )}
                 </TableCell>
               )}
-              <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} />
+              <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} rateLimits={row.entity.rateLimits} />
               <TableCell className="pr-0 text-right">
                 <div className="flex justify-end gap-2">
                   <a

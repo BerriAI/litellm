@@ -151,7 +151,7 @@ export default function CustomerOrganizationsTable({
                     )}
                   </div>
                 </TableCell>
-                <CustomerBudgetLimitCell limit={budgetLimit} />
+                <CustomerBudgetLimitCell limit={budgetLimit} rateLimits={organization.budget} />
                 <TableCell className="px-4">
                   <div className="flex items-center gap-3">
                     <div

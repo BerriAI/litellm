@@ -149,7 +149,7 @@ describe("customer app budgets", () => {
     await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), "Standard");
     const member = within(screen.getByRole("group", { name: "Per-member default for this customer" }));
     act(() => {
-      fireEvent.click(member.getByRole("checkbox", { name: "Set a budget and limits" }));
+      fireEvent.click(member.getByRole("checkbox", { name: "Set custom limits" }));
     });
     act(() => {
       fireEvent.change(member.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });

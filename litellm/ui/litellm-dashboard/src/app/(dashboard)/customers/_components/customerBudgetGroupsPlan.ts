@@ -14,6 +14,8 @@ export const customerBudgetGroupRows = (organization: BudgetGroups): CustomerBud
     capPolicy: group.cap_policy ?? defaultCustomerCapPolicy,
     monthlyBudget: String(group.budget_limits?.find((entry) => entry.budget_duration === "1mo")?.max_budget ?? ""),
     yearlyBudget: String(group.budget_limits?.find((entry) => entry.budget_duration === "12mo")?.max_budget ?? ""),
+    tpm: String(group.tpm_limit ?? ""),
+    rpm: String(group.rpm_limit ?? ""),
   }));
 
 export function planCustomerBudgetGroups(
@@ -40,6 +42,8 @@ export function planCustomerBudgetGroups(
       name: group.name.trim(),
       ...(memberGroups && group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
       ...(JSON.stringify(limits) !== JSON.stringify(previous) ? { budget_limits: limits } : {}),
+      ...(group.tpm !== (original?.tpm ?? "") ? { tpm_limit: group.tpm.trim() ? Number(group.tpm) : null } : {}),
+      ...(group.rpm !== (original?.rpm ?? "") ? { rpm_limit: group.rpm.trim() ? Number(group.rpm) : null } : {}),
     };
   });
   const body: components["schemas"]["BudgetGroupsUpdate"] = {
@@ -53,8 +57,7 @@ export function planCustomerBudgetGroups(
     default_budgets.some(
       (group) =>
         group.name !== originals.find((original) => original.id === group.budget_id)?.name ||
-        group.cap_policy !== undefined ||
-        group.budget_limits !== undefined,
+        [group.cap_policy, group.budget_limits, group.tpm_limit, group.rpm_limit].some((value) => value !== undefined),
     );
   return { ok: true, body, changed } as const;
 }
