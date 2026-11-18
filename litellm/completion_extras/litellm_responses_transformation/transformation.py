@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     responses_reasoning_items_from_thinking_blocks,
     thinking_blocks_from_reasoning_items,
 )
+from litellm.llms.azure_ai.common_utils import is_foundry_project_agent
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
@@ -1286,7 +1287,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
-            preserve_system_instructions=preserve_system_instructions or provider not in _SYSTEM_INPUT_PROVIDERS,
+            preserve_system_instructions=preserve_system_instructions
+            or provider not in _SYSTEM_INPUT_PROVIDERS
+            or (provider == "azure_ai" and is_foundry_project_agent(model)),
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
             replay_openai_history=provider == "openai",

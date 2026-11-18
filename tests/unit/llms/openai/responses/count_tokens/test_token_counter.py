@@ -222,6 +222,11 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
         "input": [
             {
                 "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Be brief."}],
+            },
+            {
+                "type": "message",
                 "role": "user",
                 "content": [
                     {"type": "input_text", "text": "Summarize."},
@@ -232,7 +237,6 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
             {"type": "function_call", "call_id": "toolu_01", "name": "lookup", "arguments": "{}"},
             {"type": "function_call_output", "call_id": "toolu_01", "output": "found"},
         ],
-        "instructions": "Be brief.",
     }
 
 
