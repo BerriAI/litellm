@@ -109,3 +109,41 @@ def test_outrun_models_trim_to_their_input_budget(local_model_cost_map: None) ->
         )
         assert litellm.token_counter(model=model, messages=messages) > budget
         assert litellm.token_counter(model=model, messages=trimmed) <= budget
+
+
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.asyncio
+async def test_missing_outrun_key_does_not_send_other_provider_credentials(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OUTRUN_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    messages: Final = [{"role": "user", "content": "hi"}]
+    with respx.mock(assert_all_called=False) as outrun_api:
+        route: Final = outrun_api.post("https://api.outrun.to/v1/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="OUTRUN_API_KEY"):
+            _ = (
+                await litellm.acompletion(model="outrun/claude-sonnet-5-5", messages=messages)
+                if is_async
+                else litellm.completion(model="outrun/claude-sonnet-5-5", messages=messages)
+            )
+    assert not route.called
+
+
+@respx.mock
+def test_chat_does_not_send_the_openai_organization_to_outrun(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-openai-only")
+    route: Final = respx.post("https://api.outrun.to/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "claude-sonnet-5-5",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    _ = litellm.completion(
+        model="outrun/claude-sonnet-5-5", api_key="fake-test-key", messages=[{"role": "user", "content": "hi"}]
+    )
+    assert "openai-organization" not in route.calls.last.request.headers

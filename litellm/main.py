@@ -466,6 +466,9 @@ def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _
 
 PROVIDERS_WITHOUT_DOCUMENT_INPUT: Final = frozenset({"ollama", "ollama_chat"})
 PROVIDERS_DROPPING_UNDECLARED_PDF_INPUT: Final = frozenset({"azure_ai"})
+# OpenAI-compatible chat providers whose own API key is required: the OpenAI credential
+# fallback in _complete_custom_openai must not send another provider's secret to them.
+_OWN_CREDENTIAL_PROVIDERS: Final[Mapping[str, str]] = {"bigmodel": "BIGMODEL_API_KEY", "outrun": "OUTRUN_API_KEY"}
 
 
 def _cost_map_pdf_input_support(model: str, custom_llm_provider: str) -> bool | None:
@@ -2802,13 +2805,16 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if custom_llm_provider == "bigmodel" and not api_key:
+    # Providers that must never receive OpenAI credentials: a missing key of their own is an error
+    # instead of a fallback to litellm.api_key / OPENAI_API_KEY / OPENAI_ORGANIZATION below.
+    own_key_env: Final = _OWN_CREDENTIAL_PROVIDERS.get(custom_llm_provider)
+    if own_key_env is not None and not api_key:
         raise litellm.AuthenticationError(
-            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+            message=f"Set {own_key_env} or pass api_key", llm_provider=custom_llm_provider, model=model
         )
     organization = (
         organization
-        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
+        or (None if own_key_env is not None else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
