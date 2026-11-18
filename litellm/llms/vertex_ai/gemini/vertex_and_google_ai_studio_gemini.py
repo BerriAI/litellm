@@ -2664,20 +2664,31 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif modality == "DOCUMENT":
                     response_tokens_details.text_tokens = (response_tokens_details.text_tokens or 0) + token_count
 
-        # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
-        # candidatesTokenCount includes all modalities, so: text = total - (image + audio + video)
+        # candidatesTokenCount normally includes every modality, so text = count - (image + audio + video).
+        # AI Studio image models returning thoughts leave image tokens out of candidatesTokenCount and
+        # totalTokenCount, so a count below the non-text tokens is all text and the rest must be added back.
         candidates_token_count: Final = usage_metadata.get("candidatesTokenCount", 0)
+        non_text_tokens: Final = (
+            0
+            if response_tokens_details is None
+            else (response_tokens_details.image_tokens or 0)
+            + (response_tokens_details.audio_tokens or 0)
+            + (response_tokens_details.video_tokens or 0)
+        )
         if candidates_token_count > 0:
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
             if response_tokens_details.text_tokens is None:
-                completion_image_tokens: Final = response_tokens_details.image_tokens or 0
-                completion_audio_tokens: Final = response_tokens_details.audio_tokens or 0
-                completion_video_tokens: Final = response_tokens_details.video_tokens or 0
-                calculated_text_tokens: Final = (
-                    candidates_token_count - completion_image_tokens - completion_audio_tokens - completion_video_tokens
+                response_tokens_details.text_tokens = (
+                    candidates_token_count - non_text_tokens
+                    if non_text_tokens <= candidates_token_count
+                    else candidates_token_count
                 )
-                response_tokens_details.text_tokens = calculated_text_tokens
+        uncounted_candidate_tokens: Final = (
+            max((response_tokens_details.text_tokens or 0) + non_text_tokens - candidates_token_count, 0)
+            if candidates_token_count > 0 and not response_tokens and response_tokens_details is not None
+            else 0
+        )
         #########################################################
 
         ## Parse promptTokensDetails (total tokens by modality, includes cached + non-cached)
@@ -2778,8 +2789,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             prompt_tokens=usage_metadata.get("promptTokenCount", 0)
             + billable_tool_use_prompt_tokens
             + cache_creation_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=usage_metadata.get("totalTokenCount", 0) + cache_creation_tokens,
+            completion_tokens=completion_tokens + uncounted_candidate_tokens,
+            total_tokens=usage_metadata.get("totalTokenCount", 0) + cache_creation_tokens + uncounted_candidate_tokens,
             prompt_tokens_details=prompt_tokens_details,
             cache_read_input_tokens=cached_tokens,
             cache_creation_input_tokens=cache_creation_tokens or None,

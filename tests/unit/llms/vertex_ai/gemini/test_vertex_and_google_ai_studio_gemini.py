@@ -1465,6 +1465,34 @@ def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
     assert result.completion_tokens_details.reasoning_tokens == 158
 
 
+@pytest.mark.parametrize(
+    "candidate_details",
+    [
+        pytest.param([{"modality": "IMAGE", "tokenCount": 1120}], id="text_not_itemized"),
+        pytest.param(
+            [{"modality": "IMAGE", "tokenCount": 1120}, {"modality": "TEXT", "tokenCount": 45}],
+            id="text_itemized",
+        ),
+    ],
+)
+def test_image_tokens_left_out_of_gemini_candidate_count_are_added_back(candidate_details):
+    usage_metadata = UsageMetadata(
+        promptTokenCount=9,
+        candidatesTokenCount=45,
+        thoughtsTokenCount=70,
+        totalTokenCount=124,
+        promptTokensDetails=[{"modality": "TEXT", "tokenCount": 9}],
+        candidatesTokensDetails=candidate_details,
+    )
+
+    usage = VertexGeminiConfig().calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    details = usage.completion_tokens_details
+    assert (details.text_tokens, details.image_tokens, details.reasoning_tokens) == (45, 1120, 70)
+    assert usage.completion_tokens == 45 + 1120 + 70
+    assert usage.total_tokens == 9 + 45 + 1120 + 70
+
+
 def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
     """Test promptTokensDetails with IMAGE modality for multimodal inputs
 
