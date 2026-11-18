@@ -3216,6 +3216,10 @@ async def _authorize_authenticated_request_checks(
             litellm_jwtauth,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
+        received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)
+        user_api_key_auth_obj.customer_hierarchy_started_at = (  # rebind-ok: server request clock, never a cached key or caller field
+            received_at if isinstance(received_at, datetime) else datetime.now(timezone.utc)
+        )
         has_customer: Final = customer_identity is not None and not RustAuth.is_public_route(
             route, core.proxy_settings()
         )
