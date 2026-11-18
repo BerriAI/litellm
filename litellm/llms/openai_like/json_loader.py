@@ -18,7 +18,8 @@ from litellm.types.utils import ProviderSpecificModelInfo
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 _SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _MODEL_ENDPOINTS_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[str, ...]])
-_USER_AGENT_ADAPTER: Final = TypeAdapter(str)
+_MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_STR_ADAPTER: Final = TypeAdapter(str)
 
 _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
@@ -29,13 +30,11 @@ class SimpleProviderConfig:
 
     def __init__(self, slug: str, data: dict):
         self.slug = slug
-        self.base_url = data["base_url"]
+        self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
         self.api_key_env: str = data["api_key_env"]
         self.api_base_env: str | None = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
-        self.user_agent: str | None = (
-            _USER_AGENT_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
-        )
+        self.user_agent: str | None = _STR_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
@@ -45,9 +44,17 @@ class SimpleProviderConfig:
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
             data.get("model_supported_endpoints", {})
         )
+        self.model_base_urls: Mapping[str, str] = _MODEL_BASE_URLS_ADAPTER.validate_python(
+            data.get("model_base_urls", {})
+        )
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+
+    def default_base_url(self, model: str | None) -> str:
+        if model is None:
+            return self.base_url
+        return self.model_base_urls.get(model.removeprefix(f"{self.slug}/"), self.base_url)
 
     def get_attribution_headers(self) -> Mapping[str, str]:
         if not self.user_agent:

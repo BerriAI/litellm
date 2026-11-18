@@ -144,6 +144,19 @@ When only some models serve an endpoint natively, list them under `model_support
 }
 ```
 
+When some models are served at a different base URL than the rest, list them under `model_base_urls`. A deployment's `api_base` and the provider's `api_base_env` still take precedence:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.example.com/v2",
+    "model_base_urls": {
+      "legacy-model": "https://api.example.com/v1"
+    }
+  }
+}
+```
+
 ### How It Works
 
 1. `json_loader.py` checks `supported_endpoints` for `/v1/responses`

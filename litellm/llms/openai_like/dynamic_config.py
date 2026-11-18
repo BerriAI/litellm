@@ -95,19 +95,7 @@ def create_config_class(provider: SimpleProviderConfig):
         def _get_openai_compatible_provider_info(
             self, api_base: str | None, api_key: str | None
         ) -> tuple[str | None, str | None]:
-            """Get API base and key from JSON config"""
-
-            # Resolve base URL
-            resolved_base = api_base
-            if not resolved_base and provider.api_base_env:
-                resolved_base = get_secret_str(provider.api_base_env)
-            if not resolved_base:
-                resolved_base = provider.base_url
-
-            # Resolve API key
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
-
-            return resolved_base, resolved_key
+            return self.get_model_provider_info(None, api_base, api_key)
 
         def get_openai_compatible_provider_info(
             self,
@@ -115,6 +103,17 @@ def create_config_class(provider: SimpleProviderConfig):
             api_key: str | None,
         ) -> tuple[str | None, str | None]:
             return self._get_openai_compatible_provider_info(api_base, api_key)
+
+        def get_model_provider_info(
+            self, model: str | None, api_base: str | None, api_key: str | None
+        ) -> tuple[str | None, str | None]:
+            resolved_base: Final = (
+                api_base
+                or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
+                or provider.default_base_url(model)
+            )
+            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            return resolved_base, resolved_key
 
         def get_complete_url(
             self,
@@ -126,12 +125,7 @@ def create_config_class(provider: SimpleProviderConfig):
             stream: bool | None = None,
         ) -> str:
             """Build complete URL for the API endpoint"""
-            if not api_base:
-                api_base = provider.base_url
-
-            if isinstance(api_base, str):
-                return ensure_api_route(api_base, "chat/completions")
-            raise ValueError(f"api_base is required for provider {provider.slug}")
+            return ensure_api_route(api_base or provider.default_base_url(model), "chat/completions")
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
@@ -273,15 +267,12 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             api_base: str | None,
             litellm_params: dict,
         ) -> str:
-            if not api_base:
-                if provider.api_base_env:
-                    api_base = get_secret_str(provider.api_base_env)
-                if not api_base:
-                    api_base = provider.base_url
-
-            if isinstance(api_base, str):
-                return join_api_base(api_base, "responses")
-            raise ValueError(f"api_base is required for provider {provider.slug}")
+            resolved_base: Final = (
+                api_base
+                or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
+                or provider.base_url
+            )
+            return join_api_base(resolved_base, "responses")
 
         def transform_responses_api_request(
             self,
