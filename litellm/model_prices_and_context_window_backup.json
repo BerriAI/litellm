@@ -1218,7 +1218,8 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1238,7 +1239,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
@@ -1278,7 +1280,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -1308,6 +1311,7 @@
         "cache_read_input_token_cost": 1.5e-06,
         "deprecation_date": "2027-01-08",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-opus-4-8",
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
@@ -5151,6 +5155,7 @@
     "azure_ai/gpt-5.4-nano": {
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "successor_model": "azure_ai/gpt-6-luna",
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_priority": 4e-08,
         "input_cost_per_token": 2e-07,
@@ -5193,6 +5198,7 @@
     "azure_ai/gpt-5.4-nano-2026-03-17": {
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "successor_model": "azure_ai/gpt-6-luna",
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_priority": 4e-08,
         "input_cost_per_token": 2e-07,
@@ -5323,6 +5329,7 @@
         "cache_read_input_token_cost": 8.3e-08,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/eu/gpt-6-luna",
         "input_cost_per_token": 1.65e-07,
         "input_cost_per_token_batches": 8.3e-08,
         "litellm_provider": "azure",
@@ -5347,6 +5354,7 @@
         "cache_read_input_token_cost": 8.3e-08,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/eu/gpt-6-luna",
         "input_cost_per_token": 1.65e-07,
         "input_cost_per_token_batches": 8.3e-08,
         "litellm_provider": "azure",
@@ -5589,6 +5597,7 @@
     "azure/eu/gpt-5.1-codex-mini": {
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/eu/gpt-5.6-terra",
         "cache_read_input_token_cost": 2.75e-08,
         "input_cost_per_token": 2.75e-07,
         "litellm_provider": "azure",
@@ -5664,6 +5673,7 @@
     "azure/eu/o1": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
@@ -5683,6 +5693,7 @@
     "azure/eu/o1-2024-12-17": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
@@ -5757,6 +5768,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.1",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
         "litellm_provider": "azure",
@@ -5777,6 +5789,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.1",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
         "litellm_provider": "azure",
@@ -5795,6 +5808,7 @@
     "azure/global-standard/gpt-4o-mini": {
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-6-luna",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -5857,6 +5871,7 @@
     "azure/global/gpt-5.1": {
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-6-sol",
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
@@ -5905,6 +5920,7 @@
     "azure/global/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.2-codex",
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
@@ -5937,6 +5953,7 @@
     "azure/global/gpt-5.1-codex-mini": {
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.6-terra",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure",
@@ -6402,6 +6419,7 @@
     "azure/gpt-audio": {
         "deprecation_date": "2027-03-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-audio-1.5",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -6436,6 +6454,7 @@
     "azure/gpt-audio-2025-08-28": {
         "deprecation_date": "2027-03-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-audio-1.5",
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -6538,6 +6557,7 @@
     "azure/gpt-audio-mini": {
         "deprecation_date": "2027-06-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-audio-1.5",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure",
@@ -6571,6 +6591,7 @@
     "azure/gpt-audio-mini-2025-10-06": {
         "deprecation_date": "2027-04-06",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-audio-1.5",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure",
@@ -6636,6 +6657,7 @@
     "azure/gpt-4o-mini": {
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-6-luna",
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_batches": 7.5e-08,
@@ -6662,6 +6684,7 @@
         "cache_read_input_token_cost": 7.5e-08,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-6-luna",
         "input_cost_per_token": 1.5e-07,
         "input_cost_per_token_batches": 7.5e-08,
         "litellm_provider": "azure",
@@ -6740,6 +6763,7 @@
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-03-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-realtime-2.1",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6780,6 +6804,7 @@
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-03-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-realtime-2.1",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6981,6 +7006,7 @@
         "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2027-06-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-realtime-2.1-mini",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
@@ -7018,6 +7044,7 @@
         "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2027-04-06",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-realtime-2.1-mini",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
@@ -7052,6 +7079,7 @@
     "azure/gpt-4o-mini-transcribe": {
         "deprecation_date": "2027-06-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-live-transcribe",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
@@ -7066,6 +7094,7 @@
     "azure/gpt-4o-mini-tts": {
         "deprecation_date": "2027-06-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-realtime-2.1-mini",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure",
         "mode": "audio_speech",
@@ -7113,6 +7142,7 @@
     "azure/gpt-4o-transcribe": {
         "deprecation_date": "2026-10-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-live-transcribe",
         "input_cost_per_audio_token": 6e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -7128,6 +7158,7 @@
     "azure/gpt-4o-transcribe-diarize": {
         "deprecation_date": "2027-04-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-live-transcribe",
         "input_cost_per_audio_token": 6e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -7253,6 +7284,7 @@
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.6-terra",
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_priority": 4.5e-07,
         "litellm_provider": "azure",
@@ -7937,6 +7969,7 @@
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2027-05-18",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.6-sol",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -7968,6 +8001,7 @@
     "azure/gpt-5.1-codex-mini": {
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.6-terra",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure",
@@ -8129,6 +8163,7 @@
         "cache_read_input_token_cost_priority": 3.5e-07,
         "deprecation_date": "2027-08-24",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-6-sol",
         "input_cost_per_token": 1.75e-06,
         "input_cost_per_token_priority": 3.5e-06,
         "litellm_provider": "azure",
@@ -11291,6 +11326,7 @@
     "azure/gpt-5.4-nano": {
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-6-luna",
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_batches": 1e-08,
         "cache_read_input_token_cost_flex": 1e-08,
@@ -11342,6 +11378,7 @@
         "cache_read_input_token_cost_flex": 1e-08,
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-6-luna",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -11427,6 +11464,7 @@
     "azure/high/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 1.59263611e-07,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11438,6 +11476,7 @@
     "azure/high/1024-x-1536/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11449,6 +11488,7 @@
     "azure/high/1536-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11460,6 +11500,7 @@
     "azure/low/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 1.0490417e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11471,6 +11512,7 @@
     "azure/low/1024-x-1536/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11482,6 +11524,7 @@
     "azure/low/1536-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11493,6 +11536,7 @@
     "azure/medium/1024-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11504,6 +11548,7 @@
     "azure/medium/1024-x-1536/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11515,6 +11560,7 @@
     "azure/medium/1536-x-1024/gpt-image-1": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
         "mode": "image_generation",
@@ -11766,6 +11812,7 @@
     },
     "azure/o1": {
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 7.5e-06,
         "input_cost_per_token": 1.5e-05,
@@ -11784,6 +11831,7 @@
     "azure/o1-2024-12-17": {
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-sol",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
@@ -11837,6 +11885,7 @@
     },
     "azure/o3": {
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
@@ -11875,6 +11924,7 @@
     },
     "azure/o3-2025-04-16": {
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
@@ -12212,6 +12262,7 @@
     "azure/tts-1": {
         "deprecation_date": "2026-12-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-realtime-2.1-mini",
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "azure",
         "mode": "audio_speech",
@@ -12220,6 +12271,7 @@
     "azure/tts-1-hd": {
         "deprecation_date": "2026-12-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-realtime-2.1-mini",
         "input_cost_per_character": 3.3e-05,
         "litellm_provider": "azure",
         "mode": "audio_speech",
@@ -12415,6 +12467,7 @@
         "cache_read_input_token_cost": 8.3e-08,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/us/gpt-6-luna",
         "input_cost_per_token": 1.65e-07,
         "input_cost_per_token_batches": 8.3e-08,
         "litellm_provider": "azure",
@@ -12439,6 +12492,7 @@
         "cache_read_input_token_cost": 8.3e-08,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/us/gpt-6-luna",
         "input_cost_per_token": 1.65e-07,
         "input_cost_per_token_batches": 8.3e-08,
         "litellm_provider": "azure",
@@ -12724,6 +12778,7 @@
     "azure/us/gpt-5.1-codex-mini": {
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/us/gpt-5.6-terra",
         "cache_read_input_token_cost": 2.75e-08,
         "input_cost_per_token": 2.75e-07,
         "litellm_provider": "azure",
@@ -12756,6 +12811,7 @@
     "azure/us/o1": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
@@ -12775,6 +12831,7 @@
     "azure/us/o1-2024-12-17": {
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.6-sol",
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
@@ -12809,6 +12866,7 @@
     },
     "azure/us/o3": {
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
@@ -12847,6 +12905,7 @@
     },
     "azure/us/o3-2025-04-16": {
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
@@ -12978,6 +13037,7 @@
     "azure/whisper-1": {
         "deprecation_date": "2026-12-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-live-transcribe",
         "input_cost_per_second": 0.0001,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
@@ -13013,6 +13073,7 @@
     "azure_ai/Codestral-2501": {
         "deprecation_date": "2027-02-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "successor_model": "azure_ai/mistral-large-4-latest",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 256000,
@@ -15225,7 +15286,8 @@
         "cache_read_input_token_cost": 3e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": {
         "deprecation_date": "2027-03-30",
@@ -16390,6 +16452,8 @@
     },
     "cerebras/llama-3.3-70b": {
         "deprecation_date": "2026-02-16",
+        "deprecation_source": "https://inference-docs.cerebras.ai/support/deprecation",
+        "successor_model": "cerebras/gpt-oss-120b",
         "input_cost_per_token": 8.5e-07,
         "litellm_provider": "cerebras",
         "max_input_tokens": 128000,
@@ -16401,6 +16465,8 @@
     },
     "cerebras/llama3.1-8b": {
         "deprecation_date": "2026-05-27",
+        "deprecation_source": "https://inference-docs.cerebras.ai/support/deprecation",
+        "successor_model": "cerebras/gpt-oss-120b",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "cerebras",
         "max_input_tokens": 128000,
@@ -16426,6 +16492,8 @@
     },
     "cerebras/qwen-3-32b": {
         "deprecation_date": "2026-02-16",
+        "deprecation_source": "https://inference-docs.cerebras.ai/support/deprecation",
+        "successor_model": "cerebras/gpt-oss-120b",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "cerebras",
         "max_input_tokens": 128000,
@@ -16749,6 +16817,7 @@
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "deprecation_date": "2027-04-08",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "successor_model": "anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -17619,6 +17688,7 @@
     "codestral/codestral-2405": {
         "deprecation_date": "2025-06-16",
         "deprecation_source": "https://docs.mistral.ai/getting-started/models/",
+        "successor_model": "codestral/codestral-latest",
         "input_cost_per_token": 0.0,
         "litellm_provider": "codestral",
         "max_input_tokens": 32000,
@@ -18155,6 +18225,7 @@
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-07-24",
         "deprecation_source": "https://api-docs.deepseek.com/updates",
+        "successor_model": "deepseek-v4-flash",
         "input_cost_per_token": 2.8e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 131072,
@@ -18177,6 +18248,7 @@
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-07-24",
         "deprecation_source": "https://api-docs.deepseek.com/updates",
+        "successor_model": "deepseek-v4-flash",
         "input_cost_per_token": 2.8e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 131072,
@@ -22241,6 +22313,7 @@
         "cache_creation_input_token_cost": 3.74997e-06,
         "cache_read_input_token_cost": 3.0002e-07,
         "deprecation_date": "2026-10-09",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
         "successor_model": "databricks/databricks-claude-sonnet-5",
         "input_cost_per_token": 2.99999e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
@@ -22436,6 +22509,7 @@
         "cache_creation_input_token_cost": 3.0002e-07,
         "cache_read_input_token_cost": 3.0002e-08,
         "deprecation_date": "2026-10-02",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
         "successor_model": "databricks/databricks-gemini-3-5-flash",
         "input_cost_per_token": 3.0001999999999996e-07,
         "input_dbu_cost_per_token": 4.285999999999999e-06,
@@ -22487,6 +22561,8 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "deprecation_date": "2026-10-02",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/retired-models-policy",
+        "successor_model": "databricks/databricks-gemini-3-1-pro",
         "supports_reasoning": true,
         "supported_modalities": [
             "text",
@@ -25084,6 +25160,7 @@
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-07-24",
         "deprecation_source": "https://api-docs.deepseek.com/updates",
+        "successor_model": "deepseek/deepseek-v4-flash",
         "input_cost_per_token": 2.8e-07,
         "input_cost_per_token_cache_hit": 2.8e-08,
         "litellm_provider": "deepseek",
@@ -25137,6 +25214,7 @@
         "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2026-07-24",
         "deprecation_source": "https://api-docs.deepseek.com/updates",
+        "successor_model": "deepseek/deepseek-v4-flash",
         "input_cost_per_token": 2.8e-07,
         "input_cost_per_token_cache_hit": 2.8e-08,
         "litellm_provider": "deepseek",
@@ -26005,6 +26083,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
         "deprecation_date": "2026-10-15",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "successor_model": "eu.anthropic.claude-haiku-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -26047,7 +26126,8 @@
         "cache_read_input_token_cost": 3e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "input_cost_per_token": 3e-06,
@@ -26067,7 +26147,8 @@
         "cache_read_input_token_cost": 3e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -26088,7 +26169,8 @@
         "cache_read_input_token_cost": 3e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -26130,6 +26212,7 @@
         "prompt_cache_min_tokens": 1024,
         "deprecation_date": "2027-01-08",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "eu.anthropic.claude-opus-4-8",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-1-20250805-v1:0",
             "litellm_provider": "bedrock"
@@ -28785,6 +28868,8 @@
         "cache_read_input_token_cost": 4.4e-08,
         "cache_read_input_token_cost_priority": 5.5e-08,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
         "input_cost_per_token": 1.32e-06,
         "input_cost_per_token_priority": 1.65e-06,
         "litellm_provider": "fireworks_ai",
@@ -28804,6 +28889,8 @@
         "cache_read_input_token_cost": 4.4e-08,
         "cache_read_input_token_cost_priority": 5.5e-08,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/deepseek-v4p1-flash",
         "input_cost_per_token": 1.32e-06,
         "input_cost_per_token_priority": 1.65e-06,
         "litellm_provider": "fireworks_ai",
@@ -28903,6 +28990,7 @@
         "cache_read_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
         "successor_model": "fireworks_ai/accounts/fireworks/models/glm-5p3",
         "input_cost_per_token": 1.4e-06,
         "input_cost_per_token_priority": 1.75e-06,
@@ -29008,6 +29096,8 @@
         "cache_read_input_token_cost": 1.6e-07,
         "cache_read_input_token_cost_priority": 2.2e-07,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/glm-5p3",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.5e-06,
         "litellm_provider": "fireworks_ai",
@@ -29027,6 +29117,8 @@
         "cache_read_input_token_cost": 1.9e-07,
         "cache_read_input_token_cost_priority": 2.85e-07,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/glm-5p3",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.425e-06,
         "litellm_provider": "fireworks_ai",
@@ -29303,6 +29395,7 @@
         "cache_read_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
         "successor_model": "fireworks_ai/glm-5p3",
         "input_cost_per_token": 1.4e-06,
         "input_cost_per_token_priority": 1.75e-06,
@@ -29371,6 +29464,8 @@
         "cache_read_input_token_cost": 1.6e-07,
         "cache_read_input_token_cost_priority": 2.2e-07,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/glm-5p3",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.5e-06,
         "litellm_provider": "fireworks_ai",
@@ -29408,6 +29503,8 @@
         "cache_read_input_token_cost": 1.9e-07,
         "cache_read_input_token_cost_priority": 2.85e-07,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/glm-5p3",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.425e-06,
         "litellm_provider": "fireworks_ai",
@@ -34139,6 +34236,8 @@
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_read_input_token_cost": 1e-06,
         "deprecation_date": "2026-11-16",
+        "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/claude-opus-5.5",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
@@ -34255,6 +34354,8 @@
     "github_copilot/gemini-3.7-flash": {
         "cache_read_input_token_cost": 7.5e-08,
         "deprecation_date": "2026-10-19",
+        "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/gemini-3.8-flash",
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
@@ -34331,6 +34432,7 @@
     "github_copilot/gpt-4.1": {
         "deprecation_date": "2026-06-01",
         "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/gpt-6-luna",
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
@@ -34344,6 +34446,7 @@
     "github_copilot/gpt-4.1-2025-04-14": {
         "deprecation_date": "2026-06-01",
         "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/gpt-6-luna",
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
@@ -34412,6 +34515,8 @@
     "github_copilot/gpt-5-mini": {
         "cache_read_input_token_cost": 2.5e-08,
         "deprecation_date": "2026-10-19",
+        "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/gpt-6-luna",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
@@ -34446,6 +34551,7 @@
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "deprecation_date": "2026-10-19",
         "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/gpt-6.2-sol",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_above_272k_tokens": 5e-06,
         "litellm_provider": "github_copilot",
@@ -34468,6 +34574,8 @@
     "github_copilot/gpt-5.4-mini": {
         "cache_read_input_token_cost": 7.5e-08,
         "deprecation_date": "2026-10-19",
+        "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/gpt-6-luna",
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 272000,
@@ -34489,6 +34597,7 @@
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "deprecation_date": "2026-10-19",
         "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/gpt-6.2-sol",
         "input_cost_per_token": 5e-06,
         "input_cost_per_token_above_272k_tokens": 1e-05,
         "litellm_provider": "github_copilot",
@@ -34560,6 +34669,7 @@
         "cache_read_input_token_cost_above_272k_tokens": 4e-07,
         "deprecation_date": "2026-11-16",
         "deprecation_source": "https://github.blog/changelog/2026-11-16-github-copilot-models-deprecated-on-november-16-2026",
+        "successor_model": "github_copilot/gpt-6.1-terra",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "litellm_provider": "github_copilot",
@@ -35630,6 +35740,7 @@
     "gpt-3.5-turbo-16k": {
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
+        "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16385,
@@ -44239,6 +44350,7 @@
         "cache_read_input_token_cost": 1.4e-07,
         "deprecation_date": "2026-10-31",
         "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
+        "successor_model": "mistral/zai-glm-5-3",
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 1048576,
@@ -44404,6 +44516,8 @@
     },
     "mistral/mistral-ocr-4-0": {
         "deprecation_date": "2026-09-30",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
+        "successor_model": "mistral/mistral-ocr-4-1",
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.004,
         "ocr_cost_per_page_batches": 0.002,
@@ -44586,6 +44700,8 @@
     },
     "mistral/mistral-large-2512": {
         "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
+        "successor_model": "mistral/mistral-large-4",
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
@@ -44662,6 +44778,8 @@
     },
     "mistral/mistral-medium-3-5": {
         "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
+        "successor_model": "mistral/mistral-large-4",
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
@@ -50872,6 +50990,7 @@
     "text-completion-codestral/codestral-2405": {
         "deprecation_date": "2025-06-16",
         "deprecation_source": "https://docs.mistral.ai/getting-started/models/",
+        "successor_model": "text-completion-codestral/codestral-latest",
         "input_cost_per_token": 0.0,
         "litellm_provider": "text-completion-codestral",
         "max_input_tokens": 32000,
@@ -51738,7 +51857,8 @@
         "cache_read_input_token_cost": 3e-07,
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -51758,7 +51878,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "anthropic.claude-sonnet-5-5"
     },
     "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -51779,7 +51900,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "deprecation_date": "2026-11-13",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "us.anthropic.claude-sonnet-5-5"
     },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -51800,6 +51922,7 @@
         "cache_read_input_token_cost": 1.5e-06,
         "deprecation_date": "2027-01-08",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "successor_model": "us.anthropic.claude-opus-4-8",
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
@@ -54014,6 +54137,8 @@
     },
     "vertex_ai/claude-3-5-haiku": {
         "deprecation_date": "2026-07-05",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
+        "successor_model": "vertex_ai/claude-haiku-4-5",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -54027,6 +54152,8 @@
     },
     "vertex_ai/claude-3-5-haiku@20241022": {
         "deprecation_date": "2026-07-05",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
+        "successor_model": "vertex_ai/claude-haiku-4-5",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -54040,6 +54167,7 @@
     },
     "vertex_ai/claude-haiku-4-5": {
         "deprecation_date": "2026-10-15",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "successor_model": "vertex_ai/claude-haiku-5-5",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
@@ -54074,6 +54202,8 @@
     },
     "vertex_ai/claude-haiku-4-5@20251001": {
         "deprecation_date": "2026-10-15",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+        "successor_model": "vertex_ai/claude-haiku-5-5",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_creation_input_token_cost_batches": 6.25e-07,
@@ -54107,6 +54237,8 @@
     },
     "vertex_ai/claude-3-5-sonnet": {
         "deprecation_date": "2026-02-19",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
+        "successor_model": "vertex_ai/claude-sonnet-5-5",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -54122,6 +54254,8 @@
     },
     "vertex_ai/claude-3-5-sonnet@20240620": {
         "deprecation_date": "2026-02-19",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
+        "successor_model": "vertex_ai/claude-sonnet-5-5",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -54136,6 +54270,8 @@
     },
     "vertex_ai/claude-3-haiku": {
         "deprecation_date": "2026-08-23",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
+        "successor_model": "vertex_ai/claude-haiku-4-5",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -54149,6 +54285,8 @@
     },
     "vertex_ai/claude-3-haiku@20240307": {
         "deprecation_date": "2026-08-23",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
+        "successor_model": "vertex_ai/claude-haiku-4-5",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -54186,6 +54324,7 @@
     },
     "vertex_ai/claude-opus-4-5": {
         "deprecation_date": "2026-11-24",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "successor_model": "vertex_ai/claude-opus-5-5",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -54221,6 +54360,8 @@
     },
     "vertex_ai/claude-opus-4-5@20251101": {
         "deprecation_date": "2026-11-24",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+        "successor_model": "vertex_ai/claude-opus-5-5",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -54256,6 +54397,7 @@
     },
     "vertex_ai/claude-opus-4-6": {
         "deprecation_date": "2027-02-05",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
@@ -54293,6 +54435,7 @@
     },
     "vertex_ai/claude-opus-4-6@default": {
         "deprecation_date": "2027-02-05",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
@@ -54330,6 +54473,7 @@
     },
     "vertex_ai/claude-opus-4-7": {
         "deprecation_date": "2027-04-16",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -54367,6 +54511,7 @@
     },
     "vertex_ai/claude-opus-4-7@default": {
         "deprecation_date": "2027-04-16",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -54519,6 +54664,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -54560,6 +54706,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
@@ -54684,6 +54831,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -54725,6 +54873,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
@@ -54892,6 +55041,7 @@
     },
     "vertex_ai/claude-opus-4-8": {
         "deprecation_date": "2027-05-28",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
@@ -54930,6 +55080,7 @@
     },
     "vertex_ai/claude-opus-4-8@default": {
         "deprecation_date": "2027-05-28",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
@@ -54968,6 +55119,7 @@
     },
     "vertex_ai/claude-sonnet-4-5": {
         "deprecation_date": "2026-09-29",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
         "successor_model": "vertex_ai/claude-sonnet-5-5",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -55080,6 +55232,8 @@
     },
     "vertex_ai/claude-sonnet-4-5@20250929": {
         "deprecation_date": "2026-09-29",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
+        "successor_model": "vertex_ai/claude-sonnet-5-5",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -55194,6 +55348,7 @@
     "vertex_ai/deepseek-ai/deepseek-v3.1-maas": {
         "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 6e-07,
         "input_cost_per_token_batches": 3e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -55215,6 +55370,7 @@
     "vertex_ai/deepseek-ai/deepseek-v3.2-maas": {
         "cache_read_input_token_cost": 5.6e-08,
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 5.6e-07,
         "input_cost_per_token_batches": 2.8e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -55236,6 +55392,7 @@
     },
     "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": {
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 1.35e-06,
         "input_cost_per_token_batches": 6.75e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -55688,6 +55845,7 @@
     },
     "vertex_ai/jamba-1.5": {
         "deprecation_date": "2026-02-27",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai-ai21_models",
         "max_input_tokens": 256000,
@@ -55698,6 +55856,7 @@
     },
     "vertex_ai/jamba-1.5-large": {
         "deprecation_date": "2026-02-27",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "vertex_ai-ai21_models",
         "max_input_tokens": 256000,
@@ -55708,6 +55867,7 @@
     },
     "vertex_ai/jamba-1.5-large@001": {
         "deprecation_date": "2026-02-27",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "vertex_ai-ai21_models",
         "max_input_tokens": 256000,
@@ -55718,6 +55878,7 @@
     },
     "vertex_ai/jamba-1.5-mini": {
         "deprecation_date": "2026-02-27",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai-ai21_models",
         "max_input_tokens": 256000,
@@ -55728,6 +55889,7 @@
     },
     "vertex_ai/jamba-1.5-mini@001": {
         "deprecation_date": "2026-02-27",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai-ai21_models",
         "max_input_tokens": 256000,
@@ -55998,6 +56160,7 @@
     "vertex_ai/minimaxai/minimax-m2-maas": {
         "cache_read_input_token_cost": 3e-08,
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-minimax_models",
         "max_input_tokens": 196608,
@@ -56011,6 +56174,7 @@
     "vertex_ai/moonshotai/kimi-k2-thinking-maas": {
         "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-moonshot_models",
         "max_input_tokens": 256000,
@@ -56026,6 +56190,7 @@
     "vertex_ai/zai-org/glm-4.7-maas": {
         "cache_read_input_token_cost": 6e-08,
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "successor_model": "vertex_ai/zai-org/glm-5.2-maas",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-zai_models",
@@ -56045,6 +56210,7 @@
     "vertex_ai/zai-org/glm-5-maas": {
         "cache_read_input_token_cost": 1e-07,
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "successor_model": "vertex_ai/zai-org/glm-5.2-maas",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-zai_models",
@@ -56200,6 +56366,7 @@
     },
     "vertex_ai/deepseek-ai/deepseek-ocr-maas": {
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "litellm_provider": "vertex_ai",
         "mode": "ocr",
         "input_cost_per_token": 3e-07,
@@ -56241,6 +56408,7 @@
     },
     "vertex_ai/openai/gpt-oss-20b-maas": {
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 7e-08,
         "litellm_provider": "vertex_ai-openai_models",
         "max_input_tokens": 131072,
@@ -56366,6 +56534,7 @@
     },
     "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": {
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_batches": 1.1e-07,
         "litellm_provider": "vertex_ai-qwen_models",
@@ -56386,6 +56555,7 @@
     "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": {
         "cache_read_input_token_cost": 2.2e-08,
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_batches": 1.1e-07,
         "litellm_provider": "vertex_ai-qwen_models",
@@ -56404,6 +56574,7 @@
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-qwen_models",
         "max_input_tokens": 262144,
@@ -56420,6 +56591,7 @@
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": {
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-qwen_models",
         "max_input_tokens": 262144,
@@ -66967,6 +67139,7 @@
     },
     "mistral/labs-leanstral-1-5": {
         "deprecation_date": "2026-09-30",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
         "input_cost_per_token": 0.0,
         "litellm_provider": "mistral",
         "max_input_tokens": 262144,
@@ -66990,6 +67163,8 @@
     },
     "mistral/voxtral-mini-2602": {
         "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
+        "successor_model": "mistral/voxtral-mini-transcribe-3",
         "input_cost_per_second": 5e-05,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
@@ -67007,6 +67182,8 @@
     },
     "mistral/voxtral-mini-transcribe-realtime-2602": {
         "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
+        "successor_model": "mistral/voxtral-mini-transcribe-realtime-3",
         "input_cost_per_second": 0.0001,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
@@ -67024,6 +67201,8 @@
     },
     "mistral/voxtral-mini-tts-2603": {
         "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/models_overview",
+        "successor_model": "mistral/voxtral-mini-tts-3",
         "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
@@ -67402,6 +67581,8 @@
         "cache_read_input_token_cost": 7e-09,
         "cache_read_input_token_cost_priority": 8.75e-09,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_priority": 2.75e-07,
         "litellm_provider": "fireworks_ai",
@@ -67462,6 +67643,8 @@
         "cache_read_input_token_cost": 7e-09,
         "cache_read_input_token_cost_priority": 8.75e-09,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_priority": 2.75e-07,
         "litellm_provider": "fireworks_ai",
@@ -67531,6 +67714,8 @@
         "cache_read_input_token_cost": 7e-09,
         "cache_read_input_token_cost_priority": 8.75e-09,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/deepseek-v4p1-flash",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_priority": 2.75e-07,
         "litellm_provider": "fireworks_ai",
@@ -67591,6 +67776,8 @@
         "cache_read_input_token_cost": 7e-09,
         "cache_read_input_token_cost_priority": 8.75e-09,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/deepseek-v4p1-flash",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_priority": 2.75e-07,
         "litellm_provider": "fireworks_ai",
@@ -67732,6 +67919,8 @@
         "cache_read_input_token_cost": 4e-08,
         "cache_read_input_token_cost_priority": 6e-08,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/nemotron-lightning-3p5-30b-a3b",
         "input_cost_per_token": 3.5e-07,
         "input_cost_per_token_priority": 5.25e-07,
         "litellm_provider": "fireworks_ai",
@@ -67794,6 +67983,8 @@
         "cache_read_input_token_cost": 4e-08,
         "cache_read_input_token_cost_priority": 6e-08,
         "deprecation_date": "2026-09-25",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
         "input_cost_per_token": 3.5e-07,
         "input_cost_per_token_priority": 5.25e-07,
         "litellm_provider": "fireworks_ai",
@@ -68761,6 +68952,8 @@
         "output_cost_per_token": 2.8e-07,
         "cache_read_input_token_cost": 7e-08,
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/deepseek-ai/DeepSeek-V4-Flash-0731",
         "supports_prompt_caching": true,
         "litellm_provider": "wandb",
         "mode": "chat",
@@ -68788,6 +68981,8 @@
         "output_cost_per_token": 2.55e-06,
         "cache_read_input_token_cost": 2e-07,
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/deepseek-ai/DeepSeek-V4-Pro-0813",
         "supports_prompt_caching": true,
         "litellm_provider": "wandb",
         "mode": "chat",
@@ -68807,6 +69002,8 @@
     },
     "wandb/ibm-granite/granite-4.1-8b": {
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/ibm-granite/granite-4.2-8b",
         "max_output_tokens": 131072,
         "max_input_tokens": 131000,
         "input_cost_per_token": 5e-08,
@@ -68818,6 +69015,8 @@
     },
     "wandb/JetBrains/Mellum2-12B-A2.5B-Instruct": {
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/ibm-granite/granite-4.2-8b",
         "max_output_tokens": 131072,
         "max_input_tokens": 131000,
         "input_cost_per_token": 5e-08,
@@ -68829,6 +69028,8 @@
     },
     "wandb/meta-llama/Llama-3.1-70B-Instruct": {
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/meta-llama/Llama-3.3-70B-Instruct",
         "max_output_tokens": 128000,
         "max_input_tokens": 131000,
         "input_cost_per_token": 8e-07,
@@ -68905,6 +69106,8 @@
     },
     "wandb/OpenPipe/Qwen3-14B-Instruct": {
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/Qwen/Qwen3.8-27B",
         "max_output_tokens": 32768,
         "max_input_tokens": 32800,
         "input_cost_per_token": 5e-08,
@@ -68948,6 +69151,8 @@
         "output_cost_per_token": 3.6e-06,
         "cache_read_input_token_cost": 1.2e-07,
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/Qwen/Qwen3.8-27B",
         "supports_prompt_caching": true,
         "litellm_provider": "wandb",
         "mode": "chat",
@@ -68956,6 +69161,8 @@
     },
     "wandb/Qwen/Qwen3.5-35B-A3B": {
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/Qwen/Qwen3.6-35B-A3B",
         "supports_reasoning": true,
         "max_output_tokens": 262144,
         "max_input_tokens": 262000,
@@ -68968,6 +69175,8 @@
     },
     "wandb/Qwen/Qwen3-30B-A3B-Instruct-2507": {
         "deprecation_date": "2026-10-05",
+        "deprecation_source": "https://docs.wandb.ai/inference/lifecycle",
+        "successor_model": "wandb/Qwen/Qwen3.6-35B-A3B",
         "max_output_tokens": 262144,
         "max_input_tokens": 262000,
         "input_cost_per_token": 1e-07,
@@ -74671,6 +74880,7 @@
     },
     "vertex_ai/gemini-2.5-flash-native-audio": {
         "deprecation_date": "2026-12-13",
+        "successor_model": "vertex_ai/gemini-3.8-live",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 3e-06,
         "input_cost_per_token": 5e-07,
@@ -75330,6 +75540,7 @@
     "azure/eu/gpt-5.1-codex-max": {
         "deprecation_date": "2027-05-18",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 1.375e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
@@ -75387,6 +75598,7 @@
     "azure/eu/gpt-5.3-codex": {
         "deprecation_date": "2027-08-24",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/eu/gpt-6-sol",
         "cache_read_input_token_cost": 1.925e-07,
         "cache_read_input_token_cost_priority": 3.85e-07,
         "input_cost_per_token": 1.925e-06,
@@ -75428,6 +75640,7 @@
         "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/eu/gpt-6-luna",
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_batches": 1.1e-08,
         "input_cost_per_token": 2.2e-07,
@@ -75446,6 +75659,7 @@
     "azure/eu/gpt-5.4-pro": {
         "deprecation_date": "2027-09-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.5-pro",
         "input_cost_per_token": 3.3e-05,
         "input_cost_per_token_above_272k_tokens": 6.6e-05,
         "input_cost_per_token_above_272k_tokens_batches": 3.3e-05,
@@ -75619,6 +75833,7 @@
     },
     "azure/eu/o3": {
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
@@ -75638,6 +75853,7 @@
     },
     "azure/eu/o3-2025-04-16": {
         "deprecation_date": "2026-11-19",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
@@ -75956,6 +76172,7 @@
     "azure/us/gpt-5.1-codex-max": {
         "deprecation_date": "2027-05-18",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 1.375e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
@@ -76013,6 +76230,7 @@
     "azure/us/gpt-5.3-codex": {
         "deprecation_date": "2027-08-24",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/us/gpt-6-sol",
         "cache_read_input_token_cost": 1.925e-07,
         "cache_read_input_token_cost_priority": 3.85e-07,
         "input_cost_per_token": 1.925e-06,
@@ -76054,6 +76272,7 @@
         "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/us/gpt-6-luna",
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_batches": 1.1e-08,
         "input_cost_per_token": 2.2e-07,
@@ -76072,6 +76291,7 @@
     "azure/us/gpt-5.4-pro": {
         "deprecation_date": "2027-09-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "successor_model": "azure/gpt-5.5-pro",
         "input_cost_per_token": 3.3e-05,
         "input_cost_per_token_above_272k_tokens": 6.6e-05,
         "input_cost_per_token_above_272k_tokens_batches": 3.3e-05,
@@ -78644,6 +78864,8 @@
         "cache_read_input_token_cost": 6e-07,
         "cache_read_input_token_cost_priority": 6e-07,
         "deprecation_date": "2026-08-27",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813",
         "input_cost_per_token": 1.2e-06,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -78662,6 +78884,8 @@
     "fireworks_ai/accounts/fireworks/models/minimax-m2p7": {
         "cache_read_input_token_cost_priority": 6e-07,
         "deprecation_date": "2026-08-27",
+        "deprecation_source": "https://docs.fireworks.ai/changelog.md",
+        "successor_model": "fireworks_ai/accounts/fireworks/models/minimax-m3",
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 196608,
@@ -78750,6 +78974,7 @@
     },
     "vertex_ai/meta/llama-3.3-70b-instruct-maas": {
         "deprecation_date": "2026-10-21",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
         "input_cost_per_token": 7.2e-07,
         "input_cost_per_token_batches": 3.6e-07,
         "litellm_provider": "vertex_ai-llama_models",
@@ -82372,6 +82597,8 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-09-01",
+        "deprecation_source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/model-deprecation-history.yml",
+        "successor_model": "github_copilot/claude-sonnet-5.5",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
