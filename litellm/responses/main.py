@@ -532,7 +532,9 @@ async def aresponses_api_with_mcp(
                 if tool_results:
                     chains_on_first_round: Final = not LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(
                         call_params
-                    ) and provider_stores_the_conversation(model, custom_llm_provider, kwargs)
+                    ) and provider_stores_the_conversation(
+                        model, custom_llm_provider, {**kwargs, "previous_response_id": previous_response_id}
+                    )
 
                     follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                         response=response,
@@ -652,6 +654,17 @@ def _bridges_to_chat_completions(
 
 
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
+
+
+_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
+
+
+def answered_by_the_chat_bridge(response_id: object) -> bool:
+    return isinstance(
+        response_id, str
+    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
+        _CHAT_COMPLETION_ID_PREFIX
+    )
 
 
 def previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
@@ -872,6 +885,8 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     A bridged turn is replayed from its spend log, so the bridge needs that row in the DB, and a bridged
     first MCP round runs as an internal call that writes no spend log at all.
     """
+    if answered_by_the_chat_bridge(kwargs.get("previous_response_id")):
+        return False
     api_base: Final = _api_base_kwarg(kwargs)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
     return not _will_bridge_to_chat_completions(
@@ -1066,7 +1081,7 @@ async def aresponses(
                 bridged=_will_bridge_to_chat_completions(
                     model,
                     custom_llm_provider,
-                    bool(kwargs.get("use_chat_completions_api")),
+                    bool(kwargs.get("use_chat_completions_api")) or answered_by_the_chat_bridge(previous_response_id),
                     kwargs.get("model_info"),
                     _api_base_kwarg(kwargs),
                 ),
@@ -1668,7 +1683,11 @@ def responses(
         _stripped_model, _from_chat_completions_prefix = _normalize_openai_chat_completions_responses_model(model)
         model = _stripped_model
         local_vars["model"] = model
-        use_chat_completions_api = use_chat_completions_api or _from_chat_completions_prefix
+        use_chat_completions_api = (
+            use_chat_completions_api
+            or _from_chat_completions_prefix
+            or answered_by_the_chat_bridge(previous_response_id)
+        )
 
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
