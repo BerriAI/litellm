@@ -10114,11 +10114,18 @@ async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_
     }
 
 
-@pytest.mark.asyncio
-async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_salt_key(monkeypatch):
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock, MagicMock
+def _rotation_table(*rows: object) -> MagicMock:
+    return MagicMock(find_many=AsyncMock(return_value=rows), update=AsyncMock())
 
+
+def _rotated_value(table: MagicMock, field: str) -> str:
+    return table.update.await_args.kwargs["data"][field]
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_salt_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
     from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
@@ -10129,16 +10136,25 @@ async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_s
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
     monkeypatch.setenv("ROTATION_TEST_SALTED", "restored-by-monkeypatch")
     monkeypatch.delenv("ROTATION_TEST_SALTED")
-    delegated_stores = (
-        "rotate_mcp_server_credentials_master_key",
-        "rotate_mcp_user_credentials_master_key",
-        "rotate_mcp_user_env_vars_master_key",
-        "rotate_sso_identity_assertions_master_key",
+    mcp_servers: Final = _rotation_table(
+        SimpleNamespace(
+            server_id="mcp-1",
+            credentials={"auth_value": encrypt_value_helper("sk-mcp-server")},
+            env_vars=None,
+            static_headers=None,
+            env=None,
+        )
     )
-    delegates = {name: AsyncMock() for name in delegated_stores}
-    for name, delegate in delegates.items():
-        monkeypatch.setattr(f"litellm.proxy.management_endpoints.key_management_endpoints.{name}", delegate)
-    model_row = SimpleNamespace(
+    mcp_user_credentials: Final = _rotation_table(
+        SimpleNamespace(user_id="user-1", server_id="mcp-1", credential_b64=encrypt_value_helper("sk-byok"))
+    )
+    mcp_user_env_vars: Final = _rotation_table(
+        SimpleNamespace(user_id="user-1", server_id="mcp-1", values_b64=encrypt_value_helper("stored-mcp-env"))
+    )
+    sso_assertions: Final = _rotation_table(
+        SimpleNamespace(user_id="user-1", assertion_b64=encrypt_value_helper("stored-assertion"))
+    )
+    model_row: Final = SimpleNamespace(
         model_id="model-1",
         model_name="salted-model",
         litellm_params={
@@ -10147,15 +10163,21 @@ async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_s
         },
         model_info={"id": "model-1"},
     )
-    credential_row = CredentialItem(
+    credential_row: Final = CredentialItem(
         credential_name="salted-credential",
         credential_values={"api_key": encrypt_value_helper("sk-credential")},
         credential_info={},
     )
-    tx = MagicMock()
+    tx: Final = MagicMock()
     tx.litellm_proxymodeltable.update_many = AsyncMock()
-    prisma_client = AsyncMock()
-    prisma_client.db = MagicMock()
+    prisma_client: Final = AsyncMock()
+    prisma_client.db = MagicMock(
+        litellm_mcpservertable=mcp_servers,
+        litellm_mcpserveroauthclient=_rotation_table(),
+        litellm_mcpusercredentials=mcp_user_credentials,
+        litellm_mcpuserenvvars=mcp_user_env_vars,
+        litellm_ssoidentityassertion=sso_assertions,
+    )
     prisma_client.db.tx = MagicMock(
         return_value=AsyncMock(__aenter__=AsyncMock(return_value=tx), __aexit__=AsyncMock(return_value=False))
     )
@@ -10180,17 +10202,27 @@ async def test_rotate_master_key_with_a_salt_key_keeps_stored_values_under_the_s
         new_master_key="sk-new-master-key",
     )
 
-    model_params = tx.litellm_proxymodeltable.update_many.call_args.kwargs["data"]["litellm_params"].data
-    credential_update = prisma_client.db.litellm_credentialstable.update.call_args.kwargs["data"]
-    credential_values = credential_update["credential_values"].data
-    env_vars = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
-    assert {
-        "model": decrypt_if_encrypted_with(model_params["api_key"], "sk-salt-key"),
-        "credential": decrypt_if_encrypted_with(credential_values["api_key"], "sk-salt-key"),
-        "env": decrypt_if_encrypted_with(env_vars["ROTATION_TEST_SALTED"], "sk-salt-key"),
-    } == {"model": "sk-model", "credential": "sk-credential", "env": "stored-env-value"}
-    keys_handed_to_stores = {name: delegate.await_args.kwargs["new_master_key"] for name, delegate in delegates.items()}
-    assert keys_handed_to_stores == dict.fromkeys(delegated_stores, "sk-salt-key")
+    model_params: Final = tx.litellm_proxymodeltable.update_many.call_args.kwargs["data"]["litellm_params"].data
+    credential_update: Final = prisma_client.db.litellm_credentialstable.update.call_args.kwargs["data"]
+    env_vars: Final = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+    stored: Final = {
+        "model": model_params["api_key"],
+        "credential": credential_update["credential_values"].data["api_key"],
+        "config env var": env_vars["ROTATION_TEST_SALTED"],
+        "mcp server": json.loads(_rotated_value(mcp_servers, "credentials"))["auth_value"],
+        "mcp user credential": _rotated_value(mcp_user_credentials, "credential_b64"),
+        "mcp user env vars": _rotated_value(mcp_user_env_vars, "values_b64"),
+        "sso assertion": _rotated_value(sso_assertions, "assertion_b64"),
+    }
+    assert {store: decrypt_if_encrypted_with(value, "sk-salt-key") for store, value in stored.items()} == {
+        "model": "sk-model",
+        "credential": "sk-credential",
+        "config env var": "stored-env-value",
+        "mcp server": "sk-mcp-server",
+        "mcp user credential": "sk-byok",
+        "mcp user env vars": "stored-mcp-env",
+        "sso assertion": "stored-assertion",
+    }
 
 
 async def test_default_key_generate_params_duration(monkeypatch):
