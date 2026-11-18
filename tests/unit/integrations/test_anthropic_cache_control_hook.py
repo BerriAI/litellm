@@ -1442,6 +1442,29 @@ def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_
     assert "prompt_cache_breakpoint" not in json.dumps(request)
 
 
+def test_cache_control_injection_points_accept_a_replayed_response_message_on_claude():
+    replayed_answer: Final = Message(role="assistant", content="First answer")
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="vertex_ai/claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "First", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            },
+            cast(AllMessageValues, replayed_answer),
+            {"role": "user", "content": "Second"},
+        ],
+        non_default_params={"cache_control_injection_points": [{"location": "message", "index": -1}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert processed[1] == replayed_answer
+    assert "prompt_cache_breakpoint" not in json.dumps([processed[0], processed[2]])
+    assert [_marks_in(processed[0]), _marks_in(processed[2])] == [0, 1]
+
+
 @pytest.mark.parametrize(
     "sibling_model_infos",
     [

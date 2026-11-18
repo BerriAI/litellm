@@ -176,9 +176,12 @@ def _breakpoints_stripped_from(key: str, value: object) -> object:
 
 def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
     """A message or tool definition with every ``prompt_cache_breakpoint`` removed: its own, its content parts',
-    its tool calls' and its ``function``'s."""
+    its tool calls' and its ``function``'s. A replayed response ``Message`` carries no marker and passes through."""
+    fields: Final = _breakpoint_fields_or_none(block)
+    if fields is None:
+        return block
     stripped: Final = {
-        key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
+        key: _breakpoints_stripped_from(key, value) for key, value in fields.items() if key != "prompt_cache_breakpoint"
     }
     return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
 
