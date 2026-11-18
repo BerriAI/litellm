@@ -6699,13 +6699,19 @@ def test_transform_request_leaves_cache_control_off_the_wire_for_bedrock_mantle(
 
 @pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
-def test_chained_turn_keeps_leading_system_strings_in_instructions(continuation, location):
-    continuation = copy.deepcopy(continuation)
-    optional = (
-        continuation if location == "optional" else {"extra_body": continuation} if location == "extra_body" else {}
+def test_chained_turn_keeps_leading_system_strings_in_instructions(
+    continuation: dict[str, str], location: str
+) -> None:
+    copied_continuation: Final = copy.deepcopy(continuation)
+    optional: Final = (
+        copied_continuation
+        if location == "optional"
+        else {"extra_body": copied_continuation}
+        if location == "extra_body"
+        else {}
     )
-    params = {"custom_llm_provider": "openai", **(continuation if location == "litellm" else {})}
-    request = _bridged_transform_request(
+    params: Final = {"custom_llm_provider": "openai", **(copied_continuation if location == "litellm" else {})}
+    request: Final = _bridged_transform_request(
         "gpt-6.2-sol",
         [
             {"role": "system", "content": "Be brief."},
@@ -6720,14 +6726,14 @@ def test_chained_turn_keeps_leading_system_strings_in_instructions(continuation,
 
 
 @pytest.mark.parametrize("continuation", [{}, {"previous_response_id": "resp_prior"}])
-def test_explicit_instructions_are_preserved(continuation):
-    request = _bridged_transform_request(
+def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> None:
+    request: Final = _bridged_transform_request(
         "gpt-6.2-sol",
         [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
         {"custom_llm_provider": "openai"},
         {"instructions": "Caller instructions", **continuation},
     )
-    assert request["instructions"] == "Caller instructions"
+    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
     if not continuation:
         assert request["input"][0] == _system_input_item("Be brief.")
 

@@ -1455,10 +1455,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()
 
-        # Set instructions if we found a system message
-        if instructions:
-            responses_api_request["instructions"] = instructions
-
         self._map_optional_params_to_responses_api_request(
             optional_params,
             responses_api_request,
@@ -1466,6 +1462,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             model=model,
             custom_llm_provider=_served_provider(litellm_params),
         )
+
+        caller_instructions: Final = responses_api_request.get("instructions")
+        if instructions:
+            responses_api_request["instructions"] = (
+                f"{instructions}\n{caller_instructions}" if caller_instructions else instructions
+            )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug("Chat provider: Stream parameter: %s", stream)

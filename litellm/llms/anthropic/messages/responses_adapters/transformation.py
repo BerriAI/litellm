@@ -636,7 +636,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         system: Final = anthropic_request.get("system")
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
-            if isinstance(system, (str, list)) and not preserve_system_instructions
+            if isinstance(system, (str, list))
+            and (
+                not preserve_system_instructions
+                or (
+                    isinstance(system, list)
+                    and any(
+                        isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system
+                    )
+                )
+            )
             else ()
         )
         if developer_parts:

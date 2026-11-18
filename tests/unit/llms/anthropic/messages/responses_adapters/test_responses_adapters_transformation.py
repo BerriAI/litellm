@@ -1209,16 +1209,16 @@ class TestTranslateRequestBroaderCoverage:
         }
 
     @pytest.mark.parametrize("system", ["Be brief.", [{"type": "text", "text": "Be brief."}]])
-    def test_chained_turn_keeps_system_in_instructions(self, system):
-        kwargs = _ADAPTER.translate_request(_make_request(system=system), preserve_system_instructions=True)
+    def test_chained_turn_keeps_system_in_instructions(self, system: str | list[dict[str, str]]) -> None:
+        kwargs: Final = _ADAPTER.translate_request(_make_request(system=system), preserve_system_instructions=True)
         assert kwargs["instructions"] == "Be brief."
         assert kwargs["input"] == [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
         ]
 
     @pytest.mark.parametrize("system", [None, "", [], [{"type": "image", "source": {}}]])
-    def test_empty_or_non_text_system_adds_no_instruction_message(self, system):
-        kwargs = _ADAPTER.translate_request(_make_request(system=system))
+    def test_empty_or_non_text_system_adds_no_instruction_message(self, system: object) -> None:
+        kwargs: Final = _ADAPTER.translate_request(_make_request(system=system))
         assert not kwargs.get("instructions")
         assert kwargs["input"] == [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
@@ -2216,15 +2216,18 @@ class TestPromptCacheBreakpointToResponses:
 
     EXPLICIT = {"mode": "explicit"}
 
-    def test_system_with_breakpoint_becomes_leading_developer_message(self):
-        request = _make_request(
+    @pytest.mark.parametrize("preserve_system_instructions", [False, True])
+    def test_system_with_breakpoint_becomes_leading_developer_message(
+        self, preserve_system_instructions: bool
+    ) -> None:
+        request: Final = _make_request(
             model="openai/gpt-5.6",
             system=[
                 {"type": "text", "text": "Be concise."},
                 {"type": "text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
             ],
         )
-        kwargs = _ADAPTER.translate_request(request)
+        kwargs: Final = _ADAPTER.translate_request(request, preserve_system_instructions=preserve_system_instructions)
         assert "instructions" not in kwargs
         assert kwargs["input"] == [
             {
