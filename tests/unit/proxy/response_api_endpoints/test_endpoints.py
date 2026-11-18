@@ -4293,6 +4293,7 @@ class TestResponsesWSFirstFrameModelAuth:
         )
         ws.close = AsyncMock()
         connection_body = {"model": "gpt-4o-mini", "first_message": "alpha", "user": "end-user-1"}
+        socket_opened_at = datetime.datetime.now() - datetime.timedelta(seconds=1)
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=(
@@ -4300,6 +4301,7 @@ class TestResponsesWSFirstFrameModelAuth:
                     "model": "gpt-4o-mini",
                     "litellm_metadata": {},
                     "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": connection_body},
+                    "litellm_logging_obj": MagicMock(model_call_details={"start_time": socket_opened_at}),
                 },
                 MagicMock(),
             )
@@ -4324,8 +4326,11 @@ class TestResponsesWSFirstFrameModelAuth:
 
             return relay()
 
+        failure_hooks = ProxyLogging(user_api_key_cache=DualCache())
+        failure_hooks.alert_types = []
+
         async def run_failure_hooks(**kwargs):
-            await spend_logger.async_post_call_failure_hook(**kwargs)
+            await failure_hooks.post_call_failure_hook(**kwargs)
 
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, **kwargs: data)
@@ -4334,6 +4339,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         with (
             patch.object(litellm, "callbacks", [spend_logger]),
+            patch.object(failure_hooks, "update_request_status", new=AsyncMock()),
             patch(  # test-quality-ok: stored prompts are off by default and the row's stored request is under test
                 "litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}
             ),
@@ -4355,7 +4361,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 proxy_logging_obj,
             ),
         ):
-            socket_opened_at = datetime.datetime.now()
+            endpoint_called_at = datetime.datetime.now()
             await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=user_api_key_dict)
             await drain_logging_tasks(timeout=1)
             (write,) = [write.kwargs for write in spend_writer.update_database.await_args_list]
@@ -4365,10 +4371,12 @@ class TestResponsesWSFirstFrameModelAuth:
         assert json.loads(row["proxy_server_request"]) == (
             {"input": "beta", "user": "end-user-1"} if closed_by_the_failed_turn else {"user": "end-user-1"}
         )
-        if closed_by_the_failed_turn:
-            assert socket_opened_at <= write["start_time"] < socket_opened_at + datetime.timedelta(
-                seconds=turn_outlived_by
-            )
+        if not closed_by_the_failed_turn:
+            assert write["start_time"] == socket_opened_at
+            return
+        assert endpoint_called_at <= write["start_time"] < endpoint_called_at + datetime.timedelta(
+            seconds=turn_outlived_by
+        )
 
     @staticmethod
     async def _close_time_failure_of_socket(
