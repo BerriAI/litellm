@@ -43,6 +43,7 @@ time.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }
