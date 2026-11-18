@@ -325,7 +325,7 @@ mod tests {
     #[case::an_overloaded_messages_provider_fails_once_as_its_529(
         vec![Ok(START), Ok(OVERLOADED), Ok(STOP)],
         messages_event as Read,
-        vec![Err((Some(529), FailureKind::ServiceUnavailable))]
+        vec![Err((Some(529), FailureKind::InternalServer))]
     )]
     #[case::responses_failed_event_fails(
         vec![Ok(FAILED)],

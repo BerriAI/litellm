@@ -463,6 +463,41 @@ async fn a_deployments_own_num_retries_retries_its_failed_call() {
     );
 }
 
+/// A retry policy names litellm's error classes, so a provider's status has to land in the class
+/// the Python proxy puts it in: an overloaded Anthropic answer is an `InternalServerError`.
+#[rstest]
+#[case::it_is_an_internal_server_error("InternalServerErrorRetries", 200)]
+#[case::it_is_not_an_unavailable_service("ServiceUnavailableErrorRetries", 529)]
+#[tokio::test]
+async fn a_retry_policy_retries_an_overloaded_provider_by_its_error_class(
+    #[case] retried_class: &str,
+    #[case] answered: u16,
+) {
+    let (failing, healthy) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(529).set_body_json(
+            json!({"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}),
+        ))
+        .mount(&failing)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&healthy)
+        .await;
+
+    let response = routed(
+        &format!(
+            "model_list:\n{}{}router_settings:\n  num_retries: 0\n  allowed_fails: 0\n  cooldown_time: 30\n  retry_policy:\n    {retried_class}: 1\ngeneral_settings:\n  master_key: gateway-key\n",
+            weighted("primary", "first", &failing, 1),
+            weighted("primary", "second", &healthy, 0),
+        ),
+        "primary",
+    )
+    .await;
+
+    assert_eq!(response.status().as_u16(), answered);
+}
+
 #[tokio::test]
 async fn a_call_through_an_alias_reports_the_alias_as_its_model_group() {
     let upstream = MockServer::start().await;

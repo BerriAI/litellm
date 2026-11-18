@@ -355,7 +355,9 @@ pub enum FailureKind {
 }
 
 impl FailureKind {
-    /// The exception class litellm maps a provider's HTTP status to (`exception_type`).
+    /// The exception class litellm maps a provider's HTTP status to (`exception_type`). An
+    /// overloaded provider's 529 is an `InternalServerError` there, not the
+    /// `ServiceUnavailableError` a 503 is, and a retry policy names these classes.
     pub fn from_status(status: u16) -> Self {
         match status {
             400 | 422 => Self::BadRequest,
@@ -365,7 +367,7 @@ impl FailureKind {
             408 | 504 => Self::Timeout,
             429 => Self::RateLimit,
             502 => Self::BadGateway,
-            503 | 529 => Self::ServiceUnavailable,
+            503 => Self::ServiceUnavailable,
             500..=599 => Self::InternalServer,
             _ => Self::Other,
         }
@@ -513,6 +515,18 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::a_server_error(500, FailureKind::InternalServer)]
+    #[case::a_bad_gateway(502, FailureKind::BadGateway)]
+    #[case::an_unavailable_provider(503, FailureKind::ServiceUnavailable)]
+    #[case::an_overloaded_provider(529, FailureKind::InternalServer)]
+    fn a_5xx_status_is_the_class_litellm_raises_for_it(
+        #[case] status: u16,
+        #[case] class: FailureKind,
+    ) {
+        assert_eq!(FailureKind::from_status(status), class);
+    }
 
     #[rstest]
     #[case::rate_limit("RateLimitError", FailureKind::RateLimit)]

@@ -208,11 +208,11 @@ mod tests {
     #[case::an_error_event_without_a_type_is_no_failure(vec![Ok(START), Ok(UNTYPED), Ok(DELTA)], None)]
     #[case::an_overloaded_provider_fails_the_stream(
         vec![Ok(START), Ok(PING), Ok(OVERLOADED), Ok(DELTA)],
-        Some((false, Some(529), FailureKind::ServiceUnavailable))
+        Some((false, Some(529), FailureKind::InternalServer))
     )]
     #[case::an_error_event_split_across_chunks_is_read_whole(
         vec![Ok(START), Ok(OVERLOADED.split_at(30).0), Ok(OVERLOADED.split_at(30).1)],
-        Some((false, Some(529), FailureKind::ServiceUnavailable))
+        Some((false, Some(529), FailureKind::InternalServer))
     )]
     #[case::a_break_fails_the_stream(
         vec![Ok(START), Err(Dropped), Ok(DELTA)],
