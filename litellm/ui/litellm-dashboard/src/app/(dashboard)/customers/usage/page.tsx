@@ -56,7 +56,6 @@ export default function CustomerHierarchyUsagePage() {
   } = useCustomerHierarchyUsage();
   const metricLabel = t(METRIC_LABELS[params.metric]);
   const budgetEntity = data?.member ?? data?.team ?? data?.organization;
-  const budgetSettingsHref = scope ? `${customerHierarchyHref("manage", scope)}&tab=settings` : null;
 
   if (!scope)
     return (
@@ -68,6 +67,9 @@ export default function CustomerHierarchyUsagePage() {
         </a>
       </div>
     );
+
+  const budgetSettingsHref = `${customerHierarchyHref("manage", scope)}&tab=settings`;
+  const isOrganizationScope = !scope.team && !scope.member;
 
   return (
     <main
@@ -105,13 +107,11 @@ export default function CustomerHierarchyUsagePage() {
                   spend={totals.spend}
                   surcharge={data?.metadata.total_customer_margin_spend}
                 />
-                {budgetEntity && budgetSettingsHref && (
-                  <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
-                )}
+                {budgetEntity && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />}
               </>
             }
           />
-          {!scope.team && !scope.member && (
+          {isOrganizationScope && (
             <CustomerOrganizationApps
               key={scope.org}
               organizationId={scope.org}
@@ -133,7 +133,7 @@ export default function CustomerHierarchyUsagePage() {
             onBucketChange={setBucket}
             appFilter={<CustomerUsageAppFilter value={params.app_id} onChange={setApp} />}
           />
-          {!scope.team && !scope.member && <CustomerModelTokenChart days={results} />}
+          {isOrganizationScope && <CustomerModelTokenChart days={results} />}
           {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {!usage.isPending && (
             <>
