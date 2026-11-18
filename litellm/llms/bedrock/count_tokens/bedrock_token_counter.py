@@ -18,6 +18,7 @@ from litellm.llms.anthropic.common_utils import context_management_betas, contex
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
     anthropic_count_fields,
+    counted_tool_choice,
     messages_count_options,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params
@@ -164,10 +165,17 @@ def _invoke_context_management(context_management: CountContextManagement | None
 
 def _invoke_tool_choice(
     options: Mapping[str, JsonValue], tools: Sequence[Mapping[str, object]] | None, drops_params: bool
-) -> Mapping[str, JsonValue]:
+) -> Mapping[str, JsonValue] | ChatCountTranslationError:
     tool_choice: Final = options.get("tool_choice")
-    dropped: Final = tool_choice is None or (drops_params and not tools)
-    return MappingProxyType({} if dropped else {"tool_choice": tool_choice})
+    match counted_tool_choice(tool_choice, drops_params):
+        case ChatCountTranslationError() as error:
+            return error
+        case None:
+            return _NO_OPTIONS
+        case _ if drops_params and not tools:
+            return _NO_OPTIONS
+        case _:
+            return MappingProxyType({"tool_choice": tool_choice})
 
 
 class BedrockTokenCounter(BaseTokenCounter):
@@ -281,10 +289,10 @@ class BedrockTokenCounter(BaseTokenCounter):
         native_context_management: Final = _invoke_context_management(context_management if claude else None)
         counted_messages: Final = messages if translated is None else translated.messages
         counted_tools: Final = tools if translated is None else translated.tools
-        invoke_fields: Final = {
-            **native_context_management,
-            **_invoke_tool_choice(options, counted_tools, deployment_drops_params(deployment)),
-        }
+        invoke_tool_choice: Final = _invoke_tool_choice(options, counted_tools, deployment_drops_params(deployment))
+        if isinstance(invoke_tool_choice, ChatCountTranslationError):
+            return invoke_tool_choice.response(request_model, model_to_use, primary_tokenizer)
+        invoke_fields: Final = {**native_context_management, **invoke_tool_choice}
         runtime_request: Final = {
             **_request_data(
                 model_to_use,
@@ -294,7 +302,8 @@ class BedrockTokenCounter(BaseTokenCounter):
             ),
             **invoke_fields,
         }
-        mantle_request: Final = {**runtime_request, **options}
+        mantle_options: Final = MappingProxyType({key: value for key, value in options.items() if key != "tool_choice"})
+        mantle_request: Final = {**runtime_request, **mantle_options}
 
         primary: Final = (
             await self._count_with(

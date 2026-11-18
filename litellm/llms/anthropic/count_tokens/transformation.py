@@ -39,7 +39,7 @@ from litellm.llms.anthropic.common_utils import (
     tools_without_custom_field,
 )
 from litellm.llms.anthropic.wif import resolve_anthropic_base
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesToolChoice
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
@@ -54,6 +54,9 @@ _TRANSFORMED_REQUEST: Final = TypeAdapter(dict[str, object])
 _DROPPED_PATHS: Final = TypeAdapter(tuple[object, ...])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
+_ANTHROPIC_TOOL_CHOICE: Final[TypeAdapter[AnthropicMessagesToolChoice | None]] = TypeAdapter(
+    AnthropicMessagesToolChoice | None
+)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 _CHAT_ROLES_WITHOUT_CONTENT: Final = frozenset({"user", "assistant"})
@@ -135,6 +138,15 @@ class ChatCountTranslationError:
             status_code=400,
             rejected_before_provider_call=True,
         )
+
+
+def counted_tool_choice(
+    tool_choice: object, drops_params: bool
+) -> AnthropicMessagesToolChoice | ChatCountTranslationError | None:
+    try:
+        return _ANTHROPIC_TOOL_CHOICE.validate_python(tool_choice)
+    except ValidationError as e:
+        return None if drops_params else ChatCountTranslationError(message=str(e))
 
 
 @with_config(ConfigDict(extra="ignore"))
