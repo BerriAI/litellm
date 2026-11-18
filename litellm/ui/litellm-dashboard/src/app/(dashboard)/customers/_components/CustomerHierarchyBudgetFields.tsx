@@ -1,12 +1,23 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
+import { $api } from "@/lib/http/api";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { CustomerHierarchyFields, CustomerHierarchyEntity, Organization } from "./customerHierarchyForms";
+import {
+  BUDGET_FIELDS,
+  type BudgetFields,
+  customerHierarchyFields,
+  type CustomerHierarchyFields,
+  type CustomerHierarchyEntity,
+  type Organization,
+} from "./customerHierarchyForms";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
+import CustomerBudgetInput from "./CustomerBudgetInput";
+import { CustomerRateLimitFields, CustomerRateLimitSummary } from "./CustomerRateLimits";
 
 interface Props {
   kind: CustomerHierarchyEntity["kind"];
@@ -26,6 +37,40 @@ export default function CustomerHierarchyBudgetFields({
   operation,
 }: Props) {
   const { t } = useTranslation();
+  const groups = $api.useQuery(
+    "get",
+    "/management/v1/customer_organization_budget_groups",
+    {},
+    { enabled: kind === "organization" },
+  );
+  const isGroup = (id: string | null | undefined) =>
+    groups.data?.default_budgets.some((group) => group.budget_id === id);
+  const originalGroup = organization.budget_is_shared ?? isGroup(organization.budget_id);
+  const usingGroup =
+    kind === "organization" &&
+    (fields.templateId === organization.budget_id ? originalGroup : isGroup(fields.templateId));
+  const knownCustom = !organization.budget_id || originalGroup === false;
+  const budgetReady = kind !== "organization" || knownCustom || Boolean(groups.data);
+  const showCustomBudget = budgetReady && !usingGroup;
+  const updateBudget = (budgetId: string, amount: string) => {
+    if (isGroup(budgetId)) {
+      const initial = customerHierarchyFields({ kind: "organization", record: organization });
+      for (const key of [...BUDGET_FIELDS, "allowedModels"] as const) update(key, initial[key]);
+      return update("templateId", budgetId);
+    }
+    const monthly = organization.budget?.budget_limits?.some((window) => window.budget_duration === "1mo");
+    const newScalarBudget = organization.budget?.max_budget == null && !monthly;
+    const leavingSavedGroup = usingGroup && originalGroup;
+    const keepCustom = !usingGroup && fields.budgetEnabled;
+    const customId = originalGroup ? "" : organization.budget_id ?? "";
+    update("templateId", customId);
+    update("maxBudget", amount);
+    if (leavingSavedGroup || (!fields.budgetEnabled && newScalarBudget)) update("budgetDuration", "1mo");
+    update(
+      "budgetEnabled",
+      Boolean(customId || keepCustom) || [amount, fields.tpm, fields.rpm].some((value) => value.trim()),
+    );
+  };
   const templateLabel = (templateId: string): string => {
     if (!templateId) return t("customerPortal.hierarchy.noTemplate");
     const template = organization.default_budgets.find((budget) => budget.budget_id === templateId);
@@ -34,12 +79,6 @@ export default function CustomerHierarchyBudgetFields({
       return t("customerPortal.hierarchy.defaultTemplate", { name: template.name });
     return template.name;
   };
-  const numericFields = [
-    ["maxBudget", "customerPortal.hierarchy.maxBudget", "any"],
-    ["softBudget", "customerPortal.hierarchy.softBudget", "any"],
-    ["tpm", "customerPortal.hierarchy.tpm", "1"],
-    ["rpm", "customerPortal.hierarchy.rpm", "1"],
-  ] as const;
   return (
     <section className="space-y-4 border-t pt-6" aria-labelledby={`${idPrefix}-budget-title`}>
       <div>
@@ -50,6 +89,15 @@ export default function CustomerHierarchyBudgetFields({
           {t(kind === "member" ? "customerPortal.hierarchy.memberBudgetHint" : "customerPortal.hierarchy.budgetHint")}
         </p>
       </div>
+      {kind === "organization" && (
+        <CustomerBudgetInput
+          id={`${idPrefix}-budget`}
+          budgetId={fields.templateId}
+          amount={fields.budgetEnabled ? fields.maxBudget : ""}
+          disabled={!budgetReady}
+          onChange={updateBudget}
+        />
+      )}
       {kind === "member" && (
         <div className="max-w-sm space-y-1.5">
           <Label htmlFor={`${idPrefix}-template`}>{t("customerPortal.hierarchy.template")}</Label>
@@ -73,7 +121,12 @@ export default function CustomerHierarchyBudgetFields({
           </Select>
         </div>
       )}
-      <div className="space-y-1.5">
+      {kind === "member" && (
+        <CustomerRateLimitSummary
+          limits={organization.default_budgets.find((group) => group.budget_id === fields.templateId)}
+        />
+      )}
+      <div hidden={!showCustomBudget} className="space-y-1.5">
         <div className="flex items-center gap-2">
           <Checkbox
             id={`${idPrefix}-budget-enabled`}
@@ -86,67 +139,98 @@ export default function CustomerHierarchyBudgetFields({
             )}
           </Label>
         </div>
-        {kind === "member" && (
-          <p className="text-xs text-muted-foreground">{t("customerPortal.hierarchy.overrideHint")}</p>
-        )}
       </div>
-      {fields.budgetEnabled && (
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            {numericFields.map(([name, label, step]) => (
-              <div className="space-y-1.5" key={name}>
-                <Label htmlFor={`${idPrefix}-${name}`}>{t(label)}</Label>
-                <Input
-                  id={`${idPrefix}-${name}`}
-                  type="number"
-                  min="0"
-                  step={step}
-                  value={fields[name]}
-                  onChange={(event) => update(name, event.target.value)}
-                />
-              </div>
-            ))}
+      {showCustomBudget && fields.budgetEnabled && (
+        <CustomerBudgetFields
+          fields={fields}
+          onChange={update}
+          idPrefix={idPrefix}
+          hideMaxBudget={kind === "organization"}
+        >
+          {kind === "member" && (
             <div className="space-y-1.5">
-              <Label htmlFor={`${idPrefix}-duration`}>{t("customerPortal.hierarchy.budgetDuration")}</Label>
+              <Label htmlFor={`${idPrefix}-expiry`}>{t("customerPortal.hierarchy.overrideExpiry")}</Label>
               <Input
-                id={`${idPrefix}-duration`}
-                value={fields.budgetDuration}
-                onChange={(event) => update("budgetDuration", event.target.value)}
-                aria-describedby={`${idPrefix}-duration-hint`}
+                id={`${idPrefix}-expiry`}
+                type="datetime-local"
+                value={fields.overrideExpiry}
+                onChange={(event) => update("overrideExpiry", event.target.value)}
+                aria-describedby={`${idPrefix}-expiry-hint`}
               />
-              <p id={`${idPrefix}-duration-hint`} className="text-xs text-muted-foreground">
-                {t("customerPortal.hierarchy.budgetDurationHint")}
+              <p id={`${idPrefix}-expiry-hint`} className="text-xs text-muted-foreground">
+                {t("customerPortal.hierarchy.overrideExpiryHint")}
               </p>
             </div>
-            {kind === "member" && (
-              <div className="space-y-1.5">
-                <Label htmlFor={`${idPrefix}-expiry`}>{t("customerPortal.hierarchy.overrideExpiry")}</Label>
-                <Input
-                  id={`${idPrefix}-expiry`}
-                  type="datetime-local"
-                  value={fields.overrideExpiry}
-                  onChange={(event) => update("overrideExpiry", event.target.value)}
-                  aria-describedby={`${idPrefix}-expiry-hint`}
-                />
-                <p id={`${idPrefix}-expiry-hint`} className="text-xs text-muted-foreground">
-                  {t("customerPortal.hierarchy.overrideExpiryHint")}
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-models`}>{t("customerPortal.hierarchy.allowedModels")}</Label>
-            <CustomerAllowedModelsSelect
-              id={`${idPrefix}-models`}
-              value={fields.allowedModels}
-              onChange={(models) => update("allowedModels", models)}
-            />
-            <p id={`${idPrefix}-models-hint`} className="text-xs text-muted-foreground">
-              {t("customerPortal.hierarchy.allowedModelsHint")}
-            </p>
-          </div>
-        </div>
+          )}
+        </CustomerBudgetFields>
       )}
     </section>
+  );
+}
+
+export function CustomerBudgetFields({
+  fields,
+  onChange: update,
+  idPrefix,
+  hideMaxBudget = false,
+  children,
+}: {
+  fields: BudgetFields;
+  onChange: {
+    (key: Exclude<keyof BudgetFields, "allowedModels">, value: string): void;
+    (key: "allowedModels", value: readonly string[]): void;
+  };
+  idPrefix: string;
+  hideMaxBudget?: boolean;
+  children?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const numericFields = [
+    ["maxBudget", "customerPortal.hierarchy.maxBudget", "any"],
+    ["softBudget", "customerPortal.hierarchy.softBudget", "any"],
+  ] as const;
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        {numericFields.map(([name, label, step]) => (
+          <div hidden={hideMaxBudget && name === "maxBudget"} className="space-y-1.5" key={name}>
+            <Label htmlFor={`${idPrefix}-${name}`}>{t(label)}</Label>
+            <Input
+              id={`${idPrefix}-${name}`}
+              type="number"
+              min="0"
+              step={step}
+              value={fields[name]}
+              onChange={(event) => update(name, event.target.value)}
+            />
+          </div>
+        ))}
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-duration`}>{t("customerPortal.hierarchy.budgetDuration")}</Label>
+          <Input
+            id={`${idPrefix}-duration`}
+            value={fields.budgetDuration}
+            onChange={(event) => update("budgetDuration", event.target.value)}
+            aria-describedby={`${idPrefix}-duration-hint`}
+          />
+          <p id={`${idPrefix}-duration-hint`} className="text-xs text-muted-foreground">
+            {t("customerPortal.hierarchy.budgetDurationHint")}
+          </p>
+        </div>
+        {children}
+      </div>
+      <CustomerRateLimitFields id={idPrefix} tpm={fields.tpm} rpm={fields.rpm} onChange={update} />
+      <div className="space-y-1.5">
+        <Label htmlFor={`${idPrefix}-models`}>{t("customerPortal.hierarchy.allowedModels")}</Label>
+        <CustomerAllowedModelsSelect
+          id={`${idPrefix}-models`}
+          value={fields.allowedModels}
+          onChange={(models) => update("allowedModels", models)}
+        />
+        <p id={`${idPrefix}-models-hint`} className="text-xs text-muted-foreground">
+          {t("customerPortal.hierarchy.allowedModelsHint")}
+        </p>
+      </div>
+    </div>
   );
 }

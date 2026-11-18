@@ -1,6 +1,5 @@
 use std::ffi::OsString;
 
-use litellm_secret_value::SecretValue;
 use litellm_tracing::Level;
 use serde::{Deserialize, de::DeserializeOwned};
 
@@ -47,23 +46,6 @@ impl Settings {
     }
 }
 
-#[derive(Deserialize)]
-pub(super) struct UiSettings {
-    #[serde(default = "default_username")]
-    pub ui_username: String,
-    pub ui_password: SecretValue,
-    #[serde(default = "default_secure_cookies")]
-    pub litellm_ui_secure_cookies: bool,
-}
-
-fn default_username() -> String {
-    "admin".into()
-}
-
-fn default_secure_cookies() -> bool {
-    true
-}
-
 pub(super) fn from_iter<T: DeserializeOwned>(
     variables: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> envy::Result<T> {
@@ -89,7 +71,7 @@ mod tests {
     }
 
     #[rstest]
-    fn defaults_allow_startup_without_ui_credentials() {
+    fn defaults_allow_startup() {
         let settings: Settings = parse(&[]).unwrap();
 
         assert_eq!(settings.host, "0.0.0.0");
@@ -105,7 +87,6 @@ mod tests {
             ("PORT", "8080"),
             ("LITELLM_CONFIG", "/tmp/custom.yaml"),
             ("RUST_LOG", "debug"),
-            ("LITELLM_UI_SECURE_COOKIES", "invalid-but-ui-disabled"),
         ])
         .unwrap();
 
@@ -132,37 +113,6 @@ mod tests {
     #[case::invalid("http")]
     fn invalid_ports_fail_startup(#[case] value: &str) {
         assert!(parse::<Settings>(&[("PORT", value)]).is_err());
-    }
-
-    #[rstest]
-    fn ui_defaults_keep_secure_cookies_and_preserve_password() {
-        let settings: UiSettings = parse(&[("UI_PASSWORD", " secret,with spaces ")]).unwrap();
-
-        assert_eq!(settings.ui_username, "admin");
-        assert_eq!(settings.ui_password.expose(), " secret,with spaces ");
-        assert!(settings.litellm_ui_secure_cookies);
-    }
-
-    #[rstest]
-    #[case::secure("true", true)]
-    #[case::insecure("false", false)]
-    fn ui_environment_overrides(#[case] value: &str, #[case] expected: bool) {
-        let settings: UiSettings = parse(&[
-            ("UI_USERNAME", "operator"),
-            ("UI_PASSWORD", "password"),
-            ("LITELLM_UI_SECURE_COOKIES", value),
-        ])
-        .unwrap();
-
-        assert_eq!(settings.ui_username, "operator");
-        assert_eq!(settings.litellm_ui_secure_cookies, expected);
-    }
-
-    #[rstest]
-    #[case::missing_password(&[])]
-    #[case::invalid_cookie_flag(&[("UI_PASSWORD", "password"), ("LITELLM_UI_SECURE_COOKIES", "invalid")])]
-    fn invalid_ui_settings_fail(#[case] variables: &[(&str, &str)]) {
-        assert!(parse::<UiSettings>(variables).is_err());
     }
 
     #[cfg(unix)]

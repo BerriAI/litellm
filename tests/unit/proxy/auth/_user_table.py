@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Final
 
 from litellm.proxy._types import LiteLLM_UserTable
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 _ILIKE_TOKEN: Final = re.compile(r"\\(.)|(%)|(_)|(.)", re.DOTALL)
 
@@ -102,5 +103,6 @@ def prisma_over(table: UserTable) -> SimpleNamespace:
         assert table_name == "user"
         return await table.create(data)
 
-    database: Final = SimpleNamespace(litellm_usertable=table)
+    database: Final = prisma_with_empty_config().db
+    database.litellm_usertable = table
     return SimpleNamespace(db=database, writer_db=database, insert_data=insert_data, jsonify_object=dict)

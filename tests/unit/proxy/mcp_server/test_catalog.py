@@ -39,6 +39,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 CatalogKind = Literal["tools", "prompts", "resources", "templates"]
 OptionalCatalogResult = ListPromptsResult | ListResourcesResult | ListResourceTemplatesResult
@@ -92,11 +93,11 @@ async def test_catalog_refresh_keeps_selected_toolset_with_current_grants_and_co
         litellm_objectpermissiontable=SimpleNamespace(find_unique=AsyncMock(return_value=live_grants)),
         litellm_mcptoolsettable=SimpleNamespace(find_many=read_toolsets),
     )
-    database: Final = SimpleNamespace(
-        db=tables,
-        writer_db=tables,
-        get_data=AsyncMock(return_value=UserAPIKeyAuth(object_permission_id=grants.object_permission_id)),
-    )
+    database: Final = SimpleNamespace(db=tables, writer_db=tables)
+    install_rust_auth_stores(monkeypatch).key.rows["catalog-key-hash"] = {
+        "token": "catalog-key-hash",
+        "object_permission_id": grants.object_permission_id,
+    }
     cache: Final = DualCache()
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)

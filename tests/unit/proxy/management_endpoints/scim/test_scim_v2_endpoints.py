@@ -89,6 +89,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 _SYNC_GROUP_ROSTER: Final = "litellm.proxy.management_endpoints.scim.scim_v2._sync_group_roster"
 
@@ -7529,15 +7530,14 @@ async def test_a_server_error_a_handler_raises_on_purpose_keeps_its_reason(
 
 @pytest.mark.asyncio
 async def test_an_auth_check_during_a_database_outage_answers_503_with_its_retry_hint(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
     outage: Final = ConnectError("All connection attempts failed")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(side_effect=outage)
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+    monkeypatch.setattr(rust_auth_stores.key, "find", AsyncMock(side_effect=outage))
 
     async with proxy_scim_client as client:
         response = await client.post(
@@ -7587,13 +7587,15 @@ async def test_a_create_with_a_body_the_schema_rejects_logs_the_user_name_it_was
 
 @pytest.mark.asyncio
 async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_for(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    proxy_scim_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    rust_auth_stores: RustAuthStores,
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(return_value=None)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
     unknown_key: Final = {"Authorization": "Bearer sk-not-a-real-key"}
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
@@ -7609,13 +7611,12 @@ async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_
 
 @pytest.mark.asyncio
 async def test_a_key_the_proxy_does_not_know_answers_401_as_a_scim_error_with_the_auth_reason(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(return_value=None)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
 
     async with proxy_scim_client as client:
         response = await client.post(
