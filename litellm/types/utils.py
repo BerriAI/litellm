@@ -2011,14 +2011,9 @@ class PromptTokensDetailsWrapper(
             self.cache_creation_token_details = _nested_cache_creation_token_details(extra_fields.get("cache_creation"))
         if self.character_count is None:
             del self.character_count
-        if self.image_count is None:
-            del self.image_count
-        if self.image_pixels is None:
-            del self.image_pixels
-        if self.video_pixels is None:
-            del self.video_pixels
-        if self.video_length_seconds is None:
-            del self.video_length_seconds
+        for field in ("image_count", "image_pixels", "video_pixels", "video_length_seconds"):
+            if getattr(self, field) is None:
+                delattr(self, field)
         if self.audio_length_seconds is None:
             del self.audio_length_seconds
         if self.query_count is None:
