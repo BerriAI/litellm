@@ -101,7 +101,7 @@ function ApplicationsList({
 }) {
   const { t } = useTranslation();
   const [search, setSearch] = useState("");
-  const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(0));
+  const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
   const [requestedPageSize, setPageSize] = useQueryState(
     "page_size",
     parseAsInteger.withDefault(APPLICATIONS_PAGE_SIZE),
@@ -111,7 +111,7 @@ function ApplicationsList({
     () => applicationRows(resources.data ?? [], apps.data ?? [], search),
     [resources.data, apps.data, search],
   );
-  const currentPage = Math.max(0, Math.min(page, Math.ceil(rows.length / pageSize) - 1));
+  const currentPage = Math.max(0, Math.min(page, Math.ceil(rows.length / pageSize)) - 1);
   return (
     <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
@@ -122,7 +122,7 @@ function ApplicationsList({
           value={search}
           onChange={(event) => {
             setSearch(event.target.value);
-            void setPage(0);
+            void setPage(1);
           }}
         />
         <span className="text-xs text-muted-foreground">{t("apps.list.count", { count: rows.length })}</span>
@@ -146,10 +146,10 @@ function ApplicationsList({
         page={currentPage}
         pageSize={pageSize}
         rowCount={rows.length}
-        onPageChange={(pageIndex) => void setPage(pageIndex)}
+        onPageChange={(pageIndex) => void setPage(pageIndex + 1)}
         onPageSizeChange={(size) => {
           void setPageSize(size);
-          void setPage(0);
+          void setPage(1);
         }}
         isLoading={resources.isFetching || apps.isFetching}
       />

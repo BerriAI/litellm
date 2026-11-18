@@ -232,6 +232,19 @@ describe("Gateway app definition", () => {
     expect(screen.queryByRole("button", { name: "app-00" })).not.toBeInTheDocument();
   });
 
+  it("should open the second page of applications from a link that says page 2", async () => {
+    definition = { resource_type: "team" };
+    resources = Array.from({ length: 30 }, (_, index) => ({
+      resource_type: "team",
+      resource_id: `team-${index}`,
+      alias: `app-${String(index).padStart(2, "0")}`,
+      app_id: null,
+    }));
+    render(<AppsManager />, { searchParams: "?page=2" });
+    expect(await screen.findByRole("button", { name: "app-25" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "app-00" })).not.toBeInTheDocument();
+  });
+
   it("should open a linked application without showing the list first", async () => {
     definition = { resource_type: "team" };
     render(<AppsManager />, { searchParams: "?app=team-chat" });
@@ -246,7 +259,7 @@ describe("Gateway app definition", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it.each(["?page_size=0", "?page=-3", "?page_size=-5&page=9"])(
+  it.each(["?page_size=0", "?page=-3", "?page=0", "?page_size=-5&page=9"])(
     "should still list applications when the URL carries %s",
     async (searchParams) => {
       definition = { resource_type: "team" };
