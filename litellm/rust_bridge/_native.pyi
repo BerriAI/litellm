@@ -2276,6 +2276,13 @@ class RustBudgetRepository:
     def find_team_member_default_budget(self, budget_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
 
 @final
+class RustBudgetWindowSpendRepository:
+    def __new__(cls, database: NativeDatabase) -> RustBudgetWindowSpendRepository: ...
+    def find(
+        self, entity_type: str, entity_id: str, window_duration: str, *, use_writer: bool = False
+    ) -> Future[str | None]: ...
+
+@final
 class RustEndUserRepository:
     def __new__(cls, database: NativeDatabase) -> RustEndUserRepository: ...
     def find_with_budget_and_object_permission(self, end_user_id: str) -> Future[str | None]: ...
@@ -2762,6 +2769,7 @@ __all__ = [
     "RustAuthStep",
     "RustBridgeDeclined",
     "RustBudgetRepository",
+    "RustBudgetWindowSpendRepository",
     "RustClaimIdentity",
     "RustDenial",
     "RustEndUserRepository",

@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT window_start,\n       spend\nFROM \"LiteLLM_BudgetWindowSpend\"\nWHERE entity_type = $1\n  AND entity_id = $2\n  AND window_duration = $3\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "window_start",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetWindowSpend\"",
+            "name": "window_start"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetWindowSpend\"",
+            "name": "spend"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7491605e07948f7083f544d3acda8835f4d05828c6ddc69b139ccb68345948f5"
+}

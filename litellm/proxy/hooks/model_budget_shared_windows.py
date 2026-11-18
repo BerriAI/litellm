@@ -10,7 +10,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     build_window_spend_transaction,
 )
-from litellm.repositories.table_repositories import BudgetWindowSpendRepository
+from litellm.repositories.budget_window_spend_repository import BudgetWindowSpendRepository
 from litellm.router_strategy.budget_limiter import budget_window_seconds
 
 if TYPE_CHECKING:
