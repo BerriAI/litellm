@@ -1332,3 +1332,310 @@ async def test_bedrock_mantle_route_sends_the_project_id_as_the_workspace_header
     [sent] = server.requests
     assert sent.headers["anthropic-workspace-id"] == "proj_abc123def456"
     assert "aws_bedrock_project_id" not in _OBJECT.validate_python(sent.body)
+
+
+PLATFORM_MODEL: Final = "bedrock/claude_platform/claude-sonnet-4-5"
+_PLATFORM_WIRE: Final = _OBJECT.validate_json(
+    (Path(__file__).parent / "bedrock_claude_platform_python_wire.json").read_bytes()
+)
+_PLATFORM_HEADERS: Final = (
+    "anthropic-beta",
+    "anthropic-version",
+    "anthropic-workspace-id",
+    "authorization",
+    "x-api-key",
+)
+_PLATFORM_ENVS: Final = (
+    "ANTHROPIC_AWS_API_KEY",
+    "ANTHROPIC_AWS_BASE_URL",
+    "ANTHROPIC_AWS_API_BASE",
+    "ANTHROPIC_AWS_WORKSPACE_ID",
+    "ANTHROPIC_WORKSPACE_ID",
+    "AWS_REGION",
+    "AWS_REGION_NAME",
+    "AWS_DEFAULT_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+)
+_PLATFORM_TOOL: Final = {
+    "name": "get_weather",
+    "description": "w",
+    "input_schema": {"type": "object", "properties": {"c": {"type": "string"}}},
+}
+_PLATFORM_AWS: Final = {
+    "aws_access_key_id": "AKIDEXAMPLE",
+    "aws_secret_access_key": "secret-example",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.fixture
+def no_platform_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _PLATFORM_ENVS:
+        monkeypatch.delenv(name, raising=False)
+
+
+async def _platform(server: RecordingServer, **kwargs: object) -> object:
+    return await _RUST_ENTRY(
+        **{
+            "model": PLATFORM_MODEL,
+            "messages": list(MESSAGES),
+            "max_tokens": 64,
+            "api_base": server.base_url,
+            "workspace_id": "ws-1",
+            "litellm_call_id": str(uuid.uuid4()),
+            **kwargs,
+        }
+    )
+
+
+def _platform_wire(request: RecordedRequest) -> dict[str, object]:
+    headers: Final = {name: request.headers.get(name) for name in _PLATFORM_HEADERS}
+    authorization: Final = headers["authorization"] or ""
+    signed: Final = authorization.startswith("AWS4-HMAC-SHA256")
+    scope: Final = authorization.split("Credential=", 1)[-1].split(",", 1)[0].split("/", 2)[-1]
+    return {
+        "path": request.path,
+        "body": json.loads(request.raw_body),
+        "headers": {**headers, "authorization": f"SigV4 {scope}" if signed else headers["authorization"]},
+    }
+
+
+_KEY: Final = {"api_key": "k"}
+_CONTEXT_MANAGEMENT: Final = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env", "no_aws_credentials")
+@pytest.mark.parametrize(
+    ("case", "request_params", "env"),
+    (
+        pytest.param("auth_api_key", {"api_key": "k-explicit"}, {}, id="api-key"),
+        pytest.param("auth_env_key", {}, {"ANTHROPIC_AWS_API_KEY": "k-env"}, id="env-key"),
+        pytest.param(
+            "auth_bearer_env",
+            {"aws_region_name": "us-east-1"},
+            {"AWS_BEARER_TOKEN_BEDROCK": "bedrock-bearer"},
+            id="bedrock-bearer",
+        ),
+        pytest.param("auth_sigv4_params", _PLATFORM_AWS, {}, id="sigv4"),
+        pytest.param(
+            "auth_fwd_xapikey_sigv4",
+            {**_PLATFORM_AWS, "extra_headers": {"x-api-key": "caller-key"}},
+            {},
+            id="forwarded-key-still-signed",
+        ),
+        pytest.param(
+            "auth_fwd_authorization_key",
+            {"api_key": "k1", "extra_headers": {"authorization": "Bearer caller"}},
+            {},
+            id="forwarded-authorization-beside-key",
+        ),
+        pytest.param(
+            "auth_fwd_xapikey_and_key",
+            {"api_key": "k1", "extra_headers": {"x-api-key": "caller-key"}},
+            {},
+            id="forwarded-key-wins",
+        ),
+        pytest.param(
+            "ws_aws_workspace_id", {**_KEY, "workspace_id": None, "aws_workspace_id": "ws-aws"}, {}, id="aws-workspace"
+        ),
+        pytest.param(
+            "ws_anthropic_workspace_id",
+            {**_KEY, "workspace_id": None, "anthropic_workspace_id": "ws-ant"},
+            {},
+            id="anthropic-workspace",
+        ),
+        pytest.param(
+            "ws_env", {**_KEY, "workspace_id": None}, {"ANTHROPIC_AWS_WORKSPACE_ID": "ws-env"}, id="env-workspace"
+        ),
+        pytest.param(
+            "ws_header_and_param",
+            {**_KEY, "extra_headers": {"anthropic-workspace-id": "ws-hdr"}},
+            {},
+            id="workspace-over-caller-header",
+        ),
+        pytest.param("ws_int", {**_KEY, "workspace_id": 123}, {}, id="numeric-workspace"),
+        pytest.param("shape_context_management", {**_KEY, "context_management": _CONTEXT_MANAGEMENT}, {}, id="cm"),
+        pytest.param(
+            "shape_override_unsupported",
+            {
+                **_KEY,
+                "context_management": _CONTEXT_MANAGEMENT,
+                "temperature": 0.5,
+                "claude_platform_unsupported_params": ["temperature"],
+            },
+            {},
+            id="override-unsupported",
+        ),
+        pytest.param(
+            "shape_override_keeps_cm",
+            {**_KEY, "context_management": _CONTEXT_MANAGEMENT, "claude_platform_unsupported_params": []},
+            {},
+            id="override-keeps-cm",
+        ),
+        pytest.param(
+            "shape_tools_cache_ttl",
+            {**_KEY, "tools": [{**_PLATFORM_TOOL, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+            {},
+            id="tool-cache-ttl",
+        ),
+        pytest.param(
+            "shape_betas",
+            {**_KEY, "extra_headers": {"anthropic-beta": "context-1m-2025-08-07,code-execution-2025-08-25"}},
+            {},
+            id="betas-unfiltered",
+        ),
+        pytest.param("shape_safeguards", {**_KEY, "safeguards": [{"type": "dangerous_tool_use"}]}, {}, id="safeguards"),
+        pytest.param(
+            "shape_thinking",
+            {**_KEY, "thinking": {"type": "enabled", "budget_tokens": 1024}, "max_tokens": 2048},
+            {},
+            id="thinking",
+        ),
+        pytest.param("url_v1", {**_KEY, "api_base": "{base}/v1"}, {}, id="base-v1"),
+        pytest.param("url_v1_messages", {**_KEY, "api_base": "{base}/v1/messages"}, {}, id="base-full-route"),
+        pytest.param("url_env_base", {**_KEY, "api_base": None}, {"ANTHROPIC_AWS_BASE_URL": "{base}"}, id="env-base"),
+    ),
+)
+async def test_claude_platform_sends_the_request_python_sends(
+    server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    request_params: Mapping[str, object],
+    env: Mapping[str, str],
+) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value.format(base=server.base_url))
+    sent_params: Final = {
+        name: value.format(base=server.base_url) if isinstance(value, str) else value
+        for name, value in request_params.items()
+        if value is not None
+    }
+    workspace: Final = {} if request_params.get("workspace_id", "") is None else {"workspace_id": "ws-1"}
+    api_base: Final = {} if "api_base" in request_params else {"api_base": server.base_url}
+
+    response: Final = await _RUST_ENTRY(
+        **{
+            "model": PLATFORM_MODEL,
+            "messages": list(MESSAGES),
+            "max_tokens": 64,
+            "litellm_call_id": str(uuid.uuid4()),
+            **api_base,
+            **workspace,
+            **sent_params,
+        }
+    )
+
+    [sent] = server.requests
+    assert _platform_wire(sent) == _PLATFORM_WIRE[case]
+    assert _public(response) == MESSAGES_RESPONSE
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env")
+async def test_claude_platform_falls_back_to_the_module_api_base(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    monkeypatch.setattr(litellm, "api_base", server.base_url)
+
+    await _platform(server, api_base=None, api_key="k")
+
+    [sent] = server.requests
+    assert _platform_wire(sent) == _PLATFORM_WIRE["url_module_global"]
+
+
+class _Billing(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger's untyped init
+        self.billed: list[Mapping[str, object]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.billed.append(_OBJECT.validate_python(kwargs.get("standard_logging_object")))
+
+    async def wait_for(self, count: int) -> None:
+        async with asyncio.timeout(5):
+            while len(self.billed) < count:
+                await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env")
+@pytest.mark.parametrize("stream", (False, True), ids=("message", "stream"))
+async def test_claude_platform_bills_the_claude_platform_row(server: RecordingServer, stream: bool) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE, events=MESSAGES_EVENTS if stream else ())
+    billing: Final = _Billing()
+
+    with rebound(litellm, "callbacks", [billing]):
+        response: Final = await _platform(server, api_key="k", stream=stream)
+        if stream:
+            await _drain(response)
+        await billing.wait_for(1)
+
+    [billed] = billing.billed
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="claude_platform/claude-sonnet-4-5",
+        custom_llm_provider="bedrock",
+        prompt_tokens=int(str(billed["prompt_tokens"])),
+        completion_tokens=int(str(billed["completion_tokens"])),
+    )
+    assert billed["custom_llm_provider"] == "bedrock"
+    assert billed["response_cost"] == pytest.approx(prompt_cost + completion_cost)
+    assert prompt_cost + completion_cost > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env")
+@pytest.mark.parametrize(
+    ("route", "raised", "status"),
+    (
+        pytest.param({"workspace_id": None}, litellm.AuthenticationError, 401, id="missing-workspace"),
+        pytest.param(
+            {"workspace_id": None, "extra_headers": {"anthropic-workspace-id": "ws-hdr"}},
+            litellm.AuthenticationError,
+            401,
+            id="caller-header-is-no-workspace",
+        ),
+        pytest.param({"api_base": None}, litellm.AuthenticationError, 401, id="missing-region"),
+        pytest.param(
+            {"api_base": None, "aws_region_name": "us-east-1.attacker.test/x?"}, ValueError, None, id="injected-region"
+        ),
+    ),
+)
+async def test_claude_platform_refusals_raise_what_python_raises(
+    server: RecordingServer, route: Mapping[str, object], raised: type[Exception], status: int | None
+) -> None:
+    with pytest.raises(raised) as rust_raised:
+        await _platform(server, api_key="k", **route)
+
+    assert type(rust_raised.value) is raised
+    assert getattr(rust_raised.value, "status_code", None) == status
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env")
+async def test_claude_platform_upstream_failure_raises_the_bedrock_exception(server: RecordingServer) -> None:
+    server.default_response = ResponseSpec(body=RATE_LIMITED, status=429)
+
+    with pytest.raises(litellm.RateLimitError) as rust_raised:
+        await _platform(server, api_key="k")
+
+    assert rust_raised.value.status_code == 429
+    assert rust_raised.value.llm_provider == "bedrock"
+    assert "BedrockException" in str(rust_raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env", "no_aws_credentials")
+async def test_claude_platform_signs_over_a_forwarded_authorization(server: RecordingServer) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+
+    await _platform(server, extra_headers={"authorization": "Bearer caller"}, **_PLATFORM_AWS)
+
+    [sent] = server.requests
+    assert _platform_wire(sent) == _PLATFORM_WIRE["auth_sigv4_params"]
