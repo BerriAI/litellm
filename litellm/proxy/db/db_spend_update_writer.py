@@ -361,6 +361,9 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
 
 
 _SpendTableName = Literal[
+    "app_list_transactions",
+    "app_customer_org_list_transactions",
+    "app_customer_member_list_transactions",
     "user_list_transactions",
     "end_user_list_transactions",
     "key_list_transactions",
@@ -388,6 +391,9 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "app_list_transactions",
+    "app_customer_org_list_transactions",
+    "app_customer_member_list_transactions",
     "customer_org_list_transactions",
     "customer_team_list_transactions",
     "customer_member_list_transactions",
@@ -400,9 +406,25 @@ class _CustomerHierarchyLevel:
     table: str
     prisma_table: str
     id_column: str
+    customer_column: str | None = None
 
 
 _CUSTOMER_HIERARCHY_LEVELS: Final = (
+    _CustomerHierarchyLevel("app_list_transactions", "LiteLLM_AppTable", "litellm_apptable", "app_id"),
+    _CustomerHierarchyLevel(
+        "app_customer_org_list_transactions",
+        "LiteLLM_AppCustomerOrgTable",
+        "litellm_appcustomerorgtable",
+        "app_id",
+        "customer_org_id",
+    ),
+    _CustomerHierarchyLevel(
+        "app_customer_member_list_transactions",
+        "LiteLLM_AppCustomerMemberTable",
+        "litellm_appcustomermembertable",
+        "app_id",
+        "customer_member_id",
+    ),
     _CustomerHierarchyLevel(
         "customer_org_list_transactions",
         "LiteLLM_CustomerOrganizationTable",
@@ -410,7 +432,10 @@ _CUSTOMER_HIERARCHY_LEVELS: Final = (
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
-        "customer_team_list_transactions", "LiteLLM_CustomerTeamTable", "litellm_customerteamtable", "customer_team_id"
+        "customer_team_list_transactions",
+        "LiteLLM_CustomerTeamTable",
+        "litellm_customerteamtable",
+        "customer_team_id",
     ),
     _CustomerHierarchyLevel(
         "customer_member_list_transactions",
@@ -419,6 +444,13 @@ _CUSTOMER_HIERARCHY_LEVELS: Final = (
         "customer_member_id",
     ),
 )
+
+
+def _customer_spend_where(level: _CustomerHierarchyLevel, entity_id: str) -> Mapping[str, str]:
+    if level.customer_column is None:
+        return {level.id_column: entity_id}
+    app_id, _, customer_id = entity_id.partition(":")
+    return {level.id_column: app_id, level.customer_column: customer_id}
 
 
 def _spend_tables_left_to_send(
@@ -2837,6 +2869,8 @@ class DBSpendUpdateWriter:
         """Increment the customer org, team and member rows a request ran under, one table per commit so a
         partial failure re-sends only the tables still owed."""
         for level in _CUSTOMER_HIERARCHY_LEVELS:
+            if level.transactions.startswith("app_") and level.transactions not in db_spend_update_transactions:
+                continue
             await DBSpendUpdateWriter._commit_customer_hierarchy_level(
                 level,
                 db_spend_update_transactions.get(level.transactions),
@@ -2898,7 +2932,7 @@ class DBSpendUpdateWriter:
             ):
                 for entity_id, response_cost in sorted(transactions.items()):
                     getattr(batcher, level.prisma_table).update_many(
-                        where={level.id_column: entity_id},
+                        where=_customer_spend_where(level, entity_id),
                         data={"spend": {"increment": response_cost}},
                     )
         except Exception as e:
@@ -3602,7 +3636,7 @@ class DBSpendUpdateWriter:
         customer_hierarchy: CustomerHierarchyIds | None,
         prisma_client: PrismaClient | None = None,
     ) -> None:
-        if prisma_client is None or customer_hierarchy is None:
+        if prisma_client is None or customer_hierarchy is None or customer_hierarchy.customer_org_id is None:
             return
         member_id: Final = customer_hierarchy.customer_member_id or ""
         team_id: Final = customer_hierarchy.customer_team_id or ""
@@ -3624,9 +3658,12 @@ class DBSpendUpdateWriter:
             "customer_team_id": team_id,
             "customer_org_id": org_id,
         }
+        attributed: Final[DailyCustomerMemberSpendTransaction] = (
+            {**transaction, "app_id": customer_hierarchy.app_id} if customer_hierarchy.app_id else transaction
+        )
         table: Final = DAILY_SPEND_TABLES["customer_member"]
-        key: Final = json.dumps(conflict_key(table, transaction))
-        await self.daily_customer_member_spend_update_queue.add_update({key: transaction})
+        key: Final = json.dumps(conflict_key(table, attributed))
+        await self.daily_customer_member_spend_update_queue.add_update({key: attributed})
 
     async def add_spend_log_transaction_to_daily_agent_transaction(
         self,

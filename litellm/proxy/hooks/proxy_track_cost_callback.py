@@ -324,7 +324,8 @@ def _failure_spend_rows(
     deployment_lookup: DeploymentLookup,
 ) -> tuple[tuple[float, Mapping[str, object]], ...]:
     """One ``(response_cost, kwargs)`` per spend row a failure writes: the final attempt under the
-    request id, then every earlier attempt the provider also billed under its own row."""
+    request id, then every earlier attempt the provider also billed under its own row.
+    """
     final_row: Final[Mapping[str, object]] = (
         request_data
         if late_guardrails_snapshot is None
@@ -700,6 +701,7 @@ class _ProxyDBLogger(CustomLogger):
             await customer_accounting_counters(
                 customer_hierarchy_ids_from_request(spend_rows[0][1]),
                 customer_budget_scopes_from_request(spend_rows[0][1]),
+                started_at=start_time,
             )
             if any(cost > 0 for cost, _ in spend_rows)
             else ()
@@ -741,7 +743,8 @@ class _ProxyDBLogger(CustomLogger):
     ) -> None:
         """The counters the success path raises for the same spend, sent before the client sees the error. A
         counter store slower than ``failure_counter_wait_seconds`` finishes them in the background instead of
-        holding the error back. The reservation was already released, so every counter takes the full row cost."""
+        holding the error back. The reservation was already released, so every counter takes the full row cost.
+        """
         increment: Final = asyncio.create_task(
             self._raise_failure_spend_counters(
                 user_api_key_dict, token, end_user_id, counted_rows, start_time, customer_counters
@@ -817,7 +820,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response: litellm.ModelResponse | object | None,  # response from completion
+        completion_response: (litellm.ModelResponse | object | None),  # response from completion
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
@@ -915,6 +918,9 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                     call_type=call_type,
                     agent_id=metadata.get("billing_agent_id") or metadata.get("agent_id"),
+                    app_id=_tracked_app_id(
+                        metadata,  # pyright: ignore[reportUnknownArgumentType]  # validated legacy callback metadata
+                    ),
                 ):
                     ## UPDATE DATABASE
                     charged_cost: Final = await _charge_request_cost(
@@ -1151,7 +1157,8 @@ def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, ob
     """The pipeline sets up the logging object only after auth, body parsing and model resolution succeed, and
     before guardrails or routing run. ``ProxyLogging._handle_logging_proxy_only_error`` marks a failure that
     arrives without one with the ``REJECTED_BEFORE_REQUEST_SETUP`` sentinel, so that request never had a provider
-    considered. An unknown model is the one later rejection that still never reached a provider."""
+    considered. An unknown model is the one later rejection that still never reached a provider.
+    """
     return request_data.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is REJECTED_BEFORE_REQUEST_SETUP or isinstance(
         exception, ProxyModelNotFoundError
     )
@@ -1193,6 +1200,11 @@ def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:
     return completion_response.usage is None and is_pollable_background_interaction(completion_response)
 
 
+def _tracked_app_id(metadata: object) -> str | None:
+    value: Final = _str_keyed_fields(metadata).get("user_api_key_app_id")
+    return value if isinstance(value, str) and value else None
+
+
 def _should_track_cost_callback(
     user_api_key: str | None,
     user_id: str | None,
@@ -1200,6 +1212,7 @@ def _should_track_cost_callback(
     end_user_id: str | None,
     call_type: str | None = None,
     agent_id: str | None = None,
+    app_id: str | None = None,
 ) -> bool:
     """
     Determine if the cost callback should be tracked based on the kwargs
@@ -1218,6 +1231,7 @@ def _should_track_cost_callback(
 
     if (
         agent_id is not None
+        or app_id is not None
         or user_api_key is not None
         or user_id is not None
         or team_id is not None
@@ -1383,7 +1397,9 @@ async def _update_database_and_spend_counters(
     request_fields: Final = _OBJECT_MAPPING.validate_python(kwargs)
     customer_counters: Final = (
         await customer_accounting_counters(
-            customer_hierarchy_ids_from_request(request_fields), customer_budget_scopes_from_request(request_fields)
+            customer_hierarchy_ids_from_request(request_fields),
+            customer_budget_scopes_from_request(request_fields),
+            started_at=start_time,
         )
         if response_cost
         else ()

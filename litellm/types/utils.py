@@ -3148,6 +3148,8 @@ class AdapterCompletionStreamWrapper:
 
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
     user_api_key_spend: float | None
@@ -3960,7 +3962,8 @@ class StandardBatchLineItem(TypedDict):
 
 class StandardBatchLineItemsPayload(TypedDict):
     """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
-    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines.
+    """
 
     batch_id: ReadOnly[str]
     finished_at: ReadOnly[int]
