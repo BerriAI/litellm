@@ -136,6 +136,7 @@ class _CustomerDailyRow(BaseModel):
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
     guardrail_spend: float
+    customer_margin_spend: float
     spend: float
     api_requests: int
     successful_requests: int

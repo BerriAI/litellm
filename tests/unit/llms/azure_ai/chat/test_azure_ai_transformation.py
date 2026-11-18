@@ -236,6 +236,13 @@ CHAT_COMPLETION_PAYLOAD: Final = {
             id="prefixed-openai-v1-chat-url",
         ),
         pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1/responses",
+            None,
+            "/openai/v1/chat/completions",
+            b"",
+            id="openai-v1-responses-url",
+        ),
+        pytest.param(
             f"{FOUNDRY_RESOURCE_BASE}/gateway/api/projects/team-x/azure-openai",
             None,
             "/gateway/api/projects/team-x/azure-openai/models/chat/completions",
