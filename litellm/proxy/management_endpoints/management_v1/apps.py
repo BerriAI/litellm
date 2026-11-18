@@ -155,3 +155,8 @@ async def put_app_member(
     actor: Actor,
 ) -> AppMember:
     return resolve(await store.put_member(app_id, customer_member_id, data, actor))
+
+
+@router.get("/{app_id}/customer_members/{customer_member_id}", response_model=AppMember)
+async def get_app_member(app_id: str, customer_member_id: str, store: Store) -> AppMember:
+    return resolve(await store.get_member(app_id, customer_member_id))

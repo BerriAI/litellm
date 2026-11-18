@@ -179,6 +179,51 @@ async def test_default_and_referenced_tiers_cannot_be_deleted(app_store: tuple[A
 
 
 @pytest.mark.asyncio
+async def test_reading_unused_member_inherits_without_registering_app_associations(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    await store.patch(app.app_id, AppPatch(default_customer_member_budget=Budget(rpm_limit=5)), "admin")
+    unused: Final = await store.get_member(app.app_id, "member")
+    assert isinstance(unused, AppMember)
+    assert unused.spend == 0 and unused.budget_override_id is None
+    assert unused.effective_budget == Budget(rpm_limit=5, allowed_models=())
+    assert not database.litellm_appcustomerorgtable.rows
+    assert not database.litellm_appcustomermembertable.rows
+
+
+@pytest.mark.asyncio
+async def test_reading_member_reports_spend_and_effective_org_and_member_budgets(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    await store.patch(app.app_id, AppPatch(default_customer_member_budget=Budget(rpm_limit=5)), "admin")
+    await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(customer_member_budget=Budget(rpm_limit=1)), "admin"
+    )
+    inherited: Final = await store.get_member(app.app_id, "member")
+    assert isinstance(inherited, AppMember) and inherited.effective_budget == Budget(rpm_limit=1, allowed_models=())
+    await store.put_member(app.app_id, "member", AppMemberPut(budget_override=Budget(max_budget=2)), "admin")
+    identity: Final = {"app_id": app.app_id, "customer_member_id": "member"}
+    await database.litellm_appcustomermembertable.upsert(
+        where={"app_id_customer_member_id": identity}, data={"create": identity, "update": {"spend": 0.25}}
+    )
+    read: Final = await store.get_member(app.app_id, "member")
+    assert isinstance(read, AppMember) and read.spend == 0.25
+    assert read.budget_override_id is not None
+    assert read.effective_budget == Budget(max_budget=2, allowed_models=())
+
+
+@pytest.mark.asyncio
+async def test_reading_unknown_app_or_customer_member_fails(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    _, store, app = app_store
+    assert await store.get_member("missing", "member") == AppFailure(404, "App not found.")
+    assert await store.get_member(app.app_id, "missing") == AppFailure(404, "Customer member not found.")
+
+
+@pytest.mark.asyncio
 async def test_unknown_and_foreign_tiers_are_rejected_without_assigning_rows(
     app_store: tuple[AppDatabase, AppStore, App],
 ) -> None:

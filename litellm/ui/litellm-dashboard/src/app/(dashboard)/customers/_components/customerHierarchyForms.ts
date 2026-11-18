@@ -72,7 +72,7 @@ const localDateTime = (value: string | null | undefined): string => {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 };
 
-const budgetFields = (budget: Budget | null | undefined) => ({
+export const budgetFields = (budget: Budget | null | undefined) => ({
   maxBudget: asText(budget?.max_budget),
   softBudget: asText(budget?.soft_budget),
   budgetDuration: budget?.budget_duration ?? "",
@@ -115,7 +115,7 @@ const numericLimit = (raw: string, integer = false): number | null | undefined =
   return number;
 };
 
-const parseBudget = (fields: CustomerHierarchyFields): Budget | null => {
+export const parseBudget = (fields: CustomerHierarchyFields): Budget | null => {
   const max = numericLimit(fields.maxBudget);
   const soft = numericLimit(fields.softBudget);
   const tpm = numericLimit(fields.tpm, true);

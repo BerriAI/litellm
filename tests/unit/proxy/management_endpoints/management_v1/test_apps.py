@@ -49,6 +49,7 @@ def test_non_proxy_admins_cannot_manage_apps(role: LitellmUserRoles) -> None:
     response: Final = http.post("/management/v1/apps", json={"alias": "assistant"})
     assert response.status_code == 403, response.text
     assert http.get("/management/v1/apps").status_code == 403
+    assert http.get("/management/v1/apps/app/customer_members/member").status_code == 403
 
 
 def test_tiers_are_managed_through_the_app_and_default_deletion_is_409() -> None:

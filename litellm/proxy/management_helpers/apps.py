@@ -340,6 +340,42 @@ class AppStore:
             }
         )
 
+    async def get_member(self, app_id: str, customer_member_id: str) -> AppMember | AppFailure:
+        app: Final = await self.get(app_id)
+        if isinstance(app, AppFailure):
+            return app
+        customer: Final = await self.customers.members.find_unique(where={"customer_member_id": customer_member_id})
+        if customer is None:
+            return AppFailure(404, "Customer member not found.")
+        parent: Final = customer.model_dump().get("parent_org_id")
+        if not isinstance(parent, str):
+            return AppFailure(404, "Customer organization not found.")
+        organization: Final = await self.organizations.find_unique(
+            where={"app_id_customer_org_id": {"app_id": app_id, "customer_org_id": parent}},
+        )
+        inherited: Final = (
+            (await self.organization_response(app, organization)).effective_customer_member_budget
+            if organization is not None
+            else app.default_customer_member_budget
+        )
+        row: Final = await self.members.find_unique(
+            where={"app_id_customer_member_id": {"app_id": app_id, "customer_member_id": customer_member_id}},
+        )
+        member: Final = (
+            AppMember.model_validate(row.model_dump())
+            if row is not None
+            else AppMember(app_id=app_id, customer_member_id=customer_member_id)
+        )
+        return member.model_copy(
+            update={
+                "effective_budget": (
+                    await self.budget(member.budget_override_id)
+                    if member.budget_override_id is not None
+                    else inherited
+                ),
+            }
+        )
+
     async def put_member(
         self,
         app_id: str,
