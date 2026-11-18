@@ -3,6 +3,7 @@
 
 mod access_group;
 mod budget;
+mod budget_window_spend;
 mod end_user;
 mod jwt_key_mapping;
 mod key;
@@ -17,6 +18,7 @@ mod user;
 
 pub(crate) use access_group::RustAccessGroupRepository;
 pub(crate) use budget::RustBudgetRepository;
+pub(crate) use budget_window_spend::RustBudgetWindowSpendRepository;
 pub(crate) use end_user::RustEndUserRepository;
 pub(crate) use jwt_key_mapping::RustJwtKeyMappingRepository;
 pub(crate) use key::RustKeyRepository;
