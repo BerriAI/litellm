@@ -18,6 +18,8 @@ pub struct KeySettings {
     pub master_key: Option<MasterKey>,
     /// [`HostFacts::has_db`](crate::HostFacts::has_db)
     pub has_db: bool,
+    /// [`HostFacts::db_configured`](crate::HostFacts::db_configured)
+    pub db_configured: bool,
     /// [`general_settings.allow_user_auth`](litellm_config::GeneralSettings::allow_user_auth)
     pub allow_user_auth: bool,
     /// [`HostFacts::ui_login`](crate::HostFacts::ui_login)

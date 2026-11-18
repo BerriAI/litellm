@@ -7,6 +7,7 @@ import ast
 import asyncio
 import base64
 import binascii
+import contextlib
 import contextvars
 import copy
 import datetime
@@ -29,7 +30,8 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import lru_cache, partial, wraps
 from importlib import resources
@@ -127,6 +129,14 @@ from litellm.litellm_core_utils.model_cost_table import (
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
+from litellm.litellm_core_utils.on_end_byte_stream import (
+    OnEndAsyncByteStream,
+    OnEndSyncByteStream,
+    StreamClosedEarly,
+    StreamCompleted,
+    StreamEnd,
+    StreamFailed,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import (
@@ -250,6 +260,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantToolCall,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    HttpxBinaryResponseContent,
     OpenAITextCompletionUserMessage,
     OpenAIWebSearchOptions,
 )
@@ -327,7 +338,18 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+    Sized,
+)
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -1354,9 +1376,8 @@ def function_setup(
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
-        all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
-
         with litellm.logging_callback_manager.callback_lists_lock:
+            all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
             if len(all_callbacks) > 0:
                 for callback in all_callbacks:
                     # check if callback is a string - e.g. "lago", "openmeter"
@@ -1670,6 +1691,109 @@ def dispatch_success_logging(
             start_time=start_time,
             end_time=end_time,
         )
+
+
+def _unread_speech_upstream(result: object, call_type: str, stream_requested: bool) -> httpx.Response | None:
+    if (
+        not stream_requested
+        or call_type not in _SPEECH_CALL_TYPES
+        or not isinstance(result, HttpxBinaryResponseContent)
+    ):
+        return None
+    return result.unread_response()
+
+
+async def _close_unread_speech(result: object, call_type: str, stream_requested: bool) -> None:
+    unread_speech: Final = _unread_speech_upstream(result, call_type, stream_requested)
+    if unread_speech is not None:
+        with contextlib.suppress(Exception):
+            await unread_speech.aclose()
+
+
+def _close_unread_speech_sync(result: object, call_type: str, stream_requested: bool) -> None:
+    unread_speech: Final = _unread_speech_upstream(result, call_type, stream_requested)
+    if unread_speech is not None:
+        with contextlib.suppress(Exception):
+            unread_speech.close()
+
+
+def _bill_failed_speech_stream(logging_obj: LiteLLMLoggingObject, result: object) -> None:
+    logging_obj.record_partial_usage_for_failure(Usage(), logging_obj.response_cost_calculator(result=result) or 0.0)
+
+
+def _speech_stream_error_mapper(
+    model: str | None, logging_obj: LiteLLMLoggingObject
+) -> Callable[[httpx.TransportError], Exception]:
+    llm_provider: Final = str(logging_obj.model_call_details.get("custom_llm_provider") or "")
+
+    def map_error(error: httpx.TransportError) -> Exception:
+        if isinstance(error, httpx.TimeoutException):
+            return litellm.Timeout(message=str(error), model=model or "", llm_provider=llm_provider)
+        return litellm.APIConnectionError(message=str(error), llm_provider=llm_provider, model=model or "")
+
+    return map_error
+
+
+def _async_speech_end_logger(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    is_completion_with_fallbacks: bool,
+    is_litellm_internal_call: bool,
+) -> Callable[[StreamEnd], Awaitable[None]]:
+    async def log_speech_end(end: StreamEnd) -> None:
+        end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
+        match end:
+            case StreamFailed(error=error):
+                if is_litellm_internal_call:
+                    return
+                traceback_exception: Final = "".join(traceback.format_exception(error))
+                _bill_failed_speech_stream(logging_obj, result)
+                unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
+                logging_obj.failure_handler(error, traceback_exception, start_time, end_time, for_async_request=True)
+                await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
+                return
+            case StreamClosedEarly():
+                logging_obj.record_client_disconnect()
+            case StreamCompleted():
+                pass
+        dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_completion_with_fallbacks=is_completion_with_fallbacks,
+            is_litellm_internal_call=is_litellm_internal_call,
+        )
+
+    return log_speech_end
+
+
+def _sync_speech_end_logger(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    is_litellm_internal_call: bool,
+    executor: BoundedLoggingThreadPoolExecutor,
+) -> Callable[[StreamEnd], None]:
+    ctx: Final = contextvars.copy_context()
+
+    def log_speech_end(end: StreamEnd) -> None:
+        end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
+        match end:
+            case StreamFailed(error=error):
+                _bill_failed_speech_stream(logging_obj, result)
+                logging_obj.failure_handler(error, "".join(traceback.format_exception(error)), start_time, end_time)
+                return
+            case StreamClosedEarly():
+                logging_obj.record_client_disconnect()
+            case StreamCompleted():
+                pass
+        if is_litellm_internal_call:
+            return
+        executor.submit(ctx.run, logging_obj.success_handler, result, start_time, end_time)
+
+    return log_speech_end
 
 
 def _schedule_async_success_logging(
@@ -2311,14 +2435,10 @@ def client(original_function):
             print_verbose(
                 f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
             )
-            # if caching is false or cache["no-cache"]==True, don't run this
             if (
                 (
-                    (
-                        (kwargs.get("caching", None) is None and litellm.cache is not None)
-                        or kwargs.get("caching", False) is True
-                    )
-                    and kwargs.get("cache", {}).get("no-cache", False) is not True
+                    (kwargs.get("caching", None) is None and litellm.cache is not None)
+                    or kwargs.get("caching", False) is True
                 )
                 and kwargs.get("aembedding", False) is not True
                 and kwargs.get("atext_completion", False) is not True
@@ -2425,12 +2545,27 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+            executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
+            unread_speech: Final = _unread_speech_upstream(
+                checked_result, call_type, "stream" in kwargs and kwargs["stream"] is True
+            )
             logged_by_fallback_attempt: Final = call_type == CallTypes.completion.value and uses_fallbacks(kwargs)
-            if not is_internal_call.get() and not logged_by_fallback_attempt:
+            if unread_speech is not None and isinstance(unread_speech.stream, httpx.SyncByteStream):
+                unread_speech.stream = OnEndSyncByteStream(
+                    unread_speech.stream,
+                    _speech_stream_error_mapper(model, logging_obj),
+                    _sync_speech_end_logger(
+                        logging_obj=logging_obj,
+                        result=checked_result,
+                        start_time=start_time,
+                        is_litellm_internal_call=is_internal_call.get(),
+                        executor=executor,
+                    ),
+                )
+            elif not is_internal_call.get() and not logged_by_fallback_attempt:
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
                 ctx: Final = contextvars.copy_context()
-                executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
                 executor.submit(
                     ctx.run,
                     logging_obj.success_handler,
@@ -2441,6 +2576,7 @@ def client(original_function):
             # RETURN RESULT
             return checked_result
         except Exception as e:
+            _close_unread_speech_sync(result, call_type, "stream" in kwargs and kwargs["stream"] is True)
             if call_type == CallTypes.completion.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
@@ -2745,18 +2881,35 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            dispatch_success_logging(
-                logging_obj=logging_obj,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_completion_with_fallbacks=is_completion_with_fallbacks,
-                is_litellm_internal_call=_is_litellm_internal_call,
+            unread_speech: Final = _unread_speech_upstream(
+                result, call_type, "stream" in kwargs and kwargs["stream"] is True
             )
+            if unread_speech is not None and isinstance(unread_speech.stream, httpx.AsyncByteStream):
+                unread_speech.stream = OnEndAsyncByteStream(
+                    unread_speech.stream,
+                    _speech_stream_error_mapper(model, logging_obj),
+                    _async_speech_end_logger(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        is_litellm_internal_call=_is_litellm_internal_call,
+                    ),
+                )
+            else:
+                dispatch_success_logging(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    is_litellm_internal_call=_is_litellm_internal_call,
+                )
 
             return _replayed_when_run_unstreamed(result, transcription_runs_unstreamed)
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
+            await _close_unread_speech(result, call_type, "stream" in kwargs and kwargs["stream"] is True)
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
@@ -2913,7 +3066,16 @@ _STREAMING_CALL_TYPES: Final = frozenset(
     }
 )
 
-_NEVER_STREAMING_CALL_TYPES: Final = frozenset(
+_SPEECH_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.speech,
+        CallTypes.aspeech,
+        CallTypes.speech.value,
+        CallTypes.aspeech.value,
+    }
+)
+
+_NEVER_STREAMING_CALL_TYPES: Final = _SPEECH_CALL_TYPES | frozenset(
     {
         CallTypes.extraction,
         CallTypes.aextraction,
@@ -2934,6 +3096,10 @@ def _is_streaming_request(
     Returns True if:
         - if "stream=True" in kwargs  (litellm chat completion, litellm text completion, litellm messages)
         - if call_type is generate_content_stream or agenerate_content_stream (litellm google genai)
+
+    Speech and extraction are excluded. Extraction never streams, and "stream=True" on speech asks
+    for the audio bytes to be forwarded as they arrive while the return value is still a single
+    response object, so both are logged like any other non-streaming call.
     """
     if call_type in _NEVER_STREAMING_CALL_TYPES or call_type in _RESULT_DECIDES_STREAMING_CALL_TYPES:
         return False
@@ -3011,6 +3177,21 @@ _DEEPSEEK_TOKENIZER_MODEL: Final = re.compile(
 _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading.Lock]] = MappingProxyType(
     {"anthropic": threading.Lock(), "deepseek": threading.Lock()}
 )
+
+
+_HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED: Final[ContextVar[bool]] = ContextVar(
+    "litellm_huggingface_tokenizer_downloads_allowed", default=True
+)
+
+
+@contextmanager
+def without_huggingface_tokenizer_downloads() -> Generator[None]:
+    """Count with a tokenizer already in memory or tiktoken, never waiting on a Hugging Face download"""
+    token: Final = _HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED.set(False)
+    try:
+        yield
+    finally:
+        _HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED.reset(token)
 
 
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
@@ -3139,6 +3320,12 @@ def _return_huggingface_tokenizer(
     if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
         return None
     key: Final = (kind, _huggingface_tokenizer_backend())
+    if (
+        kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS
+        and not _HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED.get()
+        and not isinstance(outcomes.by_tokenizer.get(key), _HuggingFaceTokenizerLoaded)
+    ):
+        return None
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
         known: Final = outcomes.known(key, partial(_retry_huggingface_tokenizer_load, model, key, outcomes))
         outcome: Final = (
@@ -5825,14 +6012,6 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
 
-    elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
-        # handle cohere params
-        optional_params = litellm.CohereChatConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
-        )
     elif custom_llm_provider == "triton":
         optional_params = litellm.TritonConfig().map_openai_params(
             non_default_params=non_default_params,

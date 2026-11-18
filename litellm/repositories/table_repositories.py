@@ -9,6 +9,7 @@ methods; richer repositories live in their own modules.
 
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
+from importlib import import_module
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
@@ -263,8 +264,22 @@ class TeamMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_Team
     table_name = "litellm_teammembership"
 
 
+_END_USER_ID_ROWS: Final = TypeAdapter(list[dict[str, str]])
+_END_USER_QUERY: Final = TypeAdapter(str)
+
+
 class EndUserRepository(PrismaTableRepository["prisma_models.LiteLLM_EndUserTable"]):
     table_name = "litellm_endusertable"
+
+    async def find_restricted_ids(self, limit: int) -> tuple[str, ...]:
+        from litellm.proxy.db.db_span import db_span
+
+        database: Final = require_attributes(self._selected_database(), LedgerTransaction, "query_raw")
+        module: Final = import_module("litellm_proxy_extras.request_log_indexes")
+        query: Final = _END_USER_QUERY.validate_python(module.END_USER_RESTRICTED_QUERY)
+        async with db_span("find_many", "LiteLLM_EndUserTable"):
+            rows: Final = _END_USER_ID_ROWS.validate_python(await database.query_raw(query, limit))
+        return tuple(row["user_id"] for row in rows)
 
 
 class ManagedVectorStoresRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedVectorStoresTable"]):
