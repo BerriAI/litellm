@@ -1,0 +1,181 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.customer_member_id,\n       m.alias,\n       m.parent_org_id,\n       COALESCE(m.parent_team_ids, '{}') AS \"parent_team_ids!\",\n       m.spend,\n       m.spend_reset_window,\n       m.budget_id,\n       m.budget_override_id,\n       m.budget_override_expires_at,\n       m.created_at,\n       m.created_by,\n       m.updated_at,\n       m.updated_by,\n       to_jsonb(b) AS \"budget?: Json<Budget>\",\n       to_jsonb(o) AS \"budget_override?: Json<Budget>\"\nFROM \"LiteLLM_CustomerMemberTable\" AS m\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = m.budget_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS o ON o.budget_id = m.budget_override_id\nWHERE m.customer_member_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "customer_member_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "customer_member_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "alias"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "parent_org_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "parent_org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "parent_team_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "spend_reset_window",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "spend_reset_window"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "budget_override_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "budget_override_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "budget_override_expires_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "budget_override_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CustomerMemberTable\"",
+            "name": "updated_by"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "budget?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "budget_override?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      null,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "0cfa11ba43a49117ed6f15f8a79362e8b588947949e73aae5e1dcb725914a302"
+}

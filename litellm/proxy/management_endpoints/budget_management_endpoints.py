@@ -69,12 +69,10 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+from litellm.repositories.customer_member_repository import CustomerMemberRepository
+from litellm.repositories.customer_organization_repository import CustomerOrganizationRepository
+from litellm.repositories.customer_team_repository import CustomerTeamRepository
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import (
-    CustomerMemberRepository,
-    CustomerOrganizationRepository,
-    CustomerTeamRepository,
-)
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models

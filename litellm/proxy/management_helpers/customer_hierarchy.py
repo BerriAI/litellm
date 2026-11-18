@@ -41,7 +41,7 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, count_in, delete_many_in, find_many_in
-from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.prisma_protocols import ModelDumpRecord, TableActions
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetGroupChange,
@@ -192,8 +192,7 @@ class TransactionOperation(str, Enum):
     DELETE = "delete"
 
 
-class PrismaRecord(Protocol):
-    def model_dump(self) -> Mapping[str, object]: ...
+PrismaRecord: TypeAlias = ModelDumpRecord
 
 
 class TransactionSource(Protocol):

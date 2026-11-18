@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT app_id,\n       customer_org_id,\n       spend,\n       spend_reset_window,\n       tier_budget_id,\n       budget_id,\n       budget_override_id,\n       budget_override_expires_at,\n       customer_member_budget_id\nFROM \"LiteLLM_AppCustomerOrgTable\"\nWHERE app_id = $1 AND customer_org_id = $2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "app_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "app_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "customer_org_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "customer_org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "spend_reset_window",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "spend_reset_window"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "tier_budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "tier_budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "budget_override_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "budget_override_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "budget_override_expires_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "budget_override_expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "customer_member_budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppCustomerOrgTable\"",
+            "name": "customer_member_budget_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "9a4a6b923d2151c99f69f9b198d6f29c4246f0ed79cc3422de5dc1f6a229d012"
+}
