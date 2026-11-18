@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import time
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -590,18 +591,16 @@ async def test_db_health_watchdog_brings_a_bypassed_reader_back(
 ):
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
-    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
-    writer = MagicMock()
-    writer.query_raw = AsyncMock(return_value=[{"result": 1}])
-    reader = MagicMock()
+    client: Final = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    writer: Final = MagicMock()
+    writer.query_raw = AsyncMock(return_value=[{"transaction_read_only": "off"}])
+    reader: Final = MagicMock()
     reader.iam_token_db_auth = False
     reader.recreate_prisma_client = AsyncMock()
     reader.query_raw = AsyncMock(return_value=[{"result": 1}])
-    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
     routing._reader_unavailable = True
     client.db = routing
-    client.attempt_db_reconnect = AsyncMock(return_value=True)
-    client._writer_is_read_only = AsyncMock(return_value=False)
     client._db_health_watchdog_interval_seconds = 1
     client._db_watchdog_reconnect_timeout_seconds = 7.0
     client._db_health_watchdog_probe_timeout_seconds = 0.2
@@ -616,7 +615,30 @@ async def test_db_health_watchdog_brings_a_bypassed_reader_back(
         await client._db_health_watchdog_loop()
 
     assert routing.read_target is reader
-    client.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_leaves_the_reader_alone_while_a_reconnect_is_running(
+    mock_proxy_logging,
+):
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    client: Final = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    reader: Final = MagicMock()
+    reader.iam_token_db_auth = False
+    reader.recreate_prisma_client = AsyncMock()
+    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    routing: Final = RoutingPrismaWrapper(writer=MagicMock(), reader=reader)
+    routing._reader_unavailable = True
+    client.db = routing
+    client._db_watchdog_reconnect_timeout_seconds = 0.01
+
+    async with client._db_reconnect_lock:
+        with patch.dict(os.environ, {"DATABASE_URL_READ_REPLICA": "reader-url"}):
+            await client._recover_unavailable_reader()
+
+    reader.recreate_prisma_client.assert_not_awaited()
+    assert routing.read_target is routing.writer
 
 
 @pytest.mark.asyncio
