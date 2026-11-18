@@ -212,10 +212,11 @@ async def test_overflowed_lifecycle_events_prevent_retry_or_fresh_fallback(
     host.answer("openai/a", responses_stream(*(Event(IN_PROGRESS) for _ in range(201)), error=cut()), fallback_ok())
     host.answer("openai/b", fallback_ok())
     core: Final = build(make_core, num_retries=0 if fallback else 2, fallbacks=[{"a": ["b"]}] if fallback else [])
-    seen: Final[list[object]] = []
+    stream: Final = await open_stream(core)
+    assert isinstance(stream, BaseResponsesAPIStreamingIterator)
+    assert [getattr(await anext(stream), "type", None) for _ in range(201)] == [IN_PROGRESS] * 201
     with pytest.raises(litellm.RateLimitError, match="stream cut"):
-        await drain_into(await open_stream(core), seen)
-    assert tuple(getattr(event, "type", None) for event in seen) == (IN_PROGRESS,) * 201
+        await anext(stream)
     assert host.deployments_called() == ["a"]
 
 
@@ -264,10 +265,11 @@ async def test_non_text_output_prevents_a_fresh_response_on_retry_or_fallback(
     host.answer("openai/b", fallback_ok())
     core: Final = build(make_core, num_retries=0 if fallback else 2, fallbacks=[{"a": ["b"]}] if fallback else [])
     stream: Final = await open_stream(core)
-    seen: Final[list[object]] = []
+    assert isinstance(stream, BaseResponsesAPIStreamingIterator)
+    assert getattr(await anext(stream), "type", None) == CREATED
+    assert getattr(await anext(stream), "type", None) == event_type
     with pytest.raises(litellm.RateLimitError, match="stream cut"):
-        await drain_into(stream, seen)
-    assert tuple(getattr(event, "type", None) for event in seen) == (CREATED, event_type)
+        await anext(stream)
     assert host.deployments_called() == ["a"]
 
 
