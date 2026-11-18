@@ -20,6 +20,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.database import read_rows
+from integration._support.diagnostics import Timeline, activity_sampler, write
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
@@ -450,10 +451,13 @@ def _owned_proxy(
     rails: Sequence[dict[str, JsonValue]],
     *,
     workers: int = 1,
+    client_timeout: float = 15,
 ) -> Iterator[OwnedProxy]:
     config_path: Final = directory / f"chaos-{uuid.uuid4().hex}.yaml"
     config_path.write_text(yaml.safe_dump(_config(rig.provider.url, rails)))
-    with owned_proxy_process(rig.gateway, directory, {}, config=config_path, workers=workers) as owned:
+    with owned_proxy_process(
+        rig.gateway, directory, {}, config=config_path, workers=workers, client_timeout=client_timeout
+    ) as owned:
         yield owned
 
 
@@ -970,27 +974,44 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
         arrivals: Final = Barrier(len(plans) + 1)
         during_outage: Final = Event()
         after_restart: Final = Event()
+        timeline: Final = Timeline()
 
         def _gated_provider(request: Request) -> Reply:
             if request.method == "GET" and request.target.partition("?")[0] == "/v1/models":
                 return _provider(request)
             body: Final = JSON_OBJECT.validate_json(request.body)
             marker: Final = _marker(body)
+            timeline.mark("provider-arrive", marker=marker)
             arrivals.wait(timeout=70)
             gate: Final = during_outage if marker in outage_markers else after_restart
             assert gate.wait(timeout=70), marker
+            timeline.mark("provider-release", marker=marker)
             return _provider(request)
 
         with wire_server(_gated_provider) as provider:
             h6_rig: Final = ChaosRig(rig.gateway, provider, rig.directory)
             with _owned_proxy(h6_rig, tmp_path, ()) as registrar:
                 _create_stored_rail(registrar.gateway, name, sink.url, stream_scope=None)
-            with _owned_proxy(h6_rig, tmp_path, ()) as owned, ThreadPoolExecutor(max_workers=len(plans)) as pool:
-                futures: Final = tuple(
-                    pool.submit(_request, owned.gateway, plan, (name,)) for plan in plans
-                )
+            with (
+                _owned_proxy(h6_rig, tmp_path, (), client_timeout=180) as owned,
+                activity_sampler(database.database_url, timeline, interval=0.25),
+                ThreadPoolExecutor(max_workers=len(plans)) as pool,
+            ):
+
+                def timed(plan: CallPlan) -> httpx.Response:
+                    timeline.mark("send", marker=plan.marker)
+                    try:
+                        response = _request(owned.gateway, plan, (name,))
+                    except Exception as error:
+                        timeline.mark("raise", marker=plan.marker, error=type(error).__name__)
+                        raise
+                    timeline.mark("done", marker=plan.marker, status=response.status_code)
+                    return response
+
+                futures: Final = tuple(pool.submit(timed, plan) for plan in plans)
                 try:
                     arrivals.wait(timeout=70)
+                    timeline.mark("all-arrived")
                     stopped: Final = subprocess.run(
                         [database.docker, "stop", database.container_name],
                         capture_output=True,
@@ -998,8 +1019,10 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
                         check=False,
                     )
                     assert stopped.returncode == 0, stopped.stderr
+                    timeline.mark("postgres-stopped")
                     during_outage.set()
                     outage_responses: Final = tuple(future.result(timeout=70) for future in futures[:10])
+                    timeline.mark("outage-responses")
                     for plan, response in zip(plans[:10], outage_responses):
                         assert response.status_code == 200 and plan.marker in response.text, (
                             plan,
@@ -1009,8 +1032,10 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
 
                     restarted: Final = _start_postgres(database)
                     assert restarted.returncode == 0, restarted.stderr
+                    timeline.mark("postgres-started")
                     postgres_ready: Final = eventually(lambda: _postgres_is_ready(database), bool, seconds=70)
                     assert postgres_ready
+                    timeline.mark("postgres-ready")
                     readiness: Final = eventually(
                         lambda: owned.gateway.client.get("/health/readiness"),
                         lambda response: response.status_code == 200
@@ -1019,9 +1044,13 @@ def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
                     )
                     readiness_body: Final = JSON_OBJECT.validate_python(cast(object, readiness.json()))
                     assert readiness_body.get("db") == "connected", readiness.text
+                    timeline.mark("proxy-ready")
                     after_restart.set()
                     responses: Final = tuple(future.result(timeout=70) for future in futures)
+                    timeline.mark("all-responses")
                 finally:
+                    _ = write("h6-postgres-restart", timeline)
+                    _ = shutil.copy(owned.log, Path(os.environ["INTEGRATION_RESULTS_DIR"]) / f"h6-{owned.log.name}")
                     during_outage.set()
                     after_restart.set()
                     if not _postgres_is_running(database):

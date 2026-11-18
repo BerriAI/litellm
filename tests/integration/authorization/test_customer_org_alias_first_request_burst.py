@@ -1,3 +1,5 @@
+import os
+import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -6,6 +8,7 @@ from typing import Final
 import httpx
 
 from tests.integration._support.client import Gateway
+from tests.integration._support.diagnostics import Timeline, activity_sampler, write
 from tests.integration._support.wire import Reply, Request, wire_server
 
 _ORG_ALIAS_HEADER: Final = "x-litellm-customer-org-alias"
@@ -51,8 +54,44 @@ def test_a_burst_of_first_requests_on_new_org_aliases_is_served_and_registers_ev
                 gateway.request, "DELETE", f"{_ORGANIZATIONS}/{alias}", params={"cascade": "true"}
             )
 
-        with ThreadPoolExecutor(max_workers=_BURST) as pool:
-            responses: Final = tuple(pool.map(lambda alias: _chat(gateway, key, model, alias), aliases))
+        timeline: Final = Timeline()
+        patient: Final = Gateway(
+            httpx.Client(
+                base_url=gateway.client.base_url,
+                timeout=180,
+                trust_env=False,
+                limits=httpx.Limits(max_connections=_BURST),
+            ),
+            gateway.key,
+            gateway.upstream_url,
+            gateway.database_url,
+        )
+
+        def timed(alias: str) -> httpx.Response:
+            timeline.mark("send", alias=alias)
+            started = time.monotonic()
+            response = _chat(patient, key, model, alias)
+            timeline.mark(
+                "done", alias=alias, status=response.status_code, seconds=round(time.monotonic() - started, 3)
+            )
+            return response
+
+        with (
+            activity_sampler(gateway.database_url or os.environ["DATABASE_URL"], timeline),
+            ThreadPoolExecutor(max_workers=_BURST) as pool,
+        ):
+            responses: Final = tuple(pool.map(timed, aliases))
+        patient.client.close()
+        latencies: Final = sorted(float(str(event["seconds"])) for event in timeline.events if event["label"] == "done")
+        _ = write(
+            "org-alias-burst",
+            timeline,
+            latencies=latencies,
+            p50=latencies[len(latencies) // 2],
+            p90=latencies[int(len(latencies) * 0.9)],
+            max=latencies[-1],
+        )
+        assert latencies[-1] < 15, ("slowest burst request", latencies[-1], "p50", latencies[len(latencies) // 2])
 
         refused: Final = tuple(response.text for response in responses if response.status_code != 200)
         assert Counter(response.status_code for response in responses) == {200: _BURST}, refused[:1]
