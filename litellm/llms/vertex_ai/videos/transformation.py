@@ -20,11 +20,14 @@ from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_base_url,
+    pop_vertex_request_labels,
 )
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -198,6 +201,13 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
           skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
+        _ = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "vertex_ai",
+            drop_params,
+            frozenset({"duration", "seed", "aspect_ratio", "generate_audio"}),
+        )
         mapped_params: Final[dict[str, object]] = {}
 
         # Map input_reference to image (will be processed in transform_video_create_request)
@@ -342,7 +352,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[dict, RequestFiles, str]:
         """
         Transform the video creation request for Veo API.
@@ -364,9 +374,14 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             }
         }
         """
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         # Build instance with prompt
         instance_dict: Final[dict[str, object]] = {"prompt": prompt}
         params_copy: Final = video_create_optional_request_params.copy()
+        labels: Final = (
+            pop_vertex_request_labels(params_copy, dict(litellm_params)) if vertex_request_label_fields() else None
+        )
 
         # Check if user wants to provide full instance dict
         if "instances" in params_copy and isinstance(params_copy["instances"], dict):
@@ -411,6 +426,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Only add parameters if there are any
         if vertex_params:
             request_data["parameters"] = vertex_params
+        if labels:
+            request_data["labels"] = labels
 
         # Append :predictLongRunning endpoint to api_base
         url: Final = f"{api_base}:predictLongRunning"

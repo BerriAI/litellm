@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
@@ -33,8 +34,14 @@ from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFU
 
 def _text_delta_stream(text: str) -> bytes:
     events: Final = (
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
     )
     return "".join(
         f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
@@ -460,7 +467,9 @@ def test_anthropic_sync_completion_sends_a_link_that_serves_a_pdf_as_a_url_docum
     def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
         if url == pdf_link:
             return _served_pdf_slice(url)
-        return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url))
+        return httpx.Response(
+            200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
 
     monkeypatch.setattr(image_handling, "safe_get", serve)
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_reply(captured))))
@@ -3210,6 +3219,81 @@ def _streamed_json_mode_contents(
     return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
 
 
+def _schemaless_streamed_json_mode_contents(fragments: tuple[str, ...]) -> str:
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in _json_tool_events(fragments))
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    "fragments",
+    [
+        ('{"summary":"', "48420083852775e76508", '"}'),
+        ('{"summary":"', "1e5", '"}'),
+        ('{"outer":', '{"values": [3, 5]}', "}"),
+    ],
+)
+def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragments: tuple[str, ...]) -> None:
+    assert _schemaless_streamed_json_mode_contents(fragments) == "".join(fragments)
+
+
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
+@pytest.mark.parametrize(
+    ("fragments", "expected"),
+    [
+        (('{"values": [3, 5]}',), "[3, 5]"),
+        ((" ", '{"values": [3, 5]}', " "), " [3, 5] "),
+        (('{"count": 1e400}',), '{"count": 1e400}'),
+        (('{"values": [1e400]}',), "[1e400]"),
+        pytest.param(
+            ('{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}",),
+            "[" + _DIGITS_PAST_THE_INT_LIMIT + "]",
+            id="values-int-over-digit-limit",
+        ),
+        pytest.param(
+            ('{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",),
+            '{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="int-over-digit-limit",
+        ),
+        (('{"n": 1e5}',), '{"n": 1e5}'),
+        (('{"values": false}',), "false"),
+        (('{"values": null}',), '{"values": null}'),
+        (("[1, 2]",), "[1, 2]"),
+        (('"x"',), '"x"'),
+        (("5",), "5"),
+        pytest.param(
+            ('{"values": ' + "[" * 300 + "]" * 300 + "}",),
+            "[" * 300 + "]" * 300,
+            id="values-nested-300-levels",
+        ),
+        pytest.param(
+            ('{"values": ' + "[" * 100000 + "]" * 100000 + "}",),
+            '{"values": ' + "[" * 100000 + "]" * 100000 + "}",
+            id="nesting-over-recursion-limit",
+        ),
+    ],
+)
+def test_streamed_json_mode_without_schema_unwraps_values_only_from_a_one_piece_input(
+    fragments: tuple[str, ...], expected: str
+) -> None:
+    assert _schemaless_streamed_json_mode_contents(fragments) == expected
+
+
+def test_streamed_json_mode_without_schema_unwraps_each_json_tool_blocks_one_piece_input() -> None:
+    json_tool_block: Final = {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}}
+    events: Final = _message_events(
+        (json_tool_block, ({"type": "input_json_delta", "partial_json": '{"values": [1]}'},)),
+        ({**json_tool_block, "id": "toolu_2"}, ({"type": "input_json_delta", "partial_json": '{"values": [2]}'},)),
+    )
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in events)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "[1][2]"
+
+
 def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():
     envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
     fragments = (envelope[:9], envelope[9:40], envelope[40:])
@@ -3532,6 +3616,36 @@ def test_streamed_json_mode_held_answer_without_an_envelope_keeps_the_model_text
     assert contents[:-2] == ("",) * (len(contents) - 2)
 
 
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":1e400,"summary":"x"}}',
+            '{"tier": 1e400, "summary": "x"}',
+            id="number_past_a_float",
+        ),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":-' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}}',
+            '{"tier": -' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            id="negative_integer_past_the_digit_limit",
+        ),
+        pytest.param('{"values":[1e400, 2.5]}', "[1e400, 2.5]", id="values_number_past_a_float"),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":1e-400,"summary":"x"}}',
+            '{"tier": 1e-400, "summary": "x"}',
+            id="number_below_a_float",
+        ),
+        pytest.param(
+            '{"values":[1e400, 1e-400, 0.0e5]}', "[1e400, 1e-400, 0.0]", id="values_numbers_past_a_float_both_ways"
+        ),
+    ],
+)
+def test_streamed_json_mode_held_answer_keeps_out_of_range_numbers_as_the_model_wrote_them(answer: str, expected: str):
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:30], answer[30:]))
+
+    assert "".join(contents) == expected
+
+
 def test_envelope_verdict_holds_a_prefix_that_stays_undecided_past_the_limit():
     schema = response_format_schema(_STREAMED_RISK_SCHEMA)
     assert schema is not None
@@ -3731,6 +3845,41 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
 
     assert json.loads("".join(contents)) == answer
     assert contents[3] == blocks[0][:-1]
+
+
+@pytest.mark.parametrize(
+    ("blocks", "expected"),
+    [
+        pytest.param(
+            ('{"tier": 1e400}', '{"summary": "x"}'), '{"tier": 1e400, "summary": "x"}', id="number_past_a_float_first"
+        ),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"),
+            '{"summary": "x", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="integer_past_the_digit_limit_last",
+        ),
+        pytest.param(
+            (
+                '{"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 1e400}',
+                '{"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "x"}',
+            ),
+            '{"tier": 1e400, "summary": "x"}',
+            id="named_field_number_past_a_float_first",
+        ),
+        pytest.param(
+            (
+                ' {"$PARAMETER_NAME":"summary","$PARAMETER_VALUE":"Jos\u00e9"} ',
+                '{"$PARAMETER_NAME":"tier","$PARAMETER_VALUE":' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            ),
+            '{"summary": "Jos\u00e9", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="compact_named_field_integer_past_the_digit_limit_last",
+        ),
+    ],
+)
+def test_streamed_json_mode_split_fields_keep_out_of_range_numbers_as_the_model_wrote_them(
+    blocks: tuple[str, ...], expected: str
+):
+    assert "".join(_streamed_json_tool_blocks(blocks)) == expected
 
 
 @pytest.mark.parametrize(

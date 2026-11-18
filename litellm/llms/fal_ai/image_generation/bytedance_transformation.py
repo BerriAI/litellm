@@ -92,6 +92,7 @@ class FalAIBytedanceSeedreamV3Config(FalAIBytedanceBaseConfig):
     """
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/bytedance/seedream/v3/text-to-image"
+    MODEL_FAMILY_ROOTS: tuple[str, ...] = ("fal-ai/bytedance/seedream/", "bytedance/seedream/")
 
 
 class FalAIBytedanceDreaminaV31Config(FalAIBytedanceBaseConfig):

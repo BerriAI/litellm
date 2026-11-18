@@ -16,6 +16,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 CARD: Final = "4111 1111 1111 1111"
+CARD_LEAK_PATTERN: Final = re.compile(r"(?<!\d)4(?:[ -]*1){15}(?!\d)")
 PHONE: Final = "+1 415-555-0134"
 MASKED_CARD: Final = "<CREDIT_CARD>"
 MASKED_EMAIL: Final = "<EMAIL_ADDRESS>"
@@ -532,7 +533,7 @@ def test_default_scope_masks_a_card_number_the_model_generates(rig: Rig, model: 
     answer: Final = _ask(rig, model, surface, rig.guardrails.default_scope, _card_prompt(_marker()))
 
     assert answer.text == MASKED_CARD, answer.wire
-    assert "4111" not in answer.wire, answer.wire
+    assert CARD_LEAK_PATTERN.search(answer.wire) is None, answer.wire
 
 
 @pytest.mark.parametrize(
@@ -547,7 +548,7 @@ def test_spend_log_stores_the_masked_output_the_caller_received(rig: Rig, model:
     stored: Final = _spend_row(rig, model)["response"]
 
     assert "\n".join(_content_strings(stored)) == MASKED_CARD, stored
-    assert "4111" not in json.dumps(stored), stored
+    assert CARD_LEAK_PATTERN.search(json.dumps(stored)) is None, stored
 
 
 def test_masking_run_is_recorded_on_the_spend_log_with_the_detected_entities(rig: Rig, model: str) -> None:

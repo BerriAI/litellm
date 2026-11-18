@@ -42,8 +42,9 @@ from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -95,7 +96,9 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
 )
 from tests._master_key import MASTER_KEY
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
@@ -108,6 +111,7 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
         "/laya/v1/systemone": frozenset({"POST"}),
         "/bespoke/v1/systemone": frozenset({"POST"}),
         "/eu_jev/v1/systemone": frozenset({"POST"}),
+        "/opensearch/{endpoint:path}": frozenset({"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"}),
     }
 )
 
@@ -446,6 +450,39 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
 
 
+@pytest.mark.parametrize("existing_api_base", [None, "http://existing.example/search"])
+def test_build_passthrough_failure_request_payload_carries_masked_api_base(existing_api_base: str | None) -> None:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="passthrough",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.pass_through.value,
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.pre_call(
+        input={},
+        api_key="",
+        additional_args={
+            "complete_input_dict": {},
+            "api_base": "http://upstream.example/search?api-version=1",
+            "headers": {},
+        },
+    )
+    params: Final = {"metadata": {}, **({"api_base": existing_api_base} if existing_api_base else {})}
+    payload: Final = _build_passthrough_failure_request_payload(
+        parsed_body={},
+        kwargs={"litellm_params": params},
+        logging_obj=logging_obj,
+        custom_llm_provider=None,
+    )
+    assert payload["litellm_params"]["api_base"] == (
+        existing_api_base or logging_obj.model_call_details["litellm_params"]["api_base"]
+    )
+    assert params == {"metadata": {}, **({"api_base": existing_api_base} if existing_api_base else {})}
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_failure_handler():
     """
@@ -465,6 +502,7 @@ async def test_pass_through_request_failure_handler():
     assert "Request failed" in (failure.traceback_str or "")
     assert failure.request_data["contents"] == "not a list"
     assert failure.request_data["model"] == ""
+    assert failure.request_data["litellm_params"]["api_base"] == "http://test.com"
 
 
 @pytest.mark.asyncio
@@ -1943,6 +1981,58 @@ async def test_pass_through_request_strips_client_guardrail_information(allow_cl
     hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
     assert hooked_body["metadata"] == {"trace_id": "keep-me"}
     assert ("input_cost_per_token" in hooked_body) is allow_client_pricing_override
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("currency", ["EUR", "USD"])
+async def test_pass_through_request_rejects_pricing_currency_before_any_hook_or_upstream(currency: str) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("must not be reached"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as rejected:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "pricing_currency": currency, "input_cost_per_token": 0.5},
+            )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
+    mock_proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"pricing_currency": None}], ids=["omitted", "null"])
+async def test_pass_through_request_keeps_usd_prices_without_an_explicit_pricing_currency(
+    body: dict[str, object],
+) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("stop before upstream"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "input_cost_per_token": 0.5, **body},
+            )
+
+    hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert hooked_body["input_cost_per_token"] == 0.5
+    assert "pricing_currency" not in hooked_body
 
 
 @pytest.mark.asyncio
@@ -4302,13 +4392,16 @@ async def test_create_pass_through_route_custom_body_url_target():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body():
+@pytest.mark.parametrize("body_type", [bytes, bytearray])
+async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body(
+    body_type: type[bytes] | type[bytearray],
+) -> None:
     """
     Bedrock SigV4 path: exact signed bytes live on request.state; upstream must receive
     content=... even if pre_call_hook mutates the parsed dict (would change json=).
     """
     # Bytes that were signed (simulated); parsed body + hook will diverge on purpose.
-    raw_signed = b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}'
+    raw_signed: Final = body_type(b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}')
     parsed_from_wire = {"retrievalQuery": {"text": "signed"}, "sig": "intact"}
 
     mock_request = MagicMock(spec=Request)
@@ -6050,6 +6143,85 @@ async def test_pass_through_request_non_streaming_success_unchanged():
 
 
 @pytest.mark.asyncio
+async def test_failed_byte_stream_releases_reserved_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        get_reserved_counter_keys,
+        reconcile_budget_reservation,
+        release_unbound_budget_reservation,
+        reserve_budget_for_request,
+    )
+    from litellm.redis.stores.connection import connect
+    from litellm.redis.stores.spend_counters import SpendCounterStore
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _relay_passthrough_response_bytes
+
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "reserved-byte-stream",
+                "litellm_params": {
+                    "model": "openai/gpt-6.1-sol",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.01,
+                },
+            }
+        ]
+    )
+    reservation: Final = await reserve_budget_for_request(
+        request_body={
+            "model": "reserved-byte-stream",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+        route="/v1/chat/completions",
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token="reserved-byte-stream-key", max_budget=100.0, spend=0.0),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=proxy_server.user_api_key_cache,
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    assert reservation is not None
+    counter: Final = next(iter(get_reserved_counter_keys(budget_reservation=reservation)))
+    assert store.get_local(counter) == pytest.approx(reservation["reserved_cost"])
+    started: Final = datetime(2026, 1, 1)
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="reserved-byte-stream",
+        messages=[],
+        stream=True,
+        call_type="passthrough",
+        start_time=started,
+        litellm_call_id="reserved-byte-stream",
+        function_id="reserved-byte-stream",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"user_api_key_budget_reservation": reservation}}, optional_params={}
+    )
+    upstream: Final = httpx.Response(
+        429, content=b"quota", request=httpx.Request("GET", "https://files.invalid/stream")
+    )
+    try:
+        async for _chunk in _relay_passthrough_response_bytes(
+            response=upstream,
+            request_body={},
+            url_route=str(upstream.url),
+            start_time=started,
+            logging_obj=logging_obj,
+            custom_llm_provider=None,
+            success_handler_kwargs={},
+        ):
+            pass
+        await release_unbound_budget_reservation(reservation)
+        assert store.get_local(counter) == pytest.approx(0.0)
+    finally:
+        await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "upstream_status_code, claimed_by_the_success_handler",
     [(200, True), (500, False)],
@@ -7675,7 +7847,7 @@ async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
     websocket.close.assert_awaited_once_with()
 
 
-async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
+async def _run_setup_rewrite_passthrough(setup_model: str, llm_router, keeps_caller_resource_path: bool = False) -> str:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         _build_vertex_live_setup_model_rewriter,
     )
@@ -7703,7 +7875,9 @@ async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
             setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
                 vertex_project="proj-db",
                 vertex_location="global",
+                configured_location="global",
                 llm_router=llm_router,
+                keeps_caller_resource_path=keeps_caller_resource_path,
             ),
         )
 
@@ -7741,6 +7915,67 @@ async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
     assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
 
 
+async def _run_binary_client_frame_passthrough(frame: bytes):
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "bytes": frame},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                vertex_project="proj-a",
+                vertex_location="europe-west4",
+                configured_location="europe-west4",
+                llm_router=None,
+                keeps_caller_resource_path=False,
+            ),
+        )
+
+    return websocket, upstream_ws
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_moves_a_binary_setup_frame_onto_the_pinned_project():
+    setup_frame = json.dumps(
+        {"setup": {"model": "projects/proj-b/locations/europe-west4/publishers/google/models/gemini-2.0-flash"}}
+    ).encode("utf-8")
+
+    _, upstream_ws = await _run_binary_client_frame_passthrough(setup_frame)
+
+    upstream_ws.send.assert_awaited_once()
+    sent_frame = upstream_ws.send.await_args.args[0]
+    assert isinstance(sent_frame, bytes), "a binary client message must stay binary upstream"
+    assert json.loads(sent_frame)["setup"]["model"] == (
+        "projects/proj-a/locations/europe-west4/publishers/google/models/gemini-2.0-flash"
+    )
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_closes_on_a_binary_frame_that_is_not_utf8():
+    websocket, upstream_ws = await _run_binary_client_frame_passthrough(b"\xff\xfe\x00projects/proj-b")
+
+    upstream_ws.send.assert_not_awaited()
+    websocket.close.assert_awaited_once()
+    assert websocket.close.await_args.kwargs["code"] == 1008
+
+
 @pytest.mark.parametrize(
     "setup_model",
     ["gemini-live-2.5-flash", "models/gemini-live-2.5-flash", "publishers/google/models/gemini-live-2.5-flash"],
@@ -7762,7 +7997,11 @@ def test_vertex_live_setup_model_resolves_before_extraction(setup_model):
     )
 
     rewriter = _build_vertex_live_setup_model_rewriter(
-        vertex_project="proj-db", vertex_location="global", llm_router=None
+        vertex_project="proj-db",
+        vertex_location="global",
+        configured_location="global",
+        llm_router=None,
+        keeps_caller_resource_path=False,
     )
     setup_data = {"model": setup_model}
 
@@ -7812,7 +8051,11 @@ async def test_websocket_passthrough_logs_a_bare_alias_setup_model():
                 endpoint="/vertex_ai/live",
                 accept_websocket=False,
                 setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
-                    vertex_project="proj-db", vertex_location="global", llm_router=None
+                    vertex_project="proj-db",
+                    vertex_location="global",
+                    configured_location="global",
+                    llm_router=None,
+                    keeps_caller_resource_path=False,
                 ),
             )
 
@@ -7877,14 +8120,24 @@ async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_mod
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched():
-    full_resource = "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09"
+@pytest.mark.parametrize(
+    "keeps_caller_resource_path, expected_prefix",
+    [(True, "projects/other/locations/us-central1/"), (False, "projects/proj-db/locations/global/")],
+    ids=["caller_path_kept", "moved_onto_session_target"],
+)
+async def test_websocket_passthrough_full_resource_setup_model(
+    keeps_caller_resource_path: bool, expected_prefix: str
+) -> None:
+    model_suffix = "publishers/google/models/gemini-2.0-flash-live-preview-04-09"
 
-    sent_frame = await _run_setup_rewrite_passthrough(full_resource, llm_router=None)
+    sent_frame = await _run_setup_rewrite_passthrough(
+        f"projects/other/locations/us-central1/{model_suffix}",
+        llm_router=None,
+        keeps_caller_resource_path=keeps_caller_resource_path,
+    )
 
-    assert json.loads(sent_frame)["setup"]["model"] == full_resource
     assert sent_frame == json.dumps(
-        {"setup": {"model": full_resource, "generationConfig": {"responseModalities": ["TEXT"]}}}
+        {"setup": {"model": f"{expected_prefix}{model_suffix}", "generationConfig": {"responseModalities": ["TEXT"]}}}
     )
 
 
@@ -8489,7 +8742,7 @@ async def test_websocket_passthrough_holds_the_keys_parallel_slot_until_the_sess
     not free it, or a second session gets in while the first is still running.
     """
     limiter_cache: Final = DualCache()
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-socket"), max_parallel_requests=1)
     logged_rows: Final[list[asyncio.Task[None]]] = []
 
@@ -9693,7 +9946,32 @@ async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test_passthrough_success_reconciles_budget_reservation():
+async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth_named_budgeted():
+    """A forged body value stays out, and loggers that dump the row never get the auth object or the spend it read."""
+    counter_keys: Final = EntitySpendCounterKeys.of(
+        token="hashed-token", team_id="t1", user_id="u1", org_id=None, end_user_id=None
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="hashed-token",
+        user_id="u1",
+        committed_budget_spend=CommittedBudgetSpend(counter_keys=counter_keys, key=0.123456),
+        metadata={"logging": [{"callback_name": "langfuse"}], "kept": "yes"},
+    )
+
+    kwargs: Final = _passthrough_kwargs_for_reservation(
+        user_api_key_dict,
+        parsed_body={"litellm_metadata": {"user_api_key_auth": {"committed_budget_spend": None}}},
+    )
+    increment_spend_counters: Final = await _track_cost_for_passthrough_kwargs(kwargs)
+
+    assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == counter_keys
+    assert "user_api_key_auth" not in kwargs["litellm_params"]["metadata"]
+    assert "committed_budget_spend" not in repr(kwargs["litellm_params"]["metadata"])
+    assert "0.123456" not in json.dumps(kwargs, default=str)
+
+
+@pytest.mark.asyncio
+async def test_passthrough_success_reconciles_budget_reservation(native_budgets_on):
     """
     A successful pass-through request must hand its pre-call budget reservation
     to the spend-counter update so the reserved amount is reconciled down to the
@@ -9701,14 +9979,17 @@ async def test_passthrough_success_reconciles_budget_reservation():
     the actual cost is added on top, so the counter drifts above real spend until
     the key falsely trips BudgetExceededError.
     """
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
-    }
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-token",
         user_id="u1",
-        budget_reservation=budget_reservation,
+    )
+    from litellm.proxy import proxy_server
+
+    budget_reservation = await native_reservation(
+        proxy_server.spend_counter_store,
+        user_api_key_dict,
+        [{"counter_key": "spend:key:hashed-token", "entity_type": "Key", "entity_id": "hashed-token"}],
+        0.5,
     )
 
     reservation = user_api_key_dict.budget_reservation
@@ -10462,6 +10743,35 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
     )
 
 
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+@pytest.mark.parametrize(
+    "counted_marker",
+    ["_litellm_router_usage_counted_tokens", "_litellm_usage_based_routing_counted_tokens"],
+)
+def test_passthrough_client_cannot_mark_its_tokens_as_already_counted(
+    client_metadata_key: str, counted_marker: str
+) -> None:
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import get_counted_usage_tokens
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/openai/v1/responses")
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={client_metadata_key: {counted_marker: 1_000_000, "client_key": "kept"}},
+        litellm_call_id="counted-marker-call-id",
+    )
+
+    assert get_counted_usage_tokens(kwargs["litellm_params"], counted_marker) is None
+    assert kwargs["litellm_params"]["metadata"]["client_key"] == "kept"
+
+
 async def _billed_metadata(gate: WebsocketFrameModelGate) -> Mapping[str, object]:
     served: Final = await _relay_client_frames(
         [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})],
@@ -11134,6 +11444,9 @@ def _split_pass_through_body(
 GEMINI_BODY: Final = '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
 
 
+PROXY_SET_PARAMS: Final = ("metadata", "proxy_server_request", COMMITTED_BUDGET_SPEND_PARAM)
+
+
 def _metadata_of(split: _PassThroughSplit) -> Mapping[str, object]:
     return MappingProxyType(_LITELLM_PARAMS.validate_python(split.litellm_params["metadata"]))
 
@@ -11145,7 +11458,7 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
     )
 
     assert frozenset(split.litellm_params) == frozenset(
-        ("ttl", "num_retries", "litellm_trace_id", "metadata", "proxy_server_request")
+        ("ttl", "num_retries", "litellm_trace_id", *PROXY_SET_PARAMS)
     )
     assert tuple(split.litellm_params[k] for k in ("ttl", "num_retries", "litellm_trace_id")) == (30, 2, "trace-a")
     assert split.forwarded_body == json.loads(GEMINI_BODY)
@@ -11179,7 +11492,7 @@ PROXY_STAMPED_NAMES: Final = frozenset(
 def test_passthrough_keeps_each_registered_litellm_owned_name_out_of_the_forwarded_body(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: "owned", **json.loads(GEMINI_BODY)}))
 
-    assert frozenset(split.litellm_params) == frozenset((name, "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset((name, *PROXY_SET_PARAMS))
     assert split.litellm_params[name] == "owned"
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -11223,7 +11536,7 @@ def test_passthrough_keeps_a_client_model_info_object_for_keys_that_allow_client
 def test_passthrough_drops_a_client_supplied_proxy_stamped_name(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: {"forged": "by-client"}, **json.loads(GEMINI_BODY)}))
 
-    assert frozenset(split.litellm_params) == frozenset(("metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(PROXY_SET_PARAMS)
     assert split.litellm_params["proxy_server_request"] != {"forged": "by-client"}, split.litellm_params
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -11234,7 +11547,7 @@ def test_passthrough_merges_both_metadata_carriers_from_the_body_into_one_metada
         ' "litellm_metadata": {"lm": "b"}, "generationConfig": {"temperature": 0}}'
     )
 
-    assert frozenset(split.litellm_params) == frozenset(("ttl", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("ttl", *PROXY_SET_PARAMS))
     assert _metadata_of(split) == {**_metadata_of(_split_pass_through_body(GEMINI_BODY)), "client_tag": "a", "lm": "b"}
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -11273,7 +11586,7 @@ def test_passthrough_sees_a_name_appended_to_the_public_list_after_import() -> N
     finally:
         litellm.all_litellm_params.remove("registered_later")
 
-    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", *PROXY_SET_PARAMS))
     assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 
@@ -11282,7 +11595,7 @@ def test_passthrough_sees_the_public_list_rebound_after_import(monkeypatch: pyte
 
     split: Final = _split_pass_through_body(LATE_REGISTERED_BODY)
 
-    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", *PROXY_SET_PARAMS))
     assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 
@@ -11591,6 +11904,7 @@ async def _boot_db_backed_proxy(
     monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
     monkeypatch.setattr(proxy_server, "master_key", None)
     monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", proxy_server.litellm_jwtauth)
     monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.delitem(proxy_server.app.dependency_overrides, user_api_key_auth, raising=False)
@@ -11599,6 +11913,11 @@ async def _boot_db_backed_proxy(
     await proxy_config.load_config(router=None, config_file_path=str(config_path))
     monkeypatch.setattr(proxy_server, "prisma_client", config_table)
     monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
+    proxy_server.ProxyStartupEvent.initialize_jwt_auth(
+        general_settings=proxy_server.general_settings,
+        prisma_client=config_table,
+        user_api_key_cache=proxy_server.user_api_key_cache,
+    )
     return _DbBackedProxy(proxy_config, str(config_path), config_table)
 
 
@@ -13202,8 +13521,9 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path
     ("flat_cost", "upstream_cost", "expected"),
     [(0.5, None, 0.5), (0.0, None, 0.0), (0.5, "0.75", 0.75), (0.5, "0", 0.0)],
 )
+@pytest.mark.parametrize("delivery", ["json", "bytes", "interrupted-bytes"])
 async def test_passthrough_header_and_callback_share_finalized_cost(
-    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float
+    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float, delivery: str
 ) -> None:
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
@@ -13219,8 +13539,19 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
         {} if upstream_cost is None else {"x-litellm-response-cost": upstream_cost, "x-litellm-total-tokens": "12"}
     )
 
+    class FileStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"partial-file"
+            if delivery == "interrupted-bytes":
+                raise httpx.ReadError("upstream stopped after a partial delivery")
+
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+        if delivery == "json":
+            return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+        return httpx.Response(
+            200, stream=FileStream(), headers={**upstream_headers, "content-type": "application/octet-stream"},
+            request=request,
+        )
 
     client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
@@ -13232,12 +13563,23 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
             request=request, target="http://cost-upstream.invalid/results", custom_headers={},
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
         )
-        payload: Final = await asyncio.wait_for(observed, timeout=10)
+        if delivery != "json":
+            assert isinstance(result, StreamingResponse)
+            assert await anext(result.body_iterator) == b"partial-file"
+            if delivery == "interrupted-bytes":
+                with pytest.raises(httpx.ReadError, match="partial delivery"):
+                    await anext(result.body_iterator)
+            else:
+                with pytest.raises(StopAsyncIteration):
+                    await anext(result.body_iterator)
         await GLOBAL_LOGGING_WORKER.flush()
+        assert observed.done(), "Delivered bytes must retain their known cost in the spend log"
+        payload: Final = observed.result()
         assert result.status_code == 200
-        assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
         assert payload["response_cost"] == pytest.approx(expected)
-        assert payload["cost_finalized"] is True
+        if delivery == "json":
+            assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
+            assert payload["cost_finalized"] is True
         if upstream_cost is not None:
             assert payload["total_tokens"] == 12
     finally:
@@ -13287,6 +13629,74 @@ async def test_chat_completion_pass_through_endpoint_reads_a_body_only_json_can_
         "anthropic",
     )
     assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
+
+
+_ADAPTER_BODY_WITH_S3_IMAGE: Final = json.dumps(
+    {
+        "model": "unknown-model",
+        "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}}]}
+        ],
+    }
+).encode()
+_ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES: Final = repr(
+    {
+        "model": "unknown-model",
+        "messages": (
+            {"role": "user", "content": ({"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}},)},
+        ),
+    }
+).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [_ADAPTER_BODY_WITH_S3_IMAGE, _ADAPTER_PYTHON_LITERAL_BODY_WITH_S3_IMAGE_IN_TUPLES],
+    ids=["json", "python_literal_with_tuples"],
+)
+async def test_chat_completion_pass_through_endpoint_refuses_an_s3_image_in_an_unlisted_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "403"
+    proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_routes_an_s3_image_in_a_listed_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", {"allowed_client_side_s3_buckets": ["private-bucket"]}
+    )
+    request: Final = _request_with_body("application/json", _ADAPTER_BODY_WITH_S3_IMAGE)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "400"
+    assert raised.value.message == str(ProxyModelNotFoundError(route="completion", model_name="unknown-model"))
 
 
 @pytest.mark.asyncio

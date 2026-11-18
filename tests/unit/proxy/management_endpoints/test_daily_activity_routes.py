@@ -67,6 +67,7 @@ class _Activity:
     prompt_caching_savings_spend: float
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
+    guardrail_spend: float
     api_requests: int
     successful_requests: int
     failed_requests: int
@@ -109,6 +110,7 @@ def _activity_for_entity(
             prompt_caching_savings_spend=0.2,
             gateway_injected_caching_savings_spend=0.3,
             autorouter_savings_spend=0.4,
+            guardrail_spend=0.5,
             api_requests=1,
             successful_requests=1,
             failed_requests=0,
@@ -165,6 +167,7 @@ def _seeded_activity() -> tuple[_Activity, ...]:
             prompt_caching_savings_spend=0.0,
             gateway_injected_caching_savings_spend=0.0,
             autorouter_savings_spend=0.0,
+            guardrail_spend=0.0,
             api_requests=1,
             successful_requests=1,
             failed_requests=0,
@@ -188,6 +191,7 @@ def _metrics(rows: Sequence[_Activity]) -> Mapping[str, int | float]:
         "prompt_caching_savings_spend": sum(row.prompt_caching_savings_spend for row in rows),
         "gateway_injected_caching_savings_spend": sum(row.gateway_injected_caching_savings_spend for row in rows),
         "autorouter_savings_spend": sum(row.autorouter_savings_spend for row in rows),
+        "guardrail_spend": sum(row.guardrail_spend for row in rows),
         "api_requests": sum(row.api_requests for row in rows),
         "successful_requests": sum(row.successful_requests for row in rows),
         "failed_requests": sum(row.failed_requests for row in rows),
@@ -256,6 +260,7 @@ class _FakeRepository:
         self._rows: Final = rows
         self.aggregated = AsyncMock(side_effect=self._aggregated)
         self.guardrail_spend = AsyncMock(return_value=())
+        self.customer_team_spend = AsyncMock(return_value=())
         self.key_page = AsyncMock(side_effect=self._key_page)
         self.key_page_call: tuple[DailyActivityScope, int, int] | None = None
         self.search_keys = AsyncMock(side_effect=self._search_keys)
@@ -650,6 +655,26 @@ def test_aggregated_routes_return_scoped_results(
     assert len(body["results"]) == 2, response.text
 
 
+@pytest.mark.parametrize("model", (None, "popular"))
+def test_aggregated_activity_can_omit_entities_without_changing_chart_data(
+    daily_activity_client: tuple[TestClient, _FakeRepository], model: str | None
+) -> None:
+    client, _ = daily_activity_client
+    params: Final = {**_DATE_PARAMS, **({"model": model} if model else {})}
+    full: Final = client.get("/user/daily/activity/aggregated", params=params)
+    compact: Final = client.get(
+        "/user/daily/activity/aggregated", params={**params, "include_entity_breakdown": "false"}
+    )
+    assert full.status_code == compact.status_code == 200
+    body: Final = full.json()
+    assert all(day["breakdown"]["entities"] for day in body["results"])
+    assert compact.json() == {
+        **body,
+        "metadata": {**body["metadata"], "entity_total_api_keys": None},
+        "results": [{**day, "breakdown": {**day["breakdown"], "entities": {}}} for day in body["results"]],
+    }
+
+
 def _ptu_sized_router(
     model_group: str, shares: Mapping[str, int] = MappingProxyType({"team-a": 30, "team-b": 20})
 ) -> Router:
@@ -790,6 +815,7 @@ def test_search_folds_each_entity_key_across_days(
                     "prompt_caching_savings_spend": 0.4,
                     "gateway_injected_caching_savings_spend": 0.6,
                     "autorouter_savings_spend": 0.8,
+                    "guardrail_spend": 1.0,
                     "total_tokens": 30,
                     "successful_requests": 2,
                     "failed_requests": 0,

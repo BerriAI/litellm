@@ -279,6 +279,11 @@ def _instruction_items_before(
     )
 
 
+def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> object | None:
+    """The stored turn's ``tools``, so its calls read the same namespace shapes it was sent with."""
+    return proxy_server_request.get("tools") if proxy_server_request is not None else None
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -443,6 +448,7 @@ class ResponsesSessionHandler:
         )
 
         response_input_param: str | ResponseInputParam | None = None
+        stored_tools: Final = _stored_request_tools(proxy_server_request_dict)
 
         ############################################################
         # Add Input messages for this Spend Log
@@ -463,11 +469,12 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=bridge_client_tool_search(response_input_param, None).input,
-                    responses_api_request={},
+                    responses_api_request={"tools": stored_tools} if stored_tools is not None else {},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
 
@@ -479,11 +486,12 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=bridge_client_tool_search(responses_api_output, None).input,
-                    responses_api_request={},
+                    responses_api_request={"tools": stored_tools} if stored_tools is not None else {},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
@@ -647,12 +655,21 @@ class ResponsesSessionHandler:
                 SELECT 1
                 FROM matching_session
                 WHERE matching_session.session_id = logs.session_id
-                  AND matching_session."user" IS NOT DISTINCT FROM logs."user"
-                  AND matching_session.team_id IS NOT DISTINCT FROM logs.team_id
+                  AND (
+                      matching_session."user" = logs."user"
+                      OR (matching_session."user" IS NULL AND logs."user" IS NULL)
+                  )
+                  AND (
+                      matching_session.team_id = logs.team_id
+                      OR (matching_session.team_id IS NULL AND logs.team_id IS NULL)
+                  )
                   AND (
                       COALESCE(matching_session."user", '') <> ''
                       OR COALESCE(matching_session.team_id, '') <> ''
-                      OR matching_session.api_key = logs.api_key
+                      OR (
+                          COALESCE(matching_session.api_key, '') <> ''
+                          AND matching_session.api_key = logs.api_key
+                      )
                   )
             )
             ORDER BY "endTime" ASC;
