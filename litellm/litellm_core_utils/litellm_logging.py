@@ -2458,9 +2458,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["output_cost"] = output_cost
         if cost_for_built_in_tools_cost_usd_dollar is not None:
             self.cost_breakdown["tool_usage_cost"] = cost_for_built_in_tools_cost_usd_dollar
-        if cache_read_cost is not None and cache_read_cost > 0:
+        if cache_read_cost is not None and cache_read_cost >= 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
-        if cache_creation_cost is not None and cache_creation_cost > 0:
+        if cache_creation_cost is not None and cache_creation_cost >= 0:
             self.cost_breakdown["cache_creation_cost"] = cache_creation_cost
         if reasoning_cost is not None and reasoning_cost > 0:
             self.cost_breakdown["reasoning_cost"] = reasoning_cost

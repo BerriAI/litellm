@@ -1824,6 +1824,8 @@ class TokenTypeCostBreakdown:
     rates: BilledTokenRates | None = None
     """Rates these lines were billed at, so a caller reporting both cannot resolve them a second,
     differently-argued way. None when the model's pricing could not be resolved."""
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 def _reasoning_token_count(usage: Usage) -> int:
@@ -2032,6 +2034,8 @@ def get_token_type_cost_breakdown(
         ),
         cache_creation_cost=cache_creation_cost,
         rates=rates,
+        cache_read_tokens=cache_read_tokens,
+        cache_creation_tokens=cache_creation_tokens,
     )
 
 
