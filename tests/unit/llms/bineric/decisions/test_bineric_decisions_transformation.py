@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -30,11 +31,22 @@ def test_connection_comes_from_the_environment_before_the_public_api(
 
 
 @pytest.mark.parametrize(
-    "api_base",
-    ("https://api.bineric.com", "https://api.bineric.com/v1", "https://api.bineric.com/v1/"),
+    "environment",
+    (
+        {},
+        {"BINERIC_API_BASE": "https://api.bineric.com"},
+        {"BINERIC_API_BASE": "https://api.bineric.com/v1/"},
+    ),
+    ids=("public_api", "base_without_v1", "base_with_v1_and_slash"),
 )
-def test_requests_go_to_v1_systemone_whether_or_not_the_base_ends_in_v1(api_base: str) -> None:
-    assert (
-        BinericDecisionsConfig().get_complete_url(api_base=api_base, model="zuse-27b")
-        == "https://api.bineric.com/v1/systemone"
-    )
+def test_requests_go_to_v1_systemone_whether_or_not_the_base_ends_in_v1(
+    environment: Mapping[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BINERIC_API_BASE", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    config: Final = BinericDecisionsConfig()
+    api_base, _ = config.resolve_connection(None, None)
+
+    assert api_base is not None
+    assert config.get_complete_url(api_base=api_base, model="zuse-27b") == "https://api.bineric.com/v1/systemone"
