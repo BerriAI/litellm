@@ -116,7 +116,7 @@ def team_facts(team: LiteLLM_TeamTable) -> FoundTeam:
 
 
 class TeamMissing(str, Enum):
-    """Why `get_team_object` found no team: its `TeamNotFoundError`, or any other `HTTPException`."""
+    """Why `read_team` found no team: its `TeamNotFoundError`, or a read that failed with the database reachable."""
 
     ABSENT = "absent"
     UNREADABLE = "unreadable"

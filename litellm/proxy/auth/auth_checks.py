@@ -3962,7 +3962,12 @@ async def get_team_object_from_cache(
 _get_team_object_from_cache: Final = get_team_object_from_cache
 
 
-async def get_team_object(
+@dataclass(frozen=True, slots=True)
+class TeamReadFailed:
+    error: Exception
+
+
+async def read_team(
     team_id: str,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
@@ -3971,15 +3976,7 @@ async def get_team_object(
     check_cache_only: bool | None = None,
     check_db_only: bool | None = None,
     team_id_upsert: bool | None = None,
-) -> LiteLLM_TeamTableCachedObj:
-    """
-    - Check if team id in proxy Team Table
-    - if valid, return LiteLLM_TeamTable object with defined limits
-    - if not, then raise an error
-
-    Raises:
-        - HTTPException: If team doesn't exist in db or cache (status_code=404)
-    """
+) -> LiteLLM_TeamTableCachedObj | TeamReadFailed:
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
@@ -4018,10 +4015,43 @@ async def get_team_object(
     except TeamNotFoundError:
         raise
     except Exception as error:
+        return TeamReadFailed(error)
+
+
+async def get_team_object(
+    team_id: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    check_cache_only: bool | None = None,
+    check_db_only: bool | None = None,
+    team_id_upsert: bool | None = None,
+) -> LiteLLM_TeamTableCachedObj:
+    """
+    - Check if team id in proxy Team Table
+    - if valid, return LiteLLM_TeamTable object with defined limits
+    - if not, then raise an error
+
+    Raises:
+        - HTTPException: If team doesn't exist in db or cache (status_code=404)
+    """
+    read: Final = await read_team(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+        check_cache_only=check_cache_only,
+        check_db_only=check_db_only,
+        team_id_upsert=team_id_upsert,
+    )
+    if isinstance(read, TeamReadFailed):
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
-        ) from error
+        ) from read.error
+    return read
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
