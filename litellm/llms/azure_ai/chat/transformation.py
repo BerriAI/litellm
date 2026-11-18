@@ -333,7 +333,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         supported_params = (
             azureAIGPT5Config.get_supported_openai_params(model)
             if azureAIGPT5Config.is_model_gpt_5_model(model)
-            else _with_reasoning_effort(super().get_supported_openai_params(model), model)
+            else _with_reasoning_effort(
+                cast(  # cast-ok: OpenAIConfig returns parameter names but leaves the list elements untyped
+                    Sequence[str], super().get_supported_openai_params(model)
+                ),
+                model,
+            )
         )
         if not model_supports_tool_choice:
             filtered_supported_params: Final = []
