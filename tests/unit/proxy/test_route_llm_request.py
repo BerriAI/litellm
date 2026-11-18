@@ -35,6 +35,7 @@ from litellm.proxy.route_llm_request import (
     user_config_routers,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router_api import RouterSettings
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
@@ -3075,6 +3076,7 @@ def _mock_deployment(model_name: str, **deployment_limits: int) -> dict[str, obj
 
 async def _settle_router_accounting() -> None:
     try:
+        await drain_logging_tasks()
         await GLOBAL_LOGGING_WORKER.flush()
     finally:
         await GLOBAL_LOGGING_WORKER.stop()
