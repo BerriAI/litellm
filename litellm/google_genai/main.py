@@ -6,7 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
-from pydantic import ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 import litellm
@@ -141,7 +141,12 @@ class GenerateContentHelper:
         """
         litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
-        request_config: Final = config or kwargs.get("generationConfig") or kwargs.get("generation_config")
+        sent_config: Final = config or kwargs.get("generationConfig") or kwargs.get("generation_config")
+        request_config: Final = (
+            sent_config.model_dump(mode="json", exclude_none=True)
+            if isinstance(sent_config, BaseModel)
+            else sent_config
+        )
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)

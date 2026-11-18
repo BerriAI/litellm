@@ -14,6 +14,7 @@ from typing import Final, Literal
 import httpx
 import pytest
 import respx
+from google.genai import types
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
@@ -404,6 +405,7 @@ _OUTPUT_CAP_SPELLINGS: Final = (
     {"generation_config": {"max_output_tokens": 16}},
     {"generationConfig": {"max_output_tokens": 16}},
     {"generation_config": {"maxOutputTokens": 16}},
+    {"config": types.GenerateContentConfig(max_output_tokens=16)},
 )
 _CHAT_UPSTREAM: Final = "http://upstream.test/v1"
 _CHAT_STREAM_BODY: Final = (
@@ -464,7 +466,7 @@ async def _call_entrypoint(entrypoint: str, output_cap: Mapping[str, object]) ->
     "entrypoint", ["generate_content", "agenerate_content", "generate_content_stream", "agenerate_content_stream"]
 )
 async def test_adapter_path_sends_the_output_cap_in_every_spelling(
-    _httpx_transport: None, entrypoint: str, output_cap: Mapping[str, Mapping[str, int]]
+    _httpx_transport: None, entrypoint: str, output_cap: Mapping[str, object]
 ) -> None:
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{_CHAT_UPSTREAM}/chat/completions").mock(side_effect=_chat_reply)
@@ -475,12 +477,19 @@ async def test_adapter_path_sends_the_output_cap_in_every_spelling(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("config_field", ["generationConfig", "generation_config"])
-async def test_adapter_path_sends_quoted_numbers_as_numbers(_httpx_transport: None, config_field: str) -> None:
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"max_output_tokens": "16", "temperature": "0.5", "topP": "0.9"},
+        {"maxOutputTokens": 16.0, "temperature": 0.5, "top_p": 0.9},
+    ],
+)
+async def test_adapter_path_sends_numbers_as_google_reads_them(
+    _httpx_transport: None, config_field: str, config: Mapping[str, object]
+) -> None:
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{_CHAT_UPSTREAM}/chat/completions").mock(side_effect=_chat_reply)
-        await _call_entrypoint(
-            "agenerate_content", {config_field: {"max_output_tokens": "16", "temperature": "0.5", "topP": "0.9"}}
-        )
+        await _call_entrypoint("agenerate_content", {config_field: config})
 
     sent: Final = json.loads(route.calls.last.request.content)
     assert (sent["max_tokens"], sent["temperature"], sent["top_p"]) == (16, 0.5, 0.9)
@@ -488,7 +497,18 @@ async def test_adapter_path_sends_quoted_numbers_as_numbers(_httpx_transport: No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("config_field", ["generationConfig", "generation_config"])
-@pytest.mark.parametrize("config", ["abc", ["maxOutputTokens"], {"max_output_tokens": "abc"}, {"maxOutputTokens": 16.5}])
+@pytest.mark.parametrize(
+    "config",
+    [
+        "abc",
+        ["maxOutputTokens"],
+        {"max_output_tokens": "abc"},
+        {"maxOutputTokens": 16.5},
+        {"maxOutputTokens": "16.0"},
+        {"max_output_tokens": True},
+        {"temperature": True},
+    ],
+)
 async def test_adapter_path_rejects_an_invalid_config_before_calling_upstream(
     _httpx_transport: None, config_field: str, config: object
 ) -> None:
@@ -503,7 +523,7 @@ async def test_adapter_path_rejects_an_invalid_config_before_calling_upstream(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output_cap", _OUTPUT_CAP_SPELLINGS)
 async def test_native_gemini_request_carries_the_output_cap_in_every_spelling(
-    _httpx_transport: None, output_cap: Mapping[str, Mapping[str, int]]
+    _httpx_transport: None, output_cap: Mapping[str, object]
 ) -> None:
     from litellm.google_genai.main import agenerate_content
 

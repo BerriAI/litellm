@@ -1,10 +1,21 @@
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypeVar, cast
+from typing import Annotated, Any, Final, TypeAlias, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    JsonValue,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    ValidationError,
+)
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
@@ -159,13 +170,35 @@ def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object 
     return next((config[key] for key in keys if config.get(key) is not None), None)
 
 
+_INTEGER_STRING: Final = re.compile(r"-?\d+")
+_NUMBER_STRING: Final = re.compile(r"-?\d+(\.\d+)?([eE][+-]?\d+)?")
+
+
+def _google_int(value: object) -> object:
+    if isinstance(value, str) and _INTEGER_STRING.fullmatch(value):
+        return int(value)
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _google_float(value: object) -> object:
+    if isinstance(value, str) and _NUMBER_STRING.fullmatch(value):
+        return float(value)
+    return value
+
+
+_GoogleInt: TypeAlias = Annotated[StrictInt, BeforeValidator(_google_int)]
+_GoogleFloat: TypeAlias = Annotated[StrictFloat, BeforeValidator(_google_float)]
+
+
 class _CompletionConfigParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    temperature: float | None = None
-    max_tokens: int | None = None
-    top_p: float | None = None
-    stop: str | Sequence[str] | None = None
+    temperature: _GoogleFloat | None = None
+    max_tokens: _GoogleInt | None = None
+    top_p: _GoogleFloat | None = None
+    stop: StrictStr | Sequence[StrictStr] | None = None
 
 
 def _completion_params(config: Mapping[str, object], model: str, llm_provider: str | None) -> Mapping[str, JsonValue]:
