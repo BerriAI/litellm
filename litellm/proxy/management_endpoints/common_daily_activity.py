@@ -257,9 +257,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.gateway_injected_caching_savings_spend += record.gateway_injected_caching_savings_spend or 0
     existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
     existing_metrics.guardrail_spend += record.guardrail_spend or 0  # rebind-ok: callers rely on in-place accumulation
-    existing_metrics.customer_margin_spend += (
-        record.customer_margin_spend or 0
-    )  # rebind-ok: callers rely on in-place accumulation
+    existing_metrics.customer_margin_spend += record.customer_margin_spend or 0  # rebind-ok: accumulates in place
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
