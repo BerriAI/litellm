@@ -1042,7 +1042,13 @@ class ModelResponseIterator:
                 if self.current_content_block_type in _THINKING_BLOCK_TYPES:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
-                    text = self._release_answer_close() + self._hold_prose(content_block_start["content_block"]["text"])
+                    # A compatible gateway may start a text block without its
+                    # empty ``text`` field; the SDK delivers the following text
+                    # deltas, so treat the missing prefix as an empty string
+                    # instead of raising KeyError before any answer text.
+                    text = self._release_answer_close() + self._hold_prose(
+                        content_block_start["content_block"].get("text", "")
+                    )
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
