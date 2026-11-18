@@ -1179,6 +1179,29 @@ async def test_anthropic_count_joins_system_blocks_the_way_mistral_chat_does(mon
     assert counted["instructions"] == chat_system["content"]
 
 
+@pytest.mark.asyncio
+async def test_anthropic_system_is_sent_only_as_mistral_count_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
+    counted: Final = await _sent_count_body(
+        monkeypatch,
+        "mistral-large-4",
+        [{"role": "user", "content": "Capital of France?"}],
+        messages_format="anthropic",
+        system="Answer in one word.",
+    )
+
+    assert counted == {
+        "model": "mistral-large-4",
+        "instructions": "Answer in one word.",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Capital of France?"}],
+            }
+        ],
+    }
+
+
 @pytest.mark.parametrize(
     ("tool_choice", "counted_tool_choice"),
     [
