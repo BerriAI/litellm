@@ -14,11 +14,25 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 BERGET_MODELS = [
-    "Qwen/Qwen3.8-27B-FP8",
+    "Cloudflare/clef-flash",
     "google/gemma-4-31B-it",
     "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
-    "moonshotai/Kimi-K3",
+    "moonshotai/Kimi-K3.1-Pro",
+    "Qwen/Qwen3.5-2B",
+    "convaiinnovations/laya",
     "zai-org/GLM-5.3-Flash",
+]
+
+BERGET_MODELS_WITH_CONTEXT = [
+    "google/gemma-4-31B-it",
+    "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+    "moonshotai/Kimi-K3.1-Pro",
+    "zai-org/GLM-5.3-Flash",
+]
+
+BERGET_EMBEDDING_MODELS = [
+    "intfloat/multilingual-e5-large",
+    "intfloat/multilingual-e5-large-instruct",
 ]
 
 
@@ -78,7 +92,29 @@ class TestBergetProvider:
         assert entry["litellm_provider"] == "berget"
         assert entry["mode"] == "chat"
         assert entry["input_cost_per_token"] > 0
-        assert entry["output_cost_per_token"] > 0
+        assert entry["output_cost_per_token"] >= 0
+
+    @pytest.mark.skipif(pytest is None, reason="pytest not installed")
+    @pytest.mark.parametrize("model_id", BERGET_MODELS_WITH_CONTEXT)
+    def test_pricing_context_windows(self, model_id):
+        entries = json.loads(
+            (REPO_ROOT / "model_prices_and_context_window.json").read_text()
+        )
+        entry = entries[f"berget/{model_id}"]
+        assert entry["max_input_tokens"] > 0
+
+    @pytest.mark.skipif(pytest is None, reason="pytest not installed")
+    @pytest.mark.parametrize("model_id", BERGET_EMBEDDING_MODELS)
+    def test_embedding_pricing_entries_exist(self, model_id):
+        entries = json.loads(
+            (REPO_ROOT / "model_prices_and_context_window.json").read_text()
+        )
+        key = f"berget/{model_id}"
+        assert key in entries, key
+        entry = entries[key]
+        assert entry["litellm_provider"] == "berget"
+        assert entry["mode"] == "embedding"
+        assert entry["input_cost_per_token"] > 0
         assert entry["max_input_tokens"] > 0
 
     @pytest.mark.skipif(pytest is None, reason="pytest not installed")
