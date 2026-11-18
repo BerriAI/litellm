@@ -56,6 +56,7 @@ from typing import Annotated
 
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import (
+    Conversation,
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
@@ -1388,6 +1389,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     max_output_tokens: int | None
     metadata: dict[str, Any] | None
     parallel_tool_calls: bool | None
+    conversation: ReadOnly[Conversation | None]
     previous_response_id: str | None
     reasoning: Reasoning | None
     store: bool | None

@@ -5,6 +5,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 import respx
+from openai.types.responses.response_create_params import Conversation
 
 import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
@@ -26,6 +27,33 @@ WEATHER_TOOL = {
     "description": "Get weather",
     "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
 }
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("conversation", ["conv_support", {"id": "conv_support"}])
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_aresponses_attaches_foundry_agent_turn_to_requested_conversation(
+    conversation: Conversation, drop_params: bool
+) -> None:
+    route: Final = respx.post(FOUNDRY_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/agents/support-agent:3",
+        input="Remember this support request",
+        conversation=conversation,
+        drop_params=drop_params,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "input": "Remember this support request",
+        "conversation": conversation,
+        "agent_reference": {"type": "agent_reference", "name": "support-agent", "version": "3"},
+    }
 
 
 @pytest.fixture(autouse=True)
