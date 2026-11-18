@@ -30,6 +30,7 @@ from pydantic import JsonValue
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.db.connection_budget import ConnectionBudget
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -830,7 +831,7 @@ def test_ownership_checks_wait_for_row_locks_without_failing_readiness(
 ) -> None:
     budget: Final = _CONNECTION_BUDGET.search(ownership_proxy.log.read_text())
     assert budget is not None, ownership_proxy.log.read_text()
-    assert int(budget.group(1)) == _OWNERSHIP_POOL_LIMIT
+    assert int(budget.group(1)) == ConnectionBudget.split(_OWNERSHIP_POOL_LIMIT).python
     with ownership_gateway.scenario() as scenario:
         model: Final = scenario.model()
         team: Final = scenario.team(models=[model])
