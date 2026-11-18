@@ -51,7 +51,11 @@ if TYPE_CHECKING:
         ({"extra_body": {"store": False}}, {"store": False}, False),
         ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
-        ({"store": False, "previous_response_id": "resp_prior"}, {"store": False, "previous_response_id": "resp_prior"}, True),
+        (
+            {"store": False, "previous_response_id": "resp_prior"},
+            {"store": False, "previous_response_id": "resp_prior"},
+            True,
+        ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
     ],
 )
@@ -68,7 +72,15 @@ async def test_acompletion_system_input_requires_forwarded_store_false(
         "created_at": 1789788253,
         "status": "completed",
         "model": "gpt-6.2-sol",
-        "output": [{"type": "message", "id": "msg_wire", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "ok", "annotations": []}]}],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
         "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
     }
     with respx.mock(assert_all_called=True) as router:
