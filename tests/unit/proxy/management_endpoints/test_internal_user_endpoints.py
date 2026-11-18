@@ -52,8 +52,14 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @pytest.mark.parametrize("windows", [None, []])
@@ -3376,7 +3382,7 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
 
 
 @pytest.mark.asyncio
-async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
+async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker, rust_auth_stores: RustAuthStores):
     """/user/delete bulk-deletes the user's keys without going through /key/delete, so the
     jwt_key_mapping cache entries pointing at those keys must be evicted here too. A surviving
     entry keeps resolving the deleted token hash until the mapping cache TTL expires: the deleted
@@ -3395,6 +3401,7 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     issuer_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", "https://issuer.example")
     unrelated_cache_key: Final = jwt_key_mapping_cache_key("sub", "other-user", None)
     jwt_table: Final = CascadingJWTMappingTable(
+        rust_auth_stores.jwt_key_mapping,
         [
             JWTMappingRow("hashed-jwt-key", "sub", "jwt-user"),
             JWTMappingRow("hashed-issuer-key", "sub", "jwt-user", "https://issuer.example"),
@@ -3420,7 +3427,6 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     mock_prisma_client: Final = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
     mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
     mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
         return_value=[SimpleNamespace(token="hashed-jwt-key"), SimpleNamespace(token="hashed-issuer-key")]
     )
@@ -5865,6 +5871,7 @@ def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     from litellm.proxy._types import (
         DeleteUserRequest,
@@ -5892,7 +5899,6 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     mock_prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
-    mock_prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
     _serve_locked_user_delete(mock_prisma_client, mock_user_row)
 
