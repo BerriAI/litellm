@@ -259,10 +259,6 @@ class ClaudeCodePluginRepository(PrismaTableRepository["prisma_models.LiteLLM_Cl
     table_name = "litellm_claudecodeplugintable"
 
 
-class TeamMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_TeamMembership"]):
-    table_name = "litellm_teammembership"
-
-
 class ManagedVectorStoresRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedVectorStoresTable"]):
     table_name = "litellm_managedvectorstorestable"
 

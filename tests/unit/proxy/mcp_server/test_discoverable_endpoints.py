@@ -13534,6 +13534,7 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("server_id", ["team-a-server", "team-b-server"])
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_oauth_writer_preserves_claimed_team_instead_of_expanding_user_roster(
     jwt_oauth_identity: tuple[_JwtOAuthConfig, "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,

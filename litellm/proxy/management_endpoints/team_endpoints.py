@@ -248,8 +248,8 @@ from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     ModelTableRepository,
     OrganizationMembershipRepository,
-    TeamMembershipRepository,
 )
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (

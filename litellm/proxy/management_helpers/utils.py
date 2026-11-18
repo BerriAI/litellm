@@ -48,7 +48,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 _BUDGET_DATA_MAPPING: Final = TypeAdapter(Mapping[str, object])

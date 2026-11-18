@@ -11,7 +11,7 @@ from litellm.proxy.mcp_server import mcp_server_manager
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
-from tests.unit.proxy.rust_auth_stores import RustAuthStores
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 
 def actor(tools: tuple[str, ...] | None, *, delegated: bool = False) -> UserAPIKeyAuth:
@@ -307,7 +307,7 @@ async def test_delegated_mcp_uses_explicit_team_grants_even_for_dashboard_admins
     )
     client: Final = MagicMock()
     rust_auth_stores.user.writer = {user.user_id: user.model_dump()}
-    client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    rust_auth_stores.team.writer = {"team": team}
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     auth: Final = actor(agent_tools, delegated=True)
@@ -566,7 +566,7 @@ async def test_caller_mcp_revocation_uses_fresh_policy(
         object_permission=current_permission,
     )
     database: Final = MagicMock()
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    rust_auth_stores.team.writer = {"caller": team}
     rust_auth_stores.user.writer = {user.user_id: user.model_dump()}
     database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=current_permission)
     cache: Final = UserApiKeyCache()
@@ -595,8 +595,15 @@ async def test_caller_team_outage_cannot_remove_authoritative_server_ceiling(
     from litellm.types.agents import AgentCaller
 
     database: Final = MagicMock()
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(side_effect=RuntimeError("writer unavailable"))
-    database.db.litellm_teamtable.find_unique = AsyncMock(side_effect=RuntimeError("reader unavailable"))
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team=FakeTeamStore(
+                rows={"caller": RuntimeError("reader unavailable")},
+                writer={"caller": RuntimeError("writer unavailable")},
+            )
+        ),
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     auth: Final = actor(("read",))

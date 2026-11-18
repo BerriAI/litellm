@@ -106,6 +106,10 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.proxy.rust_auth_stores import (
+    FakeOrganizationStore,
+    FakeTeamStore,
+)
 
 # Setup TestClient
 client = TestClient(app)
@@ -2567,8 +2571,8 @@ async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkey
 
     team_id: Final = "team-read-cache-miss"
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=LiteLLM_TeamTable(team_id=team_id, models=["model-a"])
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team_id: {"team_id": team_id, "models": ["model-a"]}}))
     )
     cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
     publish: Final = AsyncMock()
@@ -2653,6 +2657,7 @@ async def test_team_block_unblock_reach_warmed_auth_on_every_worker(
 
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(**columns))
+    install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={team_id: columns})))
     prisma_client.db.litellm_teamtable.update = AsyncMock(side_effect=update)
     cache: Final = UserApiKeyCache()
     redis: Final = _BroadcastRecordingRedis()
@@ -9153,6 +9158,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
 @pytest.mark.asyncio
 async def test_update_team_guardrails_with_org_id(
     disable_audit_logging_for_mocked_team,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """
     Test that updating team guardrails works when team has an organization_id.
@@ -9270,6 +9276,14 @@ async def test_update_team_guardrails_with_org_id(
         # The fix ensures 'teams: True' is in the include clause
         mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
             return_value=mock_org
+        )
+        install_rust_auth_stores(
+            monkeypatch,
+            RustAuthStores(
+                organization=FakeOrganizationStore(
+                    rows={"test-org-guardrails": mock_org.model_dump.return_value}
+                )
+            ),
         )
 
         # Destination-org guard in update_team queries for the caller's

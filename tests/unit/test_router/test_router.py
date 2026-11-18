@@ -111,6 +111,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 from tests.unit.conftest import redis_cache_double
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 import traceback
 import inspect
 from typing import List, Optional
@@ -13293,11 +13294,13 @@ class TestMemberAutoRouterInference:
         )
         self.database = SimpleNamespace(
             db=SimpleNamespace(
-                litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
-                litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
                 litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
             )
         )
+        self.stores = install_rust_auth_stores(
+            monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"router-team": self.team}))
+        )
+        self.teams = self.stores.team
         monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 
@@ -13419,9 +13422,9 @@ class TestMemberAutoRouterInference:
         assert first.model == "permitted-model" and first.routing_decision is not None
         assert first.routing_decision["cause"] == "llm_classifier"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_teamtable.find_unique.await_count == 1
-        assert self.database.db.litellm_teammembership.find_unique.await_count == 1
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        assert len(self.teams.lookups) == 1
+        assert len(self.stores.team_membership.lookups) == 1
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={"members_with_roles": []}
         )
         await delete_cache_team_object(
@@ -13468,9 +13471,10 @@ class TestMemberAutoRouterInference:
                 )
             )
         )
-        self.database.db.litellm_teamtable.find_unique.return_value = (
-            None if state == "deleted" else self.team.model_copy(update={"blocked": state == "blocked"})
-        )
+        if state == "deleted":
+            del self.teams.rows["router-team"]
+        else:
+            self.teams.rows["router-team"] = self.team.model_copy(update={"blocked": state == "blocked"})
         if state == "unavailable":
             monkeypatch.setattr(proxy_server, "prisma_client", None)
         with pytest.raises(HTTPException) as error:
@@ -13502,7 +13506,7 @@ class TestMemberAutoRouterInference:
         from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
         from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if ceiling == "team" else self.team.models,
                 "organization_id": "router-org" if ceiling == "organization" else None,
@@ -13564,7 +13568,7 @@ class TestMemberAutoRouterInference:
             access_model_names=["permitted-model"],
         )
         self.database.db.litellm_accessgrouptable.find_unique.return_value = group
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if group_owner == "team" else self.team.models,
                 "access_group_ids": ["router-group"] if group_owner == "team" else [],
