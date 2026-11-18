@@ -10,7 +10,6 @@ methods; richer repositories live in their own modules.
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from importlib import import_module
-from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
 from pydantic import TypeAdapter
@@ -187,7 +186,6 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         transaction: LedgerTransaction, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool
     ) -> int:
         from litellm.proxy.db.db_span import db_span
-        from litellm.repositories.spend_log_insert import spend_log_insert_statement
 
         payloads: Final = tuple(
             {
@@ -221,15 +219,8 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
             if _delivery_id(row) in accepted and row.get("accounting_log_disabled") is not True
         )
         if write_spend_logs and local_rows:
-            groups: Final = tuple(
-                tuple(group)
-                for _, group in groupby(
-                    sorted(local_rows, key=lambda row: tuple(sorted(row))), key=lambda row: tuple(sorted(row))
-                )
-            )
             async with db_span("insert_spend_logs", "LiteLLM_SpendLogs"):
-                for group in groups:
-                    await transaction.query_raw(*spend_log_insert_statement(group))
+                await transaction.litellm_spendlogs.create_many(data=local_rows, skip_duplicates=True)
         return len(accepted)
 
     @staticmethod

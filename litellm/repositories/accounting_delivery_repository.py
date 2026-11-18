@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 
 class LedgerTransaction(Protocol):
     @property
+    def litellm_spendlogs(self) -> TableActions[object]: ...
+
+    @property
     def litellm_dailycustomermemberspend(self) -> TableActions[object]: ...
 
     @property
