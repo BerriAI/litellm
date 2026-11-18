@@ -52,7 +52,7 @@ export async function expectUnrestrictedDashboard(page: Page): Promise<void> {
     page
       .getByRole("main")
       .getByRole("heading", { name: "Virtual Keys", exact: true })
-      .and(page.locator(":not(header *)")),
+      .and(page.locator(":not([data-slot='sidebar-inset'] > header *)")),
   ).toBeVisible({ timeout: 30_000 });
   const info = await page.request.get(endpoint("/user/info"), {
     headers: { Authorization: `Bearer ${session.key}` },
