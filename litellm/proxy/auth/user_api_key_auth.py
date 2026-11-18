@@ -182,6 +182,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     pre_call_served_model,
     request_served_model,
+    sanitize_for_log,
 )
 from litellm.proxy.request_auth_context import REQUEST_AUTH
 from litellm.proxy.spend_tracking.carried_budget_state import (
@@ -2349,6 +2350,10 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamRebuiltFrom
     )
 
 
+def team_object_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamRebuiltFromToken:
+    return _team_obj_from_token(valid_token)
+
+
 def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseException) -> bool:
     """Whether the token's own team fields may stand in for a team that failed to
     resolve, without widening access.
@@ -3732,7 +3737,7 @@ async def enforce_key_and_fallback_model_access(
     if config != {}:
         model_list: Final = config.get("model_list", [])
         new_model_list: Final = model_list
-        verbose_proxy_logger.debug("\n new llm router model list %s", new_model_list)
+        verbose_proxy_logger.debug("new llm router model list %s", sanitize_for_log(new_model_list))
     elif isinstance(valid_token.models, list) and "all-team-models" in valid_token.models:
         pass
     else:
