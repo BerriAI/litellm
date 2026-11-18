@@ -12,6 +12,7 @@ import threading
 from concurrent.futures import Future
 import time
 import traceback
+import tracemalloc
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
@@ -786,6 +787,121 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     serialized = logging_obj.model_call_details["original_response"]
     assert isinstance(serialized, str)
     assert "2026-05-11" in serialized
+
+
+def _no_raw_response_readers(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    for name in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "_async_input_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "set_verbose", False)
+    monkeypatch.setattr("litellm._logging.set_verbose", False)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+
+
+def test_post_call_does_not_hold_a_serialized_copy_of_a_large_dict_response(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _no_raw_response_readers(monkeypatch, caplog)
+    image_size: Final = 8 * 1024 * 1024
+    response: Final = {"created": 1, "data": [{"b64_json": "A" * image_size}]}
+
+    tracemalloc.start()
+    try:
+        allocated_before: Final = tracemalloc.get_traced_memory()[0]
+        logging_obj.post_call(original_response=response)
+        held_bytes: Final = tracemalloc.get_traced_memory()[0] - allocated_before
+    finally:
+        tracemalloc.stop()
+
+    stored: Final = logging_obj.model_call_details["original_response"]
+    assert isinstance(stored, str)
+    assert len(stored) < image_size / 100, f"{len(stored)} characters held for a {image_size} byte image"
+    assert held_bytes < image_size / 10, f"post_call retained {held_bytes} bytes"
+
+
+def test_post_call_keeps_a_response_that_is_already_text(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _no_raw_response_readers(monkeypatch, caplog)
+    text: Final = json.dumps({"data": "A" * (1024 * 1024)})
+
+    logging_obj.post_call(original_response=text)
+
+    assert logging_obj.model_call_details["original_response"] is text
+
+
+@pytest.mark.parametrize(
+    "response",
+    [CallToolResult(content=[TextContent(type="text", text="tool output")]), object()],
+    ids=["mcp-tool-result", "stream-handle"],
+)
+def test_post_call_leaves_values_that_are_not_json_objects_untouched(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, response: object
+) -> None:
+    _no_raw_response_readers(monkeypatch, caplog)
+
+    logging_obj.post_call(original_response=response)
+
+    assert logging_obj.model_call_details["original_response"] is response
+
+
+class _RawResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received: tuple[object, ...] = ()
+
+    def record(self, details: Mapping[str, object]) -> None:
+        self.received = (*self.received, details["original_response"])
+
+    def log_post_api_call(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.record(kwargs)
+
+
+def test_post_call_gives_logger_fn_the_serialized_response(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _no_raw_response_readers(monkeypatch, caplog)
+    recorder: Final = _RawResponseRecorder()
+    logging_obj.update_environment_variables(litellm_params={"logger_fn": recorder.record}, optional_params={})
+    response: Final = {"id": "resp-1", "submitted": datetime.datetime(2026, 5, 11, 23, 49, 13)}
+
+    logging_obj.post_call(original_response=response)
+
+    assert recorder.received == (json.dumps(response, default=str),)
+
+
+@pytest.mark.parametrize("scope", ["global", "request"])
+def test_post_call_gives_input_callbacks_the_serialized_response(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, scope: str
+) -> None:
+    _no_raw_response_readers(monkeypatch, caplog)
+    recorder: Final = _RawResponseRecorder()
+    monkeypatch.setattr(litellm, "input_callback", [recorder] if scope == "global" else [])
+    request_logging: Final = LitellmLogging(
+        model="gpt-image-2.6-sunburst",
+        messages=[],
+        stream=False,
+        call_type="image_generation",
+        start_time=time.time(),
+        litellm_call_id="raw-response-input-callback",
+        function_id="raw-response-input-callback",
+        dynamic_input_callbacks=[recorder] if scope == "request" else None,
+    )
+    request_logging.update_environment_variables(litellm_params={}, optional_params={})
+    response: Final = {"id": "resp-1", "data": [{"b64_json": "A" * (1024 * 1024)}]}
+
+    request_logging.post_call(original_response=response)
+
+    assert recorder.received == (json.dumps(response, default=str),)
 
 
 def _reset_sentry_globals(monkeypatch: pytest.MonkeyPatch) -> None:
