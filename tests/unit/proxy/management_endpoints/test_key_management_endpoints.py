@@ -123,7 +123,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
-from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, JwtMapping, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -21348,6 +21348,7 @@ async def _cache_with_project(
 @pytest.mark.parametrize("request_cls", [GenerateKeyRequest, UpdateKeyRequest])
 @pytest.mark.parametrize("sentinel", ["all-team-models", "all-proxy-models"])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_check_project_key_limits_accepts_inherited_model_sentinels(request_cls, sentinel):
     """LIT-5823: the sentinels inherit a parent scope, so a project allowlist must not treat them as model names."""
     user_api_key_cache = await _cache_with_project("proj-lit-5823", ["gpt-5.4-nano"])
@@ -21370,6 +21371,7 @@ async def test_check_project_key_limits_accepts_inherited_model_sentinels(reques
     ],
 )
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_check_project_key_limits_still_rejects_real_model_outside_project(request_cls, key_models):
     user_api_key_cache = await _cache_with_project("proj-lit-5823", ["gpt-5.4-nano"])
 
@@ -21754,6 +21756,7 @@ async def test_project_detachment_preserves_omission_and_other_key_fields():
 
 @pytest.mark.parametrize("project_id", [None, "project-orbit", "project-other", ""])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_detachment_uses_effective_project_for_validation_on_unowned_project(
     project_id: str | None,
 ):
@@ -21776,11 +21779,16 @@ async def test_project_detachment_uses_effective_project_for_validation_on_unown
         assert expected in str(exc.value.detail)
 
 
+@pytest.fixture
+def project_assignment_team(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(team=FakeTeamStore(rows={"team-lit-5823": {"team_id": "team-lit-5823", "members": []}})),
+    )
+
+
 def _project_assignment_prisma(stored_row: Mapping[str, object] | None = None) -> MagicMock:
     database = MagicMock()
-    team_row: Final = LiteLLM_TeamTable(team_id="team-lit-5823", members=[])
-    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
-    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     if stored_row is None:
         return database
 
@@ -21815,7 +21823,9 @@ def _project_assignment_prisma(stored_row: Mapping[str, object] | None = None) -
     return database
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_assignment_to_unassigned_key_on_same_team():
     existing: Final = LiteLLM_VerificationToken(
         token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-orbit"]
@@ -21833,7 +21843,9 @@ async def test_project_assignment_to_unassigned_key_on_same_team():
     assert update["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_assignment_rejects_project_on_another_team():
     existing: Final = LiteLLM_VerificationToken(
         token="project-assign-token", project_id=None, team_id="team-other", models=["model-orbit"]
@@ -21850,7 +21862,9 @@ async def test_project_assignment_rejects_project_on_another_team():
     assert "team" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_assignment_rejects_key_with_no_team():
     existing: Final = LiteLLM_VerificationToken(
         token="project-assign-token", project_id=None, team_id=None, models=["model-orbit"]
@@ -21867,13 +21881,14 @@ async def test_project_assignment_rejects_key_with_no_team():
     assert "team" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_assignment_rejects_nonexistent_project():
     existing: Final = LiteLLM_VerificationToken(
         token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-orbit"]
     )
     database: Final = _project_assignment_prisma()
-    database.db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
 
     with pytest.raises(HTTPException) as exc:
         await _validate_update_key_data(
@@ -21885,7 +21900,9 @@ async def test_project_assignment_rejects_nonexistent_project():
     assert "Project not found" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_assignment_validates_existing_models_against_project():
     existing: Final = LiteLLM_VerificationToken(
         token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-elsewhere"]
@@ -21902,7 +21919,9 @@ async def test_project_assignment_validates_existing_models_against_project():
     assert "not in project's allowed models" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_assignment_with_explicit_null_max_budget_ignores_stored_budget():
     existing: Final = LiteLLM_VerificationToken(
         token="project-assign-token", project_id=None, team_id="team-lit-5823", models=[], max_budget=100.0
@@ -21921,7 +21940,9 @@ async def test_project_assignment_with_explicit_null_max_budget_ignores_stored_b
     assert result["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_project_assignment_without_max_budget_uses_stored_budget():
     existing: Final = LiteLLM_VerificationToken(
         token="project-assign-token", project_id=None, team_id="team-lit-5823", models=[], max_budget=100.0
@@ -22028,6 +22049,7 @@ async def test_project_assignment_write_upserts_object_permission_in_same_tx():
     assert result["data"] == {"project_id": "project-orbit"}
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_matches_null_models_column():
     stored: Final = {
@@ -22053,6 +22075,7 @@ async def test_project_assignment_write_matches_null_models_column():
     assert result["data"]["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_strips_explicit_null_object_permission():
     stored: Final = {
@@ -22083,6 +22106,7 @@ async def test_project_assignment_write_strips_explicit_null_object_permission()
     assert result["data"]["project_id"] == "project-orbit"
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_rejects_when_max_budget_changed():
     stored: Final = {
@@ -22111,6 +22135,7 @@ async def test_project_assignment_write_rejects_when_max_budget_changed():
     assert "concurrently" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_rejects_when_object_permission_changed():
     stored: Final = {
@@ -22138,6 +22163,7 @@ async def test_project_assignment_write_rejects_when_object_permission_changed()
     assert "concurrently" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_project_assignment_write_rejects_when_team_changed():
     stored: Final = {
@@ -22165,10 +22191,10 @@ async def test_project_assignment_write_rejects_when_team_changed():
     assert "concurrently" in str(exc.value.detail)
 
 
-def _assignment_project_update_prisma(stored_row: Mapping[str, object]) -> MagicMock:
+def _assignment_project_update_prisma(stores: RustAuthStores, stored_row: Mapping[str, object]) -> MagicMock:
     database: Final = _project_assignment_prisma(stored_row=stored_row)
     project_row: Final = LiteLLM_ProjectTable(project_id="project-orbit", team_id="team-lit-5823")
-    database.db.litellm_projecttable.find_unique = AsyncMock(return_value=project_row)
+    stores.project.reader["project-orbit"] = project_row
     database.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=project_row)
     return database
 
@@ -22186,7 +22212,9 @@ def _setup_assignment_update_mocks(monkeypatch: pytest.MonkeyPatch, database: Ma
 
 
 @pytest.mark.asyncio
-async def test_update_key_fn_assigns_project_through_guarded_write(monkeypatch: pytest.MonkeyPatch):
+async def test_update_key_fn_assigns_project_through_guarded_write(
+    monkeypatch: pytest.MonkeyPatch, project_assignment_team: RustAuthStores
+):
     stored: Final = {
         "token": _hash_token_if_needed("sk-assign"),
         "project_id": None,
@@ -22198,7 +22226,7 @@ async def test_update_key_fn_assigns_project_through_guarded_write(monkeypatch: 
     existing: Final = LiteLLM_VerificationToken(
         token=stored["token"], project_id=None, team_id="team-lit-5823", models=["model-orbit"]
     )
-    database: Final = _assignment_project_update_prisma(stored)
+    database: Final = _assignment_project_update_prisma(project_assignment_team, stored)
     database.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
     cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
     _setup_assignment_update_mocks(monkeypatch, database, cache)
@@ -22221,7 +22249,9 @@ async def test_update_key_fn_assigns_project_through_guarded_write(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_update_key_fn_soft_budget_runs_guarded_assignment(monkeypatch: pytest.MonkeyPatch):
+async def test_update_key_fn_soft_budget_runs_guarded_assignment(
+    monkeypatch: pytest.MonkeyPatch, project_assignment_team: RustAuthStores
+):
     stored: Final = {
         "token": _hash_token_if_needed("sk-assign"),
         "project_id": None,
@@ -22233,7 +22263,7 @@ async def test_update_key_fn_soft_budget_runs_guarded_assignment(monkeypatch: py
     existing: Final = LiteLLM_VerificationToken(
         token=stored["token"], project_id=None, team_id="team-lit-5823", models=["model-orbit"]
     )
-    database: Final = _assignment_project_update_prisma(stored)
+    database: Final = _assignment_project_update_prisma(project_assignment_team, stored)
     database.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
     tx: Final = database.tx.return_value.__aenter__.return_value
     tx.litellm_budgettable.create = AsyncMock(return_value=SimpleNamespace(budget_id="budget-new"))
@@ -22274,6 +22304,7 @@ async def test_key_creator_cannot_detach_project_without_admin_access():
     assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_unauthorized_caller_gets_403_not_project_lookup_result():
     existing: Final = LiteLLM_VerificationToken(
@@ -22291,6 +22322,7 @@ async def test_unauthorized_caller_gets_403_not_project_lookup_result():
     assert "Project not found" not in str(exc.value.detail)
 
 
+@pytest.mark.usefixtures("project_assignment_team")
 @pytest.mark.asyncio
 async def test_unauthorized_caller_gets_403_not_project_team_leak():
     existing: Final = LiteLLM_VerificationToken(
@@ -22347,10 +22379,9 @@ def _configure_key_endpoints(
         if project_obj is not None
         else None
     )
-    mock_prisma_client.db.litellm_projecttable = MagicMock()
-    mock_prisma_client.db.litellm_projecttable.find_unique = AsyncMock(
-        return_value=project_row
-    )
+    project_rows: Final = install_rust_auth_stores(monkeypatch).project.reader
+    if project_row is not None:
+        project_rows[_OWNED_PROJECT] = project_row
     mock_prisma_client.writer_db = MagicMock()
     mock_prisma_client.writer_db.litellm_teamtable = mock_prisma_client.db.litellm_teamtable
     mock_prisma_client.writer_db.litellm_projecttable = MagicMock()
@@ -22533,9 +22564,8 @@ async def test_key_generation_uses_database_project_team_when_cache_is_stale(
 ) -> None:
     user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id=_OWNERSHIP_KEY_TEAM)
     prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
-    prisma_client.db.litellm_projecttable = MagicMock()
-    prisma_client.db.litellm_projecttable.find_unique = AsyncMock(
-        return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_KEY_TEAM)
+    install_rust_auth_stores(monkeypatch).project.reader[_OWNED_PROJECT] = LiteLLM_ProjectTable(
+        project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_KEY_TEAM
     )
     prisma_client.writer_db.litellm_projecttable = MagicMock()
     prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
@@ -22710,6 +22740,7 @@ async def test_key_generation_default_budget_does_not_reject_project_budget(monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch: pytest.MonkeyPatch) -> None:
     existing_key_row: Final = LiteLLM_VerificationToken(
         token="hashed-key",
@@ -22768,6 +22799,7 @@ async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_key_update_ambiguous_permission_error_precedes_project_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -22839,6 +22871,7 @@ async def test_key_update_ambiguous_permission_error_precedes_project_ownership(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_key_update_organization_membership_error_precedes_project_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -23495,6 +23528,13 @@ async def test_key_update_invalidates_cached_object_permission(monkeypatch):
         }
         return row
 
+    stored_permissions = install_rust_auth_stores(monkeypatch).object_permission
+    stored_permissions.seed(
+        permission_id,
+        LiteLLM_ObjectPermissionTable(
+            object_permission_id=permission_id, mcp_tool_permissions={"server-1": grants["old"]}
+        ),
+    )
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         side_effect=lambda **kwargs: _row(grants["old"])
@@ -23547,8 +23587,11 @@ async def test_key_update_invalidates_cached_object_permission(monkeypatch):
             existing_key_row=existing_key_row,
         )
 
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.side_effect = (
-        lambda **kwargs: _row(grants["new"])
+    stored_permissions.seed(
+        permission_id,
+        LiteLLM_ObjectPermissionTable(
+            object_permission_id=permission_id, mcp_tool_permissions={"server-1": grants["new"]}
+        ),
     )
     reread = await get_object_permission(
         object_permission_id=permission_id,
@@ -23583,6 +23626,13 @@ async def test_key_regeneration_invalidates_cached_object_permission(
         }
         return row
 
+    def _stored_row() -> LiteLLM_ObjectPermissionTable:
+        return LiteLLM_ObjectPermissionTable(
+            object_permission_id=permission_id, mcp_tool_permissions={"server-1": grants["served"]}
+        )
+
+    stored_permissions = install_rust_auth_stores(monkeypatch).object_permission
+    stored_permissions.seed(permission_id, _stored_row())
     mock_prisma_client = _make_regenerate_mock_prisma()
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(side_effect=_row)
     mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
@@ -23646,6 +23696,7 @@ async def test_key_regeneration_invalidates_cached_object_permission(
         is None
     )
     grants["served"] = ["tool_a", "tool_b"]
+    stored_permissions.seed(permission_id, _stored_row())
     reread = await get_object_permission(
         object_permission_id=permission_id,
         prisma_client=mock_prisma_client,

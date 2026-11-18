@@ -2843,12 +2843,35 @@ class ImageObject(OpenAIImage):
             return self.dict()
 
 
+class ImageSVGUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
+def _parse_image_svg_usage(value: object) -> ImageSVGUsage | None:
+    if value is None:
+        return None
+    try:
+        return ImageSVGUsage.model_validate(value)
+    except ValidationError:
+        verbose_logger.debug("Ignoring invalid SVG authoring usage in image response")
+        return None
+
+
 class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     image_tokens: int
     """The number of image tokens in the input prompt."""
 
     text_tokens: int
     """The number of text tokens in the input prompt."""
+
+    cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
 
 
 class ImageUsage(BaseLiteLLMOpenAIResponseObject):
@@ -2870,6 +2893,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    svg_usage: ImageSVGUsage | None = None
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2957,7 +2981,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-        super().__init__(created=created, data=_data, usage=_usage)
+        svg_usage: Final = _parse_image_svg_usage(kwargs.get("svg_usage"))
+        super().__init__(created=created, data=_data, usage=_usage, svg_usage=svg_usage)
 
         self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)

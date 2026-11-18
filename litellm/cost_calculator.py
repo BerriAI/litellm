@@ -810,6 +810,7 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
+            search_response=response if isinstance(response, SearchResponse) else None,
         )
     elif (
         per_second_cost := _per_second_pricing_cost(
@@ -2234,6 +2235,9 @@ def completion_cost(
                             custom_llm_provider=custom_llm_provider,
                             number_of_queries=number_of_queries,
                             optional_params=optional_params,
+                            search_response=completion_response
+                            if isinstance(completion_response, SearchResponse)
+                            else None,
                         )
                     )
 
