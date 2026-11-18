@@ -7,6 +7,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_access,
 )
 from litellm.proxy.auth.customer_spend import current_customer_spend
+from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -85,7 +86,8 @@ async def resolve_app_hierarchy(
     from litellm.proxy.proxy_server import get_current_spend
 
     assertion: Final = selected_app_assertion(headers)
-    if hierarchy is None and assertion is None:
+    key_names_customer: Final = customer_usage_requested({}, customer_usage_key_fields(authenticated))
+    if hierarchy is None and assertion is None and not key_names_customer:
         return hierarchy
     if prisma_client is None:
         return hierarchy
