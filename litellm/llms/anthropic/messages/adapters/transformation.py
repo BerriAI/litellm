@@ -897,7 +897,7 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking: Mapping[str, object],
         model: str,
         custom_llm_provider: str | None,
-    ) -> Any:
+    ) -> str | Mapping[str, object]:
         """
         Apply the reasoning_effort/summary wrapping rules shared by every
         thinking->reasoning_effort translation path.

@@ -98,10 +98,10 @@ def load_deps() -> DeepAgentsDeps:
     )
 
 
-_SHARED_CHECKPOINTER: dict[str, Any] = {}  # mutable-ok: process-wide lazy singleton slot for the in-memory checkpointer
+_SHARED_CHECKPOINTER: dict[str, object] = {}  # mutable-ok: process-wide lazy singleton slot for the checkpointer
 
 
-def shared_checkpointer(deps: DeepAgentsDeps) -> BaseCheckpointSaver:
+def shared_checkpointer(deps: DeepAgentsDeps) -> object:
     """One in-memory checkpointer per process, so resume() works across sessions in-process."""
     saver = _SHARED_CHECKPOINTER.get("saver")
     if saver is None:

@@ -19,10 +19,10 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, SupportsFloat, SupportsIndex
 
 from pydantic import TypeAdapter
-from typing_extensions import LiteralString, ReadOnly, TypedDict
+from typing_extensions import Buffer, LiteralString, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import Litellm_EntityType
@@ -141,7 +141,7 @@ _EXISTING_KEY_ROWS: Final = TypeAdapter(tuple[_ExistingKeyRow, ...])
 
 
 class _SeedTotalsQuery(Protocol):
-    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]: ...
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _ExistingKeysQuery(Protocol):
@@ -183,7 +183,14 @@ class _UpsertTransactionManager(Protocol):
 
 
 def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:
-    return prisma_client.db.query_raw
+    from litellm.proxy.utils import query_raw_rows
+
+    database: Final = prisma_client.db
+
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]:
+        return await query_raw_rows(database, query, *args)
+
+    return query_raw
 
 
 def _existing_keys_query(prisma_client: "PrismaClient") -> _ExistingKeysQuery:
@@ -279,9 +286,15 @@ async def spend_logs_seed_totals(
     if not rows:
         return WindowSeedTotals(total=0.0, before_batch=0.0)
     return WindowSeedTotals(
-        total=float(rows[0].get("total") or 0.0),
-        before_batch=float(rows[0].get("before_batch") or 0.0),
+        total=_seed_total(rows[0].get("total") or 0.0),
+        before_batch=_seed_total(rows[0].get("before_batch") or 0.0),
     )
+
+
+def _seed_total(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
 
 
 def _exclusion_upper_bound(started_at: datetime) -> datetime:

@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -391,8 +392,8 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            _predictions_json: Final[VertexAIBatchEmbeddingsResponseObject] = response.json()
-            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_predictions_json)
+            _predictions_json: Final = _DECODED_JSON.validate_python(response.json())
+            _predictions: Final = dict(**keyword_arguments(_predictions_json, VertexAIBatchEmbeddingsResponseObject))
             return process_response(
                 model=model,
                 model_response=model_response,

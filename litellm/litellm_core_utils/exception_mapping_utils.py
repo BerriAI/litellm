@@ -2,7 +2,7 @@ import inspect
 import json
 import re
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
@@ -236,7 +236,9 @@ def response_headers_from_exception(original_exception: Exception) -> httpx.Head
     return _get_response_headers(original_exception=original_exception)
 
 
-def _accepted_init_kwargs(exception_class: type[Exception], candidates: Mapping[str, object]) -> Mapping[str, object]:
+def _accepted_init_kwargs(
+    exception_class: Callable[..., object], candidates: Mapping[str, object]
+) -> Mapping[str, object]:
     accepted: Final = inspect.signature(exception_class).parameters
     return MappingProxyType({name: value for name, value in candidates.items() if name in accepted})
 
@@ -260,15 +262,21 @@ def extract_and_raise_litellm_exception(
     if match is None:
         return
     exception_name: Final = match.group(0).removeprefix("litellm.")
-    raised_exception_obj: Final = getattr(litellm, exception_name, None)
+    raised_exception_obj: Final[object] = getattr(litellm, exception_name, None)
     if not raised_exception_obj:
         return
-    raise raised_exception_obj(
+    if not callable(raised_exception_obj):
+        not_callable: Final = f"{raised_exception_obj!r} is not a callable object"
+        raise TypeError(not_callable)
+    raised: Final = raised_exception_obj(
         message=error_str,
         llm_provider=custom_llm_provider,
         model=model,
         **_accepted_init_kwargs(raised_exception_obj, MappingProxyType({"response": response, "body": body})),
     )
+    if isinstance(raised, BaseException) or (isinstance(raised, type) and issubclass(raised, BaseException)):
+        raise raised
+    raise TypeError("exceptions must derive from BaseException")
 
 
 class _ProviderHTTPException(Protocol):

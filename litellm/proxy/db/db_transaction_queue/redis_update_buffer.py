@@ -32,6 +32,7 @@ from litellm.constants import (
     REDIS_UPDATE_BUFFER_KEY,
     REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     BaseDailySpendTransaction,
@@ -134,8 +135,14 @@ def _encode_spend_log_row(row: SpendLogRow) -> str:
     return json.dumps(row, default=_spend_log_json_default)
 
 
-def _decode_spend_log_row(encoded: str) -> dict[str, object] | None:
-    decoded: Final = _DECODED_JSON.validate_python(_load_buffered_transaction(encoded))
+def _json_document(value: object) -> str | bytes | bytearray:
+    if isinstance(value, (str, bytes, bytearray)):
+        return value
+    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
+
+
+def _decode_spend_log_row(encoded: object) -> dict[str, object] | None:
+    decoded: Final = _DECODED_JSON.validate_python(_load_buffered_transaction(_json_document(encoded)))
     return decoded if isinstance(decoded, dict) else None
 
 
@@ -702,13 +709,14 @@ class RedisUpdateBuffer:
         """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
         if self.redis_cache is None or not self.should_commit_spend_updates_to_redis():
             return ()
-        popped: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
+        popped: Final = await self.redis_cache.async_lpop(
             key=REDIS_SPEND_LOGS_BUFFER_KEY,
             count=limit,
         )
         if popped is None:
             return ()
-        encoded_rows: Final = tuple(popped) if isinstance(popped, list) else (popped,)
+        listed_rows: Final = as_object_list(popped)
+        encoded_rows: Final = tuple(listed_rows) if listed_rows is not None else (popped,)
         decoded_rows: Final = (_decode_spend_log_row(encoded) for encoded in encoded_rows)
         return tuple(row for row in decoded_rows if row is not None)
 
@@ -772,17 +780,18 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=REDIS_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
         if list_of_transactions is None:
             return None
 
+        listed_transactions: Final = as_object_list(list_of_transactions)
         verbose_proxy_logger.info(
             "Spend tracking - popped %d spend update batches from Redis buffer (key=%s). "
             "These items are now removed from Redis and must be committed to DB.",
-            len(list_of_transactions) if isinstance(list_of_transactions, list) else 1,
+            len(listed_transactions) if listed_transactions is not None else 1,
             REDIS_UPDATE_BUFFER_KEY,
         )
 
@@ -931,13 +940,15 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions: Final[list[str] | None] = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self.redis_cache.async_lpop(
             key=redis_key,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
         if list_of_transactions is None:
             return None
-        return [_load_buffered_transaction(transaction) for transaction in list_of_transactions]
+        return [
+            _load_buffered_transaction(_json_document(transaction)) for transaction in iter_items(list_of_transactions)
+        ]
 
     async def get_all_daily_spend_update_transactions_from_redis_buffer(
         self,
@@ -1061,15 +1072,16 @@ class RedisUpdateBuffer:
 
     @staticmethod
     def _parse_list_of_transactions(
-        list_of_transactions: str | list[str],
+        list_of_transactions: object,
     ) -> list[DBSpendUpdateTransactions]:
         """
         Parses the list of transactions from Redis
         """
-        if isinstance(list_of_transactions, list):
-            return [_load_buffered_transaction(transaction) for transaction in list_of_transactions]
+        listed_transactions: Final = as_object_list(list_of_transactions)
+        if listed_transactions is not None:
+            return [_load_buffered_transaction(_json_document(transaction)) for transaction in listed_transactions]
         else:
-            return [_load_buffered_transaction(list_of_transactions)]
+            return [_load_buffered_transaction(_json_document(list_of_transactions))]
 
     @staticmethod
     def _combine_list_of_transactions(

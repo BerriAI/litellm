@@ -397,12 +397,14 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
 )
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
+    KeywordArguments,
     as_object_list,
     as_str_mapping,
     attribute_or_none,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
+    has_attributes,
     iter_items,
     json_contains,
     normalize_drop_params,
@@ -17323,8 +17325,22 @@ def _model_info_mapping(value: object, first_read: str) -> Mapping[str, object]:
     raise AttributeError(f"'{type(value).__name__}' object has no attribute '{first_read}'", name=first_read, obj=value)
 
 
+def _unpackable_mapping(value: object) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object is not a mapping")
+
+
+def _discovered_info_lookup_id(model_info: Mapping[str, object]) -> str | None:
+    model_id: Final = model_info.get("id")
+    if model_id is None or isinstance(model_id, str):
+        return model_id
+    _ = model_id in _EMPTY_MAPPING
+    return None
+
+
 def _enrich_model_info_with_litellm_data(
-    model: dict[str, Any],
+    model: dict[str, object],
     debug: bool = False,
     llm_router: Router | None = None,
     caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY,
@@ -17366,11 +17382,15 @@ def _enrich_model_info_with_litellm_data(
         else model_info
     )
     priced_model: Final = (
-        {**model, "litellm_params": {**model["litellm_params"], "model": billed_model}, "model_info": lookup_model_info}
+        {
+            **model,
+            "litellm_params": {**_unpackable_mapping(model["litellm_params"]), "model": billed_model},
+            "model_info": lookup_model_info,
+        }
         if isinstance(billed_model, str)
         else model
     )
-    priced_litellm_model: Final = priced_model.get("litellm_params", {}).get("model")
+    priced_litellm_model: Final = _with_get(priced_model.get("litellm_params", {})).get("model")
     litellm_model_info: Final[Mapping[str, object]] = (
         MappingProxyType({})
         if isinstance(priced_as, RoutedElsewhere)
@@ -17382,13 +17402,18 @@ def _enrich_model_info_with_litellm_data(
         )
     )
     discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(model.get("model_info", {}).get("id"))
+        llm_router.registry().discovered_model_info(_discovered_info_lookup_id(model_info))
         if llm_router is not None
         else MappingProxyType({})
     )
     unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
     stamped_model_info: Final = MappingProxyType(
-        {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
+        {
+            **model_info,
+            **_pricing_override_stamps(
+                model_info, _model_info_mapping(model.get("litellm_params") or _EMPTY_MAPPING, "items")
+            ),
+        }
     )
     merged_model_info: Final = {
         **stamped_model_info,
@@ -18362,12 +18387,11 @@ async def model_info_v2(
         )
     else:
         # Normal flow when modelId is not provided
+        registry_rows: Final[Sequence[object]] = copy.deepcopy(llm_router.registry().all())
         all_models = [
             m
-            for m in copy.deepcopy(llm_router.registry().all())
-            if not _byok_row_outside_caller_teams(
-                _with_get(_UNTYPED_VALUE.validate_python(m)).get("model_info", {}), allowed_team_ids
-            )
+            for m in map(_LITELLM_PARAMS_COPY.validate_python, registry_rows)
+            if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
         ]
 
         if user_model is not None:
@@ -18911,7 +18935,7 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
-def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed_model_names: Collection[str]) -> bool:
+def _deployment_matches_allowed_model_names(model: Mapping[str, object], allowed_model_names: Collection[str]) -> bool:
     """Match a router deployment against allowed public model names.
 
     Team-scoped rows store an internal routing key in ``model_name``; callers
@@ -18921,9 +18945,10 @@ def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed
     if model.get("model_name") in allowed_model_names:
         return True
     model_info: Final = model.get("model_info")
-    if not isinstance(model_info, dict):
+    info: Final = as_str_mapping(model_info)
+    if info is None or not isinstance(model_info, dict):
         return False
-    team_public_model_name: Final = model_info.get("team_public_model_name")
+    team_public_model_name: Final = info.get("team_public_model_name")
     return isinstance(team_public_model_name, str) and team_public_model_name in allowed_model_names
 
 
@@ -19198,7 +19223,8 @@ async def model_info_v1(
     # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
     # when v1 resolved models only via public model_name strings.
     registry: Final = llm_router.registry()
-    all_models: list[dict] = [dict(deployment) for deployment in copy.deepcopy(registry.all())]
+    router_rows: Final[Sequence[object]] = copy.deepcopy(registry.all())
+    all_models: list[dict] = list(map(_LITELLM_PARAMS_COPY.validate_python, router_rows))
     alias_models: Final = copy.deepcopy(registry.deployments(source="alias"))
     all_models.extend(alias_models)
 

@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     Protocol,
@@ -93,6 +92,14 @@ class _FailureLoggingWaiter(Protocol):
     def has_dispatched_failure_logging(self) -> bool: ...
 
     async def wait_for_failure_logging(self, timeout: float | None) -> None: ...
+
+
+def _joined_text(parts: Sequence[object]) -> str:
+    strings: Final = [part for part in parts if isinstance(part, str)]
+    if len(strings) == len(parts):
+        return "".join(strings)
+    first_bad: Final = next(position for position, part in enumerate(parts) if not isinstance(part, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(parts[first_bad]).__name__} found")
 
 
 def _optional_attr(obj: object, name: str) -> object:
@@ -580,7 +587,7 @@ class _CombinedChunkSplitter:
 
     @staticmethod
     def _unsigned_thinking_text(
-        blocks: Sequence[Mapping[str, Any]],
+        blocks: Sequence[Mapping[str, object]],
     ) -> str | None:
         """Return the combined thinking text when no block carries a signature.
 
@@ -592,10 +599,12 @@ class _CombinedChunkSplitter:
         """
         if any(block.get("signature") for block in blocks if isinstance(block, dict)):
             return None
-        thinking_text: Final = "".join(
-            block.get("thinking") or ""
-            for block in blocks
-            if isinstance(block, dict) and block.get("type") == "thinking"
+        thinking_text: Final = _joined_text(
+            tuple(
+                block.get("thinking") or ""
+                for block in blocks
+                if isinstance(block, dict) and block.get("type") == "thinking"
+            )
         )
         return thinking_text or None
 

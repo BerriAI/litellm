@@ -2,7 +2,9 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     get_azure_ai_auth_headers,
@@ -20,6 +22,8 @@ from litellm.utils import convert_to_model_response_object
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
@@ -109,7 +113,9 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
         if "usage" in response:
-            response["usage"] = AzureFoundryMAIImageGenerationConfig.normalize_mai_image_usage(response.get("usage"))
+            response["usage"] = AzureFoundryMAIImageGenerationConfig.normalize_mai_image_usage(
+                decoded_json_object(_DECODED_JSON.validate_python(response)).get("usage")
+            )
 
         logging_obj.post_call(
             input="",

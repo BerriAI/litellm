@@ -1,7 +1,8 @@
 import json
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from httpx._models import Headers, Response
 from pydantic import BaseModel, TypeAdapter
@@ -9,7 +10,14 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    json_contains,
+    keyword_arguments,
+    map_finish_reason,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_images_from_message,
@@ -34,6 +42,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
     ChatCompletionUsageBlock,
+    OpenAIChatCompletionFinishReason,
 )
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
@@ -62,6 +71,23 @@ _TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
 
 class _MessageFields(TypedDict, total=False, extra_items=object):
     pass
+
+
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _MessageSlots(_SupportsSetItem, Protocol):
+    def __delitem__(self, key: str, /) -> None: ...
+
+
+_NON_STRING_FINISH_REASONS: Final[Mapping[object, OpenAIChatCompletionFinishReason]] = MappingProxyType({})
+
+
+def _json_finish_reason(value: object) -> OpenAIChatCompletionFinishReason:
+    if isinstance(value, str):
+        return map_finish_reason(value)
+    return _NON_STRING_FINISH_REASONS.get(value) or map_finish_reason(str(value))
 
 
 def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
@@ -378,25 +404,31 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json: Final = raw_response.json()
+        response_fields: Final = decoded_json_object(_DECODED_JSON.validate_python(response_json))
 
         ## RESPONSE OBJECT
-        _done_reason: Final = map_finish_reason(response_json.get("done_reason") or "stop")
+        _done_reason: Final = _json_finish_reason(response_fields.get("done_reason") or "stop")
         model_response.choices[0].finish_reason = _done_reason
-        response_json_message: Final = response_json.get("message")
+        response_json_message: Final = response_fields.get("message")
         if response_json_message is not None:
-            if "thinking" in response_json_message:
+            if json_contains(response_json_message, "thinking"):
                 # remap 'thinking' to 'reasoning_content'
-                response_json_message["reasoning_content"] = response_json_message["thinking"]
-                del response_json_message["thinking"]
-            elif decoded_json_object(_DECODED_JSON.validate_python(response_json_message)).get("content") is not None:
+                thinking: Final = subscript(response_json_message, "thinking")
+                message_slots: Final = require_attributes(
+                    response_json_message, _MessageSlots, "__setitem__", "__delitem__"
+                )
+                message_slots["reasoning_content"] = thinking
+                del message_slots["thinking"]
+            elif decoded_json_object(response_json_message).get("content") is not None:
                 # parse reasoning content from content
                 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
                     parse_content_for_reasoning,
                 )
 
-                reasoning_content, content = parse_content_for_reasoning(response_json_message["content"])
-                response_json_message["reasoning_content"] = reasoning_content
-                response_json_message["content"] = content
+                reasoning_content, content = parse_content_for_reasoning(response_json["message"]["content"])
+                content_slots: Final = require_attributes(response_json_message, _SupportsSetItem, "__setitem__")
+                content_slots["reasoning_content"] = reasoning_content
+                content_slots["content"] = content
 
         if (
             request_data.get("format", "") == "json"
@@ -404,9 +436,7 @@ class OllamaChatConfig(BaseConfig):
             and response_json_message is not None
         ):
             function_call: Final = decoded_json_object(
-                _DECODED_JSON.validate_python(
-                    json.loads(_json_document(_DECODED_JSON.validate_python(response_json_message["content"])))
-                )
+                _DECODED_JSON.validate_python(json.loads(_json_document(subscript(response_json_message, "content"))))
             )
             message: Final = litellm.Message(
                 **_MessageFields(
@@ -423,15 +453,15 @@ class OllamaChatConfig(BaseConfig):
                             "type": "function",
                         }
                     ],
-                    reasoning_content=decoded_json_object(_DECODED_JSON.validate_python(response_json_message)).get(
-                        "reasoning_content"
-                    ),
+                    reasoning_content=decoded_json_object(response_json_message).get("reasoning_content"),
                 )
             )
             model_response.choices[0].message = message
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            _message: Final = litellm.Message(**response_json_message)
+            _message: Final = litellm.Message(
+                **_MessageFields(**keyword_arguments(response_json_message, litellm.Message))
+            )
             model_response.choices[0].message = _message
             # Set finish_reason to "tool_calls" when tool_calls are present
             # Fixes: https://github.com/BerriAI/litellm/issues/18922

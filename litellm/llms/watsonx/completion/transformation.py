@@ -1,6 +1,7 @@
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -9,7 +10,7 @@ from pydantic import TypeAdapter
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock, OpenAIChatCompletionFinishReason
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
 from litellm.utils import map_finish_reason
@@ -33,6 +34,13 @@ else:
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_NON_STRING_FINISH_REASONS: Final[Mapping[object, OpenAIChatCompletionFinishReason]] = MappingProxyType({})
+
+
+def _json_finish_reason(value: object) -> OpenAIChatCompletionFinishReason:
+    if isinstance(value, str):
+        return map_finish_reason(value)
+    return _NON_STRING_FINISH_REASONS.get(value) or map_finish_reason(str(value))
 
 
 class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
@@ -309,7 +317,9 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         prompt_tokens: Final = json_resp["results"][0]["input_token_count"]
         completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
         model_response.choices[0].message.content = generated_text
-        model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
+        model_response.choices[0].finish_reason = _json_finish_reason(
+            _DECODED_JSON.validate_python(json_resp["results"][0]["stop_reason"])
+        )
         created_at: Final = decoded_json_object(_DECODED_JSON.validate_python(json_resp)).get("created_at")
         if created_at:
             if not isinstance(created_at, str):

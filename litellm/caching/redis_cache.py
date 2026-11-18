@@ -34,7 +34,7 @@ from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
     REDIS_TIMEOUT_LOG_INTERVAL,
 )
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, get_parent_otel_span_from_kwargs, has_attributes
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
 from litellm.types.caching import (
@@ -150,6 +150,14 @@ _INCREMENT_IF_PRESENT_LUA: Final = (
 _LUA_COUNT: Final = TypeAdapter(int)
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
+
+
+def _bytes_items(value: object) -> tuple[bytes, ...] | None:
+    listed: Final = as_object_list(value)
+    if listed is None:
+        return None
+    byte_items: Final = tuple(item for item in listed if isinstance(item, bytes))
+    return byte_items if len(byte_items) == len(listed) else None
 
 
 def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
@@ -2261,7 +2269,7 @@ class RedisCache(BaseCache):
         count: int | None = None,
         parent_otel_span: Span | None = None,
         **kwargs,
-    ) -> Any | list[Any]:
+    ) -> object:
         _redis_client: Final = self._async_commands()
         key = self.check_and_fix_namespace(key=key)
         start_time: Final = time.time()
@@ -2290,14 +2298,15 @@ class RedisCache(BaseCache):
             )
 
             # Handle result parsing if needed
+            byte_items: Final = _bytes_items(result)
             if isinstance(result, bytes):
                 try:
                     return result.decode("utf-8")
                 except Exception:
                     return result
-            elif isinstance(result, list) and all(isinstance(item, bytes) for item in result):
+            elif byte_items is not None:
                 try:
-                    return [item.decode("utf-8") for item in result]
+                    return [item.decode("utf-8") for item in byte_items]
                 except Exception:
                     return result
             return result

@@ -34,7 +34,7 @@ from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGChunkingStrategy, RAGIngestOptions, RAGIngestResponse
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
 
     from litellm import Router
 
@@ -60,6 +60,10 @@ class _OcrPages(Protocol):
 class _OcrPage(Protocol):
     @property
     def markdown(self) -> str: ...
+
+
+def _vector_store_provider(vector_store_config: Mapping[str, object]) -> object:
+    return vector_store_config.get("custom_llm_provider", "openai")
 
 
 class BaseRAGIngestion(ABC):
@@ -122,9 +126,9 @@ class BaseRAGIngestion(ABC):
                     del self.vector_store_config[key]
 
     @property
-    def custom_llm_provider(self) -> str:
+    def custom_llm_provider(self) -> object:
         """Get the vector store provider."""
-        return self.vector_store_config.get("custom_llm_provider", "openai")
+        return _vector_store_provider(self.vector_store_config)
 
     async def upload(
         self,

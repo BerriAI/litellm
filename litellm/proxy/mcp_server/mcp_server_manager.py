@@ -7351,7 +7351,7 @@ class MCPServerManager:
         # Allow validation and modification of tool calls before execution
         # Using standard pre_call_hook
         #########################################################
-        hook_result: Final[dict[str, Any]] = await self.pre_call_tool_check(
+        hook_result: Final = await self.pre_call_tool_check(
             name=name,
             arguments=arguments,
             server_name=server_name,

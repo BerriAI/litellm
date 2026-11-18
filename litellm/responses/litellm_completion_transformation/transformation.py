@@ -1039,14 +1039,14 @@ def _replayed_messages_for_cache_points(
 
 class ChatCompletionSession(TypedDict, total=False):
     messages: list[SessionMessage]
-    litellm_session_id: str | None
+    litellm_session_id: object
     instructions: ReadOnly[str | None]
 
 
 ########### End of Initialize Classes used for Responses API  ###########
 
 
-def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+def _chain_session_metadata(chain_session: object, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
     metadata: Final = request_kwargs.get(key)
     if not isinstance(metadata, dict):

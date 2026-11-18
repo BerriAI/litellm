@@ -11,7 +11,7 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains, subscript
 from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -26,7 +26,6 @@ from litellm.types.llms.vertex_ai import (
     PromptTokensDetails,
     UsageMetadata,
     VertexAIBatchEmbeddingsRequestBody,
-    VertexAIBatchEmbeddingsResponseObject,
     VideoMetadataType,
 )
 from litellm.types.utils import (
@@ -668,14 +667,16 @@ def process_response(
     input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
-    _predictions: VertexAIBatchEmbeddingsResponseObject,
+    _predictions: object,
 ) -> EmbeddingResponse:
     openai_embeddings: Final[list[Embedding]] = []
-    for idx, embedding in enumerate(_predictions["embeddings"]):
-        openai_embedding = Embedding(
-            embedding=embedding["values"],
-            index=idx,
-            object="embedding",
+    for idx, embedding in enumerate(iter_items(subscript(_predictions, "embeddings"))):
+        openai_embedding = Embedding.model_validate(
+            {
+                "embedding": subscript(embedding, "values"),
+                "index": idx,
+                "object": "embedding",
+            }
         )
         openai_embeddings.append(openai_embedding)
 

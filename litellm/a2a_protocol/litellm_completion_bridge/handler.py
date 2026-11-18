@@ -12,7 +12,7 @@ A2A Streaming Events (in order):
 
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -101,7 +101,7 @@ class A2ACompletionBridgeHandler:
             verbose_logger.info("A2A completion bridge: model=%s, api_base=%s", full_model, api_base)
 
         # Build completion params dict
-        completion_params: Final[dict[str, Any]] = {
+        completion_params: Final[dict[str, object]] = {
             "model": full_model,
             "messages": openai_messages,
             "api_base": api_base,
