@@ -5,6 +5,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.cost_calculator import default_image_cost_calculator
 from litellm.types.utils import ModelInfo
 
@@ -132,6 +133,25 @@ def test_together_prompt_caching_flag_implies_cache_read_rate(cost_map: CostMap)
     for model, info in cost_map.items():
         if model.startswith("together_ai/") and info.get("supports_prompt_caching"):
             assert "cache_read_input_token_cost" in info, f"{model} flags caching without a cache read rate"
+
+
+@pytest.mark.parametrize("model", ["together_ai/thinkingmachines/Inkling", "together_ai/thinkingmachines/inkling"])
+def test_inkling_alias_preserves_registry_metadata_and_pricing(model: str, cost_map: CostMap) -> None:
+    canonical: Final = cost_map["together_ai/thinkingmachines/Inkling"]
+    assert cost_map[model] == canonical
+    input_rate: Final = TypeAdapter(float).validate_python(canonical["input_cost_per_token"])
+    output_rate: Final = TypeAdapter(float).validate_python(canonical["output_cost_per_token"])
+
+    response: Final = litellm.ModelResponse(
+        model=model, usage=litellm.Usage(prompt_tokens=100, completion_tokens=50)
+    )
+
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        100 * input_rate + 50 * output_rate
+    )
+    assert litellm.supports_audio_input(model=model) == canonical.get("supports_audio_input", False)
+    assert litellm.supports_vision(model=model) == canonical.get("supports_vision", False)
+    assert litellm.supports_reasoning(model=model) == canonical.get("supports_reasoning", False)
 
 
 def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, object]], ...]:

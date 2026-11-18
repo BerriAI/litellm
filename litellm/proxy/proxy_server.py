@@ -5679,6 +5679,9 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=litellm.default_redis_ttl,
     )
     spend_counter_store.attach_redis(connect(redis_cache))
+    from litellm.vector_stores.fallbacks import vector_store_fallback_cooldowns
+
+    vector_store_fallback_cooldowns.attach_redis_cache(redis_cache)
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -7544,6 +7547,8 @@ class ProxyConfig:
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                         "access_group_rules",
+                        "customer_org_alias_header",
+                        "customer_member_id_header",
                     )
                     if name in typed_general_settings
                 }

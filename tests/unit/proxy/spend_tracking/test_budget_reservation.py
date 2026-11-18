@@ -13,8 +13,6 @@ from litellm.caching import DualCache
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
-    LiteLLM_OrganizationTable,
-    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -22,24 +20,23 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
-    project_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
-    _get_team_member_budget_counter,
     _get_budget_counters,
+    _get_team_member_budget_counter,
+    count_request_input_tokens,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
-    release_unbound_budget_reservation,
-    count_request_input_tokens,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
+from litellm.router import Router
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -187,6 +184,42 @@ def _tiered_deployment(input_cost_per_token: float) -> Deployment:
 
 
 TIERED_BODY: Final = {"model": "tiered-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+
+
+CUSTOMER: Final = CustomerHierarchyAuth(
+    customer_org_id="org-1",
+    scopes=(CustomerScopeAuth(key="customer_org", entity_id="org-1", max_budget=10000),),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("margin", "customer", "factor"),
+    [(None, CUSTOMER, 1.0), (0.02, CUSTOMER, 1.02), (10, CUSTOMER, 11.0), (0.02, None, 1.0)],
+)
+async def test_customer_margin_scales_the_reservation_only_for_customer_requests(
+    spend_counter_store, margin: float | None, customer: CustomerHierarchyAuth | None, factor: float
+) -> None:
+    router: Final = Router(model_list=[_tiered_deployment(0.1).model_dump()])
+    estimate: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+    input_estimate: Final = estimate_request_input_cost(
+        request_body=TIERED_BODY, route="/chat/completions", llm_router=router
+    )
+    with patch.dict(litellm.cost_margin_config, {} if margin is None else {"customer": margin}, clear=True):
+        reservation: Final = await reserve_budget_for_request(
+            request_body=TIERED_BODY,
+            route="/chat/completions",
+            llm_router=router,
+            valid_token=UserAPIKeyAuth(token="margin-allowed", max_budget=10000, customer_hierarchy=customer),
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    assert estimate is not None and input_estimate is not None and reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(estimate * factor)
+    assert reservation["input_cost"] == pytest.approx(input_estimate * factor)
 
 
 def test_repeated_estimates_reuse_cached_model_cost_info() -> None:
