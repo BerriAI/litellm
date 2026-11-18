@@ -131,7 +131,7 @@ class _AgentsApiSessionEvent(BaseModel):
     session: _AgentsApiBody
 
 
-_AGENTS_API_BODY: Final = TypeAdapter(_AgentsApiBody | _AgentConfig)
+_AGENTS_API_BODY: Final[TypeAdapter[_AgentsApiBody | _AgentConfig]] = TypeAdapter(_AgentsApiBody | _AgentConfig)
 
 
 def _agent_model(body: Mapping[str, object]) -> str | None:
