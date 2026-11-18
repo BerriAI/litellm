@@ -19,6 +19,7 @@ pub use crate::guardrail::{GuardrailQuery, GuardrailUse, PromptShield};
 pub use crate::image::{ImageCalculator, ImageQuery};
 pub use crate::mcp::McpQuery;
 pub use crate::ocr::OcrQuery;
+pub use crate::reported::{PricedSides, ReportSource, ReportedQuery};
 pub use crate::rerank::RerankQuery;
 pub use crate::search::SearchQuery;
 pub use crate::session::{
@@ -57,6 +58,9 @@ pub enum PriceQuery {
     /// Built-in tool fees on their own, beside a call another kind prices
     #[cfg_attr(feature = "serde", serde(skip))]
     Tools(Box<ToolsQuery>),
+    /// A cost a provider or the gateway in front of it reported
+    #[cfg_attr(feature = "serde", serde(skip))]
+    Reported(Box<ReportedQuery>),
 }
 
 /// The kind of a query, named in `Unpriced::NotPorted`
@@ -92,6 +96,8 @@ pub enum Kind {
     Mcp,
     #[strum(serialize = "tools")]
     Tools,
+    #[strum(serialize = "reported")]
+    Reported,
 }
 
 /// What every kind carries
@@ -218,8 +224,7 @@ pub enum AdjustmentPolicy {
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct ReportedCost {
-    /// Which field stated it, such as `usage.cost`
-    pub source: Box<str>,
+    pub source: ReportSource,
     pub usd: f64,
 }
 
@@ -432,6 +437,7 @@ impl PriceQuery {
             Self::A2a(_) => Kind::A2a,
             Self::Mcp(_) => Kind::Mcp,
             Self::Tools(_) => Kind::Tools,
+            Self::Reported(_) => Kind::Reported,
         }
     }
 }
