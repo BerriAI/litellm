@@ -13,7 +13,8 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.models.team import BudgetLimitEntry
+from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -24,9 +25,12 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     organization_id: str | None = None
     object_permission_id: str | None = None
     password: str | None = Field(default=None, exclude=True)
+    password_reset_required: bool | None = None
+    last_breach_check_at: datetime | None = None
     teams: list[str] = []
     user_role: str | None = None
     max_budget: float | None = None
+    budget_limits: tuple[BudgetLimitEntry, ...] | None = None
     spend: float = 0.0
     user_email: str | None = None
     models: list = []
@@ -67,3 +71,11 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
         if not self.models:
             return True
         return model_name in self.models
+
+
+class SCIMPlaceholder(LiteLLMBaseModel):
+    """A user row keyed by a value that names another account by SSO identity or email."""
+
+    placeholder_user_id: str
+    resolved_user_ids: tuple[str, ...]
+    team_ids: tuple[str, ...]

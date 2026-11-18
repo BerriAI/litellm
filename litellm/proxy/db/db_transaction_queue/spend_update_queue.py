@@ -29,6 +29,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
     ) -> DBSpendUpdateTransactions:
         """Flush all updates from the queue and return all updates aggregated by entity type."""
         updates: Final = await self.flush_all_updates_from_in_memory_queue()
+        await self._emit_new_item_added_to_queue_event(queue_size=self.update_queue.qsize())
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d spend update items from in-memory queue",
@@ -48,6 +49,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
             )
             await self.aggregate_queue_updates()
+        await self._emit_new_item_added_to_queue_event(queue_size=self.update_queue.qsize())
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
@@ -55,6 +57,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         aggregated_updates: Final = self._get_aggregated_spend_update_queue_item(updates)
         for update in aggregated_updates:
             await self.update_queue.put(update)
+        await self._emit_new_item_added_to_queue_event(queue_size=self.update_queue.qsize())
 
     def _get_aggregated_spend_update_queue_item(
         self, updates: list[SpendUpdateQueueItem]
@@ -137,8 +140,31 @@ class SpendUpdateQueue(BaseUpdateQueue):
             team_list_transactions={},
             team_member_list_transactions={},
             org_list_transactions={},
+            org_member_list_transactions={},
+            project_list_transactions={},
             tag_list_transactions={},
             agent_list_transactions={},
+            model_access_group_list_transactions={},
+            customer_org_list_transactions={},
+            customer_team_list_transactions={},
+            customer_member_list_transactions={},
+            **(
+                {
+                    "app_list_transactions": dict[str, float](),
+                    "app_customer_org_list_transactions": dict[str, float](),
+                    "app_customer_member_list_transactions": dict[str, float](),
+                }
+                if any(
+                    update.get("entity_type")
+                    in (
+                        Litellm_EntityType.APP,
+                        Litellm_EntityType.APP_CUSTOMER_ORG,
+                        Litellm_EntityType.APP_CUSTOMER_MEMBER,
+                    )
+                    for update in updates
+                )
+                else {}
+            ),
         )
 
         # Map entity types to their corresponding transaction dictionary keys
@@ -149,8 +175,17 @@ class SpendUpdateQueue(BaseUpdateQueue):
             Litellm_EntityType.TEAM: "team_list_transactions",
             Litellm_EntityType.TEAM_MEMBER: "team_member_list_transactions",
             Litellm_EntityType.ORGANIZATION: "org_list_transactions",
+            Litellm_EntityType.ORGANIZATION_MEMBER: "org_member_list_transactions",
+            Litellm_EntityType.PROJECT: "project_list_transactions",
             Litellm_EntityType.TAG: "tag_list_transactions",
             Litellm_EntityType.AGENT: "agent_list_transactions",
+            Litellm_EntityType.MODEL_ACCESS_GROUP: "model_access_group_list_transactions",
+            Litellm_EntityType.CUSTOMER_ORG: "customer_org_list_transactions",
+            Litellm_EntityType.CUSTOMER_TEAM: "customer_team_list_transactions",
+            Litellm_EntityType.CUSTOMER_MEMBER: "customer_member_list_transactions",
+            Litellm_EntityType.APP: "app_list_transactions",
+            Litellm_EntityType.APP_CUSTOMER_ORG: "app_customer_org_list_transactions",
+            Litellm_EntityType.APP_CUSTOMER_MEMBER: "app_customer_member_list_transactions",
         }
 
         for update in updates:
@@ -186,10 +221,28 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict = db_spend_update_transactions["team_member_list_transactions"]
             elif dict_key == "org_list_transactions":
                 transactions_dict = db_spend_update_transactions["org_list_transactions"]
+            elif dict_key == "org_member_list_transactions":
+                transactions_dict = db_spend_update_transactions["org_member_list_transactions"]
+            elif dict_key == "project_list_transactions":
+                transactions_dict = db_spend_update_transactions["project_list_transactions"]
             elif dict_key == "tag_list_transactions":
                 transactions_dict = db_spend_update_transactions["tag_list_transactions"]
             elif dict_key == "agent_list_transactions":
                 transactions_dict = db_spend_update_transactions["agent_list_transactions"]
+            elif dict_key == "model_access_group_list_transactions":
+                transactions_dict = db_spend_update_transactions["model_access_group_list_transactions"]
+            elif dict_key == "customer_org_list_transactions":
+                transactions_dict = db_spend_update_transactions["customer_org_list_transactions"]
+            elif dict_key == "customer_team_list_transactions":
+                transactions_dict = db_spend_update_transactions["customer_team_list_transactions"]
+            elif dict_key == "customer_member_list_transactions":
+                transactions_dict = db_spend_update_transactions["customer_member_list_transactions"]
+            elif dict_key == "app_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_list_transactions")
+            elif dict_key == "app_customer_org_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_customer_org_list_transactions")
+            elif dict_key == "app_customer_member_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_customer_member_list_transactions")
             else:
                 continue
 
@@ -197,7 +250,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict = {}
 
                 # type ignore: dict_key is guaranteed to be one of "one of ("user_list_transactions", "end_user_list_transactions", "key_list_transactions", "team_list_transactions", "team_member_list_transactions", "org_list_transactions")"
-                db_spend_update_transactions[dict_key] = transactions_dict  # type: ignore
+                db_spend_update_transactions[dict_key] = transactions_dict
 
             if entity_id not in transactions_dict:
                 transactions_dict[entity_id] = 0

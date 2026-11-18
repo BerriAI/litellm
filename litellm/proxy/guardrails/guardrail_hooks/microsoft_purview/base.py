@@ -2,19 +2,26 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final
+
+import httpx
+from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, decoded_json_object, iter_items, json_contains
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
 
 GRAPH_API_BASE: Final = "https://graph.microsoft.com/v1.0"
@@ -23,6 +30,22 @@ GRAPH_SCOPE: Final = "https://graph.microsoft.com/.default"
 
 # Protection scope cache TTL in seconds (1 hour, per Microsoft recommendation).
 SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
+
+
+class GraphTokenResponse(TypedDict):
+    access_token: str
+    expires_in: NotRequired[int]
+
+
+def _policy_action_blocks(action: object) -> bool:
+    policy_action: Final = decoded_json_object(action)
+    odata_type: Final = policy_action.get("@odata.type", "")
+    action_field: Final = policy_action.get("action", "")
+
+    if json_contains(odata_type, "restrictAccessAction") or action_field == "restrictAccess":
+        restriction: Final = policy_action.get("restrictionAction", "")
+        return restriction == "block"
+    return False
 
 
 class PurviewGuardrailBase:
@@ -41,12 +64,13 @@ class PurviewGuardrailBase:
         client_secret: str,
         purview_app_name: str = "LiteLLM",
         user_id_field: str = "user_id",
-        **kwargs: Any,
-    ):
+        **kwargs: object,
+    ) -> None:
         # Forward remaining kwargs to the next class in the MRO
         # (typically CustomGuardrail).
         super().__init__(**kwargs)
 
+        self.timeout: float | httpx.Timeout | None
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.tenant_id = tenant_id
         self.client_id = client_id
@@ -59,7 +83,7 @@ class PurviewGuardrailBase:
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
         # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
-        self._scope_cache: OrderedDict[str, tuple[str, dict[str, Any], float]] = OrderedDict()
+        self._scope_cache: OrderedDict[str, tuple[str, Mapping[str, object], float]] = OrderedDict()
         self._scope_cache_maxsize = 1000
         # Use a threading.Lock (not asyncio.Lock) because this lock is acquired
         # from both the proxy's main asyncio event loop and from short-lived
@@ -98,9 +122,10 @@ class PurviewGuardrailBase:
             url=url,
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=self.timeout,
         )
         response.raise_for_status()
-        token_data: Final = response.json()
+        token_data: Final[GraphTokenResponse] = response.json()
         access_token: Final = token_data["access_token"]
         expires_in: Final = int(token_data.get("expires_in", 3599))
         # Recompute ``now`` after the await so the expiry reflects when the
@@ -117,9 +142,9 @@ class PurviewGuardrailBase:
     async def _graph_post(
         self,
         url: str,
-        json_body: dict[str, Any],
-        extra_headers: dict[str, str] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, str]]:
+        json_body: dict[str, object],
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> tuple[dict[str, object], dict[str, str]]:
         """POST to Graph API with bearer auth.
 
         Returns:
@@ -134,9 +159,9 @@ class PurviewGuardrailBase:
             headers.update(extra_headers)
 
         verbose_proxy_logger.debug("Purview Graph POST %s", url)
-        response: Final = await self.async_handler.post(url=url, headers=headers, json=json_body)
+        response: Final = await self.async_handler.post(url=url, headers=headers, json=json_body, timeout=self.timeout)
         response.raise_for_status()
-        response_json: Final[dict[str, Any]] = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         response_headers: Final = dict(response.headers)
         verbose_proxy_logger.debug("Purview Graph response: %s", response_json)
         return response_json, response_headers
@@ -145,7 +170,7 @@ class PurviewGuardrailBase:
     # Protection scopes
     # ------------------------------------------------------------------
 
-    async def _compute_protection_scopes(self, user_id: str) -> tuple[str, dict[str, Any]]:
+    async def _compute_protection_scopes(self, user_id: str) -> tuple[str, Mapping[str, object]]:
         """Call protectionScopes/compute and cache with ETag.
 
         Returns:
@@ -161,7 +186,7 @@ class PurviewGuardrailBase:
                 return cached[0], cached[1]
 
         url: Final = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/protectionScopes/compute"
-        body: Final[dict[str, Any]] = {
+        body: Final[dict[str, object]] = {
             "activities": "uploadText,downloadText",
             "locations": [
                 {
@@ -199,7 +224,7 @@ class PurviewGuardrailBase:
         activity: str,
         etag: str,
         correlation_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Call processContent for DLP policy evaluation.
 
         Args:
@@ -211,7 +236,7 @@ class PurviewGuardrailBase:
         """
         encoded_user_id: Final = self._encode_graph_user_id(user_id)
         url: Final = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/processContent"
-        body: Final[dict[str, Any]] = {
+        body: Final[dict[str, object]] = {
             "contentToProcess": {
                 "contentEntries": [
                     {
@@ -261,7 +286,7 @@ class PurviewGuardrailBase:
     # User ID resolution
     # ------------------------------------------------------------------
 
-    def _resolve_user_id(self, data: dict[str, Any], user_api_key_dict: Any) -> str | None:
+    def _resolve_user_id(self, data: Mapping[str, object], user_api_key_dict: "UserAPIKeyAuth") -> str | None:
         """Resolve the Entra user object ID from request data or auth context.
 
         Returns the strongest available identity walking down four sources, in
@@ -284,7 +309,10 @@ class PurviewGuardrailBase:
         if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
             return str(user_api_key_dict.end_user_id)
 
-        metadata: Final = data.get("metadata") or data.get("litellm_metadata") or {}
+        metadata_value: Final[object] = data.get("metadata") or data.get("litellm_metadata") or {}
+        if not isinstance(metadata_value, Mapping):
+            return None
+        metadata: Final[Mapping[str, object]] = metadata_value
         uid = metadata.get("user_api_key_user_id")
         if uid:
             return str(uid)
@@ -296,15 +324,15 @@ class PurviewGuardrailBase:
         return None
 
     @staticmethod
-    def _logging_kwargs_metadata(kwargs: dict[str, Any]) -> dict[str, Any]:
+    def _logging_kwargs_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
         """Metadata dict from ``model_call_details`` / logging kwargs."""
-        litellm_params: Final = kwargs.get("litellm_params") or {}
+        litellm_params: Final[object] = kwargs.get("litellm_params") or {}
         if not isinstance(litellm_params, dict):
             return {}
         md: Final = litellm_params.get("metadata")
         return md if isinstance(md, dict) else {}
 
-    def _resolve_trusted_user_id(self, data: dict[str, Any], user_api_key_dict: Any) -> str | None:
+    def _resolve_trusted_user_id(self, data: Mapping[str, object], user_api_key_dict: "UserAPIKeyAuth") -> str | None:
         """Resolve user ID from API-key/JWT-bound identity for blocking DLP.
 
         Uses only ``UserAPIKeyAuth.user_id`` (bound on the LiteLLM key or JWT).
@@ -325,7 +353,7 @@ class PurviewGuardrailBase:
 
         return None
 
-    def _resolve_user_id_from_logging_kwargs(self, kwargs: dict[str, Any]) -> str | None:
+    def _resolve_user_id_from_logging_kwargs(self, kwargs: Mapping[str, object]) -> str | None:
         """Trusted-identity-only resolver for logging-only hooks.
 
         Uses only the proxy-injected ``user_api_key_user_id`` (populated from
@@ -348,16 +376,11 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _should_block(response: dict[str, Any]) -> bool:
+    def _should_block(response: Mapping[str, object]) -> bool:
         """Return True if any policyAction requires blocking."""
-        for action in response.get("policyActions", []):
-            odata_type = action.get("@odata.type", "")
-            action_field = action.get("action", "")
-
-            if "restrictAccessAction" in odata_type or action_field == "restrictAccess":
-                restriction = action.get("restrictionAction", "")
-                if restriction == "block":
-                    return True
+        for action in iter_items(response.get("policyActions", [])):
+            if _policy_action_blocks(action):
+                return True
         return False
 
     # ------------------------------------------------------------------
@@ -365,7 +388,7 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def is_token_id_prompt(prompt: Any) -> bool:
+    def is_token_id_prompt(prompt: str | Sequence[object] | None) -> bool:
         """Return True if ``prompt`` carries OpenAI completions token ids.
 
         Covers every list shape that ``completion_prompt_to_str`` cannot decode
@@ -383,7 +406,7 @@ class PurviewGuardrailBase:
         return False
 
     @staticmethod
-    def completion_prompt_to_str(prompt: Any) -> str | None:
+    def completion_prompt_to_str(prompt: str | Sequence[object] | None) -> str | None:
         """Normalize OpenAI ``/v1/completions`` ``prompt`` for text DLP.
 
         Supports string prompts and list-of-string prompts. List-of-token-id prompts
@@ -408,7 +431,7 @@ class PurviewGuardrailBase:
         return None
 
     @staticmethod
-    def _extract_tool_call_args_from_message(message: Any) -> list[str]:
+    def _extract_tool_call_args_from_message(message: object) -> list[str]:
         """Return plaintext arguments strings from tool_calls and function_call fields.
 
         Covers both the request path (assistant messages in chat histories that
@@ -419,13 +442,13 @@ class PurviewGuardrailBase:
         args: Final[list[str]] = []
 
         # tool_calls: [{"function": {"arguments": "..."}}]
-        tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+        tool_calls: Final = tool_calls_with_server_tool_calls(message)
         if tool_calls:
             for tc in tool_calls:
-                fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                fn = tc.get("function") if isinstance(tc, dict) else attribute_or_none(tc, "function")
                 if fn is None:
                     continue
-                arguments = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                arguments = fn.get("arguments") if isinstance(fn, dict) else attribute_or_none(fn, "arguments")
                 if isinstance(arguments, str) and arguments.strip():
                     args.append(arguments)
 

@@ -1,11 +1,60 @@
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, TypeVar
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponse
-from litellm.types.vector_stores import (
-    VectorStoreResultContent,
-    VectorStoreSearchResponse,
-)
+from litellm.types.vector_stores import VectorStoreSearchResponse
+
+_ItemT: Final = TypeVar("_ItemT")
+
+
+class _ResultContentView(TypedDict):
+    """Content entry carried by a vector store search result."""
+
+    type: ReadOnly[NotRequired[str]]
+    text: ReadOnly[str]
+
+
+class _SearchResultView(TypedDict):
+    """Vector store search result, as far as :class:`RAGQuery` reads it."""
+
+    content: ReadOnly[NotRequired[Sequence[_ResultContentView]]]
+    text: ReadOnly[NotRequired[str]]
+
+
+class _StoreContentView(TypedDict):
+    type: ReadOnly[NotRequired[str | None]]
+    text: ReadOnly[NotRequired[str | None]]
+
+
+class _StoreResultView(TypedDict):
+    content: ReadOnly[NotRequired[Sequence[_StoreContentView] | None]]
+
+
+class _RerankResultView(TypedDict):
+    index: ReadOnly[NotRequired[int]]
+
+
+class _RerankResultsView(TypedDict):
+    results: ReadOnly[Sequence[_RerankResultView]]
+
+
+class _MessageView(TypedDict):
+    message: ReadOnly[object]
+
+
+def _iterable_items(items: Sequence[_ItemT] | None) -> Sequence[_ItemT]:
+    if items is None:
+        raise TypeError("'NoneType' object is not iterable")
+    return items
+
+
+def _sized_items(items: Sequence[_ItemT] | None) -> Sequence[_ItemT]:
+    if items is None:
+        raise TypeError("object of type 'NoneType' has no len()")
+    return items
 
 
 class RAGQuery:
@@ -36,15 +85,17 @@ class RAGQuery:
         return None
 
     @staticmethod
-    def build_context_message(context_chunks: list[Any]) -> ChatCompletionUserMessage:
+    def build_context_message(
+        context_chunks: Sequence[_StoreResultView | _SearchResultView | str | None] | None,
+    ) -> ChatCompletionUserMessage:
         """
         Process search results and build a context message.
         """
         context_content = RAGQuery.CONTENT_PREFIX_STRING
 
-        for chunk in context_chunks:
+        for chunk in _iterable_items(context_chunks):
             if isinstance(chunk, dict):
-                result_content: list[VectorStoreResultContent] | None = chunk.get("content")
+                result_content: Sequence[_StoreContentView | _ResultContentView] | None = chunk.get("content")
                 if result_content:
                     for content_item in result_content:
                         content_text: str | None = content_item.get("text")
@@ -63,15 +114,16 @@ class RAGQuery:
     @staticmethod
     def add_search_results_to_response(
         response: ModelResponse,
-        search_results: VectorStoreSearchResponse,
-        rerank_results: Any | None = None,
+        search_results: Mapping[str, object],
+        rerank_results: object = None,
     ) -> ModelResponse:
         """
         Add search results to the response choices.
         """
         if hasattr(response, "choices") and response.choices:
             for choice in response.choices:
-                message = getattr(choice, "message", None)
+                message_view: _MessageView = {"message": getattr(choice, "message", None)}
+                message = message_view["message"]
                 if message is not None:
                     # Get existing provider_specific_fields or create new dict
                     provider_fields = getattr(message, "provider_specific_fields", None) or {}
@@ -87,24 +139,27 @@ class RAGQuery:
 
     @staticmethod
     def extract_documents_from_search(
-        search_response: Any,
-    ) -> list[str | dict[str, Any]]:
+        search_response: VectorStoreSearchResponse,
+    ) -> list[str | dict[str, object]]:
         """Extract text documents from vector store search response."""
-        documents: Final[list[str | dict[str, Any]]] = []
-        for result in search_response.get("data", []):
-            content_list = result.get("content", [])
-            for content in content_list:
-                if content.get("type") == "text" and content.get("text"):
-                    documents.append(content["text"])
+        documents: Final[list[str | dict[str, object]]] = []
+        results: Final[Sequence[_StoreResultView]] = _iterable_items(search_response.get("data", []))
+        for result in results:
+            for content in _iterable_items(result.get("content", [])):
+                if content.get("type") == "text" and (content_text := content.get("text")):
+                    documents.append(content_text)
         return documents
 
     @staticmethod
-    def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> list[Any]:
+    def get_top_chunks_from_rerank(
+        search_response: VectorStoreSearchResponse, rerank_response: Any
+    ) -> list[_StoreResultView]:
         """Get the original search results corresponding to the top reranked results."""
-        top_chunks: Final = []
+        top_chunks: Final[list[_StoreResultView]] = []
         original_results: Final = search_response.get("data", [])
-        for result in rerank_response.get("results", []):
+        reranked: Final[_RerankResultsView] = {"results": rerank_response.get("results", [])}
+        for result in reranked["results"]:
             index = result.get("index")
-            if index is not None and index < len(original_results):
-                top_chunks.append(original_results[index])
+            if index is not None and index < len(sized_results := _sized_items(original_results)):
+                top_chunks.append(sized_results[index])
         return top_chunks

@@ -2,11 +2,19 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final, Union
+from collections.abc import AsyncIterable, Coroutine, Iterable, Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Union,
+    cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
+)
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
+from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
@@ -14,14 +22,20 @@ if TYPE_CHECKING:
 
 
 class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
-    model: str
-    messages: list
-    optional_params: dict
-    litellm_params: dict
-    headers: dict
-    model_response: "ModelResponse"
-    logging_obj: "LiteLLMLoggingObj"
-    custom_llm_provider: str
+    model: ReadOnly[str]
+    messages: ReadOnly[list]
+    optional_params: ReadOnly[dict[str, object]]
+    litellm_params: ReadOnly[dict[str, object]]
+    headers: ReadOnly[dict]
+    model_response: ReadOnly["ModelResponse"]
+    logging_obj: ReadOnly["LiteLLMLoggingObj"]
+    custom_llm_provider: ReadOnly[str]
+    encoding: ReadOnly[object]
+
+
+def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
+    """`responses()` runs `get_llm_provider()` itself, so hand back the prefixed model `completion()` started from."""
+    return f"{custom_llm_provider}/{model}"
 
 
 class ResponsesToCompletionBridgeHandler:
@@ -39,14 +53,14 @@ class ResponsesToCompletionBridgeHandler:
         return bool(stream)
 
     @staticmethod
-    def _is_preformatted_cached_chat_stream(result: Any) -> bool:
+    def _is_preformatted_cached_chat_stream(result: object) -> bool:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
         return isinstance(result, CustomStreamWrapper) and result.custom_llm_provider == "cached_response"
 
     @staticmethod
     def _coerce_response_object(
-        response_obj: Any,
+        response_obj: object,
         hidden_params: dict | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
@@ -68,12 +82,12 @@ class ResponsesToCompletionBridgeHandler:
                     existing.setdefault(key, value)
         return response
 
-    def _collect_response_from_stream(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    def _collect_response_from_stream(self, stream_iter: Iterable[object]) -> "ResponsesAPIResponse":
         for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -83,12 +97,12 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream completed response is invalid")
         return response
 
-    async def _collect_response_from_stream_async(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    async def _collect_response_from_stream_async(self, stream_iter: AsyncIterable[object]) -> "ResponsesAPIResponse":
         async for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -102,35 +116,37 @@ class ResponsesToCompletionBridgeHandler:
         from litellm import LiteLLMLoggingObj
         from litellm.types.utils import ModelResponse
 
-        model: Final = kwargs.get("model")
+        typed_kwargs: Final[dict[str, object]] = kwargs
+
+        model: Final = typed_kwargs.get("model")
         if model is None or not isinstance(model, str):
             raise ValueError("model is required")
 
-        custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+        custom_llm_provider: Final = typed_kwargs.get("custom_llm_provider")
         if custom_llm_provider is None or not isinstance(custom_llm_provider, str):
             raise ValueError("custom_llm_provider is required")
 
-        messages: Final = kwargs.get("messages")
+        messages: Final = typed_kwargs.get("messages")
         if messages is None or not isinstance(messages, list):
             raise ValueError("messages is required")
 
-        optional_params: Final = kwargs.get("optional_params")
+        optional_params: Final = typed_kwargs.get("optional_params")
         if optional_params is None or not isinstance(optional_params, dict):
             raise ValueError("optional_params is required")
 
-        litellm_params: Final = kwargs.get("litellm_params")
+        litellm_params: Final = typed_kwargs.get("litellm_params")
         if litellm_params is None or not isinstance(litellm_params, dict):
             raise ValueError("litellm_params is required")
 
-        headers: Final = kwargs.get("headers")
+        headers: Final = typed_kwargs.get("headers")
         if headers is None or not isinstance(headers, dict):
             raise ValueError("headers is required")
 
-        model_response: Final = kwargs.get("model_response")
+        model_response: Final = typed_kwargs.get("model_response")
         if model_response is None or not isinstance(model_response, ModelResponse):
             raise ValueError("model_response is required")
 
-        logging_obj: Final = kwargs.get("logging_obj")
+        logging_obj: Final = typed_kwargs.get("logging_obj")
         if logging_obj is None or not isinstance(logging_obj, LiteLLMLoggingObj):
             raise ValueError("logging_obj is required")
 
@@ -143,12 +159,13 @@ class ResponsesToCompletionBridgeHandler:
             model_response=model_response,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
+            encoding=typed_kwargs.get("encoding"),
         )
 
     def completion(
         self, *args, **kwargs
     ) -> Union[
-        Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
+        Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
     ]:
@@ -167,8 +184,12 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
+        logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
         request_data: Final = self.transformation_handler.transform_request(
             model=model,
@@ -180,17 +201,14 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
-        # Pin the resolved provider so `responses()` doesn't re-run
-        # `get_llm_provider()` on the model string and strip a second
-        # provider prefix (see GitHub issue #28505).  request_data already
-        # carries `custom_llm_provider` via the spread of
-        # `sanitized_litellm_params`; overwriting it on the dict (rather
-        # than adding an explicit kwarg) avoids the duplicate-keyword
-        # TypeError that would otherwise fire on the real bridge path.
+        # Set on request_data rather than passed as explicit kwargs: the spread of
+        # `sanitized_litellm_params` already carries both, so passing them again
+        # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
-        result: Final = responses(
-            **request_data,
-        )
+        request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
+        result: Final = responses(**request_data, **PROMPT_MANAGEMENT_APPLIED)
 
         from litellm.types.utils import ModelResponse
 
@@ -205,7 +223,7 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
@@ -230,17 +248,24 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
+            from .transformation import is_structured_output_request, replays_responses_history
+
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
-                streaming_response=result,  # type: ignore
+                streaming_response=result,
                 sync_stream=True,
                 json_mode=kwargs.get("json_mode"),
+                structured_output=is_structured_output_request(
+                    cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+                ),
+                replays_openai_history=replays_responses_history(custom_llm_provider),
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -263,8 +288,12 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
+        logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
         try:
             request_data: Final = self.transformation_handler.transform_request(
@@ -278,16 +307,18 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
-        # Pin the resolved provider so `aresponses()` doesn't re-run
-        # `get_llm_provider()` on the model string and strip a second
-        # provider prefix (see GitHub issue #28505).  Set on request_data
-        # rather than passed as a separate kwarg to avoid the duplicate-
-        # keyword TypeError when `sanitized_litellm_params` already
-        # carries `custom_llm_provider`.
+        # Set on request_data rather than passed as explicit kwargs: the spread of
+        # `sanitized_litellm_params` already carries both, so passing them again
+        # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
+        request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
         result: Final = await aresponses(
             **request_data,
+            **PROMPT_MANAGEMENT_APPLIED,
             aresponses=True,
+            _agentic_loop_api_surface=CHAT_COMPLETION_AGENTIC_SURFACE,
         )
 
         from litellm.types.utils import ModelResponse
@@ -303,7 +334,7 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
@@ -328,17 +359,24 @@ class ResponsesToCompletionBridgeHandler:
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                encoding=kwargs.get("encoding"),
+                encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
+            from .transformation import is_structured_output_request, replays_responses_history
+
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
-                streaming_response=result,  # type: ignore
+                streaming_response=result,
                 sync_stream=False,
                 json_mode=kwargs.get("json_mode"),
+                structured_output=is_structured_output_request(
+                    cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
+                ),
+                replays_openai_history=replays_responses_history(custom_llm_provider),
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

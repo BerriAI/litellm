@@ -27,10 +27,10 @@ async def generate_key_fn(data: GenerateKeyRequest):
         bool: True if a key should be generated, False otherwise.
     """
     # decide if a key should be generated or not
-    data_json: Final = data.json()  # type: ignore
+    data_json: Final = data.json()
 
     # Unpacking variables
-    team_id: Final = data_json.get("team_id")
+    team_id: Final = data.team_id
     data_json.get("duration")
     data_json.get("models")
     data_json.get("aliases")

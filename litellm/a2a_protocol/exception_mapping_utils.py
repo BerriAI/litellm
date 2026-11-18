@@ -4,7 +4,7 @@ A2A Protocol Exception Mapping Utils.
 Maps A2A SDK exceptions to LiteLLM A2A exception types.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.card_resolver import (
@@ -21,6 +21,13 @@ from litellm.constants import CONNECTION_ERROR_PATTERNS
 
 if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
+    from a2a.types import AgentCard
+
+
+_A2A_KIND_DIALECT_HINT: Final = (
+    " (the agent replied in the A2A 0.3 dialect while its card declares 1.0; "
+    'set litellm_params.a2a_protocol_version: "0.3" on this agent)'
+)
 
 
 try:
@@ -29,9 +36,9 @@ try:
     A2A_SDK_AVAILABLE = True
 except ImportError:
     A2A_SDK_AVAILABLE = False
-    Client = None  # type: ignore[misc, assignment]
-    ClientConfig = None  # type: ignore[misc, assignment]
-    create_client = None  # type: ignore[misc, assignment]
+    Client = None
+    ClientConfig = None
+    create_client = None
 
 
 class A2AExceptionCheckers:
@@ -152,14 +159,14 @@ def map_a2a_exception(
 
     # Default: wrap in generic A2AError
     raise A2AError(
-        message=error_str,
+        message=error_str + _A2A_KIND_DIALECT_HINT if 'has no field named "kind"' in error_str else error_str,
         model=model,
     )
 
 
 async def handle_a2a_localhost_retry(
     error: A2ALocalhostURLError,
-    agent_card: Any,
+    agent_card: "AgentCard | None",
     a2a_client: "A2AClientType",
     is_streaming: bool = False,
 ) -> "A2AClientType":
@@ -202,9 +209,9 @@ async def handle_a2a_localhost_retry(
     # Fix the agent card URL
     set_agent_card_url(agent_card, error.base_url)
 
-    # Reuse the httpx client LiteLLM attached at creation. It carries this agent's
-    # trace-id and auth headers, so a fresh client would drop them. Only clients built
-    # by ``create_a2a_client`` have it; an externally-supplied client cannot be retried.
+    # Reuse the httpx client and call context LiteLLM attached at creation, since the
+    # context carries this agent's trace-id/auth headers. Only clients built by
+    # ``create_a2a_client`` have them; an externally-supplied client cannot be retried.
     httpx_client: Final = getattr(a2a_client, "_litellm_httpx_client", None)
     if httpx_client is None:
         raise RuntimeError(
@@ -219,6 +226,9 @@ async def handle_a2a_localhost_retry(
             streaming=is_streaming,
         ),
     )
-    new_client._litellm_httpx_client = httpx_client  # type: ignore[attr-defined]
-    new_client._litellm_agent_card = agent_card  # type: ignore[attr-defined]
+    new_client._litellm_httpx_client = httpx_client
+    new_client._litellm_call_context = getattr(  # pyright: ignore[reportAttributeAccessIssue]  # LiteLLM-owned stash
+        a2a_client, "_litellm_call_context", None
+    )
+    new_client._litellm_agent_card = agent_card
     return new_client

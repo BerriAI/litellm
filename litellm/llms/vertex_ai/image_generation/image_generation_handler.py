@@ -1,10 +1,13 @@
 import json
-from typing import Any, Final
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from openai.types.image import Image
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -14,27 +17,32 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import Ver
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import ImageResponse
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_PREDICTIONS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class VertexImageGeneration(VertexLLM):
     def process_image_generation_response(
         self,
-        json_response: dict[str, Any],
+        json_response: object,
         model_response: ImageResponse,
         model: str | None = None,
     ) -> ImageResponse:
-        if "predictions" not in json_response:
+        if not json_contains(json_response, "predictions"):
             raise litellm.InternalServerError(
                 message=f"image generation response does not contain 'predictions', got {json_response}",
                 llm_provider="vertex_ai",
                 model=model,
             )
 
-        predictions: Final = json_response["predictions"]
+        predictions: Final = _PREDICTIONS.validate_python(subscript(json_response, "predictions"))
         response_data: Final[list[Image]] = []
 
         for prediction in predictions:
-            bytes_base64_encoded = prediction["bytesBase64Encoded"]
-            image_object = Image(b64_json=bytes_base64_encoded)
+            image_object = Image.model_validate({"b64_json": prediction["bytesBase64Encoded"]})
             response_data.append(image_object)
 
         model_response.data = response_data
@@ -74,7 +82,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Any | None = None,
         optional_params: dict | None = None,
@@ -83,7 +91,7 @@ class VertexImageGeneration(VertexLLM):
         extra_headers: dict | None = None,
     ) -> ImageResponse:
         if aimg_generation is True:
-            return self.aimage_generation(  # type: ignore
+            return self.aimage_generation(
                 prompt=prompt,
                 api_base=api_base,
                 vertex_project=vertex_project,
@@ -106,9 +114,9 @@ class VertexImageGeneration(VertexLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+            sync_handler: HTTPHandler = HTTPHandler(**_params)
         else:
-            sync_handler = client  # type: ignore
+            sync_handler = client
 
         # url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
@@ -162,7 +170,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response: Final = _DECODED_JSON.validate_python(response.json())
         return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
@@ -173,7 +181,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         model_response: ImageResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: AsyncHTTPHandler | None = None,
         optional_params: dict | None = None,
@@ -195,7 +203,7 @@ class VertexImageGeneration(VertexLLM):
                 params={"timeout": timeout},
             )
         else:
-            self.async_handler = client  # type: ignore
+            self.async_handler = client
 
         # make POST request to
         # https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict
@@ -266,11 +274,11 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response: Final = _DECODED_JSON.validate_python(response.json())
         return self.process_image_generation_response(json_response, model_response, model)
 
-    def is_image_generation_response(self, json_response: dict[str, Any]) -> bool:
+    def is_image_generation_response(self, json_response: Mapping[str, object]) -> bool:
         if "predictions" in json_response:
-            if "bytesBase64Encoded" in json_response["predictions"][0]:
+            if json_contains(subscript(json_response["predictions"], 0), "bytesBase64Encoded"):
                 return True
         return False

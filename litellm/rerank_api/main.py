@@ -1,11 +1,12 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine
 from functools import partial
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
@@ -17,6 +18,12 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
+
+_PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE: Final = (
+    litellm.LlmProviders.DASHSCOPE,
+    litellm.LlmProviders.QWENCLOUD,
+    litellm.LlmProviders.QWEN_AI_PLATFORM,
+)
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -30,7 +37,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 async def arerank(
     model: str,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: (
         Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
     ) = None,
@@ -39,13 +46,24 @@ async def arerank(
     return_documents: bool | None = None,
     max_chunks_per_doc: int | None = None,
     **kwargs,
-) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
+) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
+    _custom_llm_provider: str | None = None
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["arerank"] = True
+
+        declared_provider: Final = declared_authenticating_provider(model, custom_llm_provider)
+        if declared_provider is not None:
+            _custom_llm_provider = declared_provider  # rebind-ok: see pre-declaration above
+        else:
+            _, _custom_llm_provider, _, _ = litellm.get_llm_provider(  # rebind-ok: see pre-declaration above
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=kwargs.get("api_base", None),
+            )
 
         func: Final = partial(
             rerank,
@@ -64,20 +82,24 @@ async def arerank(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        if asyncio.iscoroutine(init_response):
+        if isinstance(init_response, Coroutine):
             response = await init_response
         else:
             response = init_response
         return response
     except Exception as e:
-        raise e
+        raise exception_type(
+            model=model,
+            custom_llm_provider=_custom_llm_provider or custom_llm_provider,
+            original_exception=e,
+        )
 
 
 @client
 def rerank(
     model: str,
     query: str,
-    documents: list[str | dict[str, Any]],
+    documents: list[str | dict[str, object]],
     custom_llm_provider: (
         Literal[
             "cohere",
@@ -99,7 +121,7 @@ def rerank(
     max_chunks_per_doc: int | None = None,
     max_tokens_per_doc: int | None = None,
     **kwargs,
-) -> RerankResponse | Coroutine[Any, Any, RerankResponse]:
+) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
     """
@@ -108,13 +130,14 @@ def rerank(
     # typed named param there would trip the basedpyright budget gate without
     # adding real safety; it stays typed downstream via get_optional_rerank_params.
     instruction: Final[str | None] = kwargs.get("instruction", None)
-    headers: Final[dict | None] = kwargs.get("headers")  # type: ignore
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+    headers: Final[dict | None] = kwargs.get("headers")
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
     model_info: Final = kwargs.get("model_info", None)
     user: Final = kwargs.get("user", None)
     client: Final = kwargs.get("client", None)
+    _custom_llm_provider: str | None = None  # rebind-ok: set by the get_llm_provider unpack; read in the except
     try:
         _is_async: Final = kwargs.pop("arerank", False) is True
         optional_params: Final = GenericLiteLLMParams(**kwargs)
@@ -127,7 +150,7 @@ def rerank(
 
         (
             model,
-            _custom_llm_provider,
+            _custom_llm_provider,  # rebind-ok: see pre-declaration above
             dynamic_api_key,
             dynamic_api_base,
         ) = litellm.get_llm_provider(
@@ -165,14 +188,16 @@ def rerank(
 
         model_response: Final = RerankResponse()
 
-        rerank_litellm_params: Final = {
-            "litellm_call_id": litellm_call_id,
-            "proxy_server_request": proxy_server_request,
-            "model_info": model_info,
-            "preset_cache_key": None,
-            "stream_response": {},
-            **optional_params.model_dump(exclude_unset=True),
-        }
+        rerank_litellm_params: Final = dict[str, object](
+            {
+                "litellm_call_id": litellm_call_id,
+                "proxy_server_request": proxy_server_request,
+                "model_info": model_info,
+                "preset_cache_key": None,
+                "stream_response": {},
+                **optional_params.model_dump(exclude_unset=True),
+            }
+        )
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -195,7 +220,7 @@ def rerank(
                 dynamic_api_base
                 or optional_params.api_base
                 or litellm.api_base
-                or get_secret("COHERE_API_BASE")  # type: ignore
+                or get_secret("COHERE_API_BASE")
                 or "https://api.cohere.com"
             )
 
@@ -221,7 +246,7 @@ def rerank(
                 dynamic_api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or optional_params.api_base
                 or litellm.api_base
-                or get_secret("AZURE_AI_API_BASE")  # type: ignore
+                or get_secret("AZURE_AI_API_BASE")
             )
             response = base_llm_http_handler.rerank(
                 model=model,
@@ -270,12 +295,14 @@ def rerank(
                 dynamic_api_key
                 or optional_params.api_key
                 or litellm.togetherai_api_key
-                or get_secret("TOGETHERAI_API_KEY")  # type: ignore
+                or get_secret("TOGETHERAI_API_KEY")
                 or litellm.api_key
             )
 
             if api_key is None:
                 raise ValueError("TogetherAI API key is required, please set 'TOGETHERAI_API_KEY' in your environment")
+
+            api_base = dynamic_api_base or optional_params.api_base or litellm.api_base or "https://api.together.ai/v1"
 
             response = together_rerank.rerank(
                 model=model,
@@ -286,6 +313,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 api_key=api_key,
+                api_base=api_base,
                 _is_async=_is_async,
             )
         elif _custom_llm_provider == litellm.LlmProviders.JINA_AI:
@@ -293,7 +321,7 @@ def rerank(
                 raise ValueError("Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment")
 
             api_base = (
-                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")  # type: ignore
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")
             )
 
             response = base_llm_http_handler.rerank(
@@ -319,7 +347,7 @@ def rerank(
             # Rerank uses ai.api.nvidia.com instead of integrate.api.nvidia.com
             api_base = (
                 optional_params.api_base
-                or get_secret("NVIDIA_NIM_API_BASE")  # type: ignore
+                or get_secret("NVIDIA_NIM_API_BASE")
                 or "https://ai.api.nvidia.com"  # Default for rerank
             )
 
@@ -340,7 +368,7 @@ def rerank(
             )
         elif _custom_llm_provider == litellm.LlmProviders.BEDROCK:
             api_base = (
-                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")  # type: ignore
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")
             )
 
             # Merge headers and extra_headers if both are provided
@@ -523,7 +551,11 @@ def rerank(
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
                 api_key=dynamic_api_key or optional_params.api_key,
-                api_base=dynamic_api_base or optional_params.api_base,
+                api_base=(
+                    optional_params.api_base or dynamic_api_base
+                    if _custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_RERANK_BASE
+                    else dynamic_api_base or optional_params.api_base
+                ),
                 _is_async=_is_async,
                 headers=headers or litellm.headers or {},
                 client=client,
@@ -535,4 +567,8 @@ def rerank(
         return response
     except Exception as e:
         verbose_logger.error("Error in rerank: %s", e)
-        raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=e)
+        raise exception_type(
+            model=model,
+            custom_llm_provider=_custom_llm_provider or custom_llm_provider,
+            original_exception=e,
+        )

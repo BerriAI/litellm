@@ -5,10 +5,13 @@ Implements the transformation between LiteLLM's unified vector store API
 and Google Gemini's File Search API.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.gemini.common_utils import (
     GeminiError,
@@ -33,6 +36,61 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class GeminiRetrievedContext(TypedDict, total=False):
+    """Passage Gemini retrieved from a File Search store."""
+
+    text: ReadOnly[str]
+    uri: ReadOnly[str]
+    title: ReadOnly[str]
+
+
+class GeminiGroundingChunk(TypedDict, total=False):
+    """One source Gemini grounded its answer on."""
+
+    retrievedContext: ReadOnly[GeminiRetrievedContext]
+
+
+class GeminiGroundingSegment(TypedDict, total=False):
+    """Span of the generated answer a grounding support refers to."""
+
+    text: ReadOnly[str]
+
+
+class GeminiGroundingSupport(TypedDict, total=False):
+    """Citation linking an answer span to the grounding chunks that back it."""
+
+    segment: ReadOnly[GeminiGroundingSegment]
+    groundingChunkIndices: ReadOnly[Sequence[int]]
+    confidenceScores: ReadOnly[Sequence[float]]
+
+
+class GeminiFileSearchGroundingMetadata(TypedDict, total=False):
+    """Grounding metadata Gemini returns for a File Search candidate."""
+
+    groundingChunks: ReadOnly[Sequence[GeminiGroundingChunk]]
+    groundingSupports: ReadOnly[Sequence[GeminiGroundingSupport]]
+
+
+class GeminiFileSearchCandidate(TypedDict, total=False):
+    """One candidate of a Gemini File Search ``generateContent`` response."""
+
+    groundingMetadata: ReadOnly[GeminiFileSearchGroundingMetadata]
+
+
+class GeminiFileSearchResponse(TypedDict, total=False):
+    """Body of a ``generateContent`` call made with the File Search tool."""
+
+    candidates: ReadOnly[Sequence[GeminiFileSearchCandidate]]
+
+
+class GeminiFileSearchStore(TypedDict, total=False):
+    """Body of a Gemini ``fileSearchStores`` create response."""
+
+    name: ReadOnly[str]
+    displayName: ReadOnly[str]
+    createTime: ReadOnly[str]
 
 
 class GeminiVectorStoreConfig(BaseVectorStoreConfig):
@@ -84,15 +142,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Note: This returns the base URL WITHOUT the API key.
         The API key will be appended to specific endpoint URLs in the transform methods.
         """
-        if api_base is None:
-            api_base = GeminiModelInfo.get_api_base()
-
-        if api_base is None:
-            raise ValueError("GEMINI_API_BASE is not set")
-
-        # Ensure we're using the v1beta version for File Search
-        api_version: Final = "v1beta"
-        return f"{api_base}/{api_version}"
+        return join_api_base(GeminiModelInfo.get_api_base(api_base), "v1beta")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> GeminiError:
         """Return Gemini-specific error class."""
@@ -110,7 +160,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: Mapping[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform search request to Gemini's generateContent format.
@@ -130,10 +180,10 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         api_key: Final = litellm_params.get("api_key") or GeminiModelInfo.get_api_key()
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required")
-        url: Final = f"{api_base}/models/{model}:generateContent"
+        url: Final = join_api_base(api_base, f"models/{model}:generateContent")
 
         # Build file_search tool configuration (using snake_case as per Gemini docs)
-        file_search_config: Final[dict[str, Any]] = {"file_search_store_names": [vector_store_id]}
+        file_search_config: Final[dict[str, object]] = {"file_search_store_names": [vector_store_id]}
 
         # Add metadata filter if provided
         metadata_filter: Final = vector_store_search_optional_params.get("filters")
@@ -151,18 +201,20 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             else:
                 file_search_config["metadata_filter"] = metadata_filter
 
-        # Build request body
-        request_body: Final[dict[str, Any]] = {
-            "contents": [{"parts": [{"text": query}]}],
-            "tools": [{"file_search": file_search_config}],
-        }
-
         # Add max_num_results if specified
         max_results: Final = vector_store_search_optional_params.get("max_num_results")
-        if max_results:
-            # This might need to be added to generationConfig or tool config
-            # depending on Gemini's API requirements
-            request_body.setdefault("generationConfig", {})["candidateCount"] = 1
+        # This might need to be added to generationConfig or tool config
+        # depending on Gemini's API requirements
+        generation_config: Final[Mapping[str, object]] = (
+            {"generationConfig": {"candidateCount": 1}} if max_results else {}
+        )
+
+        # Build request body
+        request_body: Final[dict[str, object]] = {
+            "contents": [{"parts": [{"text": query}]}],
+            "tools": [{"file_search": file_search_config}],
+            **generation_config,
+        }
 
         litellm_logging_obj.model_call_details["query"] = query
         litellm_logging_obj.model_call_details["vector_store_id"] = vector_store_id
@@ -178,7 +230,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Extracts grounding metadata and citations from the response.
         """
         try:
-            response_data: Final = response.json()
+            response_data: Final[GeminiFileSearchResponse] = response.json()
             results: Final[list[VectorStoreSearchResult]] = []
 
             # Extract candidates and grounding metadata
@@ -246,7 +298,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                             )
                         )
 
-            query: Final = litellm_logging_obj.model_call_details.get("query", "")
+            query: Final[str] = litellm_logging_obj.model_call_details.get("query", "")
 
             return VectorStoreSearchResponse(
                 object="vector_store.search_results.page",
@@ -269,11 +321,11 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """
         Transform create request to Gemini's fileSearchStores format.
         """
-        url: Final = f"{api_base}/fileSearchStores"
+        url: Final = join_api_base(api_base, "fileSearchStores")
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
 
-        request_body: Final[dict[str, Any]] = {}
+        request_body: Final[dict[str, object]] = {}
 
         # Add display name if provided
         name: Final = vector_store_create_optional_params.get("name")
@@ -287,7 +339,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Transform Gemini's fileSearchStore response to standard format.
         """
         try:
-            response_data: Final = response.json()
+            response_data: Final[GeminiFileSearchStore] = response.json()
 
             # Extract store name (format: fileSearchStores/xxxxxxx)
             store_name: Final = response_data.get("name", "")

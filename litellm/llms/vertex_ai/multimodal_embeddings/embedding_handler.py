@@ -1,7 +1,9 @@
 import json
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -19,6 +21,7 @@ from litellm.types.utils import EmbeddingResponse
 from .transformation import VertexAIMultimodalEmbeddingConfig
 
 vertex_multimodal_embedding_handler: Final = VertexAIMultimodalEmbeddingConfig()
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class VertexMultimodalEmbedding(VertexLLM):
@@ -79,12 +82,12 @@ class VertexMultimodalEmbedding(VertexLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+            sync_handler: HTTPHandler = HTTPHandler(**_params)
         else:
-            sync_handler = client  # type: ignore
+            sync_handler = client
 
         request_data: Final = vertex_multimodal_embedding_handler.transform_embedding_request(
-            model, input, optional_params, headers
+            model, input, optional_params, headers, _LITELLM_PARAMS.validate_python(litellm_params)
         )
 
         headers = vertex_multimodal_embedding_handler.validate_environment(
@@ -109,7 +112,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         )
 
         if aembedding is True:
-            return self.async_multimodal_embedding(  # type: ignore
+            return self.async_multimodal_embedding(
                 model=model,
                 api_base=url,
                 data=request_data,
@@ -165,10 +168,10 @@ class VertexMultimodalEmbedding(VertexLLM):
                 params={"timeout": timeout},
             )
         else:
-            client = client  # type: ignore
+            client = client
 
         try:
-            response: Final = await client.post(api_base, headers=headers, json=data)  # type: ignore
+            response: Final = await client.post(api_base, headers=headers, json=data)
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code

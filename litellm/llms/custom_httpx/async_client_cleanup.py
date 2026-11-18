@@ -20,7 +20,7 @@ async def close_litellm_async_clients():
 
     cache_dict: Final = getattr(litellm.in_memory_llm_clients_cache, "cache_dict", {})
 
-    for key, handler in cache_dict.items():
+    for handler in cache_dict.values():
         # Handle BaseLLMAIOHTTPHandler instances (aiohttp_openai provider)
         if isinstance(handler, BaseLLMAIOHTTPHandler) and hasattr(handler, "close"):
             try:
@@ -30,8 +30,8 @@ async def close_litellm_async_clients():
                 pass
 
         # Handle AsyncHTTPHandler instances (used by Gemini and other providers)
-        elif hasattr(handler, "client"):
-            client = handler.client
+        elif hasattr(handler, "_client") or hasattr(handler, "client"):
+            client = handler._client if hasattr(handler, "_client") else handler.client
             # Check if the httpx client has an aiohttp transport
             if hasattr(client, "_transport") and hasattr(client._transport, "aclose"):
                 try:

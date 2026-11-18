@@ -12,7 +12,7 @@ import os
 from typing import Final
 
 import litellm
-from litellm.proxy._types import KeyManagementSystem
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 def validate_environment():
@@ -26,7 +26,7 @@ def load_google_kms(use_google_kms: bool | None):
     if use_google_kms is None or use_google_kms is False:
         return
     try:
-        from google.cloud import kms_v1  # type: ignore
+        from google.cloud import kms_v1
 
         validate_environment()
 

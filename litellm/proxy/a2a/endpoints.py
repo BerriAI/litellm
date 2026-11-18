@@ -9,11 +9,11 @@ admin pick which ones to expose through the proxy. The actual merge into a
 LiteLLM-fronted card happens when the agent is saved via ``POST /v1/agents``.
 """
 
-from typing import Any, Final
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -24,11 +24,12 @@ from litellm.proxy.a2a.discovery import (
     fetch_well_known_card,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
 
-class DiscoverAgentRequest(BaseModel):
+class DiscoverAgentRequest(LiteLLMBaseModel):
     url: str = Field(
         ...,
         description=(
@@ -49,7 +50,7 @@ class DiscoverAgentRequest(BaseModel):
             "query parameter."
         ),
     )
-    params: dict[str, Any] | None = Field(
+    params: dict[str, object] | None = Field(
         default=None,
         description=(
             "Mode-specific parameters. ``langgraph_platform`` requires "
@@ -58,9 +59,9 @@ class DiscoverAgentRequest(BaseModel):
     )
 
 
-class DiscoverAgentResponse(BaseModel):
+class DiscoverAgentResponse(LiteLLMBaseModel):
     url: str
-    agent_card: dict[str, Any]
+    agent_card: dict[str, object]
 
 
 @router.post(

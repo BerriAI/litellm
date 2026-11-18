@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -8,14 +10,23 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
+class _ParamsLookup(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_NO_PARAMS: Final = MappingProxyType[str, object]({})
+
+
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
     # Default to always-on. Only disable if the user explicitly sets default_on: false.
     # We check the raw guardrail dict because LitellmParams normalizes None → False,
     # making it impossible to distinguish "not set" from "explicitly false" via litellm_params.
-    _raw_default_on: Final = cast(dict[str, Any], guardrail).get("litellm_params", {}).get("default_on")
-    _default_on: Final = False if _raw_default_on is False else True
+    _raw_default_on: Final = (
+        cast(Mapping[str, _ParamsLookup], guardrail).get("litellm_params", _NO_PARAMS).get("default_on")
+    )
+    _default_on: Final = _raw_default_on is not False
 
     _callback: Final = MCPEndUserPermissionGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),

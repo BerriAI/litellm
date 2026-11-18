@@ -15,12 +15,18 @@ import pytest
 from e2e_config import MASTER_KEY, unique_marker
 from e2e_http import UnauthorizedError, unwrap
 from other_client import OtherClient
+from e2e_metadata import Domain, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
 
 class TestMasterKeyAuth:
     @pytest.mark.covers("other.auth.master_key.valid_allows")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+        )
+    )
     def test_master_key_authenticates_and_grants_admin_route(self, client: OtherClient) -> None:
         listing = unwrap(client.list_users_as(MASTER_KEY))
         assert listing.total >= 0, (
@@ -29,6 +35,11 @@ class TestMasterKeyAuth:
         )
 
     @pytest.mark.covers("other.auth.master_key.invalid_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+        )
+    )
     def test_non_matching_master_key_is_denied(self, client: OtherClient) -> None:
         bogus = f"sk-{unique_marker()}"
         result = client.list_users_as(bogus)

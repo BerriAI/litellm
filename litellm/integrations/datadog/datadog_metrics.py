@@ -12,6 +12,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_hostname,
     get_datadog_pod_name,
     get_datadog_service,
+    normalize_datadog_tag_value,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -91,13 +92,13 @@ class DatadogMetricsLogger(CustomBatchLogger):
         metadata: Final = log.get("metadata", {}) or {}
         team_tag: Final = (
             metadata.get("user_api_key_team_alias")
-            or metadata.get("team_alias")  # type: ignore
+            or metadata.get("team_alias")
             or metadata.get("user_api_key_team_id")
-            or metadata.get("team_id")  # type: ignore
+            or metadata.get("team_id")
         )
 
         if team_tag:
-            tags.append(f"team:{team_tag}")
+            tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
 
         return tags
 
@@ -193,7 +194,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
             # Extract status code from error information
             status_code = "500"  # default
             error_information: Final = standard_logging_object.get("error_information", {}) or {}
-            error_code: Final = error_information.get("error_code")  # type: ignore
+            error_code: Final = error_information.get("error_code")
             if error_code is not None:
                 status_code = str(error_code)
 
@@ -237,7 +238,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         response: Final = await self.async_client.post(
             self.upload_url,
             content=compressed_data,
-            headers=headers,  # type: ignore
+            headers=headers,
         )
 
         response.raise_for_status()

@@ -5,10 +5,11 @@ Written separately to handle faking streaming for o1 and o3 models.
 """
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import ModelResponse
 
 from ...openai.openai import OpenAIChatCompletion
@@ -25,7 +26,7 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
         timeout: float | httpx.Timeout,
         optional_params: dict,
         litellm_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
         messages: list | None = None,
         print_verbose: Callable | None = None,
@@ -48,7 +49,7 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
             litellm_params=litellm_params,
             api_key=api_key,
             api_base=api_base,
-            api_version=api_version,
+            api_version=self.chat_client_api_version(api_base, api_version),
             client=client,
             _is_async=acompletion,
         )

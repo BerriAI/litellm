@@ -12,7 +12,6 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -90,6 +89,8 @@ class BasePassthroughLoggingHandler(ABC):
     ) -> str | None:
         request_body: Final = passthrough_logging_payload.get("request_body")
         if request_body:
+            from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
             return get_end_user_id_from_request_body(request_body)
         return None
 
@@ -119,8 +120,8 @@ class BasePassthroughLoggingHandler(ABC):
             # the pass-through success path reads spend from
             # model_call_details["response_cost"], not from kwargs
             logging_obj.model_call_details["response_cost"] = response_cost
-            passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = (  # type: ignore
-                kwargs.get("passthrough_logging_payload")
+            passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = kwargs.get(
+                "passthrough_logging_payload"
             )
             if passthrough_logging_payload:
                 user: Final = self._get_user_from_metadata(

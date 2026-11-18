@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import Field
 
@@ -8,47 +8,47 @@ from .base import GuardrailConfigModel
 class QualifireGuardrailConfigModel(GuardrailConfigModel):
     """Configuration parameters for the Qualifire guardrail."""
 
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="The API key for Qualifire. If not provided, the `QUALIFIRE_API_KEY` environment variable is checked.",
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="The API base URL for Qualifire. If not provided, the `QUALIFIRE_BASE_URL` environment variable is checked.",
     )
-    evaluation_id: Optional[str] = Field(
+    evaluation_id: str | None = Field(
         default=None,
         description="Pre-configured evaluation ID from Qualifire dashboard. When provided, uses invoke_evaluation() instead of evaluate().",
     )
-    prompt_injections: Optional[bool] = Field(
+    prompt_injections: bool | None = Field(
         default=None,
         description="Enable prompt injection detection. Default check if no evaluation_id and no other checks are specified.",
     )
-    hallucinations_check: Optional[bool] = Field(
+    hallucinations_check: bool | None = Field(
         default=None,
         description="Enable hallucination detection to detect factual inaccuracies.",
     )
-    grounding_check: Optional[bool] = Field(
+    grounding_check: bool | None = Field(
         default=None,
         description="Enable grounding verification to ensure output is grounded in provided context.",
     )
-    pii_check: Optional[bool] = Field(
+    pii_check: bool | None = Field(
         default=None,
         description="Enable PII (Personally Identifiable Information) detection.",
     )
-    content_moderation_check: Optional[bool] = Field(
+    content_moderation_check: bool | None = Field(
         default=None,
         description="Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
     )
-    tool_selection_quality_check: Optional[bool] = Field(
+    tool_selection_quality_check: bool | None = Field(
         default=None,
         description="Enable tool selection quality check to evaluate quality of tool/function calls.",
     )
-    assertions: Optional[List[str]] = Field(
+    assertions: list[str] | None = Field(
         default=None,
         description="Custom assertions to validate against the output. Each assertion is a string describing a condition.",
     )
-    on_flagged: Optional[Literal["block", "monitor"]] = Field(
+    on_flagged: Literal["block", "monitor"] | None = Field(
         default="block",
         description="Action to take when content is flagged. 'block' raises an exception, 'monitor' logs but allows the request.",
     )

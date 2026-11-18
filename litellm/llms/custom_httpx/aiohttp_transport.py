@@ -3,22 +3,43 @@ import concurrent.futures
 import contextlib
 import os
 import ssl
+import sys
 import typing
 import urllib.request
-from collections.abc import Callable
-from typing import Any, ClassVar, Final
+import weakref
+from collections.abc import Callable, Generator
+from typing import ClassVar, Final
 
 import aiohttp
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, Self, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.llms.base import LiteLLMBaseModel
 
-AIOHTTP_EXC_MAP: Final[dict] = {
+
+class HttpxTimeoutExtension(LiteLLMBaseModel):
+    connect: float | None = None
+    read: float | None = None
+    write: float | None = None
+    pool: float | None = None
+
+
+class AiohttpSslRequestOption(TypedDict, total=False):
+    ssl: ReadOnly[bool | ssl.SSLContext]
+
+
+_TIMEOUT_EXTENSION: Final = TypeAdapter(HttpxTimeoutExtension)
+_EMPTY_TIMEOUT: Final[HttpxTimeoutExtension] = HttpxTimeoutExtension()
+_NO_SSL_OVERRIDE: Final[AiohttpSslRequestOption] = {}
+
+AIOHTTP_EXC_MAP: Final[dict[type[BaseException], type[Exception]]] = {
     # Order matters here, most specific exception first
     # Timeout related exceptions
     asyncio.TimeoutError: httpx.TimeoutException,
@@ -33,7 +54,7 @@ AIOHTTP_EXC_MAP: Final[dict] = {
     aiohttp.ServerFingerprintMismatch: httpx.ProtocolError,
     # Network related exceptions
     aiohttp.ClientConnectorError: httpx.ConnectError,
-    aiohttp.ClientOSError: httpx.ConnectError,
+    aiohttp.ClientOSError: httpx.ReadError,
     aiohttp.ClientPayloadError: httpx.ReadError,
     # Connection disconnection exceptions
     aiohttp.ServerDisconnectedError: httpx.ReadError,
@@ -57,15 +78,27 @@ except ImportError:
     pass
 
 
+def _current_task_is_cancelling() -> bool:
+    task: Final = asyncio.current_task()
+    if task is None or sys.version_info < (3, 11):
+        return True
+    return task.cancelling() > 0
+
+
 @contextlib.contextmanager
-def map_aiohttp_exceptions() -> typing.Iterator[None]:
+def map_aiohttp_exceptions() -> Generator[None, None, None]:
     try:
         yield
+    except asyncio.CancelledError as exc:
+        # a closing connector cancels its shielded DNS task; that surfaces here without the request task being cancelled
+        if _current_task_is_cancelling():
+            raise
+        raise httpx.ConnectError("aiohttp transport cancelled the request internally") from exc
     except Exception as exc:
-        mapped_exc = None
+        mapped_exc: type[Exception] | None = None
 
         for from_exc, to_exc in AIOHTTP_EXC_MAP.items():
-            if not isinstance(exc, from_exc):  # type: ignore
+            if not isinstance(exc, from_exc):
                 continue
             if mapped_exc is None or issubclass(to_exc, mapped_exc):
                 mapped_exc = to_exc
@@ -75,6 +108,38 @@ def map_aiohttp_exceptions() -> typing.Iterator[None]:
 
         message: Final = str(exc)
         raise mapped_exc(message) from exc
+
+
+def _unread_payload(content: object) -> bytes:
+    """Bytes the upstream sent before the connection dropped that aiohttp buffered but never handed out, since its
+    reads raise the stored payload error ahead of the buffer."""
+    if not isinstance(content, aiohttp.StreamReader):
+        return b""
+    buffered: Final = b"".join(content._buffer)  # pyright: ignore[reportPrivateUsage]  # no public read drains it
+    return buffered[content._buffer_offset :]  # pyright: ignore[reportPrivateUsage]  # see above
+
+
+def _release_transport_anchor(_transport: object) -> None:
+    """Release a transport anchored to a response stream. See ``_anchor_transport_to``."""
+
+
+def _anchor_transport_to(stream: "AiohttpResponseStream", transport: object) -> None:
+    """Keep the transport alive for as long as the stream can still read.
+
+    The transport finalizer closes the session it owns, and nothing on the path from a
+    live response back to that session references the transport, so a client dropped
+    mid-stream would close the session under the body. ``weakref.finalize`` holds the
+    transport in its own registry rather than on the stream, which keeps the transport
+    out of the response's reference cycle (an exception carrying the response, for one).
+    """
+    weakref.finalize(stream, _release_transport_anchor, transport)
+
+
+def _abort_unreleased_connection(response: ClientResponse) -> None:
+    connection: Final = response.connection
+    transport: Final = None if connection is None else connection.transport
+    if transport is not None:
+        transport.abort()
 
 
 class AiohttpResponseStream(httpx.AsyncByteStream):
@@ -93,6 +158,12 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             raise httpx.ReadError(str(e)) from e
         except aiohttp.http_exceptions.TransferEncodingError as e:
             raise httpx.ReadError(str(e)) from e
+        except aiohttp.ClientPayloadError:
+            unread: Final = _unread_payload(self._aiohttp_response.content)
+            if unread:
+                yield unread
+            with map_aiohttp_exceptions():
+                raise
         except Exception:
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
@@ -106,9 +177,11 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # until the proxy is restarted, even after the backend recovers.
             # On a fully-read response the connection was already released
             # at EOF and close() is a no-op.
+            _abort_unreleased_connection(self._aiohttp_response)
             self._aiohttp_response.close()
 
     async def aclose(self) -> None:
+        _abort_unreleased_connection(self._aiohttp_response)
         with map_aiohttp_exceptions():
             await self._aiohttp_response.__aexit__(None, None, None)
 
@@ -158,6 +231,24 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         default_factory: Final[Callable[[], ClientSession]] = client if callable(client) else ClientSession
         self._client_factory: Callable[[], ClientSession] = session_factory or default_factory
+        self._session_finalizer: weakref.finalize[[ClientSession], Self] | None = None
+        if owns_session and isinstance(client, ClientSession):
+            self._close_session_when_collected(client)
+
+    def _close_session_when_collected(self, session: ClientSession) -> None:
+        """Dispose ``session`` once this transport is freed, even when a reference cycle frees it.
+
+        The finalizer registry holds the session strongly, keeping it out of the transport's cyclic garbage,
+        where aiohttp's own finalizers would report it and its connector as unclosed.
+        """
+        if self._session_finalizer is not None:
+            self._session_finalizer.detach()
+        self._session_finalizer = weakref.finalize(self, LiteLLMAiohttpTransport._dispose_owned_session, session)
+
+    @staticmethod
+    def _dispose_owned_session(session: ClientSession) -> None:
+        with contextlib.suppress(Exception):
+            LiteLLMAiohttpTransport._close_recycled_session(session)
 
     def _rebuild_session(self) -> ClientSession:
         """
@@ -169,6 +260,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         """
         session: Final = self._client_factory()
         self._owns_session = True
+        self._close_session_when_collected(session)
         return session
 
     @classmethod
@@ -208,8 +300,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         except (RuntimeError, AttributeError, OSError) as e:
             verbose_logger.debug("Best-effort connector close failed: %s", e)
 
-    def _close_recycled_session(self, session: ClientSession) -> None:
-        """Deterministically dispose a ClientSession this transport is replacing.
+    @classmethod
+    def _close_recycled_session(cls, session: ClientSession) -> None:
+        """Deterministically dispose a ClientSession a transport is replacing, or owned when it was collected.
 
         Covers the three lifecycles a recycled session can be in:
         - its loop is the current running loop: schedule an async close and keep
@@ -222,7 +315,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         if session.closed:
             return
 
-        session_loop: Final = getattr(session, "_loop", None)
+        session_loop: Final[asyncio.AbstractEventLoop | None] = getattr(session, "_loop", None)
         try:
             current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
@@ -237,27 +330,26 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     future: Final = asyncio.run_coroutine_threadsafe(session.close(), session_loop)
                 except RuntimeError as e:  # loop shut down between the checks
                     verbose_logger.debug("Threadsafe session close failed: %s", e)
-                    self._mark_connector_closed(session)
+                    cls._mark_connector_closed(session)
                 else:
-                    future.add_done_callback(self._on_threadsafe_close_done)
+                    future.add_done_callback(cls._on_threadsafe_close_done)
                 return
 
             # Foreign loop that is stopped or closed: an async close can no
             # longer run there, and running it on the current loop would touch
             # another loop's internals. Dispose synchronously instead.
-            self._mark_connector_closed(session)
+            cls._mark_connector_closed(session)
             return
 
         if current_loop is None:
-            self._mark_connector_closed(session)
+            cls._mark_connector_closed(session)
             return
 
         task: Final = current_loop.create_task(session.close())
-        cls: Final = type(self)
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
 
-    def _get_valid_client_session(self) -> ClientSession:
+    def get_valid_client_session(self) -> ClientSession:
         """
         Helper to get a valid ClientSession for the current event loop.
 
@@ -278,7 +370,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         # Check if the existing session is still valid for the current event loop
         try:
-            session_loop: Final = getattr(self.client, "_loop", None)
+            session_loop: Final[asyncio.AbstractEventLoop | None] = getattr(self.client, "_loop", None)
             current_loop: Final = asyncio.get_running_loop()
 
             # If session is from a different or closed loop, recreate it
@@ -308,11 +400,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         return self.client
 
+    _get_valid_client_session = get_valid_client_session
+
     async def _make_aiohttp_request(
         self,
         client_session: ClientSession,
         request: httpx.Request,
-        timeout: dict,
+        timeout: HttpxTimeoutExtension,
         proxy: str | None,
         sni_hostname: str | None,
         ssl_verify: bool | ssl.SSLContext | None = None,
@@ -323,7 +417,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         Args:
             client_session: The aiohttp ClientSession to use
             request: The httpx Request to send
-            timeout: Timeout settings dict with 'connect', 'read', 'pool' keys
+            timeout: Timeout settings with 'connect', 'read', 'pool' fields
             proxy: Optional proxy URL
             sni_hostname: Optional SNI hostname for SSL
             ssl_verify: Optional SSL verification setting (False to disable, SSLContext for custom)
@@ -340,31 +434,30 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             # requests (e.g. DELETE /responses/{id}), which upstream APIs reject.
             data = request.content or None
         except httpx.RequestNotRead:
-            data = request.stream  # type: ignore
+            data = request.stream
             request.headers.pop("transfer-encoding", None)  # handled by aiohttp
 
         # Only pass ssl kwarg when explicitly configured, to avoid
         # overriding the session/connector defaults with None (which is
         # not a valid value for aiohttp's ssl parameter).
-        request_kwargs: Final[dict[str, Any]] = {
-            "method": request.method,
-            "url": YarlURL(str(request.url), encoded=True),
-            "headers": request.headers,
-            "data": data,
-            "allow_redirects": False,
-            "auto_decompress": False,
-            "timeout": ClientTimeout(
-                sock_connect=timeout.get("connect"),
-                sock_read=timeout.get("read"),
-                connect=timeout.get("pool"),
-            ),
-            "proxy": proxy,
-            "server_hostname": sni_hostname,
-        }
-        if ssl_verify is not None:
-            request_kwargs["ssl"] = ssl_verify
+        ssl_option: Final[AiohttpSslRequestOption] = _NO_SSL_OVERRIDE if ssl_verify is None else {"ssl": ssl_verify}
 
-        response: Final = await client_session.request(**request_kwargs).__aenter__()
+        response: Final = await client_session.request(
+            method=request.method,
+            url=YarlURL(str(request.url), encoded=True),
+            headers=request.headers,
+            data=data,
+            allow_redirects=False,
+            auto_decompress=False,
+            timeout=ClientTimeout(
+                sock_connect=timeout.connect,
+                sock_read=timeout.read,
+                connect=timeout.pool,
+            ),
+            proxy=proxy,
+            server_hostname=sni_hostname,
+            **ssl_option,
+        ).__aenter__()
 
         return response
 
@@ -372,11 +465,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         self,
         request: httpx.Request,
     ) -> httpx.Response:
-        timeout: Final = request.extensions.get("timeout", {})
-        sni_hostname: Final = request.extensions.get("sni_hostname")
+        timeout: Final = _TIMEOUT_EXTENSION.validate_python(request.extensions.get("timeout", _EMPTY_TIMEOUT))
+        sni_hostname: Final[str | None] = request.extensions.get("sni_hostname")
 
         # Use helper to ensure we have a valid session for the current event loop
-        client_session = self._get_valid_client_session()
+        client_session = self.get_valid_client_session()
 
         # Resolve proxy settings from environment variables
         proxy: Final = await self._get_proxy_settings(request)
@@ -423,10 +516,12 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Re-raise if it's a different RuntimeError
                 raise
 
+        stream: Final = AiohttpResponseStream(response)
+        _anchor_transport_to(stream, self)
         return httpx.Response(
             status_code=response.status,
             headers=response.headers,
-            stream=AiohttpResponseStream(response),
+            stream=stream,
             request=request,
         )
 

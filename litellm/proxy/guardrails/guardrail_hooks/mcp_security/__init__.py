@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.mcp_security.mcp_security_guardrail import (
@@ -20,10 +20,7 @@ def initialize_guardrail(
     if not guardrail_name:
         raise ValueError("MCP Security: guardrail_name is required")
 
-    on_violation: Final[Literal["block", "alert"]] = cast(
-        Literal["block", "alert"],
-        getattr(litellm_params, "on_violation", "block"),
-    )
+    on_violation: Final[Literal["block", "alert"]] = "block" if litellm_params.on_violation == "block" else "alert"
 
     mcp_security_guardrail: Final = MCPSecurityGuardrail(
         guardrail_name=guardrail_name,

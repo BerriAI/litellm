@@ -21,7 +21,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -60,7 +60,7 @@ def _run(checker, text: str) -> dict:
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 400:
-            detail: Final[dict[str, Any]] = e.detail if isinstance(e.detail, dict) else {}
+            detail: Final[dict[str, object]] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
                 "score": detail.get("score", 1.0),
@@ -249,7 +249,7 @@ def _content_filter(category: str):
     guardrail: Final = ContentFilterGuardrail(
         guardrail_name=f"{category}_eval",
         categories=[
-            {  # type: ignore[list-item]
+            {
                 "category": category,
                 "enabled": True,
                 "action": "BLOCK",
@@ -532,7 +532,7 @@ class _LlmJudgeChecker:
             temperature=0,
             max_tokens=5,
         )
-        decision: Final = (response.choices[0].message.content or "").strip().upper()  # type: ignore[union-attr]
+        decision: Final = (response.choices[0].message.content or "").strip().upper()
 
         if "BLOCK" in decision:
             raise HTTPException(

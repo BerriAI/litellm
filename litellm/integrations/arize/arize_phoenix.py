@@ -1,7 +1,8 @@
 import os
 import threading
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = Union[_Span, Any]
+    Span = _Span
     OpenTelemetry = _OpenTelemetry
     LITELLM_TRACER_NAME: str
 else:
@@ -40,14 +41,14 @@ else:
         )
     except ImportError:
         LITELLM_TRACER_NAME = "litellm"
-        OpenTelemetry = None  # type: ignore
+        OpenTelemetry = None
 
 
 ARIZE_HOSTED_PHOENIX_ENDPOINT: Final = "https://otlp.arize.com/v1/traces"
 _MAX_PROJECT_PROVIDERS: Final = 64
 
 
-class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
+class ArizePhoenixLogger(OpenTelemetry):
     """
     Arize Phoenix logger that sends traces to a Phoenix endpoint.
 
@@ -100,7 +101,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         if getattr(self, "_use_injected_tracer_provider", False):
             return
 
-        shared_processor: Final = getattr(self, "_shared_span_processor", None)
+        shared_processor: Final[SpanProcessor | None] = getattr(self, "_shared_span_processor", None)
         if shared_processor is not None:
             try:
                 shared_processor.force_flush()
@@ -111,7 +112,8 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
                 )
 
         with getattr(self, "_project_providers_lock", threading.Lock()):
-            providers: Final = list(getattr(self, "_project_providers", {}).values())
+            project_providers: Final[Mapping[str, TracerProvider]] = getattr(self, "_project_providers", {})
+            providers: Final = list(project_providers.values())
 
         for provider in providers:
             try:
@@ -139,7 +141,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             project_attributes["deployment.environment"] = deployment_environment
 
         env_resource: Final = OTELResourceDetector().detect()
-        project_resource: Final = Resource.create(project_attributes)  # type: ignore[arg-type]
+        project_resource: Final = Resource.create(project_attributes)
         return env_resource.merge(project_resource)
 
     def _build_tracer_provider_for_project(self, project_name: str) -> TracerProvider:
@@ -193,7 +195,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         primary ``otel`` callback which handles proxy-level parent spans.
         """
 
-    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
+    def set_attributes(self, span: Span, kwargs, response_obj: object):
         ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
 
     @staticmethod
@@ -352,17 +354,16 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         _project_name, tracer = self._resolve_tracer_for_kwargs(kwargs)
         ctx, parent_span = self._get_phoenix_context(kwargs, tracer=tracer)
 
-        status: Final = Status(StatusCode.OK if success else StatusCode.ERROR)
+        status_code: Final = StatusCode.OK if success else StatusCode.ERROR
 
         span: Final = tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=ctx,
         )
-        span.set_status(status)
         self.set_attributes(span, kwargs, response_obj)
-        if not success:
-            self._record_exception_on_span(span=span, kwargs=kwargs)
+        span_error_message: Final = None if success else self._record_exception_on_span(span=span, kwargs=kwargs)
+        span.set_status(Status(status_code, span_error_message))
 
         if success:
             self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
@@ -371,10 +372,11 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         self._create_guardrail_span(kwargs=kwargs, context=ctx)
 
         if parent_span is not None:
-            parent_span.set_status(status)
             self.set_attributes(parent_span, kwargs, response_obj)
-            if not success:
-                self._record_exception_on_span(span=parent_span, kwargs=kwargs)
+            parent_error_message: Final = (
+                None if success else self._record_exception_on_span(span=parent_span, kwargs=kwargs)
+            )
+            parent_span.set_status(Status(status_code, parent_error_message))
             parent_span.end(end_time=self._to_ns(end_time))
 
         if success:
@@ -430,7 +432,8 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         otlp_auth_headers = None
         if api_key is not None:
-            otlp_auth_headers = f"Authorization=Bearer {api_key}"
+            auth_header_key = "authorization" if protocol == "otlp_grpc" else "Authorization"
+            otlp_auth_headers = f"{auth_header_key}=Bearer {api_key}"
         elif "app.phoenix.arize.com" in endpoint:
             raise ValueError("PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com).")
 

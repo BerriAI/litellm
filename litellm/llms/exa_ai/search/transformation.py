@@ -4,17 +4,25 @@ Calls Exa AI's /search endpoint to search the web.
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
+_STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
+_RESULT_EXTRAS: Final = (("highlights", "highlights"), ("highlightScores", "highlight_scores"), ("score", "score"))
 
 
 class _ExaAISearchRequestRequired(TypedDict):
@@ -86,13 +94,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE
-
-        # Append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        return ensure_api_route(api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE, "search")
 
     def transform_search_request(
         self,
@@ -165,8 +167,13 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].title → SearchResult.title
         - results[].url → SearchResult.url
         - results[].text → SearchResult.snippet
+        - results[].highlights → SearchResult.snippet (fallback when "text" is absent)
+        - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
+        - results[].highlights / highlightScores / score → SearchResult.highlights / highlight_scores / score,
+          each set only when Exa returned it
+        - every top-level key except results (requestId, costDollars, ...) → SearchResponse.provider_metadata
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -175,21 +182,31 @@ class ExaAISearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []
-        for result in response_json.get("results", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("text", ""),  # Exa AI uses "text" for content
-                date=result.get("publishedDate"),  # ISO 8601 datetime string
-                last_updated=None,  # Exa AI doesn't provide last_updated in response
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("text")
+                    or "\n\n".join(_STRS.validate_python(result.get("highlights") or []))
+                    or result.get("summary")
+                    or "",
+                    "date": result.get("publishedDate"),  # ISO 8601 datetime string
+                    "last_updated": None,  # Exa AI doesn't provide last_updated in response
+                    **{field: result[key] for key, field in _RESULT_EXTRAS if key in result},
+                }
             )
             results.append(search_result)
 
-        return SearchResponse(
-            results=results,
-            object="search",
+        return SearchResponse.model_validate(
+            {
+                "results": results,
+                "object": "search",
+                "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
+            }
         )

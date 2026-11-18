@@ -9,14 +9,46 @@ The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI
 """
 
 from collections.abc import Callable
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypeAliasType, TypedDict
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_httpx_client,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.vertex_ai.common_utils import VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai_gemma import VertexGemmaContainerError
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+class _PredictionsEnvelope(TypedDict):
+    predictions: NotRequired[ReadOnly[dict[str, object]]]
+
+
+_PredictionsEnvelopeType = TypeAliasType("_PredictionsEnvelopeType", _PredictionsEnvelope)
+_PREDICTIONS_ENVELOPE: Final[TypeAdapter[_PredictionsEnvelope]] = TypeAdapter(
+    _PredictionsEnvelopeType,
+    config=ConfigDict(strict=True, extra="allow"),
+)
+
+
+def parse_vertex_gemma_container_error(predictions: object) -> VertexGemmaContainerError | None:
+    try:
+        return VertexGemmaContainerError.model_validate(predictions)
+    except ValidationError:
+        return None
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -29,6 +61,13 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        return [
+            param
+            for param in super().get_supported_openai_params(model=model)
+            if param not in VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
+        ]
 
     def should_fake_stream(
         self,
@@ -46,7 +85,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model_response: ModelResponse,
         stream: bool,
-    ) -> ModelResponse | Any:
+        model: str,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> "ModelResponse | CustomStreamWrapper":
         """
         Helper method to return fake stream iterator if streaming is requested.
 
@@ -55,12 +96,18 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             stream: Whether streaming was requested
 
         Returns:
-            MockResponseIterator if stream=True, otherwise the model_response
+            CustomStreamWrapper if stream=True, otherwise the model_response
         """
         if stream:
+            from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
             from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
-            return MockResponseIterator(model_response=model_response)
+            return CustomStreamWrapper(
+                completion_stream=MockResponseIterator(model_response=model_response),
+                model=model,
+                custom_llm_provider="vertex_ai",
+                logging_obj=logging_obj,
+            )
         return model_response
 
     def transform_request(
@@ -107,13 +154,15 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def _unwrap_predictions_response(
         self,
-        response_json: dict[str, Any],
-    ) -> dict[str, Any]:
+        response_json: _PredictionsEnvelope,
+    ) -> dict[str, object]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 
         Vertex Gemma wraps the OpenAI-compatible response in a 'predictions' field.
-        This method extracts it so the parent class can process it normally.
+        This method extracts it so the parent class can process it normally. A serving
+        container can also answer with its own OpenAI-shaped error object inside that
+        field, still under HTTP 200, which is raised with its own status and message.
         """
         if "predictions" not in response_json:
             raise BaseLLMException(
@@ -121,7 +170,84 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message="Invalid response format: missing 'predictions' field",
             )
 
-        return response_json["predictions"]
+        predictions: Final = response_json["predictions"]
+        container_error: Final = parse_vertex_gemma_container_error(predictions)
+        if container_error is None:
+            return predictions
+        raise BaseLLMException(status_code=container_error.code, message=container_error.message)
+
+    @staticmethod
+    def _sync_post(
+        client: HTTPHandler | httpx.Client | None,
+        api_base: str,
+        headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
+        request_data: dict[str, object],  # mutable-ok: forwarded to post(json: dict | ...)
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        if isinstance(client, HTTPHandler):
+            return client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        if isinstance(client, httpx.Client):
+            if timeout is None:
+                return client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data,
+                )
+            return client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        return get_httpx_client().post(
+            url=api_base,
+            headers=headers,
+            json=request_data,
+            timeout=timeout,
+        )
+
+    @staticmethod
+    async def _async_post(
+        client: AsyncHTTPHandler | httpx.AsyncClient | None,
+        api_base: str,
+        headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
+        request_data: dict[str, object],  # mutable-ok: forwarded to post(json: dict | ...)
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
+
+        if isinstance(client, AsyncHTTPHandler):
+            return await client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        if isinstance(client, httpx.AsyncClient):
+            if timeout is None:
+                return await client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data,
+                )
+            return await client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        return await get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI).post(
+            url=api_base,
+            headers=headers,
+            json=request_data,
+            timeout=timeout,
+        )
 
     def completion(
         self,
@@ -132,12 +258,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         acompletion: bool,
         litellm_params: dict,
         logger_fn: Callable | None = None,
-        client: httpx.Client | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | httpx.Client | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
         encoding=None,
         custom_llm_provider: str = "vertex_ai",
@@ -147,6 +273,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         Supports both sync and async requests with fake streaming.
         """
         if acompletion:
+            async_client = client if isinstance(client, (AsyncHTTPHandler, httpx.AsyncClient)) else None
             return self._async_completion(
                 model=model,
                 messages=messages,
@@ -157,10 +284,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 logging_obj=logging_obj,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                client=async_client,
                 timeout=timeout,
                 encoding=encoding,
             )
         else:
+            sync_client = client if isinstance(client, (HTTPHandler, httpx.Client)) else None
             return self._sync_completion(
                 model=model,
                 messages=messages,
@@ -171,6 +300,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 logging_obj=logging_obj,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                client=sync_client,
                 timeout=timeout,
                 encoding=encoding,
             )
@@ -183,14 +313,14 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         api_key: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         litellm_params: dict,
-        timeout: float | httpx.Timeout | None,
-        encoding: Any,
+        client: HTTPHandler | httpx.Client | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        encoding: "Tokenizer | None" = None,
     ):
         """Synchronous completion request"""
-        from litellm.llms.custom_httpx.http_handler import HTTPHandler
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
@@ -222,11 +352,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler: Final = HTTPHandler(concurrent_limit=1)
-        response: Final = http_handler.post(
-            url=api_base,
+        response: Final = self._sync_post(
+            client=client,
+            api_base=api_base,
             headers=headers,
-            json=request_data,
+            request_data=request_data,
             timeout=timeout,
         )
 
@@ -236,7 +366,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json: Final = response.json()
+        response_json: Final = _PREDICTIONS_ENVELOPE.validate_python(response.json())
 
         # Unwrap predictions to get OpenAI-compatible response
         openai_response: Final = self._unwrap_predictions_response(response_json)
@@ -263,7 +393,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
+        return self._handle_fake_stream_response(
+            model_response=model_response,
+            stream=stream,
+            model=model,
+            logging_obj=logging_obj,
+        )
 
     async def _async_completion(
         self,
@@ -273,15 +408,14 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         api_key: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         litellm_params: dict,
-        timeout: float | httpx.Timeout | None,
-        encoding: Any,
+        client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        encoding: "Tokenizer | None" = None,
     ):
         """Asynchronous completion request"""
-        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-        from litellm.types.utils import LlmProviders
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
@@ -313,13 +447,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler: Final = get_async_httpx_client(
-            llm_provider=LlmProviders.VERTEX_AI,
-        )
-        response: Final = await http_handler.post(
-            url=api_base,
+        response: Final = await self._async_post(
+            client=client,
+            api_base=api_base,
             headers=headers,
-            json=request_data,
+            request_data=request_data,
             timeout=timeout,
         )
 
@@ -329,7 +461,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json: Final = response.json()
+        response_json: Final = _PREDICTIONS_ENVELOPE.validate_python(response.json())
 
         # Unwrap predictions to get OpenAI-compatible response
         openai_response: Final = self._unwrap_predictions_response(response_json)
@@ -356,4 +488,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
+        return self._handle_fake_stream_response(
+            model_response=model_response,
+            stream=stream,
+            model=model,
+            logging_obj=logging_obj,
+        )

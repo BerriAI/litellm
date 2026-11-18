@@ -6,6 +6,7 @@ Used to get the LangFuseLogger for a given request
 Handles Key/Team Based Langfuse Logging
 """
 
+import os
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
@@ -16,6 +17,12 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
     DynamicLoggingCache = Any
+
+
+def _tenant_host_refused_by_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.presets.destinations import langfuse_sdk_tenant_host_refused_by_otel_v2
+
+    return langfuse_sdk_tenant_host_refused_by_otel_v2(params)
 
 
 class LangFuseHandler:
@@ -36,7 +43,9 @@ class LangFuseHandler:
 
         """
         temp_langfuse_logger: LangFuseLogger | None = globalLangfuseLogger
-        if LangFuseHandler._dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params) is False:
+        if LangFuseHandler._dynamic_langfuse_credentials_are_passed(
+            standard_callback_dynamic_params
+        ) is False or _tenant_host_refused_by_otel_v2(standard_callback_dynamic_params):
             return LangFuseHandler._return_global_langfuse_logger(
                 globalLangfuseLogger=globalLangfuseLogger,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
@@ -80,7 +89,7 @@ class LangFuseHandler:
             return globalLangfuseLogger
 
         credentials_dict: dict[
-            str, Any
+            str, object
         ] = {}  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
         globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(
             credentials=credentials_dict,
@@ -108,6 +117,7 @@ class LangFuseHandler:
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret") or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),
+            langfuse_environment=credentials.get("langfuse_environment"),
             allow_env_credentials=credentials.get("langfuse_host") is None,
         )
         in_memory_dynamic_logger_cache.set_cache(
@@ -135,7 +145,32 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_secret_key"),
             langfuse_public_key=standard_callback_dynamic_params.get("langfuse_public_key"),
             langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
+            langfuse_environment=LangFuseHandler._meaningful_dynamic_environment(standard_callback_dynamic_params),
         )
+
+    @staticmethod
+    def _meaningful_dynamic_environment(
+        standard_callback_dynamic_params: StandardCallbackDynamicParams,
+    ) -> str | None:
+        """Return the per-request environment only when it changes behavior.
+
+        Empty/whitespace values and values equal to the deployment-wide
+        LANGFUSE_TRACING_ENVIRONMENT fallback are treated as absent so an
+        environment-only override that matches the default does not mint a
+        duplicate SDK client (each client costs threads and counts against
+        MAX_LANGFUSE_INITIALIZED_CLIENTS).
+        """
+        raw = standard_callback_dynamic_params.get("langfuse_environment")
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        if (
+            not value
+            or value == os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+            or value == LangFuseLogger.resolve_deployment_environment()
+        ):
+            return None
+        return value
 
     @staticmethod
     def _dynamic_langfuse_credentials_are_passed(
@@ -153,6 +188,7 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_public_key") is not None
             or standard_callback_dynamic_params.get("langfuse_secret") is not None
             or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
+            or LangFuseHandler._meaningful_dynamic_environment(standard_callback_dynamic_params) is not None
         ):
             return True
         return False

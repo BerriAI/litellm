@@ -1,6 +1,7 @@
+from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, Final, List, Literal, Mapping, Set, Union
+from typing import Any, Final, Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -28,6 +29,7 @@ class FileType(Enum):
     JSON = "JSON"
     M4A = "M4A"
     M4V = "M4V"
+    MD = "MD"
     MOV = "MOV"
     MP3 = "MP3"
     MP4 = "MP4"
@@ -54,7 +56,7 @@ class FileType(Enum):
     XLSX = "XLSX"
 
 
-FILE_EXTENSIONS: Final[Mapping[FileType, List[str]]] = MappingProxyType(
+FILE_EXTENSIONS: Final[Mapping[FileType, list[str]]] = MappingProxyType(
     {
         FileType.AAC: ["aac"],
         FileType.CSV: ["csv"],
@@ -74,6 +76,7 @@ FILE_EXTENSIONS: Final[Mapping[FileType, List[str]]] = MappingProxyType(
         FileType.JSON: ["json"],
         FileType.M4A: ["m4a"],
         FileType.M4V: ["m4v"],
+        FileType.MD: ["md", "markdown"],
         FileType.MOV: ["mov"],
         FileType.MP3: ["mp3"],
         FileType.MP4: ["mp4"],
@@ -121,6 +124,7 @@ FILE_MIME_TYPES: Final[Mapping[FileType, str]] = MappingProxyType(
         FileType.JSON: "application/json",
         FileType.M4A: "audio/x-m4a",
         FileType.M4V: "video/x-m4v",
+        FileType.MD: "text/markdown",
         FileType.MOV: "video/quicktime",
         FileType.MP3: "audio/mpeg",
         FileType.MP4: "video/mp4",
@@ -237,7 +241,7 @@ def is_audio_file_type(file_type):
 
 
 # Text
-TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
+TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.MD, FileType.RTF, FileType.TXT}
 
 
 def is_text_file_type(file_type):
@@ -249,36 +253,38 @@ Other FileType Groupings
 """
 # Accepted file types for GEMINI 1.5 through Vertex AI
 # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts#gemini-send-multimodal-samples-images-nodejs
-GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[Set[FileType]] = {
-    # Image
-    FileType.PNG,
-    FileType.JPEG,
-    FileType.WEBP,
-    # Audio
-    FileType.AAC,
-    FileType.FLAC,
-    FileType.MP3,
-    FileType.MPA,
-    FileType.MPEG,
-    FileType.MPGA,
-    FileType.OPUS,
-    FileType.PCM,
-    FileType.WAV,
-    FileType.WEBM,
-    # Video
-    FileType.FLV,
-    FileType.MOV,
-    FileType.MPEG,
-    FileType.MPEGPS,
-    FileType.MPG,
-    FileType.MP4,
-    FileType.WEBM,
-    FileType.WMV,
-    FileType.THREE_GPP,
-    # PDF
-    FileType.PDF,
-    FileType.TXT,
-}
+GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[frozenset[FileType]] = frozenset(
+    {
+        # Image
+        FileType.PNG,
+        FileType.JPEG,
+        FileType.WEBP,
+        # Audio
+        FileType.AAC,
+        FileType.FLAC,
+        FileType.MP3,
+        FileType.MPA,
+        FileType.MPEG,
+        FileType.MPGA,
+        FileType.OPUS,
+        FileType.PCM,
+        FileType.WAV,
+        FileType.WEBM,
+        # Video
+        FileType.FLV,
+        FileType.MOV,
+        FileType.MPEG,
+        FileType.MPEGPS,
+        FileType.MPG,
+        FileType.MP4,
+        FileType.WEBM,
+        FileType.WMV,
+        FileType.THREE_GPP,
+        # PDF
+        FileType.PDF,
+        FileType.TXT,
+    }
+)
 
 
 def is_gemini_1_5_accepted_file_type(file_type: FileType) -> bool:
@@ -302,8 +308,8 @@ class TwoStepFileUploadRequest(TypedDict):
 
     method: Required[str]
     url: Required[str]
-    headers: Required[Dict[str, str]]
-    data: Required[Union[str, bytes, Dict[str, Any]]]
+    headers: Required[dict[str, str]]
+    data: Required[str | bytes | dict[str, Any]]
 
 
 class TwoStepFileUploadConfig(TypedDict, total=False):

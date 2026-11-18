@@ -5,6 +5,12 @@ import os
 from collections.abc import Callable
 from typing import Any, Final, Literal, get_type_hints
 
+from typing_extensions import ReadOnly, TypedDict
+
+
+class _AttributeView(TypedDict):
+    value: ReadOnly[object]
+
 
 def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
     module_name = value
@@ -41,18 +47,19 @@ def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
             module_file_path = os.path.join(directory, *module_name.split(".")) + ".py"
 
         if module_file_path is not None and os.path.exists(module_file_path):
-            spec: Final = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
+            spec: Final = importlib.util.spec_from_file_location(module_name, module_file_path)
             if spec is None:
                 raise ImportError(f"Could not find a module specification for {module_file_path}")
-            module = importlib.util.module_from_spec(spec)  # type: ignore
+            module = importlib.util.module_from_spec(spec)
             if spec.loader is None:
                 raise ImportError(f"Could not find a module loader for {module_file_path}")
-            spec.loader.exec_module(module)  # type: ignore
+            spec.loader.exec_module(module)
         else:
             module = importlib.import_module(module_name)
 
         # Get the instance from the module
-        instance: Final = getattr(module, instance_name)
+        attribute: Final[_AttributeView] = {"value": getattr(module, instance_name)}
+        instance: Final[object] = attribute["value"]
 
         return instance
     except ImportError as e:
@@ -65,7 +72,7 @@ def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
         raise e
 
 
-def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | None = None) -> Any:
+def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | None = None) -> object:
     """
     Load custom logger instance from S3 or GCS URL.
 
@@ -167,7 +174,8 @@ def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | 
         spec.loader.exec_module(module)
 
         # Get the instance
-        instance: Final = getattr(module, instance_name)
+        attribute: Final[_AttributeView] = {"value": getattr(module, instance_name)}
+        instance: Final[object] = attribute["value"]
 
         # Clean up the temporary file
         try:
@@ -198,8 +206,8 @@ async def _download_gcs_file_wrapper(bucket_name: str, object_key: str, local_fi
 
 
 def validate_custom_validate_return_type(
-    fn: Callable[..., Any] | None,
-) -> Callable[..., Literal[True]] | None:
+    fn: Callable[..., object] | None,
+) -> Callable[..., object] | None:
     if fn is None:
         return None
 

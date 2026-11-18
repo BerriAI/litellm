@@ -6,13 +6,15 @@ from collections.abc import Callable
 from functools import partial
 from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ..common_utils import PredibaseError
@@ -33,7 +35,7 @@ async def make_call(
     if response.status_code != 200:
         raise PredibaseError(status_code=response.status_code, message=response.text)
 
-    completion_stream: Final = response.aiter_lines()
+    completion_stream: Final = aiter_sse_lines(response.aiter_text())
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -59,7 +61,7 @@ class PredibaseChatCompletion:
         print_verbose: Callable,
         encoding,
         api_key: str,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         tenant_id: str,
@@ -130,7 +132,7 @@ class PredibaseChatCompletion:
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                )  # type: ignore
+                )
             else:
                 ### ASYNC COMPLETION
                 return self.async_completion(
@@ -150,7 +152,7 @@ class PredibaseChatCompletion:
                     headers=headers,
                     timeout=timeout,
                     predibase_config=predibase_config,
-                )  # type: ignore
+                )
 
         ### SYNC STREAMING
         if stream is True:
@@ -159,10 +161,10 @@ class PredibaseChatCompletion:
                 headers=headers,
                 data=json.dumps(data),
                 stream=stream,
-                timeout=timeout,  # type: ignore
+                timeout=timeout,
             )
             _response: Final = CustomStreamWrapper(
-                response.iter_lines(),
+                iter_sse_lines(response.iter_text()),
                 model,
                 custom_llm_provider="predibase",
                 logging_obj=logging_obj,
@@ -174,13 +176,13 @@ class PredibaseChatCompletion:
                 url=completion_url,
                 headers=headers,
                 data=json.dumps(data),
-                timeout=timeout,  # type: ignore
+                timeout=timeout,
             )
         return predibase_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
-            logging_obj=logging_obj,  # type: ignore
+            logging_obj=logging_obj,
             optional_params=request_optional_params,
             api_key=api_key,
             request_data=data,
@@ -250,7 +252,7 @@ class PredibaseChatCompletion:
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         data: dict,
         timeout: float | httpx.Timeout,
         optional_params=None,

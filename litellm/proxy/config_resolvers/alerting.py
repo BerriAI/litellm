@@ -11,6 +11,7 @@ from typing import Final
 from litellm.proxy.config_resolvers._descriptors import FieldDescriptor
 
 EMAIL_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
+    FieldDescriptor("PROXY_BASE_URL", "PROXY_BASE_URL", "PROXY_BASE_URL"),
     FieldDescriptor("SMTP_HOST", "SMTP_HOST", "SMTP_HOST"),
     FieldDescriptor("SMTP_PORT", "SMTP_PORT", "SMTP_PORT", default="587"),
     FieldDescriptor("SMTP_TLS", "SMTP_TLS", "SMTP_TLS", default="True"),
@@ -24,4 +25,8 @@ EMAIL_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
 
 SLACK_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
     FieldDescriptor("SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL", is_secret=True),
+)
+
+MS_TEAMS_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
+    FieldDescriptor("MS_TEAMS_WEBHOOK_URL", "MS_TEAMS_WEBHOOK_URL", "MS_TEAMS_WEBHOOK_URL", is_secret=True),
 )

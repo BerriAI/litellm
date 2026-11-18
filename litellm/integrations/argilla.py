@@ -7,10 +7,12 @@ import json
 import os
 import random
 import types
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final, Protocol
 
 import httpx
-from pydantic import BaseModel  # type: ignore
+from pydantic import BaseModel
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -26,6 +28,22 @@ from litellm.types.integrations.argilla import (
     ArgillaItem,
 )
 from litellm.types.utils import StandardLoggingPayload
+
+
+class _ArgillaDataset(TypedDict):
+    id: ReadOnly[str]
+
+
+class _ArgillaDatasetsBody(TypedDict, total=False):
+    items: ReadOnly[Sequence[_ArgillaDataset]]
+
+
+class _ArgillaDatasetsResponse(Protocol):
+    def json(self) -> _ArgillaDatasetsBody: ...
+
+
+def _datasets_body(response: _ArgillaDatasetsResponse) -> _ArgillaDatasetsBody:
+    return response.json()
 
 
 def is_serializable(value):
@@ -49,15 +67,15 @@ class ArgillaLogger(CustomBatchLogger):
         if litellm.argilla_transformation_object is None:
             raise Exception("'litellm.argilla_transformation_object' is required, to log your payload to Argilla.")
         self.validate_argilla_transformation_object(litellm.argilla_transformation_object)
-        self.argilla_transformation_object = litellm.argilla_transformation_object
+        self.argilla_transformation_object: Mapping[str, str] = litellm.argilla_transformation_object
         self.default_credentials = self.get_credentials_from_env(
             argilla_api_key=argilla_api_key,
             argilla_dataset_name=argilla_dataset_name,
             argilla_base_url=argilla_base_url,
         )
         self.sampling_rate: float = (
-            float(os.getenv("ARGILLA_SAMPLING_RATE"))  # type: ignore
-            if os.getenv("ARGILLA_SAMPLING_RATE") is not None and os.getenv("ARGILLA_SAMPLING_RATE").strip().isdigit()  # type: ignore
+            float(os.getenv("ARGILLA_SAMPLING_RATE"))
+            if os.getenv("ARGILLA_SAMPLING_RATE") is not None and os.getenv("ARGILLA_SAMPLING_RATE").strip().isdigit()
             else 1.0
         )
 
@@ -69,7 +87,7 @@ class ArgillaLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
-    def validate_argilla_transformation_object(self, argilla_transformation_object: dict[str, Any]):
+    def validate_argilla_transformation_object(self, argilla_transformation_object: Mapping[str, object]):
         if not isinstance(argilla_transformation_object, dict):
             raise Exception("'argilla_transformation_object' must be a dictionary, to log your payload to Argilla.")
 
@@ -101,7 +119,7 @@ class ArgillaLogger(CustomBatchLogger):
                 url=f"{_credentials_base_url}/api/v1/me/datasets?name={_credentials_dataset_name}",
                 headers={"X-Argilla-Api-Key": _credentials_api_key},
             )
-            json_response: Final = dataset_response.json()
+            json_response: Final = _datasets_body(dataset_response)
             if (
                 "items" in json_response
                 and isinstance(json_response["items"], list)
@@ -115,7 +133,7 @@ class ArgillaLogger(CustomBatchLogger):
             ARGILLA_DATASET_NAME=_credentials_dataset_name,
         )
 
-    def get_chat_messages(self, payload: StandardLoggingPayload) -> list[dict[str, Any]]:
+    def get_chat_messages(self, payload: StandardLoggingPayload) -> list[dict[str, object]]:
         payload_messages: Final = payload.get("messages", None)
 
         if payload_messages is None:
@@ -196,9 +214,9 @@ class ArgillaLogger(CustomBatchLogger):
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             sampling_rate: Final = (
-                float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+                float(os.getenv("LANGSMITH_SAMPLING_RATE"))
                 if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
+                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
                 else 1.0
             )
             random_sample: Final = random.random()

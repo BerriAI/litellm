@@ -2,7 +2,9 @@
 Translate from OpenAI's `/v1/chat/completions` to Amazon Nova's `/v1/chat/completions`
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -15,6 +17,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AmazonNovaChatConfig(OpenAILikeChatConfig):
@@ -35,7 +40,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         tools: list | None = None,
         reasoning_effort: list | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -52,7 +57,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         # Amazon Nova is openai compatible, we just need to set this to custom_openai and have the api_base be Nova's endpoint
-        api_base = api_base or get_secret_str("AMAZON_NOVA_API_BASE") or "https://api.nova.amazon.com/v1"  # type: ignore
+        api_base = api_base or get_secret_str("AMAZON_NOVA_API_BASE") or "https://api.nova.amazon.com/v1"
 
         # Get API key from multiple sources
         key: Final = api_key or litellm.amazon_nova_api_key or get_secret_str("AMAZON_NOVA_API_KEY") or litellm.api_key
@@ -83,7 +88,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

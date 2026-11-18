@@ -11,16 +11,66 @@ A2A Protocol Format:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import Mapping, Sequence
+from functools import reduce
+from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
+
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes, subscript
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_UNSUPPORTED_RESPONSE: Final = object()
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _ResultLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _item_assignment_target(value: object) -> _SupportsSetItem:
+    if isinstance(value, _SupportsSetItem):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object does not support item assignment")
+
+
+def _response_payload(response: object) -> object:
+    if has_attributes(response, _ModelDumpable, "model_dump"):
+        return response.model_dump()
+    if isinstance(response, dict):
+        return response
+    return _UNSUPPORTED_RESPONSE
+
+
+def _path_step(current: object, key: str) -> object:
+    return subscript(current, int(key) if key.isdigit() else key)
+
+
+class _A2ATextPart(TypedDict, total=False):
+    """The subset of an A2A message part this handler reads text from."""
+
+    kind: ReadOnly[str]
+    text: ReadOnly[str]
 
 
 class A2AGuardrailHandler(BaseTranslation):
@@ -41,7 +91,7 @@ class A2AGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Any:
+    ) -> dict:
         """
         Process A2A input messages by applying guardrails to text content.
 
@@ -107,12 +157,12 @@ class A2AGuardrailHandler(BaseTranslation):
 
     async def process_output_response(
         self,
-        response: Any,
+        response: object,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> object:
         """
         Process A2A output response by applying guardrails to text content.
 
@@ -131,17 +181,12 @@ class A2AGuardrailHandler(BaseTranslation):
         Returns:
             Modified response with guardrails applied to text content
         """
-        # Handle both dict and Pydantic model responses
-        if hasattr(response, "model_dump"):
-            response_dict = response.model_dump()
-            is_pydantic = True
-        elif isinstance(response, dict):
-            response_dict = response
-            is_pydantic = False
-        else:
+        payload: Final = _response_payload(response)
+        if payload is _UNSUPPORTED_RESPONSE:
             verbose_proxy_logger.warning("A2A: Unknown response type %s, skipping guardrail", type(response))
             return response
 
+        response_dict: Final = require_attributes(payload, _ResultLookup, "get")
         result: Final = response_dict.get("result", {})
         if not result or not isinstance(result, dict):
             verbose_proxy_logger.debug("A2A: No result in response, skipping guardrail")
@@ -202,24 +247,17 @@ class A2AGuardrailHandler(BaseTranslation):
 
         verbose_proxy_logger.debug("A2A: Processed output response")
 
-        # Update the original response
-        if is_pydantic:
-            # For Pydantic models, we need to update the underlying dict
-            # and the model will reflect the changes
-            response_dict["result"] = result
-            return response
-        else:
-            response["result"] = result
-            return response
+        _item_assignment_target(response_dict)["result"] = result
+        return response
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: list[Any],
+        responses_so_far: list[object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> list[Any]:
+    ) -> list[object]:
         """
         Process A2A streaming output by applying guardrails to accumulated text.
 
@@ -303,19 +341,25 @@ class A2AGuardrailHandler(BaseTranslation):
 
         return responses_so_far
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        _, valid_parsed = self._parse_streaming_responses(responses_so_far)
+        combined_text, _ = self._collect_text_from_parsed_chunks(valid_parsed)
+        return StreamingScanKey(texts=(combined_text,))
+
     def _parse_streaming_responses(
         self,
-        responses_so_far: list[Any],
-    ) -> tuple[list[dict[str, Any] | None], list[tuple[int, dict[str, Any]]]]:
+        responses_so_far: Sequence[object],
+    ) -> tuple[list[dict[str, object] | None], list[tuple[int, dict[str, object]]]]:
         """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
-        parsed: Final[list[dict[str, Any] | None]] = [None] * len(responses_so_far)
+        parsed: Final[list[dict[str, object] | None]] = [None] * len(responses_so_far)
         for i, item in enumerate(responses_so_far):
+            obj: dict[str, object]
             if isinstance(item, dict):
                 obj = item
             elif isinstance(item, str):
                 try:
-                    obj = json.loads(item.strip())
-                except (json.JSONDecodeError, TypeError):
+                    obj = _JSON_OBJECT.validate_python(json.loads(item.strip()))
+                except (json.JSONDecodeError, TypeError, ValidationError):
                     continue
             else:
                 continue
@@ -326,7 +370,7 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _collect_text_from_parsed_chunks(
         self,
-        valid_parsed: list[tuple[int, dict[str, Any]]],
+        valid_parsed: list[tuple[int, dict[str, object]]],
     ) -> tuple[str, list[int]]:
         """Collect text from parsed chunks, returning combined text and indices."""
         from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
@@ -411,7 +455,7 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _extract_texts_from_parts(
         self,
-        parts: list[dict[str, Any]],
+        parts: Sequence[_A2ATextPart],
         path: tuple[str, ...],
         texts_to_check: list[str],
         task_mappings: list[tuple[tuple[str, ...], int]],
@@ -426,20 +470,11 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _apply_text_to_path(
         self,
-        result: dict[str | int, Any],
+        result: Mapping[str, object],
         path: tuple[str, ...],
         part_idx: int,
         text: str,
     ) -> None:
         """Apply guardrailed text back to the specified path in the result."""
-        # Navigate to the parts list
-        current = result
-        for key in path:
-            if key.isdigit():
-                # Array index
-                current = current[int(key)]
-            else:
-                current = current[key]
-
-        # Update the text in the part
-        current[part_idx]["text"] = text
+        parts: Final = reduce(_path_step, path, result)
+        _item_assignment_target(subscript(parts, part_idx))["text"] = text

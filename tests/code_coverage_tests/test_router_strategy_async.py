@@ -4,14 +4,9 @@ Test that all cache calls in async functions in router_strategy/ are async
 """
 
 import os
-import sys
 from typing import Dict, List, Tuple
 import ast
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import os
 
 
 class AsyncCacheCallVisitor(ast.NodeVisitor):
