@@ -234,7 +234,7 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    # Catalog and capabilities: https://api.topxai.xyz/api/pricing (verified 2026-11-10)
+    # Catalog and capabilities: https://api.topxai.xyz/api/pricing (verified 2026-11-18)
     TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
@@ -264,9 +264,9 @@ class TestTopxAIModelMetadata:
     NO_OUTPUT_LIMIT_MODELS: Final = ("topxai/grok-4.7",)
     # First premium token and output multiplier:
     # https://api.topxai.xyz/pricing/gpt-6.2-sol (2026-11-18)
-    # https://api.topxai.xyz/pricing/gpt-6.1-terra (verified 2026-11-09)
+    # https://api.topxai.xyz/pricing/gpt-6.1-terra (2026-11-18)
     # https://api.topxai.xyz/pricing/gpt-6.2-astra (2026-11-18)
-    # https://api.topxai.xyz/pricing/grok-4.7
+    # https://api.topxai.xyz/pricing/grok-4.7 (2026-11-18)
     TIERED_MODELS: Final = (
         ("topxai/gpt-6.2-sol", 272_001, 1.5),
         ("topxai/gpt-6.1-terra", 272_001, 1.5),
@@ -282,6 +282,25 @@ class TestTopxAIModelMetadata:
         pytest.param(datetime(2026, 10, 26, 9, 59, tzinfo=timezone.utc), id="monday-09:59"),
         pytest.param(datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc), id="monday-10:00"),
         pytest.param(datetime(2026, 10, 25, 8, 0, tzinfo=timezone.utc), id="sunday-08:00"),
+    )
+    # Auto-route prices in USD per million tokens: input, output, cache read, cache write
+    # (None where the route publishes no cache-write price). Claude, GPT and Grok are sold
+    # on one route per lab at 80% of the lab's list price, long-context tiers included;
+    # the GLM, Kimi and DeepSeek private deployments have fixed prices.
+    # https://api.topxai.xyz/api/pricing, route_prices[auto_route] (verified 2026-11-18)
+    AUTO_ROUTE_PRICES: Final = (
+        ("topxai/claude-sonnet-5-5", 1.6, 8, 0.08, 2),
+        ("topxai/claude-opus-5-5", 3.2, 16, 0.16, 4),
+        ("topxai/claude-fable-5-2", 6.4, 32, 0.16, 8),
+        ("topxai/gpt-6.2-sol", 1.6, 8, 0.08, 2),
+        ("topxai/gpt-6.1-terra", 0.8, 4, 0.04, 1),
+        ("topxai/gpt-6.2-astra", 6.4, 32, 0.32, 8),
+        ("topxai/grok-4.7", 1.6, 4.8, 0.4, None),
+        ("topxai/kimi-k3.1-pro", 0.5, 5, 0.3, None),
+        ("topxai/GLM-5.3-Abliterated", 3, 6, 0.45, None),
+        ("topxai/GLM-5.3-Flash-Abliterated", 0.36, 1.5, 0.075, None),
+        ("topxai/deepseek-flash-Abliterated", 0.42, 1.5, 0.105, None),
+        ("topxai/deepseek-flash-fast", 0.02, 0.16, 0.004, None),
     )
 
     @staticmethod
@@ -321,6 +340,28 @@ class TestTopxAIModelMetadata:
             assert ("max_output_tokens" in info) is (model not in self.NO_OUTPUT_LIMIT_MODELS)
             assert info["max_input_tokens"] >= 500_000
             assert info["source"].startswith("https://api.topxai.xyz/pricing/")
+
+    def test_topxai_auto_route_prices_cover_every_model(self):
+        assert tuple(row[0] for row in self.AUTO_ROUTE_PRICES) == self.TOPXAI_MODELS
+
+    @pytest.mark.parametrize("model,input_price,output_price,cache_read_price,cache_write_price", AUTO_ROUTE_PRICES)
+    def test_topxai_auto_route_prices(
+        self,
+        model: str,
+        input_price: float,
+        output_price: float,
+        cache_read_price: float,
+        cache_write_price: "float | None",
+    ) -> None:
+        info: Final = self._load(("model_prices_and_context_window.json",))[model]
+        per_million: Final = 1_000_000
+        assert info["input_cost_per_token"] * per_million == pytest.approx(input_price)
+        assert info["output_cost_per_token"] * per_million == pytest.approx(output_price)
+        assert info["cache_read_input_token_cost"] * per_million == pytest.approx(cache_read_price)
+        if cache_write_price is None:
+            assert "cache_creation_input_token_cost" not in info
+        else:
+            assert info["cache_creation_input_token_cost"] * per_million == pytest.approx(cache_write_price)
 
     @pytest.mark.parametrize("model,first_premium_token,output_multiplier", TIERED_MODELS)
     @pytest.mark.parametrize("offset", (-1, 0, 1))
