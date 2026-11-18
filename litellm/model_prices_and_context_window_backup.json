@@ -5768,7 +5768,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-5.1",
+        "successor_model": "azure/global/gpt-5.1",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
         "litellm_provider": "azure",
@@ -5789,7 +5789,7 @@
         "cache_read_input_token_cost": 1.25e-06,
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-5.1",
+        "successor_model": "azure/global/gpt-5.1",
         "input_cost_per_token": 2.5e-06,
         "input_cost_per_token_batches": 1.25e-06,
         "litellm_provider": "azure",
@@ -5808,7 +5808,6 @@
     "azure/global-standard/gpt-4o-mini": {
         "deprecation_date": "2027-04-14",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-6-luna",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -5871,7 +5870,6 @@
     "azure/global/gpt-5.1": {
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-6-sol",
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
@@ -5920,7 +5918,6 @@
     "azure/global/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-5.2-codex",
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
@@ -5953,7 +5950,6 @@
     "azure/global/gpt-5.1-codex-mini": {
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-5.6-terra",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure",
@@ -26127,7 +26123,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
-        "successor_model": "anthropic.claude-sonnet-5-5"
+        "successor_model": "eu.anthropic.claude-sonnet-5-5"
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "input_cost_per_token": 3e-06,
@@ -26148,7 +26144,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
-        "successor_model": "anthropic.claude-sonnet-5-5"
+        "successor_model": "eu.anthropic.claude-sonnet-5-5"
     },
     "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -26170,7 +26166,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
-        "successor_model": "anthropic.claude-sonnet-5-5"
+        "successor_model": "eu.anthropic.claude-sonnet-5-5"
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "input_cost_per_token": 1.5e-05,
@@ -51858,7 +51854,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "deprecation_date": "2026-11-13",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
-        "successor_model": "anthropic.claude-sonnet-5-5"
+        "successor_model": "us.anthropic.claude-sonnet-5-5"
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -51879,7 +51875,7 @@
         "supports_vision": true,
         "deprecation_date": "2026-11-13",
         "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
-        "successor_model": "anthropic.claude-sonnet-5-5"
+        "successor_model": "us.anthropic.claude-sonnet-5-5"
     },
     "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -75659,7 +75655,6 @@
     "azure/eu/gpt-5.4-pro": {
         "deprecation_date": "2027-09-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-5.5-pro",
         "input_cost_per_token": 3.3e-05,
         "input_cost_per_token_above_272k_tokens": 6.6e-05,
         "input_cost_per_token_above_272k_tokens_batches": 3.3e-05,
@@ -76291,7 +76286,6 @@
     "azure/us/gpt-5.4-pro": {
         "deprecation_date": "2027-09-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
-        "successor_model": "azure/gpt-5.5-pro",
         "input_cost_per_token": 3.3e-05,
         "input_cost_per_token_above_272k_tokens": 6.6e-05,
         "input_cost_per_token_above_272k_tokens_batches": 3.3e-05,
