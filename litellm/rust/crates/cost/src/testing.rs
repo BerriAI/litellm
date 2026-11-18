@@ -402,6 +402,10 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
             "output_cost_per_video" => (Meter::Output(OutputUnit::Video), Channel::Online),
             "input_cost_per_image" => (Meter::Input(InputUnit::Image), Channel::Online),
             "input_cost_per_pixel" => (Meter::Input(InputUnit::Pixel), Channel::Online),
+            "output_cost_per_pixel" => (Meter::Output(OutputUnit::Pixel), Channel::Online),
+            "output_cost_per_billable_unit" => {
+                (Meter::Output(OutputUnit::BillableUnit), Channel::Online)
+            }
             "output_cost_per_video_per_second" => {
                 (Meter::Output(OutputUnit::VideoSecond), Channel::Online)
             }
@@ -446,6 +450,17 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
                 UnitPrice::new(rate.as_f64()?)?,
             ))
         });
+    let sizes = fields
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, rate)| {
+            let size = crate::price::ImageSize::new(key.strip_prefix("output_cost_per_image_")?)?;
+            Some((
+                online(Meter::Output(OutputUnit::Image(Some(size)))),
+                UnitPrice::new(rate.as_f64()?)?,
+            ))
+        });
     let rates = fields
         .as_object()
         .into_iter()
@@ -463,6 +478,7 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
         })
         .chain(clips)
         .chain(resolutions)
+        .chain(sizes)
         .collect();
     TestRow {
         prices: Prices::new(rates, None, Billing::default()),
