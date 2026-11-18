@@ -169,6 +169,7 @@ export const mergeCustomerActivityPages = (
       total_prompt_caching_savings_spend: total.prompt_caching_savings_spend ?? 0,
       total_gateway_injected_caching_savings_spend: total.gateway_injected_caching_savings_spend ?? 0,
       total_autorouter_savings_spend: total.autorouter_savings_spend ?? 0,
+      total_customer_margin_spend: total.customer_margin_spend ?? 0,
       total_response_time_ms: total.total_response_time_ms ?? 0,
       total_timed_requests: total.timed_requests ?? 0,
       total_api_keys: new Set(results.flatMap((day) => Object.keys(day.breakdown.api_keys))).size,

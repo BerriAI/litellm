@@ -6,6 +6,7 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.llms.custom_httpx import http_handler
 from litellm.llms.custom_httpx.http_handler import default_user_agent
 from litellm.rust_bridge.host import settings
 from litellm.secret_managers.main import get_secret_str
@@ -32,12 +33,14 @@ def test_http_settings_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(litellm, "aiohttp_trust_env", True)
     monkeypatch.setattr(litellm, "disable_aiohttp_trust_env", True)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(http_handler, "rsa_key_exchange_and_chacha20_excluded", lambda: True)
 
     assert settings.http_settings() == settings.HttpSettings(
         ssl_verify="/etc/ssl/corp.pem",
         ssl_certificate="/etc/ssl/client.pem",
         ssl_security_level="DEFAULT@SECLEVEL=1",
         ssl_ecdh_curve="X25519",
+        rsa_key_exchange_and_chacha20_excluded=True,
         force_ipv4=True,
         http2=True,
         aiohttp_trust_env=True,
@@ -230,6 +233,8 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
     monkeypatch.setattr(litellm, "api_key", "module-key")
     monkeypatch.setattr(litellm, "azure_key", "azure-module-key")
+    monkeypatch.setattr(litellm, "drop_params", True)
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["team"])
 
     assert settings.provider_defaults() == settings.ProviderDefaults(
         vertex_project="configured-project",
@@ -237,4 +242,6 @@ def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPa
         enable_azure_ad_token_refresh=True,
         api_key="module-key",
         azure_key="azure-module-key",
+        drop_params=True,
+        bedrock_request_metadata_fields=["team"],
     )

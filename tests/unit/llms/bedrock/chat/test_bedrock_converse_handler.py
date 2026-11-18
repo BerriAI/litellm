@@ -23,6 +23,7 @@ from botocore.exceptions import ClientError
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
@@ -341,12 +342,14 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
             {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}}},
         ),
         ("bedrock/invoke/ai21.j2-ultra-v1", {}),
+        ("bedrock/converse/meta.llama3-3-70b-instruct-v1:0", {"fake_stream": True}),
     ],
     ids=[
         "model_without_streaming",
         "request_shape_without_streaming",
         "json_schema_without_native_structured_output",
         "invoke_route_without_streaming",
+        "caller_fake_stream",
     ],
 )
 
@@ -501,6 +504,7 @@ async def test_live_anthropic_messages_stream_through_the_router_fails_at_the_st
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer())
     router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
         "bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0"
@@ -773,6 +777,7 @@ async def test_failed_stream_on_each_router_surface_reports_the_timeout_it_was_b
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(upstream_answer))
     router: Final = _bedrock_router(model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS)
 

@@ -115,6 +115,12 @@ const records = [
     date: "2026-11-10",
   },
 ];
+const gatewayApps = [
+  { ...audit, app_id: "app-chat", resource_type: "team", resource_id: "gateway-chat", alias: "chat" },
+  { ...audit, app_id: "app-search", resource_type: "team", resource_id: "gateway-search", alias: "search" },
+];
+let appsEnabled = false;
+const appForRecord = (record: (typeof records)[number]) => (record.key === "hash-b" ? "app-search" : "app-chat");
 const fetchMock = vi.fn<typeof fetch>();
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -148,6 +154,33 @@ const activityUrl = (resource: string, id: string, endDate = "2026-11-03") => {
 };
 const serve = (input: Parameters<typeof fetch>[0]): Response => {
   const url = requestUrl(input);
+  if (url.pathname === "/management/v1/apps/definition") return json({ resource_type: appsEnabled ? "team" : null });
+  if (url.pathname === "/management/v1/apps") return json(appsEnabled ? gatewayApps : []);
+  if (url.pathname === "/management/v1/apps/resources")
+    return json([
+      ...gatewayApps.map((app) => ({
+        resource_type: app.resource_type,
+        resource_id: app.resource_id,
+        app_id: app.app_id,
+        alias: app.alias,
+      })),
+      { resource_type: "team", resource_id: "unbound-team", app_id: null, alias: "Unconfigured resource" },
+    ]);
+  if (url.pathname === "/management/v1/customer_organization_budget_groups")
+    return json({ default_budgets: [], revision: "a".repeat(64) });
+  const app = gatewayApps.find(
+    (item) => url.pathname === `/management/v1/apps/${item.app_id}/customer_organizations/org-1`,
+  );
+  if (app) {
+    const appBudget = {
+      app_id: app.app_id,
+      customer_org_id: "org-1",
+      spend: app.app_id === "app-chat" ? 27 : 3,
+      budget_override_id: `budget-${app.app_id}`,
+      effective_budget: { max_budget: 100, budget_duration: "1mo" },
+    };
+    return json(appBudget);
+  }
   const aggregated = url.pathname.endsWith("/daily/activity/aggregated");
   if (url.pathname.endsWith("/daily/activity") || aggregated) {
     const resource = url.pathname.split("/").at(aggregated ? -4 : -3);
@@ -156,6 +189,7 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
     const ids = aggregated ? [url.searchParams.get("customer_org_id")] : url.searchParams.get(filter)?.split(",") ?? [];
     const selected = records
       .filter((record) => ids.includes(record[dimension]))
+      .filter((record) => !url.searchParams.get("app_id") || appForRecord(record) === url.searchParams.get("app_id"))
       .filter(
         (record) =>
           record.date >= (url.searchParams.get("start_date") ?? "") &&
@@ -197,6 +231,7 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
 
 describe("CustomerHierarchyUsagePage", () => {
   beforeEach(() => {
+    appsEnabled = false;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-11-13T12:00:00Z"));
     testQueryClient.clear();
@@ -216,12 +251,81 @@ describe("CustomerHierarchyUsagePage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("should show app spend and budget actions on the customer landing below its global budget", async () => {
+    appsEnabled = true;
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
+    expect(await screen.findByRole("button", { name: "Edit budget for chat" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit budget for search" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add app budget" })).toBeInTheDocument();
+    const globalBudget = screen.getByRole("region", { name: "Current budget" });
+    const appBudget = screen.getByRole("region", { name: "App budgets" });
+    expect(globalBudget.compareDocumentPosition(appBudget) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("should filter the usage graph by app while retaining the global customer budget and date range", async () => {
+    appsEnabled = true;
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl, onUrlUpdate });
+    await screen.findByRole("button", { name: "Edit budget for search" });
+    await user.click(screen.getByRole("combobox", { name: "App" }));
+    expect(await screen.findByRole("option", { name: "search" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Unconfigured resource" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "search" }));
+    await waitFor(() =>
+      expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("app_id")).toBe("app-search"),
+    );
+    await waitFor(() => expect(tableRows("Models")).toHaveLength(1));
+    expect(tableRows("Models")[0]).toHaveTextContent("model-b");
+    expect(
+      within(screen.getByRole("region", { name: "Current budget" })).getByText("$40.00 / $100.00"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Customer teams", exact: true })).toHaveAttribute(
+      "href",
+      "/ui/customers/manage?org=org-1&from=2026-11-01&to=2026-11-03&app_id=app-search",
+    );
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        queryString: "?org=org-1&from=2026-11-01&to=2026-11-03&source=portal&app_id=app-search",
+      }),
+    );
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "App" }), "All apps");
+    await waitFor(() => expect(tableRows("Models")).toHaveLength(2));
+  });
+
+  it("should retain the global budget while an app filter error can be retried", async () => {
+    appsEnabled = true;
+    let unavailable = true;
+    fetchMock.mockImplementation((input) =>
+      Promise.resolve(
+        requestUrl(input).pathname === "/management/v1/apps" && unavailable
+          ? json({ detail: "App list unavailable" }, 503)
+          : serve(input),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
+    const chart = within(await screen.findByRole("region", { name: "Usage over time" }));
+    expect(await chart.findByRole("alert")).toHaveTextContent("App list unavailable");
+    expect(
+      within(screen.getByRole("region", { name: "Current budget" })).getByText("$40.00 / $100.00"),
+    ).toBeInTheDocument();
+    unavailable = false;
+    await user.click(chart.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(chart.queryByRole("alert")).not.toBeInTheDocument());
+    await chooseSelectOption(user, chart.getByRole("combobox", { name: "App" }), "search");
+    await waitFor(() =>
+      expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("app_id")).toBe("app-search"),
+    );
+  });
+
   it.each([
-    ["2026-11-15T00:30:00Z", "", "2026-11-01", "2026-11-30"],
-    ["2027-01-01T00:30:00Z", "", "2027-01-01", "2027-01-31"],
+    ["2026-11-15T00:30:00Z", "", "2026-11-01", "2026-11-15"],
+    ["2027-01-01T00:30:00Z", "", "2027-01-01", "2027-01-01"],
+    ["2026-11-15T00:30:00Z", "&range=month", "2026-11-01", "2026-11-30"],
     ["2026-11-15T00:30:00Z", "&range=MTD", "2026-11-01", "2026-11-15"],
     ["2026-11-30T23:30:00Z", "&range=today", "2026-11-30", "2026-11-30"],
-  ])("uses UTC calendar dates at %s with %s", async (now, query, startDate, endDate) => {
+  ])("should use UTC calendar dates at %s with %s", async (now, query, startDate, endDate) => {
     vi.setSystemTime(new Date(now));
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: `?org=org-1${query}` });
     await screen.findByRole("heading", { name: "Customer organization" });
@@ -237,10 +341,10 @@ describe("CustomerHierarchyUsagePage", () => {
     ).toBe(endDate);
   });
 
-  it("keeps the selected dates in customer navigation and the return to all customers", async () => {
+  it("should keep the selected dates in customer navigation and the return to all customers", async () => {
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
     await screen.findByRole("heading", { name: "Customer organization" });
-    for (const name of ["Customer teams", "Customer members", "Settings", "Customer organizations"]) {
+    for (const name of ["Customer teams", "Customer members", "Settings", "All customers"]) {
       const link = screen.getByRole("link", { name, exact: true });
       const url = new URL(link.getAttribute("href")!, "http://localhost");
       expect(url.searchParams.get("from")).toBe("2026-11-01");

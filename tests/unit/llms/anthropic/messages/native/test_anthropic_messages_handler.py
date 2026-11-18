@@ -2051,7 +2051,7 @@ def _bedrock_invoke_recording(bodies: list[dict[str, object]]) -> AsyncHTTPHandl
 
 
 async def _opus_4_8_messages_with_top_k(bodies: list[dict[str, object]], **deployment: object) -> object:
-    return await messages.acreate(
+    return await python_messages.anthropic_messages(
         max_tokens=16,
         messages=[{"role": "user", "content": "hi"}],
         model=_OPUS_4_8_ON_BEDROCK_INVOKE,
@@ -2593,7 +2593,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
                 }
 
                 # Call the function with AWS credentials
-                await litellm.anthropic.messages.acreate(
+                await python_messages.anthropic_messages(
                     messages=[{"role": "user", "content": "Hello, test credentials"}],
                     model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     max_tokens=100,
@@ -2648,7 +2648,7 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         test_region = "us-east-1"
 
         # Call anthropic.messages.acreate with aws_region_name
-        response = await litellm.anthropic.messages.acreate(
+        response = await python_messages.anthropic_messages(
             messages=[{"role": "user", "content": "Hello, test region"}],
             model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             max_tokens=100,

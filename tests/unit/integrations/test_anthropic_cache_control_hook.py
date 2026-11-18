@@ -1447,7 +1447,7 @@ def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_
     [
         pytest.param((), id="one-deployment"),
         pytest.param(
-            ({"supports_prompt_cache_breakpoint": True, "base_model": "anthropic.claude-unmapped-v1:0"},),
+            ({"supports_bedrock_converse_cache_point": True, "base_model": "anthropic.claude-unmapped-v1:0"},),
             id="beside-a-deployment-of-the-same-profile-with-a-base-model",
         ),
     ],
@@ -1466,7 +1466,9 @@ def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_
                 "litellm_params": {"model": model, "aws_region_name": "us-east-1"},
                 "model_info": model_info,
             }
-            for position, model_info in enumerate(({"supports_prompt_cache_breakpoint": True}, *sibling_model_infos))
+            for position, model_info in enumerate(
+                ({"supports_bedrock_converse_cache_point": True}, *sibling_model_infos)
+            )
         ]
     )
     processed, params = _hook_result(model)
@@ -5312,6 +5314,49 @@ def test_openai_deployment_declared_flag_answers_support_while_the_host_still_de
     )
 
 
+_OPENAI_BREAKPOINT_FLAG_DECLARATIONS: Final = [
+    pytest.param({"supports_openai_prompt_cache_breakpoint": True}, True, id="dedicated-opt-in"),
+    pytest.param({"supports_prompt_cache_breakpoint": True}, True, id="deprecated-alias-opt-in"),
+    pytest.param(
+        {"supports_openai_prompt_cache_breakpoint": True, "supports_prompt_cache_breakpoint": False},
+        True,
+        id="dedicated-opt-in-beats-alias-opt-out",
+    ),
+    pytest.param(
+        {"supports_openai_prompt_cache_breakpoint": False, "supports_prompt_cache_breakpoint": True},
+        False,
+        id="dedicated-opt-out-beats-alias-opt-in",
+    ),
+    pytest.param(
+        {"supports_openai_prompt_cache_breakpoint": None, "supports_prompt_cache_breakpoint": True},
+        True,
+        id="null-dedicated-falls-back-to-alias",
+    ),
+    pytest.param({"supports_bedrock_converse_cache_point": True}, False, id="bedrock-flag-is-not-an-openai-opt-in"),
+]
+
+
+@pytest.mark.parametrize(("model_info", "expected"), _OPENAI_BREAKPOINT_FLAG_DECLARATIONS)
+def test_a_deployments_dedicated_openai_breakpoint_flag_wins_over_its_deprecated_alias(
+    model_info: Mapping[str, object], expected: bool
+) -> None:
+    assert (
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            "qa-openai-shared", "openai", "https://api.openai.com/v1", model_info=model_info
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(("entry", "expected"), _OPENAI_BREAKPOINT_FLAG_DECLARATIONS)
+def test_a_catalog_entrys_dedicated_openai_breakpoint_flag_wins_over_its_deprecated_alias(
+    entry: Mapping[str, object], expected: bool
+) -> None:
+    litellm.register_model({"qa-catalog-flagged-model": {"litellm_provider": "openai", "mode": "chat", **entry}})
+
+    assert supports_openai_prompt_cache_breakpoint("qa-catalog-flagged-model", "openai", {"id": "plain-id"}) is expected
+
+
 @pytest.mark.parametrize(
     "registration_order", [("opted-in", "opted-out", "unflagged"), ("unflagged", "opted-out", "opted-in")]
 )
@@ -5446,9 +5491,10 @@ def _openai_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
     return respx_mock.post(url).mock(return_value=Response(200, json=dict(reply)))
 
 
+@pytest.mark.parametrize("flag", ["supports_prompt_cache_breakpoint", "supports_openai_prompt_cache_breakpoint"])
 @pytest.mark.parametrize("declared", [True, False])
 async def test_a_wildcard_deployments_prompt_cache_flag_leaves_each_matched_model_to_the_catalog(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, declared: bool
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, declared: bool, flag: str
 ) -> None:
     chat: Final = _openai_route(respx_mock, monkeypatch, "acompletion")
     router: Final = Router(
@@ -5460,7 +5506,7 @@ async def test_a_wildcard_deployments_prompt_cache_flag_leaves_each_matched_mode
                     "api_key": "openai-test-key",
                     "cache_control_injection_points": [{"location": "message", "role": "system"}],
                 },
-                "model_info": {"id": "wildcard-id", "supports_prompt_cache_breakpoint": declared},
+                "model_info": {"id": "wildcard-id", flag: declared},
             }
         ],
         num_retries=0,
@@ -5739,7 +5785,10 @@ _BEDROCK_INVOKE_REPLY: Final = MappingProxyType(
 async def test_a_bedrock_claude_deployment_declaring_the_breakpoint_flag_keeps_bedrocks_own_cache_marks(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str, expected_system: list[object]
 ) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
         side_effect=lambda request: Response(
             200,

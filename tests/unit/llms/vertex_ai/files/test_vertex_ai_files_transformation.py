@@ -2522,7 +2522,42 @@ def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_global_drop_
     assert _generation_config(row) == {"max_output_tokens": 5}
 
 
+@pytest.mark.parametrize(
+    ("deployment_params", "row_params"),
+    [({"drop_params": True}, {}), ({}, {"drop_params": True})],
+    ids=["deployment", "row"],
+)
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_deployment_or_row_drop_params(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object], row_params: Mapping[str, object]
+) -> None:
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    deployment: Final = {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-zeta-9", **deployment_params}
+    entry: Final = dict(_chat_entry("gemini-zeta-9", {**_SAMPLING_KNOBS, **row_params}))
+    (row,) = _uploaded_rows(VertexAIFilesConfig(), deployment, [entry])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
 def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+def test_batch_row_keeps_flagged_logprobs_only_when_the_row_allows_them(
+    allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+    knobs: Final = {"logprobs": True, "top_logprobs": 3, "drop_params": True}
+
+    (allowed_row, dropped_row) = _wrap_entries(
+        [
+            _chat_entry("gemini-zeta-9", {**knobs, "allowed_openai_params": list(allowed)}),
+            _chat_entry("gemini-zeta-9", knobs),
+        ]
+    )
+
+    assert _generation_config(allowed_row) == {"max_output_tokens": 5, "responseLogprobs": True, "logprobs": 3}
+    assert _generation_config(dropped_row) == {"max_output_tokens": 5}

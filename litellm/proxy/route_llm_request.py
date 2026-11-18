@@ -23,7 +23,6 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
-    get_team_provider_deployment,
     team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
@@ -314,6 +313,21 @@ class ProxyMissingRequiredParamError(ProxyException):
 
 class ProxyMissingParamWithoutLoadedModelError(ProxyMissingRequiredParamError):
     pass
+
+
+class ProxyCommaSeparatedModelsStreamError(ProxyException):
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                "Comma-separated models send the request to every listed model and cannot stream. "
+                "To stream, send one model name. To spread traffic or fail over across models, put them behind "
+                "one model group or fallbacks (https://docs.litellm.ai/docs/proxy/reliability). "
+                "To race the listed models and stream the first answer, set fastest_response=true."
+            ),
+            type="invalid_request_error",
+            param="stream",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -765,9 +779,7 @@ def _model_less_team_vector_store_file_call(
 async def _authorized_team_file_deployment(
     llm_router: LitellmRouter | None, call: _ModelLessTeamFileCall
 ) -> TeamProviderDeployment | None:
-    return await team_deployment_the_caller_may_use(
-        get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider), llm_router, call.caller
-    )
+    return await team_deployment_the_caller_may_use(llm_router, call.caller, call.custom_llm_provider)
 
 
 def _with_team_deployment_attribution(
@@ -919,17 +931,19 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     elif (
         route_type == "acompletion"
-        and data.get("model", "") is not None
-        and "," in data.get("model", "")
+        and isinstance(comma_separated_models := data.get("model"), str)
+        and "," in comma_separated_models
         and llm_router is not None
     ):
         # Handle batch completions with comma-separated models BEFORE user_config check
         # This ensures batch completion logic is applied even when user_config is set
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
-        else:
-            models: Final = [model.strip() for model in data.pop("model").split(",")]
-            return llm_router.abatch_completion(models=models, **data)
+        if data.get("stream") is True:
+            raise ProxyCommaSeparatedModelsStreamError()
+        data.pop("model")
+        models: Final = [model.strip() for model in comma_separated_models.split(",")]
+        return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)

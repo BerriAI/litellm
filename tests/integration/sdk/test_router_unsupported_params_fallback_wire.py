@@ -36,6 +36,16 @@ _UPSTREAM_400: Final = Reply(
     status=400,
     body=json.dumps({"error": {"message": "Unsupported value: temperature", "type": "invalid_request_error"}}).encode(),
 )
+_REJECTING_STATUSES: Final = (413, 422)
+
+
+def _upstream_rejects(status: int) -> Reply:
+    return Reply(
+        status=status,
+        body=json.dumps({"error": {"message": f"Rejected with {status}", "type": "invalid_request_error"}}).encode(),
+    )
+
+
 _UPSTREAM_CONTEXT_WINDOW: Final = Reply(
     status=400,
     body=json.dumps(
@@ -209,5 +219,28 @@ def test_flag_applied_through_update_settings_stops_fallbacks_on_upstream_400(cl
 def test_upstream_400_still_falls_back_by_default(client: str) -> None:
     with wire_server(_peer({"primary": _UPSTREAM_400, "backup": _BACKUP_ANSWERS})) as wire:
         router: Final = _router(wire)
+        assert _complete(client, router) == "answered by the backup"
+        assert _deployments_hit(wire) == ("primary", "backup")
+
+
+@pytest.mark.parametrize("status", _REJECTING_STATUSES)
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_upstream_413_and_422_reach_the_caller_without_trying_fallbacks(client: str, status: int) -> None:
+    with wire_server(_peer({"primary": _upstream_rejects(status), "backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(wire, fallback_on_unsupported_params=False)
+        with pytest.raises(litellm.BadRequestError, match=f"Rejected with {status}") as raised:
+            _complete(client, router)
+        assert raised.value.status_code == status
+        assert _deployments_hit(wire) == ("primary",)
+
+
+@pytest.mark.parametrize("status", _REJECTING_STATUSES)
+@pytest.mark.parametrize("client", _CLIENTS)
+@pytest.mark.parametrize("settings", [{}, {"fallback_on_unsupported_params": True}], ids=["default", "flag-on"])
+def test_upstream_413_and_422_still_fall_back_unless_bad_requests_raise(
+    client: str, status: int, settings: Mapping[str, object]
+) -> None:
+    with wire_server(_peer({"primary": _upstream_rejects(status), "backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(wire, **settings)
         assert _complete(client, router) == "answered by the backup"
         assert _deployments_hit(wire) == ("primary", "backup")

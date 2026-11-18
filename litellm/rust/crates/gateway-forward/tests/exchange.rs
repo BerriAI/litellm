@@ -98,6 +98,7 @@ async fn forwards_the_request_as_the_client_sent_it_minus_hop_headers() {
 #[case::api_key("X-Api-Key", "test")]
 #[case::azure_key("Api-Key", "test")]
 #[case::litellm_key("Litellm-Api-Key", "test")]
+#[case::x_litellm_key("X-Litellm-Api-Key", "test")]
 #[case::forwarded("Forwarded", "for=192.0.2.1;proto=https")]
 #[case::forwarded_for("X-Forwarded-For", "192.0.2.1")]
 #[case::forwarded_proto("X-Forwarded-Proto", "https")]

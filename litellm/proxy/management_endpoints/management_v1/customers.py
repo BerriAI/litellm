@@ -17,6 +17,7 @@ from litellm.proxy.list_api.common import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetSort,
     CustomerHierarchy,
     CustomerPortalLimits,
     ErrorCode,
@@ -28,6 +29,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetGroups,
     BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
@@ -57,6 +59,11 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Customer Management busy",
             "Customer Management capacity is being updated. Retry the request.",
         ),
+        ErrorCode.TRANSACTION_TIMEOUT: (
+            504,
+            "Customer Management operation timed out",
+            "Customer Management operation timed out. The transaction was rolled back. Retry the request.",
+        ),
         ErrorCode.FREE_TIER_LIMIT: (
             403,
             "Customer Management free tier limit reached",
@@ -75,7 +82,7 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ErrorCode.TEMPLATE_NOT_IN_ORG: (
             422,
             "Template not in organization",
-            "Budget template must belong to the member's organization.",
+            "Budget template must belong to the selected member or organization budget group catalog.",
         ),
         ErrorCode.HAS_CHILDREN: (409, "Has children", "Delete the customer's children before deleting the parent."),
         ErrorCode.INVALID_TEMPLATE_NAMES: (
@@ -208,6 +215,42 @@ def get_user_api_key_cache() -> UserApiKeyCache:
 
 
 AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+
+@router.get(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable organization budget groups and their revision. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_customer_organization_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(await hierarchy.transaction(lambda store: store.get_budget_groups(None)))
+
+
+@router.patch(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete organization budget group list with its expected_revision. "
+    "default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_customer_organization_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> BudgetGroups:
+    groups: Final = resolve(await hierarchy.transaction(lambda store: store.configure_templates(None, data, actor)))
+    members, aliases = resolve(
+        await hierarchy.transaction(
+            lambda store: store.organization_group_consumers(tuple(group.budget_id for group in groups.default_budgets))
+        )
+    )
+    await forget_customer_hierarchies(members, cache)
+    await forget_customer_organization_aliases(aliases, cache)
+    return groups
 
 
 @router.get(
@@ -408,9 +451,12 @@ async def list_customer_teams(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_org_id: str | None = None,
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[Team]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size))
+    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size, sort))
     return list_response(result, request, page, size)
 
 
@@ -522,10 +568,15 @@ async def list_customer_members(
     parent_team_id: str | None = None,
     parent_org_id: str | None = None,
     search: Annotated[str, Query(description="Case-insensitive substring of the customer member ID or alias")] = "",
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[CustomerMember]:
     size: Final = min(page_size, 100)
     result: Final = resolve(
-        await hierarchy.list_members(parent_team_id, page, size, parent_org_id=parent_org_id, search=search.strip())
+        await hierarchy.list_members(
+            parent_team_id, page, size, parent_org_id=parent_org_id, search=search.strip(), sort=sort
+        )
     )
     return list_response(result, request, page, size)
 

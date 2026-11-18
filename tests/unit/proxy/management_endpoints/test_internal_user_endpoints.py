@@ -20,9 +20,9 @@ from pytest_mock import MockerFixture
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
+    Litellm_EntityType,
     LiteLLM_UserTable,
     LiteLLM_UserTableFiltered,
-    Litellm_EntityType,
     LitellmUserRoles,
     NewUserRequest,
     NewUserResponse,
@@ -47,12 +47,19 @@ from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @pytest.mark.parametrize("windows", [None, []])
@@ -1680,6 +1687,13 @@ async def test_new_user_default_teams_flow(mocker):
     persisted_user_row = mocker.MagicMock()
     persisted_user_row.teams = ["96fed65b-0182-4ff4-8429-2721cd7d42af"]
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=persisted_user_row)
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                team_id="96fed65b-0182-4ff4-8429-2721cd7d42af", metadata={"team_member_budget_id": "team-budget"}
+            )
+        ]
+    )
 
     # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
@@ -1773,6 +1787,9 @@ async def test_new_user_default_teams_flow(mocker):
         assert team_call_kwargs["team_id"] == "96fed65b-0182-4ff4-8429-2721cd7d42af"
         assert team_call_kwargs["user_email"] == "test@example.com"
         assert team_call_kwargs["user_role"] == "user"
+        assert team_call_kwargs["max_budget_in_team"] is None, (
+            "the team already has a member budget, a private copy of the cap has no budget_duration and never resets"
+        )
 
         # Verify response structure
         assert response.user_id == "test-user-123"
@@ -1786,7 +1803,9 @@ async def test_new_user_default_teams_flow(mocker):
 
 
 @pytest.mark.asyncio
-async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture) -> None:
+async def test_new_user_clears_recent_missing_user_lookup(
+    mocker: MockerFixture, rust_auth_stores: RustAuthStores
+) -> None:
     user_id: Final = "sso-created-user"
     db_access_time_key: Final = f"user_id:{user_id}"
     auth_checks.last_db_access_time.pop(db_access_time_key, None)
@@ -1795,6 +1814,7 @@ async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture)
     prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=1)
     prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=None)
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=None)
+    prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=None)
     user_api_key_cache: Final = UserApiKeyCache()
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
     license_check: Final = mocker.MagicMock()
@@ -1838,11 +1858,11 @@ async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture)
         )
         assert created_user.user_id == user_id
 
-        prisma_client.db.litellm_usertable.find_unique.return_value = LiteLLM_UserTable(
+        rust_auth_stores.user.rows[user_id] = LiteLLM_UserTable(
             user_id=user_id,
             user_email="sso-created-user@example.com",
             user_role=LitellmUserRoles.INTERNAL_USER,
-        )
+        ).model_dump(mode="json")
         user: Final = await auth_checks.get_user_object(
             user_id=user_id,
             prisma_client=prisma_client,
@@ -2038,6 +2058,26 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
 
     # Test Case 3: None email should not cause issues
     await _check_duplicate_user_email(None, mock_prisma_client)  # Should not raise exception
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "new_email, is_duplicate",
+    [("ann_lee@example.com", False), ("ann%@example.com", False), ("ANN.LEE@example.com", True)],
+)
+async def test_check_duplicate_user_email_matches_the_whole_address_exactly(new_email: str, is_duplicate: bool) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _check_duplicate_user_email
+
+    table: Final = UserTable(user_row("ann", "ann.lee@example.com"))
+
+    if is_duplicate:
+        with pytest.raises(HTTPException) as exc_info:
+            await _check_duplicate_user_email(new_email, prisma_over(table))
+        assert exc_info.value.status_code == 409
+    else:
+        assert await _check_duplicate_user_email(new_email, prisma_over(table)) is None
 
 
 @pytest.mark.asyncio
@@ -2945,7 +2985,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
 )
 @pytest.mark.parametrize("all_users", [False, True], ids=["single-user", "bulk-all-users"])
 async def test_user_update_reaches_cached_user_on_every_worker(
-    mocker: MockerFixture, field: str, new_value: object, all_users: bool
+    mocker: MockerFixture, rust_auth_stores: RustAuthStores, field: str, new_value: object, all_users: bool
 ) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import get_user_object
@@ -3031,6 +3071,7 @@ async def test_user_update_reaches_cached_user_on_every_worker(
         get_data=mocker.AsyncMock(return_value=saved_user),
         updated_user=updated_user,
     )
+    rust_auth_stores.user.rows[saved_user.user_id] = updated_user.model_dump(mode="json")
     prisma_client_for_auth: Final = cast("PrismaClient", prisma_client)
     mocker.patch(  # test-quality-ok: substitute the database dependency
         "litellm.proxy.proxy_server.prisma_client", prisma_client
@@ -3344,7 +3385,7 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
 
 
 @pytest.mark.asyncio
-async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
+async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker, rust_auth_stores: RustAuthStores):
     """/user/delete bulk-deletes the user's keys without going through /key/delete, so the
     jwt_key_mapping cache entries pointing at those keys must be evicted here too. A surviving
     entry keeps resolving the deleted token hash until the mapping cache TTL expires: the deleted
@@ -3363,6 +3404,7 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     issuer_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", "https://issuer.example")
     unrelated_cache_key: Final = jwt_key_mapping_cache_key("sub", "other-user", None)
     jwt_table: Final = CascadingJWTMappingTable(
+        rust_auth_stores.jwt_key_mapping,
         [
             JWTMappingRow("hashed-jwt-key", "sub", "jwt-user"),
             JWTMappingRow("hashed-issuer-key", "sub", "jwt-user", "https://issuer.example"),
@@ -3388,7 +3430,6 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
     mock_prisma_client: Final = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
     mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
     mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
         return_value=[SimpleNamespace(token="hashed-jwt-key"), SimpleNamespace(token="hashed-issuer-key")]
     )
@@ -4679,18 +4720,36 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
     find_many.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("teams_are_defaults", "team_metadata", "expected_max_budget_in_team"),
+    [
+        pytest.param(True, {"team_member_budget_id": "team-budget"}, None, id="default-team-with-a-member-budget"),
+        pytest.param(True, {}, 25.0, id="default-team-without-a-member-budget"),
+        pytest.param(False, {"team_member_budget_id": "team-budget"}, 25.0, id="team-named-in-the-request"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker):
-    """A configured per-member budget on a default team must reach the membership
-    write; dropping it means the member is unlimited within the team budget."""
+async def test_add_new_user_to_default_team_only_drops_the_cap_the_team_member_budget_already_holds(
+    mocker: MockerFixture,
+    teams_are_defaults: bool,
+    team_metadata: dict[str, str],
+    expected_max_budget_in_team: float | None,
+) -> None:
+    """A private copy of a default team's cap has no budget_duration and never resets, so the member
+    joins on the team's member budget when it exists. A cap with no team budget behind it, or one the
+    caller asked for in /user/new, must still reach the membership write."""
     from litellm.proxy._types import NewUserRequestTeam
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         add_new_user_to_default_team,
     )
 
-    mock_add = mocker.patch(
+    mock_add: Final = mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
         new_callable=mocker.AsyncMock,
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(
+        return_value=[SimpleNamespace(team_id="budgeted-team", metadata=team_metadata)]
     )
 
     await add_new_user_to_default_team(
@@ -4701,11 +4760,12 @@ async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker
             NewUserRequestTeam(team_id="budgeted-team", max_budget_in_team=25.0, user_role="admin"),
             NewUserRequestTeam(team_id="uncapped-team"),
         ],
-        prisma_client=mocker.MagicMock(),
+        prisma_client=prisma_client,
+        teams_are_defaults=teams_are_defaults,
     )
 
-    calls = {c.kwargs["team_id"]: c.kwargs for c in mock_add.call_args_list}
-    assert calls["budgeted-team"]["max_budget_in_team"] == 25.0
+    calls: Final = {c.kwargs["team_id"]: c.kwargs for c in mock_add.call_args_list}
+    assert calls["budgeted-team"]["max_budget_in_team"] == expected_max_budget_in_team
     assert calls["budgeted-team"]["user_role"] == "admin"
     assert calls["uncapped-team"]["max_budget_in_team"] is None
 
@@ -5700,9 +5760,11 @@ _DB_OUTAGE_503_BODY: Final = {
 }
 
 
-def _user_read_raising(mocker: MockerFixture, error: Exception) -> tuple[MagicMock, MagicMock]:
+def _user_read_raising(
+    mocker: MockerFixture, stores: RustAuthStores, error: Exception
+) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    stores.user.error = error
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
@@ -5723,8 +5785,8 @@ def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:
 
 
 @pytest.mark.asyncio
-async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_answering_403(mocker):
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_answering_403(mocker, rust_auth_stores):
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
 
     with pytest.raises(httpx.ConnectError):
         await _authorize_user_list_request(
@@ -5737,8 +5799,10 @@ async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_ans
 
 
 @pytest.mark.asyncio
-async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead_of_answering_403(mocker):
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead_of_answering_403(
+    mocker, rust_auth_stores
+):
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -5755,8 +5819,10 @@ async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(mocker, caplog):
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(
+    mocker, caplog, rust_auth_stores
+):
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -5792,11 +5858,11 @@ async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_
     ids=["user_list", "user_filter_ui"],
 )
 def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(
-    mocker, route: str, params: dict[str, str]
+    mocker, rust_auth_stores, route: str, params: dict[str, str]
 ):
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -5814,6 +5880,7 @@ def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     from litellm.proxy._types import (
         DeleteUserRequest,
@@ -5841,7 +5908,6 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     mock_prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
-    mock_prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
     _serve_locked_user_delete(mock_prisma_client, mock_user_row)
 
