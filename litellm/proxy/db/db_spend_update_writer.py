@@ -3528,9 +3528,8 @@ class DBSpendUpdateWriter:
             )
             if type != "customer_member":
                 return daily_transaction
-            metadata: Final[Mapping[str, object]] = _metadata
             cache_cost, priced_cache_tokens = recorded_customer_cache_cost(
-                metadata.get("cost_breakdown"),
+                _metadata["cost_breakdown"] if "cost_breakdown" in _metadata else None,
                 daily_transaction["cache_read_input_tokens"],
                 daily_transaction["cache_creation_input_tokens"],
             )
