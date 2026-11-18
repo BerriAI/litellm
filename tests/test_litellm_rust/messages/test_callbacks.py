@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
@@ -10,6 +11,7 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -539,6 +541,14 @@ _INVALID_SIGNATURE: Final = {
         "message": "messages.1.content.0: Invalid `signature` in `thinking` block",
     },
 }
+_BOUND_ELSEWHERE: Final = {
+    "type": "error",
+    "error": {
+        "type": "invalid_request_error",
+        "message": "messages.1.content.0: Invalid `signature` in `thinking` block. "
+        "The block is bound to a different conversation.",
+    },
+}
 _THINKING_REPLAY: Final = (
     {"role": "user", "content": "Weather in Paris?"},
     {
@@ -637,6 +647,28 @@ async def test_the_logged_provider_request_of_a_retried_call_is_the_retried_byte
     assert_served_natively(server, count=2)
     assert sent.content == server.requests[1].raw_body
     assert json.loads(sent.content)["messages"][1]["content"][-1]["input"] == {"big": _WIDE}
+
+
+@pytest.mark.asyncio
+async def test_a_binding_mismatch_retry_warns_the_operator_once(
+    server: RecordingServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    server.responses.insert(0, ResponseSpec(body=_BOUND_ELSEWHERE, status=400))
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        sent, _ = await _logged_exchange(server, False, _THINKING_REPLAY, {"type": "adaptive"})
+
+    assert_served_natively(server, count=2)
+    assert "thinking-binding-controls-2026-08-01" in sent.headers["anthropic-beta"].split(",")
+    retried: Final = _OBJECT.validate_python(server.requests[1].body)
+    assert retried["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+    }
+    (warning,) = tuple(
+        record.getMessage() for record in caplog.records if "bound to a different conversation" in record.getMessage()
+    )
+    assert "still holds" in warning
 
 
 @pytest.mark.asyncio

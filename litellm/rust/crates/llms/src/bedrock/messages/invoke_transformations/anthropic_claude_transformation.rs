@@ -1,5 +1,7 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
-use litellm_host::interceptors::RetriedRequest;
+use crate::anthropic::messages::transformation::{
+    claude_retries_past_attempt_limit, retry_claude_messages_after_http_error,
+};
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 
 use crate::{
     anthropic::messages::handler::shape_anthropic_messages_request,
@@ -51,7 +53,7 @@ use crate::bedrock::{
     request_metadata::{bedrock_request_metadata_headers, merge_bedrock_invoke_headers},
 };
 
-use super::{request, stream};
+use super::{betas::with_thinking_binding_beta, request, stream};
 
 const INVOKE_MODEL_PREFIX: &str = "invoke/";
 
@@ -223,7 +225,17 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         request_body: &Value,
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+        retry_claude_messages_after_http_error(status, error_text, request_body, context)
+            .map(with_thinking_binding_beta)
+    }
+
+    fn retries_past_attempt_limit(
+        &self,
+        last_reasons: &[RetryReason],
+        status: u16,
+        error_text: &str,
+    ) -> bool {
+        claude_retries_past_attempt_limit(last_reasons, status, error_text)
     }
 
     fn shape_request(
