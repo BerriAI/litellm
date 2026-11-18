@@ -240,6 +240,7 @@ def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
 
 
 _HISTORY_REPLAY_PROVIDERS: Final = frozenset({"openai", "azure"})
+_SYSTEM_INPUT_PROVIDERS: Final = frozenset({"openai", "azure", "azure_ai", "bedrock_mantle"})
 
 
 def replays_responses_history(provider: str | None) -> bool:
@@ -1091,7 +1092,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         target_trims_breakpoints: bool = True,
         keep_prompt_cache_breakpoints: bool = False,
         keep_system_order: bool = False,
-        preserve_system_instructions: bool = False,
+        preserve_system_instructions: bool = True,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
         replay_openai_history: bool = False,
@@ -1120,7 +1121,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         drop_params: bool = False,
         target_trims_breakpoints: bool = True,
         keep_system_order: bool = False,
-        preserve_system_instructions: bool = False,
+        preserve_system_instructions: bool = True,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
         replay_openai_history: bool = False,
@@ -1422,7 +1423,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             keep_system_order=marked_a_system_string,
-            preserve_system_instructions=continuation,
+            preserve_system_instructions=continuation or provider not in _SYSTEM_INPUT_PROVIDERS,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
             replay_openai_history=replays_responses_history(provider),
