@@ -632,3 +632,44 @@ def test_client_boolean_cache_replaced_with_mapping():
     assert caching_false is False
     assert isinstance(kwargs_false["cache"], dict)
     assert kwargs_false["cache"].get("no-cache") is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_route_without_explicit_policy_does_not_block_target_cache_enable():
+    """Prompt deployment without explicit cache policy does not inject caching=False into group route."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.router_rust.invoke.prompt_management import prompt_management_acompletion
+
+    core = MagicMock()
+    core.group_deployments.return_value = [{"model_name": "target-group"}]
+    core.shaping.cache_responses = False  # Global cache is OFF
+    core.shaping.default_litellm_params = {}
+    core.drive = AsyncMock(return_value={"id": "resp-1", "choices": [{"message": {"content": "ok"}}]})
+
+    # Prompt deployment has NO explicit response_cache policy
+    deployment = {
+        "model_name": "langfuse/prompt",
+        "litellm_params": {"model": "langfuse/prompt"},
+        "model_info": {},
+    }
+    core.select = AsyncMock(return_value=deployment)
+    core.handle.deployments.return_value = (deployment,)
+
+    mock_logging = MagicMock()
+    mock_logging.get_chat_completion_prompt.return_value = (
+        "target-group",
+        [{"role": "user", "content": "rendered"}],
+        {},
+    )
+
+    with patch(
+        "litellm.router_rust.invoke.prompt_management._logging_and_kwargs",
+        return_value=(mock_logging, {"prompt_id": "pid", "original_function": core.router.acompletion}),
+    ):
+        await prompt_management_acompletion(core, "langfuse/prompt", [{"role": "user", "content": "hi"}], {})
+
+        assert core.drive.call_count == 1
+        _, call_kwargs = core.drive.call_args[0][:2]
+        # caching must NOT be set to False on the routed request so a target with response_cache=True can enable it
+        assert "caching" not in call_kwargs or call_kwargs["caching"] is not False
