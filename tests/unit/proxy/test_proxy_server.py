@@ -10,6 +10,7 @@ from unittest import mock
 from dotenv import load_dotenv
 
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 import litellm.proxy
 import litellm.proxy.proxy_server
@@ -809,7 +810,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
 
     request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
@@ -852,7 +853,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
     with patch.object(

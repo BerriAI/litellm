@@ -85,8 +85,6 @@ async def resolve_app_hierarchy(
     from litellm.proxy.proxy_server import get_current_spend
 
     assertion: Final = selected_app_assertion(headers)
-    if hierarchy is None and assertion is None:
-        return hierarchy
     if prisma_client is None:
         return hierarchy
     store: Final = AppStore(prisma_client.db, cache=cache)
