@@ -5696,15 +5696,14 @@ def test_openai_gpt_native_json_schema_sets_text_format_strict(set_native_struct
 
 
 @pytest.mark.parametrize(
-    ("base_model", "expected_text"),
+    ("model", "base_model", "expected_text"),
     [
-        ("bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
-        ("bedrock/us.anthropic.claude-sonnet-4-6", None),
+        ("team-model", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("team-model", "bedrock/us.anthropic.claude-sonnet-4-6", None),
+        ("us.amazon.nova-2-lite-v1:0", "bedrock/global.openai.gpt-6-luna", None),
     ],
 )
-def test_custom_named_deployment_takes_text_format_strict_from_base_model(base_model, expected_text):
-    model: Final = "team-model"
-
+def test_custom_named_deployment_takes_text_format_strict_from_base_model(model, base_model, expected_text):
     request: Final = AmazonConverseConfig()._transform_request(
         model=model,
         messages=[{"role": "user", "content": "Name the capital of France."}],

@@ -658,6 +658,16 @@ class AmazonConverseConfig(BaseConfig):
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
         return re.search(r"openai\.gpt-\d", model) is not None
 
+    @classmethod
+    def _deployment_is_openai_gpt(cls, model: str, base_model: str | None) -> bool:
+        if cls._is_openai_gpt_reasoning_model(model):
+            return True
+        return (
+            base_model is not None
+            and bedrock_model_is_unknown(model)
+            and cls._is_openai_gpt_reasoning_model(base_model)
+        )
+
     @staticmethod
     def _requires_min_max_tokens(model: str) -> bool:
         return re.search(r"openai\.gpt-\d|xai\.grok-|moonshotai\.kimi-k3", model) is not None
@@ -2258,9 +2268,7 @@ class AmazonConverseConfig(BaseConfig):
                         self._validate_anthropic_adaptive_effort(model=model, effort=effort)
                     additional_request_params["output_config"] = anthropic_output_config
 
-        if _has_native_text_format(output_config) and any(
-            self._is_openai_gpt_reasoning_model(name) for name in (model, deployment_base_model or "")
-        ):
+        if _has_native_text_format(output_config) and self._deployment_is_openai_gpt(model, deployment_base_model):
             additional_request_params["text"] = _text_with_strict_format(additional_request_params.get("text"))
 
         return (
