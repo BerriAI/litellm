@@ -520,7 +520,16 @@ async fn openrouter_receives_native_messages_headers_and_its_deployment_bearer(
     if streaming {
         assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), sse);
     } else {
-        assert_eq!(support::json(response).await, message);
+        let served = message
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| match name.as_str() {
+                "model" => (name.clone(), json!("public/model")),
+                _ => (name.clone(), value.clone()),
+            })
+            .collect();
+        assert_eq!(support::json(response).await, Value::Object(served));
     }
     let requests = upstream.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);

@@ -739,6 +739,87 @@ async fn a_stream_that_ends_cleanly_keeps_its_deployment_serving() {
     assert_eq!(statuses, [200, 200, 200]);
 }
 
+const SERVED_STREAM: &str = concat!(
+    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-unlisted-9\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+);
+
+/// The model a `/v1/messages` answer reports, in its body or in its stream's `message_start`.
+fn reported_model(body: &str) -> Value {
+    let message_start = body
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str::<Value>(data).unwrap()["message"].clone());
+    message_start.unwrap_or_else(|| serde_json::from_str(body).unwrap())["model"].clone()
+}
+
+#[rstest]
+#[case::served_by_its_own_group("backup", false, "backup", "0")]
+#[case::served_by_a_fallback("primary", false, "claude-unlisted-9", "1")]
+#[case::a_stream_served_by_its_own_group("backup", true, "backup", "0")]
+#[case::a_stream_served_by_a_fallback("primary", true, "primary", "1")]
+#[tokio::test]
+async fn a_messages_answer_reports_the_model_the_client_asked_for_and_how_it_was_routed(
+    #[case] model: &str,
+    #[case] stream: bool,
+    #[case] expected: &str,
+    #[case] fallbacks: &str,
+) {
+    let (failing, healthy) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"error": {"message": "refused"}})),
+        )
+        .mount(&failing)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(if stream {
+            streamed(SERVED_STREAM)
+        } else {
+            served_message()
+        })
+        .mount(&healthy)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}router_settings:\n  fallbacks:\n    - primary: [backup]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &failing),
+        deployment("backup", "backup-1", &healthy),
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+    let request = Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": model, "max_tokens": 8, "stream": stream, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    let status = response.status().as_u16();
+    assert_eq!(
+        routing_headers(&response),
+        [
+            ("x-litellm-model-id", "backup-1"),
+            ("x-litellm-model-group", "backup"),
+            ("x-litellm-attempted-retries", "0"),
+            ("x-litellm-attempted-fallbacks", fallbacks),
+        ]
+    );
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    assert_eq!(
+        (status, reported_model(std::str::from_utf8(&body).unwrap())),
+        (200, json!(expected))
+    );
+}
+
 async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
