@@ -1443,7 +1443,7 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
     )
     mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
 
     user_api_key_cache: Final = UserApiKeyCache()
@@ -3788,7 +3788,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
         return _end_user_budget_row(budget_id, budgets[budget_id]) if budget_id in budgets else None
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
     prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
@@ -5100,7 +5100,7 @@ def _unrestricted_end_user_prisma(spend: float):
     end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
@@ -11707,6 +11707,7 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
         patch("litellm.proxy.proxy_server.premium_user", premium),
         patch("litellm.proxy.proxy_server.master_key", "sk-fixture-master"),
         patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.database_url_configured", True),
         patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
         patch("httpx.AsyncClient.send", side_effect=AssertionError("OAuth2 must not run for this request")) as network,
     ):
