@@ -3,7 +3,7 @@
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
@@ -50,22 +50,6 @@ _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLM
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _IMAGE_TOKEN_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
-_BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
-
-_CACHE_WRITE_RATE_KEYS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "5m": _BASE_CACHE_WRITE_RATE_KEY,
-        "30m": _BASE_CACHE_WRITE_RATE_KEY,
-        "1hr": "cache_creation_input_token_cost_above_1hr",
-        "12hr": "cache_creation_input_token_cost_above_12hr",
-    }
-)
-
-_TTL_PRICED_CACHE_WRITE_RATE_KEYS: Final[Mapping[str, str]] = MappingProxyType(
-    {ttl: key for ttl, key in _CACHE_WRITE_RATE_KEYS.items() if key != _BASE_CACHE_WRITE_RATE_KEY}
-)
-
-
 _IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
     "input_cost_per_token",
     "output_cost_per_token",
@@ -102,17 +86,7 @@ SERVICE_TIER_COST_KEY_SUFFIXES: Final[tuple[str, ...]] = tuple(
     sorted(frozenset(f"_{suffix}" for suffix in _SERVICE_TIER_TO_COST_KEY_SUFFIX.values()))
 )
 
-_INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
 _BATCH_KEY_SUFFIX: Final = "_batches"
-_BATCH_RATE_PREFIXES: Final = (
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "cache_read_input_token_cost",
-    "cache_read_input_image_token_cost",
-    "cache_creation_input_token_cost",
-)
-_BATCH_TIER_PREFIXES: Final = (*_BATCH_RATE_PREFIXES, *_TTL_PRICED_CACHE_WRITE_RATE_KEYS.values())
-_BATCH_TIER_KEY: Final = re.compile(rf"^({'|'.join(_BATCH_TIER_PREFIXES)})_above_(\d+k?)_tokens{_BATCH_KEY_SUFFIX}$")
 _NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
@@ -287,80 +261,6 @@ def _parse_above_token_threshold(key: str) -> float:
 
 def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
     return prompt_tokens > threshold or (inclusive and prompt_tokens == threshold)
-
-
-@dataclass(frozen=True, slots=True)
-class BatchCostRates:
-    input: float | None
-    output: float | None
-    cache_read: float | None
-    cache_creation: float | None
-    cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
-    cache_read_image: float | None = None
-
-
-def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
-    value: Final = model_info.get(key)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if not isinstance(value, str):
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
-def _batch_tier_rate(model_info: ModelInfo, tier_key: str, flat_key: str) -> float | None:
-    tier_rate: Final = _batch_rate(model_info, tier_key)
-    return _batch_rate(model_info, flat_key) if tier_rate is None else tier_rate
-
-
-def _batch_tier_thresholds(model_info: ModelInfo, prefix: str) -> frozenset[str]:
-    return frozenset(
-        tier.group(2)
-        for key, value in model_info.items()
-        if value is not None and (tier := _BATCH_TIER_KEY.match(key)) is not None and tier.group(1) == prefix
-    )
-
-
-def _crossed_batch_tier(model_info: ModelInfo, prefix: str, usage: Usage, inclusive: bool) -> str | None:
-    return next(
-        (
-            threshold
-            for threshold in sorted(
-                _batch_tier_thresholds(model_info, prefix), key=_parse_token_threshold, reverse=True
-            )
-            if _prompt_exceeds_threshold(usage.prompt_tokens, _parse_token_threshold(threshold), inclusive)
-        ),
-        None,
-    )
-
-
-def _batch_rate_for_prefix(model_info: ModelInfo, prefix: str, usage: Usage, inclusive: bool) -> float | None:
-    flat_key: Final = f"{prefix}{_BATCH_KEY_SUFFIX}"
-    threshold: Final = _crossed_batch_tier(model_info, prefix, usage, inclusive)
-    if threshold is None:
-        return _batch_rate(model_info, flat_key)
-    return _batch_tier_rate(model_info, f"{prefix}_above_{threshold}_tokens{_BATCH_KEY_SUFFIX}", flat_key)
-
-
-def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
-    inclusive: Final = custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
-    return BatchCostRates(
-        input=_batch_rate_for_prefix(model_info, "input_cost_per_token", usage, inclusive),
-        output=_batch_rate_for_prefix(model_info, "output_cost_per_token", usage, inclusive),
-        cache_read=_batch_rate_for_prefix(model_info, "cache_read_input_token_cost", usage, inclusive),
-        cache_creation=_batch_rate_for_prefix(model_info, "cache_creation_input_token_cost", usage, inclusive),
-        cache_creation_rates_by_ttl=MappingProxyType(
-            {
-                ttl: rate
-                for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()
-                if (rate := _batch_rate_for_prefix(model_info, key, usage, inclusive)) is not None
-            }
-        ),
-        cache_read_image=_batch_rate_for_prefix(model_info, "cache_read_input_image_token_cost", usage, inclusive),
-    )
 
 
 def get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float | None = 0.0) -> float | None:

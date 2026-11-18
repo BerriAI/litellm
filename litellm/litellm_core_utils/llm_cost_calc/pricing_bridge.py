@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     BilledUsage,
     billed_usage,
+    parse_prompt_tokens_details,
 )
 from litellm.rust_bridge._native import NativeRateCard, NativeReceipt, NativeUnpriced
 from litellm.types.utils import Usage
@@ -150,8 +151,45 @@ class ImageDocument(TypedDict):
     input_images: ReadOnly[int]
 
 
+class WritesByTtl(TypedDict):
+    five_minutes: ReadOnly[int | None]
+    thirty_minutes: ReadOnly[int | None]
+    one_hour: ReadOnly[int | None]
+    twelve_hours: ReadOnly[int | None]
+
+
+class BatchUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    completion_image_tokens: ReadOnly[int]
+    cache_hit_tokens: ReadOnly[int]
+    cache_hit_audio_tokens: ReadOnly[int]
+    cached_image_tokens: ReadOnly[int]
+    cache_creation_tokens: ReadOnly[int]
+    cache_creation_by_ttl: ReadOnly[WritesByTtl | None]
+    audio_tokens: ReadOnly[int]
+    image_tokens: ReadOnly[int]
+    video_tokens: ReadOnly[int]
+
+
+class BatchLineDocument(TypedDict):
+    kind: ReadOnly[Literal["batch_line"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+    usage: ReadOnly[BatchUsage]
+    data_residency: ReadOnly[str | None]
+    vertex_location: ReadOnly[str | None]
+
+
+class ManyDocument(BatchLineDocument):
+    """One line of a ``price_many`` request and the index of its row among the rows passed beside it."""
+
+    row: ReadOnly[int | None]
+
+
 UnitsDocument = (
-    ImageDocument
+    BatchLineDocument
+    | ImageDocument
     | VideoDocument
     | SearchDocument
     | RerankDocument
@@ -300,6 +338,41 @@ def price_units(
     """A per-unit call priced from ``document``'s facts, or why no row prices it. ``tables`` are the deployment's own
     price tables, read in order ahead of ``catalog``, the row ``get_model_info`` found for the call."""
     return model_cost_inputs.price_units(document, tables, catalog)
+
+
+def batch_usage(usage: Usage) -> BatchUsage:
+    """The token counts a batch line bills, read off its usage the way main's batch calculator read them."""
+    details: Final = parse_prompt_tokens_details(usage)
+    ttl: Final = details["cache_creation_token_details"]
+    completion_details: Final = usage.completion_tokens_details
+    return BatchUsage(
+        prompt_tokens=usage.prompt_tokens or 0,
+        completion_tokens=usage.completion_tokens,
+        completion_image_tokens=(completion_details.image_tokens or 0) if completion_details is not None else 0,
+        cache_hit_tokens=details["cache_hit_tokens"],
+        cache_hit_audio_tokens=details["cache_hit_audio_tokens"],
+        cached_image_tokens=details["cached_image_tokens"],
+        cache_creation_tokens=details["cache_creation_tokens"],
+        cache_creation_by_ttl=None
+        if ttl is None
+        else WritesByTtl(
+            five_minutes=ttl.ephemeral_5m_input_tokens,
+            thirty_minutes=ttl.ephemeral_30m_input_tokens,
+            one_hour=ttl.ephemeral_1h_input_tokens,
+            twelve_hours=ttl.ephemeral_12h_input_tokens,
+        ),
+        audio_tokens=details["audio_tokens"],
+        image_tokens=details["image_tokens"],
+        video_tokens=details["video_tokens"],
+    )
+
+
+def price_many(
+    documents: Sequence[ManyDocument], rows: Sequence[Mapping[str, object]]
+) -> Sequence[NativeReceipt | NativeUnpriced]:
+    """Each call priced from its document as ``price_units`` would, in one crossing. A document's ``row`` is the index
+    of the row ``get_model_info`` found for it, each row lowered once however many documents name it."""
+    return model_cost_inputs.price_many(documents, rows)
 
 
 def price_fee(document: FeeDocument) -> NativeReceipt | NativeUnpriced:

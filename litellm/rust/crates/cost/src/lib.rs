@@ -1,5 +1,6 @@
 mod a2a;
 pub mod adjust;
+mod batch;
 pub mod bound;
 mod calculate;
 pub mod call;
@@ -32,6 +33,6 @@ mod video;
 
 pub use bound::bound;
 pub use calculate::calculate;
-pub use engine::price;
+pub use engine::{price, price_many};
 pub use error::*;
 pub use rates::rates;

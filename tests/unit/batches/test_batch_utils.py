@@ -9,7 +9,7 @@ numeric results rather than "ran without error".
 
 Pure functions (parsing, token math, credential extraction, success checks) run
 for real with exact-value assertions. The few true external seams - the cost
-maps (litellm.completion_cost, batch_cost_calculator), the tokenizer
+maps (litellm.completion_cost, batch_cost_calculator, deployment and registered batch rates), the tokenizer
 (token_counter), and remote file fetch (afile_content) - are mocked with
 deterministic stand-ins so the arithmetic under test is the only variable.
 """
@@ -56,6 +56,27 @@ def _success_row(model="gpt-4o", usage=None, **body_extra):
     if usage is not None:
         body["usage"] = usage
     return {"response": {"status_code": 200, "body": body}}
+
+
+def _batch_rates(input_rate: float, output_rate: float) -> ModelInfo:
+    return ModelInfo(  # pyright: ignore[reportCallIssue]  # a deployment row sets only the prices it bills
+        input_cost_per_token_batches=input_rate, output_cost_per_token_batches=output_rate
+    )
+
+
+def _register_batch_rates(
+    monkeypatch: pytest.MonkeyPatch, model: str, provider: str, input_rate: float, output_rate: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "input_cost_per_token_batches": input_rate,
+            "output_cost_per_token_batches": output_rate,
+            "litellm_provider": provider,
+            "mode": "chat",
+        },
+    )
 
 
 def _failed_row(status_code=500, model="gpt-4o"):
@@ -572,12 +593,9 @@ def test_aggregate_counts_successful_and_failed_requests(monkeypatch):
     assert result.successful_requests + result.failed_requests == len(rows)
 
 
-def test_aggregate_returns_batch_cost_usage_result_dataclass(monkeypatch):
-    import litellm.cost_calculator as cc
-
-    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (0.4, 0.6))
+def test_aggregate_returns_batch_cost_usage_result_dataclass():
     result = bu._aggregate_batch_cost_usage_models(
-        entries=[_success_row(usage=_usage(10, 5))], custom_llm_provider="openai"
+        entries=[_success_row(usage=_usage(10, 5))], custom_llm_provider="openai", model_info=_batch_rates(0.04, 0.12)
     )
     assert isinstance(result, bu.BatchCostUsageResult)
     assert (result.cost, result.models, result.successful_requests, result.failed_requests) == (
@@ -586,37 +604,30 @@ def test_aggregate_returns_batch_cost_usage_result_dataclass(monkeypatch):
         1,
         0,
     )
-    assert (result.prompt_cost, result.completion_cost) == (0.4, 0.6)
+    assert (result.prompt_cost, result.completion_cost) == (10 * 0.04, 5 * 0.12)
 
 
 # =========================================================================== #
-# _aggregate_batch_cost_usage_models: cost  (cost maps mocked)
+# _aggregate_batch_cost_usage_models: cost
 # =========================================================================== #
 
 
 def test_cost_without_model_info_prices_each_row_by_its_response_model(monkeypatch):
-    # model_info is None -> batch_cost_calculator per successful row, model from the response body.
-    import litellm.cost_calculator as cc
-
-    calls = []
-
-    def _batch_cost(**kw):
-        calls.append(kw)
-        return (0.3, 0.2)
-
-    monkeypatch.setattr(cc, "batch_cost_calculator", _batch_cost)
+    # model_info is None -> each successful row is priced by the cost map row of the model its response names.
+    _register_batch_rates(monkeypatch, "batch-response-model", "openai", 0.01, 0.02)
+    _register_batch_rates(monkeypatch, "batch-other-model", "openai", 0.1, 0.2)
     rows = [
-        _success_row(usage=_usage(10, 5)),
-        _failed_row(),  # excluded -> not costed
-        _success_row(usage=_usage(20, 10)),
+        _success_row(model="batch-response-model", usage=_usage(10, 5)),
+        _failed_row(model="batch-other-model"),  # excluded -> not costed
+        _success_row(model="batch-other-model", usage=_usage(20, 10)),
     ]
 
     result = bu._aggregate_batch_cost_usage_models(entries=rows, custom_llm_provider="openai")
 
-    assert result.cost == pytest.approx(1.0)  # 2 successful * (0.3 + 0.2)
-    assert (result.prompt_cost, result.completion_cost) == (pytest.approx(0.6), pytest.approx(0.4))
-    assert len(calls) == 2  # failed row not costed
-    assert all(call["model"] == "gpt-4o" and call["model_info"] is None for call in calls)
+    assert (result.prompt_cost, result.completion_cost) == (
+        pytest.approx(10 * 0.01 + 20 * 0.1),
+        pytest.approx(5 * 0.02 + 10 * 0.2),
+    )
     assert result.successful_requests == 2
     assert result.failed_requests == 1
 
@@ -646,11 +657,8 @@ def test_empty_body_line_does_not_zero_whole_batch():
     assert (result.successful_requests, result.failed_requests) == (3, 0)
 
 
-def test_cost_from_content_model_info_path(monkeypatch):
-    # model_info set -> batch_cost_calculator(prompt_cost, completion_cost).
-    import litellm.cost_calculator as cc
-
-    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (0.1, 0.2))
+def test_cost_from_content_model_info_path():
+    # model_info set -> every row is priced by the deployment's own batch rates.
     rows = [
         _success_row(usage=_usage(10, 5)),
         _success_row(usage=_usage(20, 10)),
@@ -659,24 +667,23 @@ def test_cost_from_content_model_info_path(monkeypatch):
     result = bu._aggregate_batch_cost_usage_models(
         entries=rows,
         custom_llm_provider="openai",
-        model_info={"input_cost_per_token": 0.0},  # type: ignore[arg-type]  # truthy -> model_info path
+        model_info=_batch_rates(0.01, 0.02),
     )
 
-    assert result.cost == pytest.approx(0.6)  # 2 * (0.1 + 0.2)
+    assert result.cost == pytest.approx(0.6)  # (10 + 20) * 0.01 + (5 + 10) * 0.02
 
 
-def test_aggregate_consumes_entries_in_a_single_pass(monkeypatch):
+def test_aggregate_consumes_entries_in_a_single_pass():
     """A one-shot generator: any implementation that iterates the entries twice
     (e.g. separate cost and usage passes) sees nothing on the second pass and
     returns wrong totals for at least one of cost/usage/models."""
-    import litellm.cost_calculator as cc
-
-    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (0.25, 0.25))
     one_shot = (row for row in [_success_row(usage=_usage(10, 5)), _failed_row(), _success_row(usage=_usage(20, 10))])
 
-    result = bu._aggregate_batch_cost_usage_models(entries=one_shot, custom_llm_provider="openai")
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=one_shot, custom_llm_provider="openai", model_info=_batch_rates(0.025, 0.05)
+    )
 
-    assert result.cost == 1.0
+    assert result.cost == pytest.approx(30 * 0.025 + 15 * 0.05)
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (30, 15, 45)
     assert result.models == ["gpt-4o", "gpt-4o"]
     assert result.successful_requests == 2
@@ -880,16 +887,15 @@ def test_vertex_cost_error_in_line_is_swallowed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_calculate_batch_cost_and_usage_orchestration(monkeypatch):
-    import litellm.cost_calculator as cc
-
+async def test_calculate_batch_cost_and_usage_orchestration():
     rows = [_success_row(model="gpt-4o", usage=_usage(10, 5))]
-    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (1.5, 1.0))
 
-    result = await bu.calculate_batch_cost_and_usage(file_content_dictionary=rows, custom_llm_provider="openai")
+    result = await bu.calculate_batch_cost_and_usage(
+        file_content_dictionary=rows, custom_llm_provider="openai", model_info=_batch_rates(0.15, 0.2)
+    )
 
-    assert result.cost == 2.5
-    assert (result.prompt_cost, result.completion_cost) == (1.5, 1.0)
+    assert result.cost == pytest.approx(2.5)
+    assert (result.prompt_cost, result.completion_cost) == (pytest.approx(1.5), pytest.approx(1.0))
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (10, 5, 15)
     assert result.models == ["gpt-4o"]
 
@@ -1292,14 +1298,13 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
     async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
         return _vertex_jsonl(rows)
 
-    import litellm.cost_calculator as cc
-
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
-    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (2.0, 1.3))
 
-    result = await bu.handle_completed_batch(_batch("of"), custom_llm_provider="openai")
+    result = await bu.handle_completed_batch(
+        _batch("of"), custom_llm_provider="openai", model_info=_batch_rates(0.2, 0.26)
+    )
 
-    assert result.cost == 3.3
+    assert result.cost == pytest.approx(10 * 0.2 + 5 * 0.26)
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (10, 5, 15)
     assert result.models == ["gpt-4o"]
 
@@ -1655,16 +1660,8 @@ def test_anthropic_cost_applies_batch_discount_and_cache_pricing():
     assert result.cost == pytest.approx(expected_half_price)
 
 
-def test_anthropic_cost_without_model_info_uses_batch_cost_calculator(monkeypatch):
-    import litellm.cost_calculator as cc
-
-    seen = []
-
-    def _fake_batch_cost_calculator(**kw):
-        seen.append(kw)
-        return (0.1, 0.2)
-
-    monkeypatch.setattr(cc, "batch_cost_calculator", _fake_batch_cost_calculator)
+def test_anthropic_cost_without_model_info_prices_each_row_by_its_message_model(monkeypatch):
+    _register_batch_rates(monkeypatch, "claude-batch-parity-model", "anthropic", 0.01, 0.04)
     monkeypatch.setattr(
         litellm,
         "completion_cost",
@@ -1672,13 +1669,10 @@ def test_anthropic_cost_without_model_info_uses_batch_cost_calculator(monkeypatc
     )
 
     result = bu._aggregate_batch_cost_usage_models(
-        entries=[_anthropic_succeeded_row()], custom_llm_provider="anthropic"
+        entries=[_anthropic_succeeded_row(model="claude-batch-parity-model")], custom_llm_provider="anthropic"
     )
 
-    assert result.cost == pytest.approx(0.3)
-    assert seen[0]["model"] == "claude-sonnet-4-5-20250929"
-    assert seen[0]["custom_llm_provider"] == "anthropic"
-    assert seen[0]["usage"].prompt_tokens == 10
+    assert (result.prompt_cost, result.completion_cost) == (pytest.approx(10 * 0.01), pytest.approx(5 * 0.04))
 
 
 def test_anthropic_batch_models_collected_from_succeeded_rows(monkeypatch):
@@ -2917,21 +2911,16 @@ def test_get_batch_job_total_usage_from_file_content(sample_file_content_dict):
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_batch_cost_calculator(sample_file_content_dict):
-    """
-    mock batch_cost_calculator to return (0.3, 0.2) per line
-
-    we know sample_file_content_dict has 2 successful responses
-
-    so we expect the cost to be (0.3 + 0.2) * 2 = 1.0, split 0.6 / 0.4
-    """
-    with patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.3, 0.2)):
-        result = _aggregate_batch_cost_usage_models(
-            entries=sample_file_content_dict,
-            custom_llm_provider="openai",
-        )
-        assert result.cost == pytest.approx(1.0)  # (0.3 + 0.2) * 2 successful responses
-        assert result.prompt_cost == pytest.approx(0.6)
-        assert result.completion_cost == pytest.approx(0.4)
+    """sample_file_content_dict has 2 successful responses with 20 + 22 prompt and 10 + 10 completion tokens, each
+    priced at the deployment's batch rates"""
+    result = _aggregate_batch_cost_usage_models(
+        entries=sample_file_content_dict,
+        custom_llm_provider="openai",
+        model_info=_batch_rates(0.01, 0.02),
+    )
+    assert result.prompt_cost == pytest.approx(42 * 0.01)
+    assert result.completion_cost == pytest.approx(20 * 0.02)
+    assert result.cost == pytest.approx(42 * 0.01 + 20 * 0.02)
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
