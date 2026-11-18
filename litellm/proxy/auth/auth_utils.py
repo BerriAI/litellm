@@ -2899,6 +2899,11 @@ def _handler_selected_model(
     return model if isinstance(model, str) and model else route_model
 
 
+_ENGINES_ROUTE_PATTERNS: Final = tuple(
+    re.compile(rf"^/engines/(.+)/{endpoint}/?$") for endpoint in ("chat/completions", "completions", "embeddings")
+)
+
+
 def _model_from_route_path(route: str) -> str | None:
     """
     Google generateContent-style routes allow "/" inside the model id, e.g.
@@ -2907,6 +2912,9 @@ def _model_from_route_path(route: str) -> str | None:
     azure_deployment: Final = re.match(r"/openai/deployments/([^/]+)", route)
     if azure_deployment:
         return azure_deployment.group(1)
+    engine: Final = next(filter(None, (pattern.match(route) for pattern in _ENGINES_ROUTE_PATTERNS)), None)
+    if engine:
+        return engine.group(1)
     if route.lower().startswith("/vertex"):
         vertex_model: Final = re.search(r"/models/([^:]+)", route)
         return vertex_model.group(1) if vertex_model else None

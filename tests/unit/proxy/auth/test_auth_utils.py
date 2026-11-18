@@ -6067,6 +6067,41 @@ def test_an_opted_in_primary_does_not_unlock_model_id_for_a_fallback_that_did_no
         )
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/engines/claude/chat/completions",
+        "/engines/claude/completions",
+        "/engines/claude/embeddings",
+        "/openai/deployments/claude/chat/completions",
+    ],
+)
+def test_an_opted_in_body_model_does_not_unlock_model_id_for_the_path_model_that_runs(route: str) -> None:
+    router: Final = _router_with(*_EVERY_MODEL_ID_PROVIDER, opted_in=frozenset(("sm",)))
+    with pytest.raises(ValueError, match="model_id is not allowed"):
+        is_request_body_safe(
+            request_body={"model": "sm", "model_id": "arn:aws:bedrock:us-east-1:999:imported-model/EVIL"},
+            general_settings={},
+            llm_router=router,
+            model="sm",
+            route=route,
+        )
+
+
+def test_client_model_id_is_allowed_on_an_engines_route_when_the_path_model_opts_in() -> None:
+    router: Final = _router_with(*_EVERY_MODEL_ID_PROVIDER, opted_in=frozenset(("sm", "claude")))
+    assert (
+        is_request_body_safe(
+            request_body={"model": "sm", "model_id": "us.amazon.nova-micro-v1:0"},
+            general_settings={},
+            llm_router=router,
+            model="sm",
+            route="/engines/claude/chat/completions",
+        )
+        is True
+    )
+
+
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 def test_model_id_in_request_metadata_is_allowed(metadata_key: str) -> None:
     assert (
