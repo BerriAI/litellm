@@ -30,14 +30,14 @@ _TOKEN_HASH_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
 
 def _mapping_cache_keys(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None) -> tuple[str, ...]:
     """A global mapping also answers lookups from every configured issuer, which cache their misses per issuer."""
-    from litellm.proxy.proxy_server import litellm_jwtauth
+    from litellm.proxy.proxy_server import jwt_handler
 
     own_key: Final = jwt_key_mapping_cache_key(jwt_claim_name, jwt_claim_value, jwt_issuer)
     if jwt_issuer:
         return (own_key,)
     issuer_keys: Final = tuple(
         jwt_key_mapping_cache_key(jwt_claim_name, jwt_claim_value, issuer_config.issuer)
-        for issuer_config in litellm_jwtauth.issuers or ()
+        for issuer_config in getattr(getattr(jwt_handler, "litellm_jwtauth", None), "issuers", None) or ()
     )
     return tuple(dict.fromkeys((own_key, *issuer_keys)))
 
