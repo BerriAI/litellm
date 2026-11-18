@@ -4,7 +4,11 @@
 
 use litellm_host::interceptors::{RequestContext, WireRequest};
 use litellm_host_python::json_to_py;
-use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
+use pyo3::{
+    exceptions::PyBaseException,
+    prelude::*,
+    types::{PyBytes, PyDict},
+};
 use serde_json::Value;
 
 use crate::logger::PythonLogger;
@@ -13,7 +17,7 @@ use crate::python::{Logging, Wrapper};
 pub struct SentRequest<'a> {
     pub url: &'a str,
     pub headers: &'a Py<PyDict>,
-    pub body: &'a Py<PyDict>,
+    pub body: &'a [u8],
 }
 
 pub trait LegacyCallbacks {
@@ -47,6 +51,7 @@ pub trait LegacyCallbacks {
         status: u16,
         headers: &[(String, String)],
         body: &str,
+        streamed: bool,
         request: Option<SentRequest<'_>>,
     ) -> PyResult<()>;
 
@@ -182,12 +187,21 @@ impl LegacyCallbacks for PythonLogger {
         status: u16,
         headers: &[(String, String)],
         body: &str,
+        streamed: bool,
         request: Option<SentRequest<'_>>,
     ) -> PyResult<()> {
-        let request = request.map(|sent| (sent.url, sent.headers.bind(py), sent.body.bind(py)));
+        let request =
+            request.map(|sent| (sent.url, sent.headers.bind(py), PyBytes::new(py, sent.body)));
         Logging::RecordResponse.call(
             py,
-            (self.object(py), status, headers.to_vec(), body, request),
+            (
+                self.object(py),
+                status,
+                headers.to_vec(),
+                body,
+                streamed,
+                request,
+            ),
         )?;
         Ok(())
     }

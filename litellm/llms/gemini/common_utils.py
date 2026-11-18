@@ -320,11 +320,7 @@ def get_gemini_image_generation_config(
         generation_config["imageConfig"] = image_config
 
     candidate_count: Final = next(
-        (
-            optional_params[key]
-            for key in ("candidateCount", "candidate_count", "sampleCount", "n")
-            if optional_params.get(key) is not None
-        ),
+        (optional_params[key] for key in ("candidateCount", "candidate_count") if optional_params.get(key) is not None),
         None,
     )
     if candidate_count is not None:
@@ -542,6 +538,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
 

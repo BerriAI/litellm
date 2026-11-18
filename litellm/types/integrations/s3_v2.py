@@ -1,18 +1,41 @@
 from typing import Literal
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from typing_extensions import ReadOnly, TypedDict
 
 S3PartitionGranularity = Literal["day", "hour"]
 
 
-class s3BatchLoggingElement(LiteLLMBaseModel):
-    """
-    Type of element stored in self.log_queue in S3Logger
-    """
-
-    payload: dict
-    s3_object_key: str
-    s3_object_download_filename: str
-    body: str | None = None
-    content_type: str = "application/json"
-    retrying_since: float | None = None
+class S3LoggerSettings(TypedDict, total=False):
+    s3_bucket_name: ReadOnly[str | None]
+    s3_path: ReadOnly[str | None]
+    s3_region_name: ReadOnly[str | None]
+    s3_api_version: ReadOnly[str | None]
+    s3_use_ssl: ReadOnly[bool]
+    s3_verify: ReadOnly[bool | str | None]
+    s3_endpoint_url: ReadOnly[str | None]
+    s3_aws_access_key_id: ReadOnly[str | None]
+    s3_aws_secret_access_key: ReadOnly[str | None]
+    s3_aws_session_token: ReadOnly[str | None]
+    s3_aws_session_name: ReadOnly[str | None]
+    s3_aws_profile_name: ReadOnly[str | None]
+    s3_aws_role_name: ReadOnly[str | None]
+    s3_aws_web_identity_token: ReadOnly[str | None]
+    s3_aws_sts_endpoint: ReadOnly[str | None]
+    s3_flush_interval: ReadOnly[int | None]
+    s3_batch_size: ReadOnly[int | None]
+    s3_config: ReadOnly[object]
+    s3_use_team_prefix: ReadOnly[bool]
+    s3_strip_base64_files: ReadOnly[bool]
+    s3_use_key_prefix: ReadOnly[bool]
+    s3_use_virtual_hosted_style: ReadOnly[bool]
+    s3_server_side_encryption: ReadOnly[str | None]
+    s3_sse_kms_key_id: ReadOnly[str | None]
+    s3_log_prompts_only: ReadOnly[bool | None]
+    s3_partition_granularity: ReadOnly[str | None]
+    s3_max_concurrent_uploads: ReadOnly[int]
+    s3_max_queue_size: ReadOnly[int | None]
+    s3_max_retry_age_seconds: ReadOnly[int | None]
+    s3_drop_on_terminal_error: ReadOnly[bool]
+    s3_adaptive_concurrency: ReadOnly[bool]
+    s3_max_adaptive_concurrency: ReadOnly[int | None]
+    s3_batch_file_upload: ReadOnly[bool]

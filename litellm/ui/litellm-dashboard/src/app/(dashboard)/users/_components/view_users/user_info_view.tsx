@@ -137,7 +137,7 @@ export default function UserInfoView({
           try {
             const teamPromises = data.teams.map(async (teamId: string) => {
               try {
-                const teamData = await teamInfoCall(accessToken, teamId);
+                const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
                 return {
                   team_id: teamId,
                   team_alias: teamData?.team_info?.team_alias || null,
@@ -213,7 +213,7 @@ export default function UserInfoView({
       if (data.teams && data.teams.length > 0) {
         const teamPromises = data.teams.map(async (teamId: string) => {
           try {
-            const teamData = await teamInfoCall(accessToken, teamId);
+            const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
             return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
           } catch {
             return { team_id: teamId, team_alias: null };
@@ -254,7 +254,7 @@ export default function UserInfoView({
       if (data.teams && data.teams.length > 0) {
         const teamPromises = data.teams.map(async (teamId: string) => {
           try {
-            const teamData = await teamInfoCall(accessToken, teamId);
+            const teamData = await teamInfoCall(accessToken, teamId, { includeMembers: false, keyLimit: 1 });
             return { team_id: teamId, team_alias: teamData?.team_info?.team_alias || null };
           } catch {
             return { team_id: teamId, team_alias: null };
@@ -324,15 +324,18 @@ export default function UserInfoView({
       if (!accessToken || !userData) return;
 
       const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
+      const skills: string[] | undefined = formValues.skills;
+      const objectPermission =
+        mcpEntitlement || skills !== undefined ? { ...mcpEntitlement, ...(skills !== undefined && { skills }) } : null;
       const userFields = Object.fromEntries(
         Object.entries(formValues).filter(
-          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
+          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions" && field !== "skills",
         ),
       );
 
       await userUpdateUserCall(
         accessToken,
-        mcpEntitlement ? { ...userFields, object_permission: mcpEntitlement } : userFields,
+        objectPermission ? { ...userFields, object_permission: objectPermission } : userFields,
         null,
       );
 
@@ -349,8 +352,8 @@ export default function UserInfoView({
           formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
         model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
-        object_permission: mcpEntitlement
-          ? { ...userData.object_permission, ...mcpEntitlement }
+        object_permission: objectPermission
+          ? { ...userData.object_permission, ...objectPermission }
           : userData.object_permission,
       });
 
@@ -724,6 +727,14 @@ export default function UserInfoView({
                   <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
                     {JSON.stringify(userData.metadata || {}, null, 2)}
                   </pre>
+                </div>
+
+                <div>
+                  <p className="font-medium mb-2">{t("objectPermissionsView.skills.title")}</p>
+                  <p>
+                    {userData.object_permission?.skills?.join(", ") ||
+                      t("objectPermissionsView.skills.noneGrantedDirectly")}
+                  </p>
                 </div>
 
                 <div>

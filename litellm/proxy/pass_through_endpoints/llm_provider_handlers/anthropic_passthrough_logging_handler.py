@@ -32,7 +32,6 @@ from litellm.llms.anthropic.messages.stream_assembly import (
 from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     is_collection_route,
     log_batch_registration_result,
@@ -190,6 +189,8 @@ class AnthropicPassthroughLoggingHandler:
     ) -> str | None:
         request_body: Final = passthrough_logging_payload.get("request_body")
         if request_body:
+            from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
             return get_end_user_id_from_request_body(request_body)
         return None
 

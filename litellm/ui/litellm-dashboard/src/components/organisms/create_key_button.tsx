@@ -42,6 +42,7 @@ import {
   MountedFormField,
   MountedFormProvider,
   projectMountedValues,
+  useMountedName,
   useMountRegistry,
   type MountedFormValues,
 } from "../common_components/MountedFormField";
@@ -56,6 +57,13 @@ import TeamDropdown from "../common_components/team_dropdown";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
+import { moveMetadataBudgetAlertsToRows } from "../templates/KeyEditViewControls";
+import { BudgetAlertEmailsEditor, type BudgetAlertEmailsEditorText } from "../key_team_helpers/BudgetAlertEmailsEditor";
+import {
+  type BudgetAlertRow,
+  budgetAlertRowsSchema,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+} from "../key_team_helpers/budgetAlertEmails";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
@@ -131,6 +139,15 @@ type FieldWrite = (value: unknown) => void;
 type McpSelectorValue = { servers: string[]; accessGroups: string[]; toolsets?: string[] };
 
 type AgentSelectorValue = { agents: string[]; accessGroups: string[] };
+
+const MountedBudgetAlertEmailsEditor = (props: {
+  readonly control: Control<MountedFormValues>;
+  readonly label: React.ReactNode;
+  readonly text: BudgetAlertEmailsEditorText;
+}) => {
+  useMountedName(KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+  return <BudgetAlertEmailsEditor {...props} name={KEY_MAX_BUDGET_ALERT_EMAILS_KEY} />;
+};
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
 
@@ -262,7 +279,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const { data: tagsData } = useTags();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
   const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
@@ -532,7 +548,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) =>
-    void form.handleSubmit(() => handleCreate(projectMountedValues(registry, form.getValues)))(event);
+    void form.handleSubmit(() => {
+      const values = projectMountedValues(registry, form.getValues);
+      const alertRows = budgetAlertRowsSchema((issue) =>
+        issue === "thresholdRange"
+          ? t("keyDetail.maxBudgetAlertEmails.thresholdRange")
+          : t("keyDetail.maxBudgetAlertEmails.duplicateThreshold"),
+      ).safeParse(values[KEY_MAX_BUDGET_ALERT_EMAILS_KEY] ?? []);
+      if (!alertRows.success) {
+        alertRows.error.issues.forEach((issue) =>
+          form.setError([KEY_MAX_BUDGET_ALERT_EMAILS_KEY, ...issue.path].join("."), { message: issue.message }),
+        );
+        return;
+      }
+      return handleCreate(values);
+    })(event);
 
   // Fetch available models when team or auth changes.
   // Note: Model prefill from URL params is handled by the useEffect below, which
@@ -900,31 +930,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   )}
                 </MountedFormField>
                 {ownerLimitedToTeamMembers && ownerField}
-                {enableProjectsUI && (
-                  <MountedFormField
-                    label={
-                      <span>
-                        {t("createKey.project.label")}{" "}
-                        <SimpleTooltip content={t("createKey.project.tooltip")}>
-                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </SimpleTooltip>
-                      </span>
-                    }
-                    name="project_id"
-                    className="mt-4"
-                  >
-                    {(control) => (
-                      <ProjectDropdown
-                        id={control.id}
-                        value={typeof control.value === "string" ? control.value : null}
-                        projects={projects}
-                        teamId={selectedCreateKeyTeam?.team_id}
-                        loading={isProjectsLoading || !teams}
-                        onChange={changeProject(control.onChange)}
-                      />
-                    )}
-                  </MountedFormField>
-                )}
+                <MountedFormField
+                  label={
+                    <span>
+                      {t("createKey.project.label")}{" "}
+                      <SimpleTooltip content={t("createKey.project.tooltip")}>
+                        <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="project_id"
+                  className="mt-4"
+                >
+                  {(control) => (
+                    <ProjectDropdown
+                      id={control.id}
+                      value={typeof control.value === "string" ? control.value : null}
+                      projects={projects}
+                      teamId={selectedCreateKeyTeam?.team_id}
+                      loading={isProjectsLoading || !teams}
+                      onChange={changeProject(control.onChange)}
+                    />
+                  )}
+                </MountedFormField>
               </div>
 
               {/* Show message when team selection is required */}
@@ -1093,6 +1121,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
+                      <div className="mt-4">
+                        <MountedBudgetAlertEmailsEditor
+                          control={form.control}
+                          label={
+                            <span>
+                              {t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholds")}{" "}
+                              <SimpleTooltip content={t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholdsHint")}>
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          text={{
+                            thresholdPlaceholder: t("keyDetail.maxBudgetAlertEmails.thresholdPlaceholder"),
+                            recipientsPlaceholder: t("keyDetail.maxBudgetAlertEmails.recipientsPlaceholder"),
+                            removeThreshold: t("keyDetail.maxBudgetAlertEmails.removeThreshold"),
+                            addThreshold: t("keyDetail.maxBudgetAlertEmails.addThreshold"),
+                          }}
+                        />
+                      </div>
                       <MountedFormField
                         className="mt-4"
                         label={
@@ -1599,6 +1646,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               value={(control.value as string | undefined) ?? ""}
                               rows={4}
                               placeholder={t("createKey.metadata.placeholder")}
+                              onBlur={() => {
+                                control.onBlur();
+                                moveMetadataBudgetAlertsToRows(
+                                  form.getValues("metadata") as string | undefined,
+                                  form.getValues(KEY_MAX_BUDGET_ALERT_EMAILS_KEY) as BudgetAlertRow[] | undefined,
+                                  (metadata, rows) => {
+                                    form.setValue("metadata", metadata, { shouldDirty: true });
+                                    form.setValue(KEY_MAX_BUDGET_ALERT_EMAILS_KEY, rows, { shouldDirty: true });
+                                  },
+                                  t,
+                                );
+                              }}
                             />
                           </>
                         )}

@@ -10,6 +10,7 @@ pub struct Deployment {
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
     pub litellm_params: LitellmParams,
+    pub configurable_clientside_auth_params: Box<[String]>,
     pub timeout: Option<Duration>,
     pub shaping: MessagesShaping,
 }

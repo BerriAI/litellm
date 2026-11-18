@@ -13,6 +13,7 @@ vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => (
 
 vi.mock("@/utils/roles", () => ({
   all_admin_roles: ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"],
+  isProxyAdminRole: (role: string) => role === "Admin" || role === "proxy_admin",
 }));
 
 describe("UserEditView", () => {
@@ -66,6 +67,7 @@ describe("UserEditView", () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
     vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+    vi.mocked(networking.getClaudeCodePluginsList).mockResolvedValue({ plugins: [] });
   });
 
   afterEach(() => {
@@ -652,6 +654,7 @@ describe("UserEditView", () => {
         "mcp_tool_permissions",
         "metadata",
         "models",
+        "skills",
         "user_alias",
         "user_email",
         "user_id",
@@ -668,6 +671,7 @@ describe("UserEditView", () => {
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
+        skills: [],
       };
       expect(payload).toStrictEqual(expectedPayload);
       expect(typeof payload.max_budget).toBe("number");

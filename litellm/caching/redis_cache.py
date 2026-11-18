@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._internal_context import current_service_caller
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
@@ -88,6 +87,14 @@ class _AsyncRedisCommands(Protocol):
 
     def lpop(self, name: str, count: int | None = None) -> Awaitable[object]: ...
 
+    def getrange(self, key: str, start: int, end: int) -> Awaitable[object]: ...
+
+    def set(
+        self, name: str, value: str | bytes, *, ex: int | None = None, xx: bool = False, get: bool = False
+    ) -> Awaitable[object]: ...
+
+    def getset(self, name: str, value: str | bytes) -> Awaitable[object]: ...
+
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
@@ -112,7 +119,6 @@ class _SupportsScriptLoad(Protocol):
 _GENERIC_CALLER_MODULES: Final = frozenset(
     {
         __name__,
-        "litellm.caching.redis_batch",
         "litellm.caching.dual_cache",
         "litellm.caching.caching",
         "litellm.rust_bridge.execution",
@@ -125,8 +131,6 @@ _GENERIC_CALLER_FRAME_NAMES: Final = frozenset(
         "wrapper",
         "_run_under_circuit_breaker",
         "_run_under_circuit_breaker_sync",
-        "run_alone",
-        "_settle_alone",
         "get_cache",
         "set_cache",
         "async_get_cache",
@@ -154,6 +158,9 @@ _INCREMENT_IF_PRESENT_LUA: Final = (
 _LUA_COUNT: Final = TypeAdapter(int)
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
+_GETRANGE_REPLY: Final[TypeAdapter[bytes | str]] = TypeAdapter(bytes | str)
+_SET_GET_REPLY: Final[TypeAdapter[bytes | str | None]] = TypeAdapter(bytes | str | None)
+_PIPELINE_REPLIES: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
@@ -184,11 +191,9 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
     Get the function names of the nearest meaningful callers of the cache method.
 
     Frames that merely forward the call (this module's circuit-breaker guards, the
-    cache facades, the batch pipeline's retry path, generic cache verbs) are
-    skipped, and the walk stops at the event loop, so the chain names the litellm
-    code that wanted the call. When nothing but forwarding frames is found (the call
-    runs in a task of its own, like a batch op retried on the flush) the chain the
-    declaring code threaded through ``service_caller`` is reported, else ``unknown``.
+    cache facades, generic cache verbs) are skipped, and the walk stops at the event
+    loop, so the chain names the litellm code that wanted the call, or ``unknown``
+    when nothing but forwarding frames is found.
 
     Args:
         num_frames: Number of previous frames to include (default: 2)
@@ -219,9 +224,7 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         )
         function_names: Final = leading_names + further_names
 
-        if function_names:
-            return " <- ".join(function_names)
-        return current_service_caller() or "unknown"
+        return " <- ".join(function_names) if function_names else "unknown"
     except Exception:
         return "unknown"
 
@@ -448,6 +451,36 @@ def _redis_reply_error_types() -> tuple[type[Exception], type[Exception]]:
     from redis.exceptions import ReadOnlyError, ResponseError
 
     return ResponseError, ReadOnlyError
+
+
+async def _set_existing_reply(commands: _AsyncRedisCommands, name: str, value: str, ttl: int | None) -> object:
+    try:
+        return await commands.set(name, value, ex=ttl, xx=True, get=True)
+    except _redis_reply_error_types()[0]:
+        return await _getset_existing_before_redis_6_2(commands, name, value, ttl)
+
+
+def _transaction_or_cluster_pipeline(commands: _AsyncRedisCommands) -> "Pipeline[bytes]":
+    from redis.exceptions import RedisClusterException
+
+    try:
+        return commands.pipeline(transaction=True)
+    except RedisClusterException:
+        return commands.pipeline(transaction=False)
+
+
+async def _getset_existing_before_redis_6_2(
+    commands: _AsyncRedisCommands, name: str, value: str, ttl: int | None
+) -> object:
+    async with _transaction_or_cluster_pipeline(commands) as pipe:
+        pipe.getset(name, value)
+        if ttl is not None:
+            pipe.expire(name, ttl)
+        replies: Final = _PIPELINE_REPLIES.validate_python(await pipe.execute())
+    previous: Final = replies[0]
+    if previous is None:
+        await commands.delete(name)
+    return previous
 
 
 def _is_redis_reply(exc: BaseException) -> bool:
@@ -1666,6 +1699,20 @@ class RedisCache(BaseCache):
             log_redis_failure(verbose_logger, logging.ERROR, "Error occurred in batch get cache", e)
             _record_swallowed_redis_failure(self._health, e)
             return key_value_dict
+
+    @_redis_circuit_breaker_guard
+    async def async_getrange(self, key: str, start: int, end: int) -> str:
+        value: Final = _GETRANGE_REPLY.validate_python(
+            await self._async_commands().getrange(self.check_and_fix_namespace(key=key), start, end)
+        )
+        return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+
+    @_redis_circuit_breaker_guard
+    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: int | None) -> str | None:
+        previous: Final = _SET_GET_REPLY.validate_python(
+            await _set_existing_reply(self._async_commands(), self.check_and_fix_namespace(key=key), value, ttl)
+        )
+        return previous.decode("utf-8", errors="replace") if isinstance(previous, bytes) else previous
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(
