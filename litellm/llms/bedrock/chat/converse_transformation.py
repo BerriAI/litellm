@@ -80,6 +80,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_converse_rejects_assistant_prefill,
+    bedrock_model_is_in_catalog,
     bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
@@ -664,7 +665,7 @@ class AmazonConverseConfig(BaseConfig):
             return True
         return (
             base_model is not None
-            and bedrock_model_is_unknown(model)
+            and not bedrock_model_is_in_catalog(model)
             and cls._is_openai_gpt_reasoning_model(base_model)
         )
 
