@@ -164,6 +164,16 @@ async def test_an_unknown_customer_is_refused_with_403_naming_its_header_when_re
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_member_of_a_known_organization_is_refused_from_the_organization_only_hierarchy() -> None:
+    identity: Final = CustomerRequestIdentity(customer_org_alias="org", customer_member_id="new-member")
+
+    with pytest.raises(ProxyException) as refused:
+        await refuse_unknown_customer(identity, ORG_ONLY, _refused)
+
+    assert (refused.value.code, refused.value.param) == ("403", "x-litellm-customer-member-id")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("identity", "hierarchy", "refusal"),
     (
