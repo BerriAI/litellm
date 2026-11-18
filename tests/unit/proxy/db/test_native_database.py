@@ -1,6 +1,6 @@
 import asyncio
 import datetime as dt
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final
@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.serialization import BestAvailableEncryption
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
+from litellm._internal_context import set_request_parent_otel_span
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, db_write_failure_is_requeue_safe
 from litellm.proxy.db.native_database import (
@@ -25,7 +26,14 @@ from litellm.proxy.db.native_database import (
 )
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR
 from litellm.proxy.db.token_auth import IAMEndpoint, RdsIamTokenAuth
-from litellm.rust_bridge._native import DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure
+from litellm.rust_bridge._native import (
+    DatabaseEndpoint,
+    NativeDatabase,
+    NativeDatabaseFailure,
+    RustJwtKeyMappingRepository,
+    RustKeyRepository,
+    RustModelAccessGroupRepository,
+)
 
 NOW: Final = datetime(2026, 11, 3, 12, 0, 0)
 _ADDRESS: Final = TypeAdapter(tuple[str, int])
@@ -220,6 +228,7 @@ class _RecordingServiceLogging(ServiceLogging):
     def __init__(self) -> None:
         super().__init__(mock_testing=True)
         self.events: tuple[tuple[str, str, float, Mapping[str, str] | None, str | None], ...] = ()
+        self.parents: tuple[object, ...] = ()
         self.arrived: Final = asyncio.Event()
 
     async def async_service_success_hook(
@@ -234,6 +243,7 @@ class _RecordingServiceLogging(ServiceLogging):
         caller: str | None = None,
     ) -> None:
         self.events = (*self.events, (service.value, call_type, duration, event_metadata, None))
+        self.parents = (*self.parents, parent_otel_span)
         self.arrived.set()
 
     async def async_service_failure_hook(
@@ -249,6 +259,7 @@ class _RecordingServiceLogging(ServiceLogging):
         caller: str | None = None,
     ) -> None:
         self.events = (*self.events, (service.value, call_type, duration, event_metadata, str(error)))
+        self.parents = (*self.parents, parent_otel_span)
         self.arrived.set()
 
 
@@ -295,6 +306,62 @@ async def test_native_health_check_failure_reports_a_db_event() -> None:
     assert (service, call_type, metadata) == ("postgres", "health_check", {})
     assert duration >= 0.9
     assert failure is not None and "database query failed" in failure
+
+
+@pytest.mark.asyncio
+async def test_service_logging_events_parent_under_the_recording_contexts_request_span() -> None:
+    logging: Final = _RecordingServiceLogging()
+    events: Final = ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=lambda: logging)
+    request_span: Final = object()
+
+    async def record_in_request() -> None:
+        set_request_parent_otel_span(request_span)  # pyright: ignore[reportArgumentType]  # a sentinel stands in for the OTel span
+        await asyncio.to_thread(events.record, "get_data", None, None, NOW.timestamp(), 0.1, None)
+
+    await asyncio.create_task(record_in_request())
+    await asyncio.wait_for(logging.arrived.wait(), timeout=5)
+
+    assert logging.parents == (request_span,)
+
+
+async def _key_find(native: NativeDatabase) -> object:
+    return await RustKeyRepository(native).find("hashed")
+
+
+async def _jwt_mapped_token(native: NativeDatabase) -> object:
+    return await RustJwtKeyMappingRepository(native).mapped_token("sub", "user", None)
+
+
+async def _model_access_group_names(native: NativeDatabase) -> object:
+    return await RustModelAccessGroupRepository(native).names(10)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read", [_key_find, _jwt_mapped_token, _model_access_group_names])
+@pytest.mark.parametrize("in_request", [True, False])
+async def test_auth_repository_reads_report_their_db_event_under_the_callers_request_span(
+    read: Callable[[NativeDatabase], Awaitable[object]], in_request: bool
+) -> None:
+    logging: Final = _RecordingServiceLogging()
+    native: Final = await NativeDatabase.connect(
+        ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=lambda: logging),
+        await DatabaseEndpoint.resolve("postgresql://litellm:secret@127.0.0.1:1/proxy?pool_timeout=1", 2),
+    )
+    request_span: Final = object()
+
+    async def read_in_request() -> None:
+        if in_request:
+            set_request_parent_otel_span(request_span)  # pyright: ignore[reportArgumentType]  # a sentinel stands in for the OTel span
+        with pytest.raises(NativeDatabaseFailure):
+            await read(native)
+
+    try:
+        await asyncio.create_task(read_in_request())
+        await asyncio.wait_for(logging.arrived.wait(), timeout=5)
+    finally:
+        await native.close()
+
+    assert logging.parents == ((request_span,) if in_request else (None,))
 
 
 async def _native_failure(url: str) -> NativeDatabaseFailure:

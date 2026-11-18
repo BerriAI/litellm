@@ -2,10 +2,6 @@
 pub enum Error {
     #[error("database query failed")]
     Query(#[from] sqlx::Error),
-    #[error("spend batch has {ids} ids and {costs} costs")]
-    InvalidSpendBatch { ids: usize, costs: usize },
-    #[error("invalid spend timestamp")]
-    InvalidTimestamp(#[from] chrono::ParseError),
     #[error("invalid pool duration")]
     InvalidDuration(#[from] std::time::TryFromFloatSecsError),
 }
