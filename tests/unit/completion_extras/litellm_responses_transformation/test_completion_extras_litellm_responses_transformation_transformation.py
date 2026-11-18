@@ -7479,6 +7479,8 @@ _SYSTEM_AND_USER_MESSAGES: Final = [
         ("openai/gpt-6.3-sol", {}),
         ("gpt-7-sol", {}),
         ("team-deployment", {"base_model": "azure/gpt-6.2-sol"}),
+        ("openai.gpt-6.2-sol", {"custom_llm_provider": "bedrock_mantle"}),
+        ("us-east-1/openai.gpt-6.2-astra", {"custom_llm_provider": "bedrock_mantle"}),
     ],
 )
 def test_system_prompt_leads_input_when_instructions_miss_the_prompt_cache(model, litellm_params):
@@ -7493,7 +7495,7 @@ def test_system_prompt_leads_input_when_instructions_miss_the_prompt_cache(model
     assert [item["role"] for item in request["input"]] == ["developer", "user"]
 
 
-@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6", "team-deployment"])
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6", "team-deployment", "openai.gpt-6.1-sol"])
 def test_system_prompt_stays_in_instructions_when_they_are_cached(model):
     request = _bridged_system_prompt_request(model, _SYSTEM_AND_USER_MESSAGES)
 

@@ -16,7 +16,9 @@ _INSTRUCTION_ROLES: Final = frozenset({"system", "developer"})
 def instructions_miss_prompt_cache(model: str, base_model: object = None) -> bool:
     """GPT-6.2 and later place top-level `instructions` after `input`, beyond every cache breakpoint."""
     names: Final = (model, base_model) if isinstance(base_model, str) and base_model else (model,)
-    return any(map(OpenAIGPT5Config.is_model_gpt_6_2_plus_model, names))
+    return any(
+        OpenAIGPT5Config.is_model_gpt_6_2_plus_model(name.rsplit("/", 1)[-1].removeprefix("openai.")) for name in names
+    )
 
 
 def _role(item: ResponseInputItemParam) -> str | None:

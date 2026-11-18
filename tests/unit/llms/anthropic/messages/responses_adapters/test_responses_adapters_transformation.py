@@ -2580,7 +2580,17 @@ def _developer_item(*texts: str) -> dict[str, Any]:
     }
 
 
-@pytest.mark.parametrize("model", ["openai/gpt-6.2-sol", "gpt-6.2-astra", "openai/gpt-6.3-sol", "gpt-7-sol"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openai/gpt-6.2-sol",
+        "gpt-6.2-astra",
+        "openai/gpt-6.3-sol",
+        "gpt-7-sol",
+        "bedrock_mantle/openai.gpt-6.2-sol",
+        "bedrock_mantle/us-east-1/openai.gpt-6.2-astra",
+    ],
+)
 def test_system_string_leads_input_when_instructions_miss_the_prompt_cache(model: str) -> None:
     kwargs = _ADAPTER.translate_request(_make_request(model=model, system="Be concise."))
 
