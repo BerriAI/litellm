@@ -9,13 +9,16 @@ Fixtures mirror what a live proxy run recorded on the callback, including the pr
 spelling of prompt-cache counts (`prompt_tokens_details.cached_tokens`).
 """
 
+import asyncio
 import json
 import os
 from datetime import datetime, timedelta
 from typing import Any, Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -110,7 +113,6 @@ def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMOb
     assert "function" not in message["tool_calls"][0]
 
 
-
 def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: DataDogLLMObsLogger) -> None:
     payload: Final = build(
         logger,
@@ -144,6 +146,7 @@ def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: 
             "type": "function",
         },
     ]
+
 
 def test_tool_call_identifiers_that_are_not_strings_are_blanked_not_stringified(logger: DataDogLLMObsLogger) -> None:
     payload = build(
@@ -1202,3 +1205,80 @@ def test_tool_arguments_ship_as_an_object_only_when_they_decode_to_one(
     )
 
     assert payload["meta"]["output"]["messages"][0]["tool_calls"][0]["arguments"] == shipped
+
+
+@pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize("redact", [False, True], ids=["visible", "redacted"])
+def test_sync_events_reach_the_datadog_intake_without_an_event_loop(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, failure: bool, redact: bool
+) -> None:
+    monkeypatch.setenv("DD_API_KEY", "synthetic-key")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+    intake: Final = respx_mock.post("https://api.us5.datadoghq.com/api/intake/llm-obs/v1/trace/spans").respond(202)
+    callback: Final = DataDogLLMObsLogger(turn_off_message_logging=redact)
+    kwargs: Final = build_payload()
+    kwargs["standard_logging_object"]["call_type"] = "completion"
+    kwargs["standard_logging_object"]["status"] = "failure" if failure else "success"
+    if failure:
+        kwargs["standard_logging_object"]["error_information"] = {
+            "error_message": "Synthetic provider failure",
+            "error_class": "BadRequestError",
+        }
+    start: Final = datetime(2026, 1, 1, 12)
+    event: Final = callback.log_failure_event if failure else callback.log_success_event
+    event(kwargs, None, start, start + timedelta(seconds=2))
+
+    assert intake.call_count == 1
+    request: Final[httpx.Request] = intake.calls[0].request
+    assert request.headers["DD-API-KEY"] == "synthetic-key"
+    spans: Final = json.loads(request.content)["data"]["attributes"]["spans"]
+    assert len(spans) == 1
+    assert spans[0]["status"] == ("error" if failure else "ok")
+    assert spans[0]["metrics"]["total_tokens"] == 4954
+    assert spans[0]["meta"]["input"]["messages"][0]["content"] == ("redacted-by-litellm" if redact else "hi")
+    assert callback.log_queue == []
+
+
+@pytest.mark.parametrize("status", [400, 500])
+def test_sync_intake_errors_do_not_fail_the_completion(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, status: int
+) -> None:
+    monkeypatch.setenv("DD_API_KEY", "synthetic-key")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+    intake: Final = respx_mock.post("https://api.us5.datadoghq.com/api/intake/llm-obs/v1/trace/spans").respond(status)
+    callback: Final = DataDogLLMObsLogger()
+    start: Final = datetime(2026, 1, 1, 12)
+    callback.log_success_event(build_payload(), None, start, start + timedelta(seconds=2))
+    assert intake.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
+async def test_async_events_are_batched_once_when_sync_delivery_is_also_attempted(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, failure: bool
+) -> None:
+    monkeypatch.setenv("DD_API_KEY", "synthetic-key")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    intake: Final = respx_mock.post("https://api.us5.datadoghq.com/api/intake/llm-obs/v1/trace/spans").respond(202)
+    callback: Final = DataDogLLMObsLogger(batch_size=2)
+    kwargs: Final = build_payload()
+    kwargs["litellm_params"]["acompletion"] = True
+    kwargs["standard_logging_object"]["status"] = "failure" if failure else "success"
+    start: Final = datetime(2026, 1, 1, 12)
+    sync_event: Final = callback.log_failure_event if failure else callback.log_success_event
+    async_event: Final = callback.async_log_failure_event if failure else callback.async_log_success_event
+    try:
+        sync_event(kwargs, None, start, start + timedelta(seconds=2))
+        await async_event(kwargs, None, start, start + timedelta(seconds=2))
+        assert intake.call_count == 0
+        await async_event(kwargs, None, start, start + timedelta(seconds=2))
+        assert intake.call_count == 1
+        spans: Final = json.loads(intake.calls[0].request.content)["data"]["attributes"]["spans"]
+        assert len(spans) == 2
+        assert [span["metrics"]["total_tokens"] for span in spans] == [4954, 4954]
+        assert callback.log_queue == []
+    finally:
+        if callback._flush_task is not None:
+            callback._flush_task.cancel()
+            await asyncio.gather(callback._flush_task, return_exceptions=True)
