@@ -92,6 +92,10 @@
       "sarvam-105b": "https://api.sarvam.ai/v1",
       "sarvam-105b-conversations": "https://api.sarvam.ai/v1"
     },
+    "model_special_handling": {
+      "sarvam-105b": {"convert_content_list_to_string": true},
+      "sarvam-105b-conversations": {"convert_content_list_to_string": true}
+    },
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
     "param_mappings": {

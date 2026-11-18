@@ -157,6 +157,18 @@ When some models are served at a different base URL than the rest, list them und
 }
 ```
 
+When only some models need a `special_handling` flag, set it under `model_special_handling`. A model's flags override the provider's:
+
+```json
+{
+  "your_provider": {
+    "model_special_handling": {
+      "legacy-model": {"convert_content_list_to_string": true}
+    }
+  }
+}
+```
+
 ### How It Works
 
 1. `json_loader.py` checks `supported_endpoints` for `/v1/responses`
