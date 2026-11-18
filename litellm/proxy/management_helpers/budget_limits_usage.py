@@ -1,11 +1,11 @@
 import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 
-BudgetWindowEntityType = Literal["Key", "Team", "User"]
+BudgetWindowEntityType: TypeAlias = Literal["Key", "Team", "User"]
 
 
 def budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
@@ -35,7 +35,7 @@ async def _budget_window_usage(
     counter_key: Callable[[str], str],
     entity_type: BudgetWindowEntityType,
     entity_id: str,
-) -> tuple[str, dict[str, object]] | None:
+) -> tuple[str, Mapping[str, object]] | None:
     """Reads the same cross-pod counter, window entity and window start the budget check enforces against,
     so a stale-low counter is re-checked against the LiteLLM_BudgetWindowSpend row."""
     from litellm.proxy.proxy_server import get_current_spend
@@ -60,7 +60,7 @@ async def build_budget_limits_usage(
     counter_key: Callable[[str], str],
     entity_type: BudgetWindowEntityType,
     entity_id: str,
-) -> dict[str, dict[str, object]] | None:
+) -> Mapping[str, Mapping[str, object]] | None:
     """Current-window spend per budget window, keyed by budget_duration. None when there are no windows.
 
     Plain dicts, since /user/info and /team/info nest this inside dicts that pydantic serializes."""

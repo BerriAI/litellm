@@ -168,6 +168,9 @@ _ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
     dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
 _ADMIN_USER_ROW_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_ADMIN_BUDGET_LIMITS_ADAPTER: Final[TypeAdapter[Sequence[BudgetLimitEntry] | str | None]] = TypeAdapter(
+    Sequence[BudgetLimitEntry] | str | None
+)
 
 
 def _user_table(
@@ -968,8 +971,10 @@ def _redact_scim_enterprise_metadata(
 
 
 async def _user_budget_limits_usage(
-    user_id: str, budget_limits: Sequence[object] | str | None
+    user_id: str | None, budget_limits: Sequence[object] | str | None
 ) -> Mapping[str, Mapping[str, object]] | None:
+    if user_id is None:
+        return None
     return await build_budget_limits_usage(
         budget_limits=budget_limits,
         counter_key=lambda duration: user_window_counter(user_id, duration),
@@ -1334,7 +1339,12 @@ async def _get_admin_user_row(
     if row is None:
         return None
     fields: Final = _ADMIN_USER_ROW_ADAPTER.validate_python(row.model_dump() if isinstance(row, BaseModel) else row)
-    return {name: value for name, value in fields.items() if name != "password"}
+    budget_limits: Final = _ADMIN_BUDGET_LIMITS_ADAPTER.validate_python(fields.get("budget_limits"))
+    usage: Final = await _user_budget_limits_usage(admin_user_id, budget_limits)
+    return {
+        **{name: value for name, value in fields.items() if name != "password"},
+        **({"budget_limits_usage": usage} if usage is not None else {}),
+    }
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
