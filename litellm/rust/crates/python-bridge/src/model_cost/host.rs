@@ -1,9 +1,12 @@
 //! Calls into `litellm.rust_bridge.host.model_cost`
 
-use litellm_model_catalog::{Generation, KnownNames};
+use litellm_model_catalog::wire::Fields;
+use litellm_model_catalog::{Generation, Inferred, KnownNames, NameHost};
 use pyo3::call::PyCallArgs;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PyMapping, PyTuple};
+
+use super::live::row_fields;
 
 pub(crate) const MODULE: &str = "litellm.rust_bridge.host.model_cost";
 
@@ -110,11 +113,35 @@ pub(crate) fn inputs(py: Python<'_>) -> PyResult<Bound<'_, super::NativeModelCos
 }
 
 pub(crate) fn known_names(py: Python<'_>) -> PyResult<KnownNames> {
-    let (providers, renamed_models) = call(py, "known_names", ())?.extract()?;
+    let (providers, renamed_models, vertex_renamed, replicate_models) =
+        call(py, "known_names", ())?.extract()?;
     Ok(KnownNames {
         providers,
         renamed_models,
+        vertex_renamed,
+        replicate_models,
     })
+}
+
+/// The two answers about a name only Python has: the provider `get_llm_provider` reads off it, and the row
+/// `get_model_info` answers for a provider that serves its own. A host call that raises answers as a lookup that
+/// misses
+pub(crate) struct PythonNames<'py> {
+    pub(crate) py: Python<'py>,
+}
+
+impl NameHost for PythonNames<'_> {
+    fn infer(&self, model: &str) -> Option<Inferred> {
+        let found: Option<(String, String)> = call(self.py, "infer_provider", (model,))
+            .and_then(|found| found.extract())
+            .ok()?;
+        found.map(|(model, provider)| Inferred { model, provider })
+    }
+
+    fn served_row(&self, model: &str, provider: &str) -> Option<Fields> {
+        let served = call(self.py, "served_row", (model, provider)).ok()?;
+        row_fields(served.cast::<PyMapping>().ok()?).ok()
+    }
 }
 
 pub(crate) fn published(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
