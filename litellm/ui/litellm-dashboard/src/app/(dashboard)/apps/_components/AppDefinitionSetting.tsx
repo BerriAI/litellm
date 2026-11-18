@@ -144,17 +144,11 @@ export default function AppDefinitionSetting() {
             )}
           </div>
           <p className="text-xs text-muted-foreground">{t("apps.definition.lockHint")}</p>
-          <div className="space-y-1.5 border-t pt-4">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <Checkbox
-                checked={definition.data.auto_create_customers_without_app ?? true}
-                disabled={pending}
-                onCheckedChange={(checked) => void saveWithoutApp(checked === true)}
-              />
-              {t("apps.definition.autoCreateWithoutApp")}
-            </label>
-            <p className="text-xs text-muted-foreground">{t("apps.definition.autoCreateWithoutAppHint")}</p>
-          </div>
+          <CustomersWithoutAppSwitch
+            checked={definition.data.auto_create_customers_without_app}
+            disabled={pending}
+            onChange={(allowed) => void saveWithoutApp(allowed)}
+          />
         </>
       )}
       {error && (
@@ -163,5 +157,26 @@ export default function AppDefinitionSetting() {
         </p>
       )}
     </section>
+  );
+}
+
+function CustomersWithoutAppSwitch({
+  checked,
+  disabled,
+  onChange,
+}: {
+  checked?: boolean;
+  disabled: boolean;
+  onChange: (allowed: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-1.5 border-t pt-4">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <Checkbox checked={checked ?? true} disabled={disabled} onCheckedChange={(value) => onChange(value === true)} />
+        {t("apps.definition.autoCreateWithoutApp")}
+      </label>
+      <p className="text-xs text-muted-foreground">{t("apps.definition.autoCreateWithoutAppHint")}</p>
+    </div>
   );
 }
