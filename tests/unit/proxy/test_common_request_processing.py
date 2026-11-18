@@ -15910,11 +15910,12 @@ _VLLM_ROUTES: Final = (
 
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
-async def test_openai_compatible_backend_400_relays_param_and_unwrapped_message(
+async def test_openai_compatible_backend_400_relays_param_and_unwrapped_message_with_an_openai_type(
     route: str, call: Callable[[], object]
 ) -> None:
     body: Final = {
         "error": {
+            "object": "error",
             "message": "max_tokens must be at least 1, got -5.",
             "type": "BadRequestError",
             "param": "max_tokens",
@@ -15934,7 +15935,8 @@ async def test_openai_compatible_backend_400_relays_param_and_unwrapped_message(
             proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
         )
     payload: Final = relayed.value.to_dict()
-    assert (payload["param"], payload["type"], payload["code"]) == ("max_tokens", "BadRequestError", "400")
+    assert (payload["param"], payload["type"], payload["code"]) == ("max_tokens", "invalid_request_error", "400")
+    assert "provider_specific_fields" not in payload
     assert str(payload["message"]).endswith("max_tokens must be at least 1, got -5.")
     assert '{"error"' not in str(payload["message"])
     assert "{'error'" not in str(payload["message"])
@@ -15971,10 +15973,9 @@ async def test_openai_compatible_backend_400_redacts_secrets_and_internal_detail
             proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
         )
     payload: Final = relayed.value.to_dict()
-    assert str(payload["type"]).startswith("BadRequestError ")
+    assert payload["type"] == "invalid_request_error"
     assert str(payload["param"]).startswith("token_field ")
     for secret_or_internal in leaks:
-        assert secret_or_internal not in str(payload["type"])
         assert secret_or_internal not in str(payload["param"])
         assert secret_or_internal not in str(payload["message"])
 
@@ -16015,6 +16016,62 @@ async def test_openai_compatible_backend_400_relays_the_error_fields_beyond_open
         "content_filters": list(_CONTENT_FILTERS),
         "innererror": {"code": "ResponsibleAIPolicyViolation"},
     }
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_redacts_internal_hosts_used_as_keys_in_its_extra_fields(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = {
+        "error": {
+            "message": "every scanner is down",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": None,
+            "upstreams": {"10.0.4.17:8080": "down", "guard-scan.internal.corp": "down"},
+        }
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, json=body)
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    answered: Final = json.dumps(relayed.value.to_dict()["provider_specific_fields"])
+    assert "upstreams" in answered
+    assert [leak for leak in ("10.0.4.17", "guard-scan.internal.corp") if leak in answered] == []
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("route", "call"), _VLLM_ROUTES)
+async def test_openai_compatible_backend_400_with_a_non_finite_number_in_its_extra_fields_still_answers_valid_json(
+    route: str, call: Callable[[], object]
+) -> None:
+    body: Final = (
+        b'{"error": {"message": "rejected", "type": "invalid_request_error", "param": "prompt", "code": null,'
+        b' "scores": {"toxicity": NaN, "bias": Infinity}}}'
+    )
+    with respx.mock(assert_all_called=True) as mock:
+        _ = mock.post(f"https://vllm-backend.example.com/v1/{route}").mock(
+            return_value=httpx.Response(400, content=body, headers={"content-type": "application/json"})
+        )
+        with pytest.raises(litellm.BadRequestError) as caught:
+            _ = call()
+    with pytest.raises(ProxyException) as relayed:
+        await ProxyBaseLLMRequestProcessing(data={"model": "qwen"})._handle_llm_api_exception(
+            e=caught.value,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-front"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    answered: Final = json.loads(json.dumps(relayed.value.to_dict(), allow_nan=False))
+    assert (relayed.value.code, answered["param"]) == ("400", "prompt")
 
 
 _ScenarioT = TypeVar("_ScenarioT")

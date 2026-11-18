@@ -33,13 +33,20 @@ from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
 
 
 _UPSTREAM_PARAM_CASES: Final = [
-    pytest.param("max_tokens", None, id="renamed_by_the_bridge"),
+    pytest.param("max_tokens", "max_output_tokens", id="renamed_by_the_bridge"),
+    pytest.param("max_completion_tokens", "max_output_tokens", id="renamed_twice"),
+    pytest.param("reasoning_effort", "reasoning.effort", id="moved_under_reasoning"),
+    pytest.param("response_format.json_schema.schema", "text.format", id="moved_under_text"),
+    pytest.param("tools[0].function.name", "tools", id="reshaped_tool"),
     pytest.param("messages.[0].content", None, id="chat_only_path"),
+    pytest.param("stream_options", None, id="sent_only_by_the_bridge"),
+    pytest.param("frequency_penalty", None, id="not_a_responses_field"),
     pytest.param("user", "user", id="shared_field"),
+    pytest.param(["body", "max_tokens"], None, id="non_string_param"),
 ]
 
 
-def _upstream_rejects(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str) -> respx.Route:
+def _upstream_rejects(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: object) -> respx.Route:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
     return respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
@@ -51,8 +58,8 @@ def _upstream_rejects(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
-def test_sync_bridged_turn_relays_an_upstream_param_only_when_it_names_a_responses_field(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: str, relayed_param: str | None
+def test_sync_bridged_turn_names_an_upstream_param_as_the_responses_field_the_caller_sent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: object, relayed_param: str | None
 ):
     upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
 
@@ -71,8 +78,8 @@ def test_sync_bridged_turn_relays_an_upstream_param_only_when_it_names_a_respons
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
-async def test_async_bridged_turn_relays_an_upstream_param_only_when_it_names_a_responses_field(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: str, relayed_param: str | None
+async def test_async_bridged_turn_names_an_upstream_param_as_the_responses_field_the_caller_sent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: object, relayed_param: str | None
 ):
     upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
     bridged_turn: Final = LiteLLMCompletionTransformationHandler().response_api_handler(

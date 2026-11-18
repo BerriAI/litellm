@@ -2,6 +2,8 @@
 ``type`` is a required string and ``param`` is nullable, neither of which the literal
 string ``"None"`` satisfies."""
 
+import json
+import re
 import sys
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -36,7 +38,11 @@ _HTTP_ERROR_STATUSES: Final = range(status.HTTP_400_BAD_REQUEST, 600)
 
 _ERROR_BODY: Final = TypeAdapter(dict[str, object])
 
-_OPENAI_ERROR_OBJECT_FIELDS: Final = frozenset({"message", "type", "param", "code", "provider_specific_fields"})
+_OPENAI_ERROR_TYPE_SHAPE: Final = re.compile(r"[a-z][a-z0-9_]*")
+
+_OPENAI_ERROR_OBJECT_FIELDS: Final = frozenset(
+    {"object", "message", "type", "param", "code", "provider_specific_fields"}
+)
 
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
 
@@ -103,9 +109,13 @@ def _http_error_status(value: object) -> int | None:
 
 
 def openai_error_type(exc: object, status_code: int) -> str:
-    """OpenAI types ``error.type`` as a required string, so an exception carrying none
-    falls back to the type its status code stands for."""
-    return _relayable_text(attribute_of(exc, "type")) or openai_error_type_for_status(status_code)
+    """OpenAI types ``error.type`` as a required snake_case string, so an exception carrying none,
+    or a backend's own class name such as vLLM's ``BadRequestError``, falls back to the type its
+    status code stands for."""
+    carried: Final = _relayable_text(attribute_of(exc, "type"))
+    if _OPENAI_ERROR_TYPE_SHAPE.fullmatch(carried):
+        return carried
+    return openai_error_type_for_status(status_code)
 
 
 def openai_error_type_for_status(status_code: int) -> str:
@@ -140,11 +150,28 @@ def relayed_provider_specific_fields(
     fields: Final = (
         _ERROR_BODY.validate_python(declared)
         if isinstance(declared, dict)
-        else {key: value for key, value in error_object.items() if key not in _OPENAI_ERROR_OBJECT_FIELDS}
+        else _openai_error_object_extras(error_object)
     )
     if not fields:
         return None
-    return _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(fields))
+    redacted: Final = _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(fields))
+    return redacted if _is_json_compliant(redacted) else None
+
+
+def _is_json_compliant(fields: Mapping[str, object]) -> bool:
+    try:
+        _ = json.dumps(fields, allow_nan=False)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _openai_error_object_extras(error_object: Mapping[str, object]) -> Mapping[str, object]:
+    if not isinstance(error_object.get("message"), str):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {key: value for key, value in error_object.items() if key not in _OPENAI_ERROR_OBJECT_FIELDS}
+    )
 
 
 def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:

@@ -5862,7 +5862,9 @@ def test_get_error_information_error_code_priority():
     assert result["error_class"] == "NoCodeException"
 
 
-@pytest.mark.parametrize("provider_code", ["context_length_exceeded", "integer_below_min_value", "content_filter"])
+@pytest.mark.parametrize(
+    "provider_code", ["context_length_exceeded", "integer_below_min_value", "content_filter", "1211", "200"]
+)
 def test_get_error_information_logs_the_http_status_over_a_provider_error_code(provider_code: str):
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 

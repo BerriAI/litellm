@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
     proxy_exception_for,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.types.router import RouterErrors
@@ -535,8 +536,7 @@ def test_openai_error_type_and_param_redact_secrets_and_internal_details(leakabl
     relayed_type: Final = openai_error_type(carried, 400)
     relayed_param: Final = openai_error_param(carried)
 
-    assert leakable not in relayed_type
-    assert relayed_type.startswith("BadTypeError ")
+    assert relayed_type == openai_error_type(Exception("boom"), 400)
     assert relayed_param is not None
     assert leakable not in relayed_param
     assert relayed_param.startswith("bad_field ")
@@ -551,3 +551,54 @@ def test_a_type_or_param_that_redaction_empties_falls_back_to_the_status_type_an
 
     assert openai_error_type(carried, 400) == openai_error_type(Exception("boom"), 400)
     assert openai_error_param(carried) is None
+
+
+@pytest.mark.parametrize("carried_type", ["insufficient_quota", "invalid_request_error", "server_error"])
+def test_openai_error_type_relays_a_snake_case_type_the_backend_sent(carried_type: str) -> None:
+    class _Carrier(Exception):
+        type: str = carried_type
+
+    assert openai_error_type(_Carrier("boom"), 400) == carried_type
+
+
+@pytest.mark.parametrize("carried_type", ["BadRequestError", "Bad Request", "invalid-request", "1211"])
+def test_openai_error_type_answers_the_status_type_for_a_type_outside_openais_vocabulary(carried_type: str) -> None:
+    class _Carrier(Exception):
+        type: str = carried_type
+
+    assert openai_error_type(_Carrier("boom"), 400) == "invalid_request_error"
+    assert openai_error_type(_Carrier("boom"), 429) == "rate_limit_error"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"object": "error", "message": "rejected", "type": "BadRequestError", "param": None, "code": 400},
+        {"error": "Input validation error: `max_new_tokens` must be strictly positive", "error_type": "validation"},
+        {"detail": [{"loc": ["body", "max_tokens"], "msg": "must be >= 1", "type": "value_error"}]},
+    ],
+    ids=["vllm", "text_generation_inference", "fastapi_validation"],
+)
+def test_relayed_provider_specific_fields_ignore_bodies_with_nothing_beyond_openais_error_object(
+    body: dict[str, object],  # mutable-ok: BadRequestError.body is a dict
+) -> None:
+    rejected: Final = litellm.BadRequestError(message="rejected", model="qwen", llm_provider="hosted_vllm", body=body)
+
+    assert relayed_provider_specific_fields(rejected) is None
+
+
+def test_relayed_provider_specific_fields_keep_what_an_openai_shaped_body_adds() -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="filtered",
+        model="gpt-5.4-nano",
+        llm_provider="azure",
+        body={
+            "message": "filtered",
+            "type": None,
+            "param": "prompt",
+            "code": "content_filter",
+            "innererror": {"code": "ResponsibleAIPolicyViolation"},
+        },
+    )
+
+    assert relayed_provider_specific_fields(rejected) == {"innererror": {"code": "ResponsibleAIPolicyViolation"}}

@@ -7805,9 +7805,13 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
     return ()
 
 
+def _is_http_error_status(code: str) -> bool:
+    return len(code) == 3 and code.isascii() and code.isdigit() and 400 <= int(code) <= 599
+
+
 def _logged_error_code(original_exception: Exception | None) -> str:
     carried_code: Final = str(getattr(original_exception, "code", None))
-    if carried_code.isdigit():
+    if _is_http_error_status(carried_code):
         return carried_code
     status_code: Final[object] = getattr(original_exception, "status_code", None)
     if status_code is not None:

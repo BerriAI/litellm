@@ -1,0 +1,51 @@
+import re
+from collections.abc import Generator, Iterable, Mapping
+from collections.abc import Set as AbstractSet
+from contextlib import contextmanager
+from types import MappingProxyType
+from typing import Final
+
+import openai
+
+from litellm.types.llms.openai import ResponsesAPIRequestParams
+
+_RESPONSES_REQUEST_FIELDS: Final = (
+    ResponsesAPIRequestParams.__required_keys__ | ResponsesAPIRequestParams.__optional_keys__
+)
+_RESPONSES_FIELD_BY_BRIDGED_FIELD: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "max_tokens": "max_output_tokens",
+        "max_completion_tokens": "max_output_tokens",
+        "reasoning_effort": "reasoning.effort",
+        "reasoning_summary": "reasoning.summary",
+        "response_format": "text.format",
+        "web_search_options": "tools",
+    }
+)
+_FIELDS_THE_BRIDGE_RESHAPES: Final = frozenset({"tools", "tool_choice"})
+_FIELDS_ONLY_THE_BRIDGE_SENDS: Final = frozenset({"stream_options"})
+_PARAM_PATH_SEPARATOR: Final = re.compile(r"[.\[]")
+
+
+def responses_error_param(chat_completion_param: object, caller_fields: AbstractSet[str]) -> str | None:
+    if not isinstance(chat_completion_param, str):
+        return None
+    root: Final = _PARAM_PATH_SEPARATOR.split(chat_completion_param, maxsplit=1)[0]
+    renamed: Final = _RESPONSES_FIELD_BY_BRIDGED_FIELD.get(root)
+    if renamed is not None:
+        return renamed
+    if root in _FIELDS_THE_BRIDGE_RESHAPES:
+        return root
+    if root in _FIELDS_ONLY_THE_BRIDGE_SENDS or root not in caller_fields:
+        return None
+    return chat_completion_param
+
+
+@contextmanager
+def error_param_named_as_a_responses_field(caller_kwargs: Iterable[str]) -> Generator[None]:
+    caller_fields: Final = _RESPONSES_REQUEST_FIELDS.union(caller_kwargs)
+    try:
+        yield
+    except openai.APIError as error:
+        error.param = responses_error_param(error.param, caller_fields)
+        raise
