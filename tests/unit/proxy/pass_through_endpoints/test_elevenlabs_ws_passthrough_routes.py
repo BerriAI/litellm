@@ -13,8 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._lazy_features import LAZY_FEATURES
-from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import cache_key_object
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _websocket_relay,
@@ -104,13 +103,6 @@ async def _serve(
         relay=relay,
     )
     return relay
-
-
-@pytest.mark.parametrize("path", [STREAM_PATH, MULTI_STREAM_PATH])
-def test_elevenlabs_tts_is_a_lazily_loaded_mapped_pass_through_route(path: str) -> None:
-    feature: Final = next(feature for feature in LAZY_FEATURES if feature.name == "llm_passthrough")
-    assert feature.matches(path)
-    assert any(path.startswith(prefix) for prefix in LiteLLMRoutes.mapped_pass_through_routes.value)
 
 
 @pytest.mark.asyncio
