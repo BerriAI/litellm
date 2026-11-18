@@ -437,15 +437,19 @@ fn chunks_on_the_unobserved_tail_reach_the_caller_without_the_stream_hooks(
 }
 
 #[rstest]
-fn a_draining_stream_reports_every_chunk_to_the_stream_hooks_after_the_caller_closes(
+#[case::complete(false, &["delivered", "succeeded:None", "adapter.close"])]
+#[case::failed(true, &["failed:DetachedStream:classified: upstream stream failed", "adapter.close"])]
+fn a_draining_stream_reports_its_outcome_to_hooks_after_the_caller_closes(
     #[from(interpreter)] _python: Interpreter,
+    #[case] fails: bool,
+    #[case] terminal_events: &[&str],
     #[values(false, true)] asynchronous: bool,
 ) {
     Python::attach(|py| {
         let log = Log::default();
         let stream = open_stream_from(
             py,
-            draining_streaming_machine(true, std::time::Duration::ZERO),
+            draining_streaming_machine(true, std::time::Duration::ZERO, fails),
             hooks(&log, HookScript::Plain),
             call_options(asynchronous),
         );
@@ -462,32 +466,29 @@ fn a_draining_stream_reports_every_chunk_to_the_stream_hooks_after_the_caller_cl
             stream.call_method0("__next__").unwrap();
             stream.call_method0("close").unwrap();
         }
-        assert_eq!(
-            log.entries(),
-            [
-                "started",
-                "begin",
-                "opened",
-                "delivered",
-                "delivered",
-                "delivered",
-                "succeeded:None",
-                "adapter.close"
-            ]
-        );
+        let events = ["started", "begin", "opened", "delivered", "delivered"];
+        assert_eq!(log.entries(), [events.as_slice(), terminal_events].concat());
     });
 }
 
 #[rstest]
 #[case::draining(
     true,
+    false,
     "cancelled",
     &["started", "begin", "opened", "delivered", "delivered", "delivered", "succeeded:None", "adapter.close"]
 )]
-#[case::not_draining(false, "cancelled", &["started", "begin", "opened", "delivered", "adapter.close"])]
+#[case::drain_fails(
+    true,
+    true,
+    "cancelled",
+    &["started", "begin", "opened", "delivered", "delivered", "failed:DetachedStream:classified: upstream stream failed", "adapter.close"]
+)]
+#[case::not_draining(false, false, "cancelled", &["started", "begin", "opened", "delivered", "adapter.close"])]
 fn a_caller_cancelled_mid_read_leaves_only_a_draining_stream_reading_on(
     #[from(interpreter)] _python: Interpreter,
     #[case] drain: bool,
+    #[case] fails: bool,
     #[case] outcome: &str,
     #[case] logged: &[&str],
 ) {
@@ -501,6 +502,7 @@ fn a_caller_cancelled_mid_read_leaves_only_a_draining_stream_reading_on(
                     Ok(draining_streaming_machine(
                         drain,
                         std::time::Duration::from_millis(200),
+                        fails,
                     )(request))
                 },
                 support::StreamingBinding,

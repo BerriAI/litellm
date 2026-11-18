@@ -5031,6 +5031,9 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     virtual_key_claim_field: str | None = Field(
         default=None,
         description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
@@ -5148,6 +5151,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: list[str] | None = None
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     agent_id_jwt_field: str | None = Field(
         default=None,
         description=(

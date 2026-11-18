@@ -61,9 +61,9 @@ mod tests {
     use crate::Error;
 
     const CALL: Call = Call {
-        call_type: "add_key_spend",
-        table: Some("LiteLLM_VerificationToken"),
-        operation: Some("update"),
+        call_type: "get_data",
+        table: Some("combined_view"),
+        operation: None,
     };
 
     #[derive(Default)]
@@ -118,7 +118,9 @@ mod tests {
         let recording = Recording::default();
 
         let result = observe(&recording, CALL, async {
-            Err::<(), _>(Error::InvalidSpendBatch { ids: 1, costs: 2 })
+            Err::<(), _>(Error::from(
+                std::time::Duration::try_from_secs_f64(-1.0).expect_err("negative"),
+            ))
         })
         .await;
 

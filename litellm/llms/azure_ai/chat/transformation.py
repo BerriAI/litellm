@@ -38,8 +38,13 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning, warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
+    CHAT_COMPLETIONS_PATH,
     api_key_header_for_base,
+    foundry_project_root,
+    foundry_v1_root,
     is_foundry_model_inference_base,
+    with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.fireworks_ai.common_utils import AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX
@@ -414,7 +419,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                 headers["Authorization"] = f"Bearer {api_key}"
         else:
             # No api_key provided — fall back to Azure AD token-based auth
-            litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
+            litellm_params_obj: Final = with_foundry_project_scope(
+                GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {})), api_base
+            )
             headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
@@ -425,7 +432,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        return api_key_header_for_base(api_base) == "api-key"
+        return api_key_header_for_base(api_base) == "api-key" and not foundry_project_root(httpx.URL(api_base))
 
     def get_complete_url(
         self,
@@ -467,6 +474,13 @@ class AzureAIStudioConfig(OpenAIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
+
+        v1_root: Final = foundry_v1_root(original_url)
+        if v1_root is not None:
+            v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
+            if foundry_project_root(original_url):
+                return str(original_url.copy_with(path=v1_chat_path, params=without_api_version(original_url)))
+            return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
@@ -560,7 +574,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         return is_foundry_model_inference_base(api_base)
 
     def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
-        if api_base is None or self._is_foundry_model_inference_base(api_base):
+        if (
+            api_base is None
+            or self._is_foundry_model_inference_base(api_base)
+            or bool(foundry_project_root(httpx.URL(api_base)))
+        ):
             return False
         stripped_model: Final = model.split("/", 1)[1] if "/" in model else model
         return (

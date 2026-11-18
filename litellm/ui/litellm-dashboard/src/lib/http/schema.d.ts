@@ -4088,6 +4088,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/nvidia_nim/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Nim Models
+         * @description List upstream NIM models using a saved credential or submitted connection settings.
+         *
+         *     Requires a proxy administrator. Returns model IDs only, without asserting inference access,
+         *     pricing or capabilities. Upstream failures return unavailable so the UI can use its catalog.
+         */
+        post: operations["discover_nim_models_credentials_nvidia_nim_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/user_connections": {
         parameters: {
             query?: never;
@@ -4637,7 +4660,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -5316,7 +5339,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -9871,6 +9894,30 @@ export interface paths {
          * @description Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the same organization, with the first team as default. Identity, budget counters and historical usage are retained. Historical usage stays attributed to the original team. Proxy admins only.
          */
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_organization_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Organization Budget Groups
+         * @description List reusable organization budget groups and their revision. Proxy admins only.
+         */
+        get: operations["get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure Customer Organization Budget Groups
+         * @description Save the complete organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch"];
         trace?: never;
     };
     "/management/v1/customer_organizations": {
@@ -29909,6 +29956,18 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** BudgetGroups */
+        BudgetGroups: {
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
+        };
         /** BudgetGroupsUpdate */
         BudgetGroupsUpdate: {
             /**
@@ -42739,6 +42798,32 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** NimModelDiscoveryConnection */
+        NimModelDiscoveryConnection: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** NimModelDiscoveryRequest */
+        NimModelDiscoveryRequest: {
+            /** Credential Name */
+            credential_name?: string | null;
+            credential_values?: components["schemas"]["NimModelDiscoveryConnection"] | null;
+        };
+        /** NimModelDiscoveryResponse */
+        NimModelDiscoveryResponse: {
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "unavailable";
+        };
         /** NoulAnswer */
         NoulAnswer: {
             /** Noul */
@@ -42825,6 +42910,21 @@ export interface components {
             /** Value */
             value: string | boolean;
         };
+        /** OpenAIDecisionCacheWriteTokensDetails */
+        OpenAIDecisionCacheWriteTokensDetails: {
+            /**
+             * Ttl 12H Tokens
+             * @default 0
+             */
+            ttl_12h_tokens: number;
+            /**
+             * Ttl 30M Tokens
+             * @default 0
+             */
+            ttl_30m_tokens: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** OpenAIDecisionInputTokensDetails */
         OpenAIDecisionInputTokensDetails: {
             /**
@@ -42832,6 +42932,7 @@ export interface components {
              * @default 0
              */
             cache_write_tokens: number;
+            cache_write_tokens_details?: components["schemas"]["OpenAIDecisionCacheWriteTokensDetails"] | null;
             /**
              * Cached Tokens
              * @default 0
@@ -43072,6 +43173,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -43162,6 +43268,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43207,6 +43318,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Default Budget Template Id */
             default_budget_template_id?: string | null;
         };
@@ -43255,6 +43371,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43274,6 +43395,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -62173,6 +62299,39 @@ export interface operations {
             };
         };
     };
+    discover_nim_models_credentials_nvidia_nim_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NimModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NimModelDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_user_connections_credentials_user_connections_get: {
         parameters: {
             query?: never;
@@ -63330,11 +63489,22 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -63347,6 +63517,17 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
@@ -63356,9 +63537,9 @@ export interface operations {
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -63371,6 +63552,19 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: ({
+                        /** Mode */
+                        mode?: string | null;
+                        /** Ttl */
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order
@@ -70094,6 +70288,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
                 };
             };
             /** @description Validation Error */
@@ -86325,11 +86572,22 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -86342,6 +86600,17 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
@@ -86351,9 +86620,9 @@ export interface operations {
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -86366,6 +86635,19 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: ({
+                        /** Mode */
+                        mode?: string | null;
+                        /** Ttl */
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order
