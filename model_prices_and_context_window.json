@@ -17861,7 +17861,9 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0
     },
     "command-a-translate-08-2025": {
         "litellm_provider": "cohere_chat",
@@ -17871,7 +17873,9 @@
         "source": "https://docs.cohere.com/docs/command-a-translate",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0
     },
     "command-a-vision-07-2025": {
         "litellm_provider": "cohere_chat",
@@ -17881,7 +17885,9 @@
         "source": "https://docs.cohere.com/docs/command-a-vision",
         "supports_response_schema": true,
         "supports_tool_choice": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0
     },
     "command-r7b-arabic-02-2025": {
         "litellm_provider": "cohere_chat",
