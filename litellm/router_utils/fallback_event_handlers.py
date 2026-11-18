@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
-from litellm.litellm_core_utils.litellm_logging import Logging, same_attempt_marker
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_handlers import (
@@ -475,11 +475,7 @@ def _failure_callbacks_blocked_logging_object(kwargs: Mapping[str, object]) -> L
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
         return None
-    if logging_obj.model_call_details.get("has_logged_async_failure", False) is not True:
-        return None
-    current_marker: Final = logging_obj.model_call_details.get("current_attempt_api_call_start_time")
-    logged_marker: Final = logging_obj.model_call_details.get("async_failure_logged_attempt")
-    return logging_obj if not same_attempt_marker(current_marker, logged_marker) else None
+    return logging_obj if logging_obj.failure_callbacks_blocked_for_attempt() else None
 
 
 def _request_metadata_bucket(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:

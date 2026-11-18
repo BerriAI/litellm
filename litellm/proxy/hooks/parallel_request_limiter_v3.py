@@ -110,7 +110,11 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router
-    from litellm.rust_bridge._native import NativeParallelRequestLimiter, NativeParallelRequestLimiterState
+    from litellm.rust_bridge._native import (
+        NativeModelCapacityState,
+        NativeParallelRequestLimiter,
+        NativeParallelRequestLimiterState,
+    )
     from litellm.types.agents import AgentResponse
 
     Span = _Span
@@ -136,8 +140,12 @@ class RateLimitedModel:
         return requested_limit if requested_limit is not None else limits.get(self.group)
 
 
+def native_rate_limit_store(cache: DualCache) -> RateLimitStore:
+    return RateLimitStore(connect(cache.redis_cache).rate_limits(cache.default_in_memory_ttl))
+
+
 def dynamic_rate_limiter_covers(model_group: str) -> bool:
-    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+    from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
@@ -146,7 +154,7 @@ def dynamic_rate_limiter_covers(model_group: str) -> bool:
     if group is None or (group.tpm is None and group.rpm is None):
         return False
     return any(
-        callback == "dynamic_rate_limiter_v3" or isinstance(callback, PROXY_DynamicRateLimitHandlerV3)
+        callback == "dynamic_rate_limiter_v3" or isinstance(callback, NativeDynamicRateLimiter)
         for callback in litellm.callbacks
     )
 
@@ -775,6 +783,12 @@ class RequestRateLimiterStash:
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
     native_state: "NativeParallelRequestLimiterState | None" = None
+    native_capacity_state: "NativeModelCapacityState | None" = None
+
+    def native_capacity(self, create: Callable[[], "NativeModelCapacityState"]) -> "NativeModelCapacityState":
+        if self.native_capacity_state is None:
+            self.native_capacity_state = create()
+        return self.native_capacity_state
 
 
 @dataclass(frozen=True, slots=True)
@@ -1128,11 +1142,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         self.ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self.fail_closed_resolver = fail_closed_resolver
         self.force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
-        self.rate_limits: Final = rate_limit_store or RateLimitStore(
-            connect(internal_usage_cache.dual_cache.redis_cache).rate_limits(
-                internal_usage_cache.dual_cache.default_in_memory_ttl
-            )
-        )
+        self.rate_limits: Final = rate_limit_store or native_rate_limit_store(internal_usage_cache.dual_cache)
 
         self.window_size = rate_limit_window_size()
 

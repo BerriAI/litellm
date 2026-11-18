@@ -18,6 +18,8 @@ USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
+VSCODE_CHAT_INTEGRATION_ID: Final = "vscode-chat"
+COPILOT_CLI_INTEGRATION_ID: Final = "copilot-developer-cli"
 
 
 def custom_github_app_hint() -> str | None:
@@ -60,6 +62,14 @@ class GetAccessTokenError(GithubCopilotError):
     pass
 
 
+def copilot_integration_id() -> str:
+    """Copilot serves a custom GitHub App's user tokens only as the Copilot CLI integration."""
+    client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+    if client_id in ("", DEFAULT_GITHUB_CLIENT_ID):
+        return VSCODE_CHAT_INTEGRATION_ID
+    return COPILOT_CLI_INTEGRATION_ID
+
+
 def get_copilot_default_headers(
     api_key: str,
 ) -> dict[str, str]:  # mutable-ok: callers merge caller headers into the returned dict
@@ -71,7 +81,7 @@ def get_copilot_default_headers(
     return {
         "Authorization": f"Bearer {api_key}",
         "content-type": "application/json",
-        "copilot-integration-id": "vscode-chat",
+        "copilot-integration-id": copilot_integration_id(),
         "editor-version": "vscode/1.95.0",  # Fixed version for stability
         "editor-plugin-version": EDITOR_PLUGIN_VERSION,
         "user-agent": USER_AGENT,

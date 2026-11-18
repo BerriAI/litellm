@@ -1846,6 +1846,68 @@ async def test_proxy_startup_refuses_a_fips_mode_reference_to_an_unset_variable(
             pass
 
 
+_HEX_KEY: Final = "sk-" + bytes(range(32)).hex()
+
+
+def _boot_in_fips_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
+) -> None:
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": master_key, "fips_mode": True})
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: True)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "master_key, environment, refusal",
+    [
+        (_HEX_KEY, {"LITELLM_SALT_KEY": "thirteen-byte"}, r"but LITELLM_SALT_KEY is too short"),
+        ("sk-a-safe-master-key", {}, r"but LITELLM_SALT_KEY is not set"),
+        (_HEX_KEY, {}, r"but LITELLM_SALT_KEY is not set"),
+    ],
+    ids=["13-byte-salt-key-and-hex-master-key", "20-byte-master-key-and-no-salt-key", "hex-master-key-and-no-salt-key"],
+)
+async def test_proxy_startup_refuses_fips_mode_without_a_salt_key_of_at_least_112_bits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str], refusal: str
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError, fips_mode_active
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_in_fips_mode(monkeypatch, tmp_path, master_key, environment)
+
+    with pytest.raises(FipsModeError, match=refusal):
+        async with proxy_startup_event(FastAPI()):
+            pass
+    assert fips_mode_active() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "master_key, environment",
+    [
+        ("sk-short-key!", {"LITELLM_SALT_KEY": _HEX_KEY}),
+        ("sk-a-safe-master-key", {"LITELLM_SALT_KEY": "fourteen-bytes"}),
+    ],
+    ids=["hex-salt-key-and-13-byte-master-key", "14-byte-salt-key-and-20-byte-master-key"],
+)
+async def test_proxy_startup_starts_fips_mode_with_a_salt_key_of_at_least_112_bits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, master_key: str, environment: Mapping[str, str]
+) -> None:
+    from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_in_fips_mode(monkeypatch, tmp_path, master_key, environment)
+
+    try:
+        async with proxy_startup_event(FastAPI()):
+            started_in_fips_mode: Final = fips_mode_active()
+    finally:
+        enforce_fips_mode({})
+    assert started_in_fips_mode is True
+
+
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext

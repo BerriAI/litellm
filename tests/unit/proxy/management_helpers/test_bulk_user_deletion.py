@@ -983,6 +983,20 @@ async def test_bulk_member_delete_rejects_unknown_team_and_unauthorized_callers(
 
 
 @pytest.mark.asyncio
+async def test_bulk_member_delete_answers_404_when_the_team_was_deleted_while_it_waited_on_the_team_lock():
+    def team_delete_commits_first(team_id: str) -> None:
+        del prisma.db.litellm_teamtable.rows[team_id]
+
+    prisma = _FakePrisma(users=[_user("u1", "t1")], teams=[_team("t1", "u1")], on_lock=team_delete_commits_first)
+
+    with pytest.raises(ManagementProblem) as missing:
+        await _remove(prisma, "t1", [{"user_id": "u1"}])
+
+    assert missing.value.problem.status == 404
+    assert prisma.db.litellm_usertable.rows["u1"].teams == ["t1"]
+
+
+@pytest.mark.asyncio
 async def test_team_admin_may_bulk_remove_members():
     team = _team("t1", "lead", "u1")
     team.members_with_roles[0].role = "admin"
