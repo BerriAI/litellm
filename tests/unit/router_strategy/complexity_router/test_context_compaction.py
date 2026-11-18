@@ -16,6 +16,7 @@ from litellm.router_strategy.complexity_router.config import ContextCompactionCo
 from litellm.router_strategy.complexity_router.context_compaction import (
     CompactionState,
     Surface,
+    _budget,
     arm_compaction,
     compact_to_fit,
     compaction_executor,
@@ -503,6 +504,38 @@ async def test_retry_reuses_summary_or_terminal_cancellation(outcome: Literal["s
         assert calls.qsize() == 1 and stopped.is_set()
     finally:
         compaction_executor.reset(token)
+
+
+@pytest.mark.parametrize("declared_limits", [False, True])
+async def test_unmapped_deployment_does_not_raise_model_not_mapped_error(
+    wire: tuple[respx.Route, respx.Route], declared_limits: bool
+) -> None:
+    router: Final = make_router()
+    ctx: Final = RoutingContext(router)
+    deployment_dict: Final = {
+        "model_name": "unmapped-tier",
+        "litellm_params": {
+            "model": "openrouter/unmapped-model-family/unmapped-variant-1234",
+            "api_key": "fake",
+            **({"max_input_tokens": 128000, "max_output_tokens": 4096} if declared_limits else {}),
+        },
+        "model_info": {"id": "db-deployment-1"},
+    }
+    budget: Final = _budget(ctx, deployment_dict, {"model": "auto"}, 0.9)
+    if declared_limits:
+        assert budget.window == 128000
+        assert budget.available == int(128000 * 0.9) - 4096
+    else:
+        assert budget.window is None
+        assert budget.available is None
+    state: Final = CompactionState(config=ContextCompactionConfig())
+    request: Final = {
+        "model": "auto",
+        "messages": [{"role": "user", "content": "hello"}],
+        "_context_compaction_state": state,
+    }
+    result: Final = await compact_to_fit(ctx, deployment_dict, request, "chat")
+    assert result is request
 
 
 @pytest.fixture(autouse=True)
