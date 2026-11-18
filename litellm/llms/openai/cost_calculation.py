@@ -74,7 +74,7 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
     provider: Final = custom_llm_provider or "openai"
     return prompt_and_completion(
         price_units(
-            TranscriptionDocument(kind="transcription", model=model, provider=provider, seconds=duration, tokens=False),
+            TranscriptionDocument(kind="transcription", model=model, provider=provider, seconds=duration),
             catalog=get_model_info(model=model, custom_llm_provider=provider),
         )
     )
