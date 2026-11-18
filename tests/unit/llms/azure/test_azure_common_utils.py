@@ -2594,7 +2594,7 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     ],
 )
 def test_uses_azure_entra_id_auth_matches_the_sources_the_azure_client_builds_entra_auth_from(
-    litellm_params, environ, token_refresh_enabled, expected
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], token_refresh_enabled: bool, expected: bool
 ):
     assert uses_azure_entra_id_auth(litellm_params, environ, token_refresh_enabled) is expected
 
