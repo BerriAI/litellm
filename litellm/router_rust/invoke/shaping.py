@@ -465,7 +465,11 @@ def update_kwargs_with_deployment(
         else inferred_provider(declared_model if isinstance(declared_model, str) else None)
     )
     forwarded_authorization: Final = (
-        ProviderSpecificHeaderUtils.forwarded_authorization(kwargs.get("provider_specific_header"), deployment_provider)
+        ProviderSpecificHeaderUtils.forwarded_authorization(
+            kwargs.get("provider_specific_header"),
+            deployment_provider,
+            declared_model if isinstance(declared_model, str) else None,
+        )
         if deployment_provider in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS
         else None
     )
