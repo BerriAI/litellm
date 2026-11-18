@@ -1,3 +1,4 @@
+import json
 import warnings
 import pytest
 from pydantic import ValidationError
@@ -34,9 +35,7 @@ class TestSAPTransformationIntegration:
 
         result = mock_config.transform_request(model, messages, optional_params, {}, {})
 
-        model_params = result["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
 
         assert "temperature" in model_params
         assert "frequency_penalty" in model_params
@@ -44,18 +43,16 @@ class TestSAPTransformationIntegration:
         assert "model_version" not in model_params
         assert "tools" not in model_params
 
-        model_version = result["config"]["modules"]["prompt_templating"]["model"][
-            "version"
-        ]
+        model_version = result["config"]["modules"]["prompt_templating"]["model"]["version"]
         assert model_version == "v1.5"
 
         prompt = result["config"]["modules"]["prompt_templating"]["prompt"]
         if "tools" in prompt:
             assert isinstance(prompt["tools"], list)
             for tool in prompt["tools"]:
-                assert (
-                    tool["function"]["parameters"]["type"] == "object"
-                ), "SAP API requires parameters.type == 'object'"
+                assert tool["function"]["parameters"]["type"] == "object", (
+                    "SAP API requires parameters.type == 'object'"
+                )
                 assert "properties" in tool["function"]["parameters"]
 
     def test_transform_request_parameter_handling_robustness(self, mock_config):
@@ -96,33 +93,25 @@ class TestSAPTransformationIntegration:
 
         for i, test_case in enumerate(test_cases):
             filtered_params = {
-                k: v
-                for k, v in test_case["params"].items()
-                if k not in {"tools", "model_version", "deployment_url"}
+                k: v for k, v in test_case["params"].items() if k not in {"tools", "model_version", "deployment_url"}
             }
 
             for expected_param in test_case["expected_in_model"]:
-                assert (
-                    expected_param in filtered_params
-                ), f"Case {i + 1}: {expected_param} should be in model params"
+                assert expected_param in filtered_params, f"Case {i + 1}: {expected_param} should be in model params"
 
             for excluded_param in test_case["expected_excluded"]:
-                assert (
-                    excluded_param not in filtered_params
-                ), f"Case {i + 1}: {excluded_param} should be excluded from model params"
+                assert excluded_param not in filtered_params, (
+                    f"Case {i + 1}: {excluded_param} should be excluded from model params"
+                )
 
-            result = mock_config.transform_request(
-                model, messages, test_case["params"], {}, {}
-            )
+            result = mock_config.transform_request(model, messages, test_case["params"], {}, {})
             if result and "config" in result:
-                model_params = result["config"]["modules"]["prompt_templating"][
-                    "model"
-                ]["params"]
+                model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
 
                 for excluded_param in test_case["expected_excluded"]:
-                    assert (
-                        excluded_param not in model_params
-                    ), f"Case {i + 1}: {excluded_param} should not be in actual model params"
+                    assert excluded_param not in model_params, (
+                        f"Case {i + 1}: {excluded_param} should not be in actual model params"
+                    )
 
     def test_config_transform_with_response_format_json_object(self, mock_config):
         expected_dict = {
@@ -145,9 +134,7 @@ class TestSAPTransformationIntegration:
         }
         config = mock_config.transform_request(
             model="gpt-4o",
-            messages=[
-                {"role": "user", "content": "First man on the moon, answer in json"}
-            ],
+            messages=[{"role": "user", "content": "First man on the moon, answer in json"}],
             optional_params={
                 "response_format": {"type": "json_object"},
                 "deployment_url": "shouldn't be in results",
@@ -189,9 +176,7 @@ class TestSAPTransformationIntegration:
 
         config = mock_config.transform_request(
             model="gpt-4o",
-            messages=[
-                {"role": "user", "content": "First man on the moon, answer in json"}
-            ],
+            messages=[{"role": "user", "content": "First man on the moon, answer in json"}],
             optional_params={
                 "response_format": expected_response_format,
                 "deployment_url": "shouldn't be in results",
@@ -199,27 +184,15 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={},
         )
-        assert (
-            config["config"]["modules"]["prompt_templating"]["prompt"][
-                "response_format"
-            ]
-            == expected_response_format
-        )
-        assert (
-            len(config["config"]["modules"]["prompt_templating"]["model"]["params"])
-            == 0
-        )
+        assert config["config"]["modules"]["prompt_templating"]["prompt"]["response_format"] == expected_response_format
+        assert len(config["config"]["modules"]["prompt_templating"]["model"]["params"]) == 0
 
     def test_config_transform_with_stream(self, mock_config):
         expected_dict = {
             "config": {
                 "modules": {
                     "prompt_templating": {
-                        "prompt": {
-                            "template": [
-                                {"role": "user", "content": "Hello, how are you?"}
-                            ]
-                        },
+                        "prompt": {"template": [{"role": "user", "content": "Hello, how are you?"}]},
                         "model": {
                             "name": "anthropic--claude-4-sonnet",
                             "params": {},
@@ -257,9 +230,7 @@ class TestSAPTransformationIntegration:
             headers={},
         )
 
-        assert config["config"]["modules"]["prompt_templating"]["prompt"][
-            "defaults"
-        ] == {"user_query": "default value"}
+        assert config["config"]["modules"]["prompt_templating"]["prompt"]["defaults"] == {"user_query": "default value"}
         assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
     def test_sap_placeholder_values(self, mock_config):
@@ -323,14 +294,8 @@ class TestSAPTransformationIntegration:
         assert config["placeholder_values"] == placeholder_values
         modules = config["config"]["modules"]
         assert modules["grounding"]["type"] == "document_grounding_service"
-        assert (
-            modules["grounding"]["config"]["placeholders"]["output"]
-            == "grounding_response"
-        )
-        assert (
-            modules["grounding"]["config"]["filters"][0]["data_repository_type"]
-            == "vector"
-        )
+        assert modules["grounding"]["config"]["placeholders"]["output"] == "grounding_response"
+        assert modules["grounding"]["config"]["filters"][0]["data_repository_type"] == "vector"
         assert modules["prompt_templating"]["model"]["params"] == {}
 
     def test_grounding_search_config_rejects_both_count_fields(self, mock_config):
@@ -442,10 +407,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
 
-        assert (
-            "For using SAP Filtering Module you must provide at least one property"
-            in str(exc_info.value)
-        )
+        assert "For using SAP Filtering Module you must provide at least one property" in str(exc_info.value)
 
     def test_sap_masking(self, mock_config):
         masking_config = {
@@ -509,9 +471,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
 
-        assert "must set exactly one of: 'providers' or 'masking_providers'" in str(
-            exc_info.value
-        )
+        assert "must set exactly one of: 'providers' or 'masking_providers'" in str(exc_info.value)
 
     def test_masking_providers_deprecated_emits_warning(self, mock_config):
         masking_config = {
@@ -533,8 +493,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
         assert any(
-            issubclass(warning.category, DeprecationWarning)
-            and "masking_providers" in str(warning.message)
+            issubclass(warning.category, DeprecationWarning) and "masking_providers" in str(warning.message)
             for warning in w
         ), "Expected DeprecationWarning for 'masking_providers'"
 
@@ -573,10 +532,7 @@ class TestSAPTransformationIntegration:
                 headers={},
             )
 
-        assert (
-            "TranslationModuleConfig requires at least one of 'input' or 'output'"
-            in str(exc_info.value)
-        )
+        assert "TranslationModuleConfig requires at least one of 'input' or 'output'" in str(exc_info.value)
 
     def test_sap_multiple_modules(self, mock_config):
         translation_config = {
@@ -611,34 +567,15 @@ class TestSAPTransformationIntegration:
             assert translation["input"]["config"]["source_language"] == "en-US"
             assert translation["input"]["config"]["target_language"] == "de-DE"
             assert translation["output"]["config"]["target_language"] == "fr-FR"
+            assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
             assert (
-                config["config"]["modules"][1]["prompt_templating"]["model"]["name"]
-                == "gpt-5"
-            )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["model"]["name"]
-                == "gpt-4o"
-            )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["model"]["params"]
-                == {}
-            )
-            assert (
-                config["config"]["modules"][1]["prompt_templating"]["prompt"][
-                    "template"
-                ][0]["content"]
+                config["config"]["modules"][1]["prompt_templating"]["prompt"]["template"][0]["content"]
                 == "Hello world!"
             )
-            assert (
-                config["config"]["modules"][0]["prompt_templating"]["prompt"][
-                    "template"
-                ][0]["content"]
-                == "Hello."
-            )
-            assert (
-                config["config"]["modules"][1]["translation"]["input"]["type"]
-                == "sap_document_translation"
-            )
+            assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
+            assert config["config"]["modules"][1]["translation"]["input"]["type"] == "sap_document_translation"
 
 
 class TestTransformResponseGeminiThoughtSignatures:
@@ -738,3 +675,81 @@ class TestTransformResponseGeminiThoughtSignatures:
         message = result.choices[0].message
         assert message.reasoning_content == "plain gemini 2.5 style reasoning"
         assert getattr(message, "thinking_blocks", None) is None
+
+
+def _stream_event(shape: str, delta: dict) -> str:
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gemini-3.5-flash",
+        "choices": [{"index": 0, "delta": delta}],
+    }
+    events = {
+        "final_result": {"request_id": "r1", "final_result": chunk},
+        "orchestration_result": {"request_id": "r1", "orchestration_result": chunk},
+        "openai_chunk": chunk,
+    }
+    return "data: " + json.dumps(events[shape])
+
+
+class TestStreamGeminiThoughtSignatures:
+    @pytest.mark.parametrize("shape", ["final_result", "orchestration_result", "openai_chunk"])
+    def test_list_shaped_reasoning_content_in_stream_delta(self, shape):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines = [
+            _stream_event(
+                shape,
+                {
+                    "role": "assistant",
+                    "content": "OPEN",
+                    "reasoning_content": [
+                        {"content": "Checking the ticket. ", "signature": "sig-one"},
+                        {"content": "It is open.", "signature": "sig-two"},
+                    ],
+                },
+            ),
+            "data: [DONE]",
+        ]
+
+        chunks = list(SAPStreamIterator(response=iter(lines)))
+
+        assert len(chunks) == 1
+        delta = chunks[0].choices[0].delta
+        assert delta.content == "OPEN"
+        assert delta.reasoning_content == "Checking the ticket. It is open."
+        assert delta.thinking_blocks == [
+            {"type": "thinking", "thinking": "Checking the ticket. ", "signature": "sig-one"},
+            {"type": "thinking", "thinking": "It is open.", "signature": "sig-two"},
+        ]
+
+    def test_signature_only_block_in_stream_delta(self):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines = [
+            _stream_event(
+                "final_result",
+                {
+                    "content": "OPEN",
+                    "reasoning_content": [{"content": "", "signature": "CtMHAdHtim920NjKZTfLS9W/gDXBihg="}],
+                },
+            )
+        ]
+
+        delta = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
+
+        assert delta.reasoning_content is None
+        assert delta.thinking_blocks == [
+            {"type": "thinking", "thinking": "", "signature": "CtMHAdHtim920NjKZTfLS9W/gDXBihg="}
+        ]
+
+    def test_string_reasoning_content_in_stream_delta_is_untouched(self):
+        from litellm.llms.sap.chat.handler import SAPStreamIterator
+
+        lines = [_stream_event("final_result", {"content": "OPEN", "reasoning_content": "plain reasoning"})]
+
+        delta = next(SAPStreamIterator(response=iter(lines))).choices[0].delta
+
+        assert delta.reasoning_content == "plain reasoning"
+        assert getattr(delta, "thinking_blocks", None) is None
