@@ -54,7 +54,7 @@ mod _native {
     #[pymodule_export]
     use crate::cost::{
         NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeRateCard,
-        NativeTokenUsage,
+        NativeTokenUsage, NativeUnpriced,
     };
     #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
@@ -250,6 +250,7 @@ mod tests {
                 "NativeReceipt",
                 "NativeBilledRates",
                 "NativeRateCard",
+                "NativeUnpriced",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",

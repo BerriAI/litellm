@@ -247,6 +247,15 @@ class NativeRateCard:
     def ptu_flat_cost(self) -> bool: ...
 
 @final
+class NativeUnpriced:
+    @property
+    def reason(
+        self,
+    ) -> Literal["no_row", "missing_rates", "missing_usage", "catalog_deferred", "not_ported"]: ...
+    @property
+    def row(self) -> str | None: ...
+
+@final
 class NativeModelCostMap:
     @staticmethod
     def bundled(min_model_count: int, max_shrink_ratio: float) -> NativeModelCostMap: ...
@@ -278,6 +287,12 @@ class NativeModelCostMap:
     def bound(
         self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]
     ) -> tuple[float | None, float | None]: ...
+    def price_units(
+        self,
+        document: Mapping[str, object],
+        tables: Sequence[Mapping[str, object]] = ...,
+        catalog: Mapping[str, object] | None = None,
+    ) -> NativeReceipt | NativeUnpriced: ...
     def rates(self, key: str) -> NativeRateCard | None: ...
     def adjust(
         self, cost: float, provider: str | None, model: str | None = None, region: str | None = None

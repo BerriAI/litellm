@@ -6,6 +6,8 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - `engine.rs` hands each `PriceQuery` kind to its handler module. A kind or case without a handler answers `Unpriced::NotPorted`, and only then may the caller price it the old way
 - `tokens.rs` and `tokens/` port the token path of `completion_cost`: `rule.rs` for what each provider branch of `cost_per_token` adds, `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
+- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
+  - Where main billed a call nothing on purpose (no row, no rate, no units) the core answers `Unpriced`, never 0.0, and the adapter maps it to each calculator's legacy return
 
 ## Parity fixtures
 
@@ -24,6 +26,9 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - The legacy budget hold reads flat rates only, so bands, cache-write rates, uplifts, discount and margin never reach it, and a router group's reasoning and image rates are dropped before it (`proxy/spend_tracking/budget_reservation.py` `_max_cost_for_cost_info`)
 - A streamed `/v1/messages` call never bills the service tier its usage reports, because the assembled stream response drops `usage.service_tier`, so only the requested tier prices it (`inference-messages/src/pricing.rs` copies this from `stream_chunk_builder`)
 - The per-event stream cost injection prices each `message_delta`'s own usage alone, without the `message_start` input and cache counts, the request's speed or the stream's thinking (`common_request_processing.py` `_inject_cost_into_usage_dict`, copied in `inference-messages/src/pricing.rs`)
+
+- A rerank row priced only per token bills 0 unless its provider's config bills tokens (Jina AI, Scaleway, Voyage), as Cohere v5, Azure AI Cohere v5 and Together AI rows are billed by search units they have no rate for (`calculate_rerank_cost` of `BaseRerankConfig`)
+- An OCR annotation page with no annotation rate of its own bills at the page rate, also in a batch, where the page rate may come from the deployment while the catalog prices annotations (`ocr_cost`, `ocr_batch_cost`)
 
 ## Not copied from main
 

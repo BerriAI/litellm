@@ -21,7 +21,6 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankTokens,
 )
-from litellm.types.utils import ModelInfo
 
 from ..embedding.transformation import VoyageError
 
@@ -168,25 +167,6 @@ class VoyageRerankConfig(BaseRerankConfig):
             "Authorization": f"Bearer {resolved_api_key}",
             "content-type": "application/json",
         }
-
-    def calculate_rerank_cost(
-        self,
-        model: str,
-        custom_llm_provider: str | None = None,
-        billed_units: RerankBilledUnits | None = None,
-        model_info: ModelInfo | None = None,
-    ) -> tuple[float, float]:
-        if (
-            model_info is None
-            or "input_cost_per_token" not in model_info
-            or model_info["input_cost_per_token"] is None
-            or billed_units is None
-        ):
-            return 0.0, 0.0
-        total_tokens: Final = billed_units.get("total_tokens")
-        if total_tokens is None:
-            return 0.0, 0.0
-        return model_info["input_cost_per_token"] * total_tokens, 0.0
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers):
         return VoyageError(message=error_message, status_code=status_code, headers=headers)

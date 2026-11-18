@@ -51,6 +51,7 @@ impl Mul<Quantity> for UnitPrice {
         match quantity {
             Quantity::Count(units) => Usd(self.0 * units as f64),
             Quantity::Duration(duration) => Usd(self.0 * duration.as_secs_f64()),
+            Quantity::Measured(amount) => Usd(self.0 * amount),
         }
     }
 }
