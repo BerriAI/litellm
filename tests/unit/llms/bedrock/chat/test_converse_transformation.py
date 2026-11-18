@@ -5695,6 +5695,27 @@ def test_openai_gpt_native_json_schema_sets_text_format_strict(set_native_struct
     }
 
 
+@pytest.mark.parametrize(
+    ("base_model", "expected_text"),
+    [
+        ("bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("bedrock/us.anthropic.claude-sonnet-4-6", None),
+    ],
+)
+def test_custom_named_deployment_takes_text_format_strict_from_base_model(base_model, expected_text):
+    model: Final = "team-model"
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=dict(_gpt_params_from_caller_output_config(model)),
+        litellm_params={"base_model": base_model},
+        headers={},
+    )
+
+    assert request.get("additionalModelRequestFields", {}).get("text") == expected_text
+
+
 def test_anthropic_native_json_schema_sends_no_text_field(set_native_structured_output):
     model: Final = "us.anthropic.claude-opus-4-8"
     set_native_structured_output(model, "bedrock")
