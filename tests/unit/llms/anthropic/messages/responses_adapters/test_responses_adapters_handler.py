@@ -101,7 +101,7 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
-        extra_kwargs={"custom_llm_provider": "openai", **forwarded, **request_params},
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
     )
     instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
     assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
@@ -1649,3 +1649,33 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
         )
 
     assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("store_params", "system_in_input"),
+    [
+        ({}, False),
+        ({"store": True}, False),
+        ({"store": "false"}, False),
+        ({"store": False}, True),
+        ({"store": True, "extra_body": {"store": False}}, True),
+        ({"store": False, "extra_body": {"store": True}}, False),
+        ({"store": False, "extra_body": {"store": None}}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, False),
+        ({"store": False, "additional_drop_params": ["temperature"]}, True),
+    ],
+)
+def test_messages_system_prompt_moves_to_input_only_when_the_sent_store_is_false(
+    store_params: dict[str, object], system_in_input: bool
+) -> None:
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **store_params},
+    )
+    developer: Final = {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}
+    assert (kwargs["input"][0] == developer) is system_in_input, kwargs
+    assert (kwargs.get("instructions") is None) is system_in_input, kwargs
+

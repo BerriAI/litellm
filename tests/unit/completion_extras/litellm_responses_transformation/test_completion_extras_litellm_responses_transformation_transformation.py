@@ -1898,7 +1898,7 @@ def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_c
             {"role": "system", "content": _JSON_SYSTEM_PROMPT},
             {"role": "user", "content": "List three colors."},
         ],
-        optional_params={"response_format": response_format},
+        optional_params={"response_format": response_format, "store": False},
         litellm_params={"custom_llm_provider": "openai"},
         headers={},
         litellm_logging_obj=Mock(),
@@ -6341,7 +6341,7 @@ def _bridged_transform_request(
     return LiteLLMResponsesTransformationHandler().transform_request(
         model=model,
         messages=cast(List[AllMessageValues], messages),  # cast-ok: the test builds chat messages as plain mappings
-        optional_params=dict(optional_params or {}),
+        optional_params={"store": False, **(optional_params or {})},
         litellm_params=litellm_params,
         headers={},
         litellm_logging_obj=Mock(),
@@ -6595,6 +6595,40 @@ def test_unforwarded_conversation_still_sends_system_as_cacheable_input(location
         _system_input_item("Be brief."),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
     ]
+
+
+@pytest.mark.parametrize(
+    "store_params",
+    [
+        {"store": None},
+        {"store": True},
+        {"store": "false"},
+        {"store": False, "extra_body": {"store": True}},
+        {"store": False, "extra_body": {"store": None}},
+    ],
+)
+def test_system_prompt_stays_in_instructions_unless_the_sent_store_is_false(store_params: dict[str, object]) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai"},
+        {key: value for key, value in store_params.items() if value is not None or key == "extra_body"}
+        if store_params != {"store": None}
+        else {"store": None},
+    )
+    assert request.get("instructions") == "Be brief.", request
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+def test_nested_store_false_sends_system_as_cacheable_input() -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai"},
+        {"store": True, "extra_body": {"store": False}},
+    )
+    assert request.get("instructions") is None, request
+    assert request["input"][0] == _system_input_item("Be brief.")
 
 
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
