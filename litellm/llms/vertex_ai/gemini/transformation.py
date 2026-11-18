@@ -146,6 +146,14 @@ def _get_highest_media_resolution(current: str | None, new_detail: str | None) -
     return current
 
 
+def gemini_part_media_resolution(model: str | None, detail: str | None) -> Mapping[str, str] | None:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    if model is None or not VertexGeminiConfig.is_gemini_3_or_newer(model):
+        return None
+    return _convert_detail_to_media_resolution_enum(detail)
+
+
 def _extract_max_media_resolution_from_messages(
     messages: list[AllMessageValues],
 ) -> str | None:
@@ -476,7 +484,7 @@ def _normalize_and_validate_gemini_mime_type(mime_type: str, model: str | None) 
     return get_file_mime_type_for_file_type(file_type)
 
 
-def _process_gemini_media(
+def process_gemini_media(
     image_url: str,
     format: str | None = None,
     media_resolution_enum: dict[str, str] | None = None,
@@ -586,6 +594,9 @@ def _process_gemini_media(
         raise e
 
 
+_process_gemini_media: Final = process_gemini_media
+
+
 def snake_to_camel(snake_str: str) -> str:
     """Convert snake_case to camelCase"""
     components: Final = snake_str.split("_")
@@ -595,7 +606,9 @@ def snake_to_camel(snake_str: str) -> str:
 _snake_to_camel = snake_to_camel
 
 
-def encode_gemini_file_inspection_metadata(file: Mapping[str, object]) -> GeminiFileInspectionMetadata:
+def encode_gemini_file_inspection_metadata(
+    file: Mapping[str, object], *, model: str | None = None
+) -> GeminiFileInspectionMetadata:
     document_metadata: Final = as_str_mapping(file.get("document_metadata"))
     spreadsheet_metadata: Final = as_str_mapping(file.get("spreadsheet_metadata"))
     document: Final = (
@@ -605,12 +618,19 @@ def encode_gemini_file_inspection_metadata(file: Mapping[str, object]) -> Gemini
         if document_metadata is not None
         else GeminiFileInspectionMetadata()
     )
-    if spreadsheet_metadata is None:
-        return document
-    return {
-        **document,
-        "spreadsheet_metadata": {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()},
-    }
+    selection: Final[GeminiFileInspectionMetadata] = (
+        {
+            **document,
+            "spreadsheet_metadata": {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()},
+        }
+        if spreadsheet_metadata is not None
+        else document
+    )
+    detail: Final = file.get("resolution") or file.get("detail")
+    resolution: Final = gemini_part_media_resolution(model, detail if isinstance(detail, str) else None)
+    if resolution is None:
+        return selection
+    return {**selection, "media_resolution": resolution}
 
 
 def camel_to_snake(camel_str: str) -> str:

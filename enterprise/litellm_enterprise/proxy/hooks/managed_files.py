@@ -5,7 +5,7 @@ import asyncio
 import base64
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -44,11 +44,13 @@ from litellm.constants import (
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import gemini_files_api_tool_uri
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -57,6 +59,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
 from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.proxy._types import (
     CallTypes,
@@ -194,6 +197,22 @@ def _batch_output_file_object(
 
 def _public_file_object(file_object: OpenAIFileObject, unified_file_id: str) -> OpenAIFileObject:
     return file_object.model_copy(update={"id": unified_file_id, "litellm_details_fallback": None})
+
+
+def _chat_message_file_id(part: object, role: str) -> str | None:
+    fields: Final = as_str_mapping(part)
+    if fields is None or fields.get("type") not in ("file", "input_file"):
+        return None
+    file: Final = as_str_mapping(fields.get("file")) or {}
+    file_id: Final = file.get("file_id")
+    if role == "user" and fields.get("type") == "file" and isinstance(file_id, str) and file_id:
+        return file_id
+    if role in ("tool", "function"):
+        return gemini_files_api_tool_uri({**fields, **file})
+    file_data: Final = file.get("file_data")
+    if isinstance(file_data, str) and file_data.startswith(GEMINI_FILES_API_URI_PREFIXES):
+        return file_data
+    return None
 
 
 def _is_transient_file_retrieve_error(error: Exception) -> bool:
@@ -1467,10 +1486,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         return False
 
-    async def check_file_ids_access(self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth) -> None:
+    async def check_file_ids_access(
+        self,
+        file_ids: Sequence[str],
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        include_gemini_files_api_uris: bool = False,
+    ) -> None:
         """
         Check if the user has access to a list of file IDs.
-        Only checks managed (unified) file IDs.
+        Checks unified file IDs and, when enabled, Gemini Files API references.
 
         Args:
             file_ids: List of file IDs to check access for
@@ -1480,13 +1505,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             HTTPException: If user doesn't have access to any of the files
         """
         for file_id in file_ids:
-            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-            if is_unified_file_id:
-                if not await self.can_user_call_unified_file_id(file_id, user_api_key_dict):
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-                    )
+            if _is_base64_encoded_unified_file_id(file_id) or (
+                include_gemini_files_api_uris and file_id.startswith(GEMINI_FILES_API_URI_PREFIXES)
+            ):
+                await self.check_managed_file_id_access({"file_id": file_id}, user_api_key_dict)
 
     async def async_pre_call_hook(
         self,
@@ -1519,7 +1541,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 file_ids = self.get_file_ids_from_messages(messages)
                 if file_ids:
                     # Check user has access to all managed files
-                    await self.check_file_ids_access(file_ids, user_api_key_dict)
+                    await self.check_file_ids_access(file_ids, user_api_key_dict, include_gemini_files_api_uris=True)
 
                     # Check if any files are stored in storage backends and need base64 conversion
                     # This is needed for Vertex AI/Gemini which requires base64 content
@@ -1701,24 +1723,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return kwargs
 
     def get_file_ids_from_messages(self, messages: List[AllMessageValues]) -> List[str]:
-        """
-        Gets file ids from messages
-        """
-        file_ids = []
-        for message in messages:
-            if message.get("role") == "user":
-                content = message.get("content")
-                if content:
-                    if isinstance(content, str):
-                        continue
-                    for c in content:
-                        if c.get("type") == "file":
-                            file_object = cast(ChatCompletionFileObject, c)
-                            file_object_file_field = file_object["file"]
-                            file_id = file_object_file_field.get("file_id")
-                            if file_id:
-                                file_ids.append(file_id)
-        return file_ids
+        return [
+            file_id
+            for message in messages
+            if (role := message.get("role")) in ("user", "tool", "function")
+            and isinstance(content := message.get("content"), Iterable)
+            and not isinstance(content, (str, Mapping))
+            for part in content
+            if (file_id := _chat_message_file_id(part, role)) is not None
+        ]
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
         """

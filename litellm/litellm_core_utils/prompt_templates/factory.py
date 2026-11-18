@@ -59,7 +59,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
 from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
-from litellm.types.llms.vertex_ai import FunctionResponsePartType, GeminiFileInspectionMetadata
+from litellm.types.llms.vertex_ai import FunctionResponsePartType
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
@@ -1500,18 +1500,24 @@ def _contains_part_reference(payload: JsonValue) -> bool:
     return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
-def _gemini_files_api_tool_part(file: Mapping[str, object], model: str | None) -> VertexPartType | None:
+def gemini_files_api_tool_uri(file: Mapping[str, object]) -> str | None:
     from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
     uri: Final = next(
         (value for key in ("file_data", "file_id", "file_url") if isinstance(value := file.get(key), str) and value),
         None,
     )
-    if not isinstance(uri, str) or not uri.startswith(GEMINI_FILES_API_URI_PREFIXES):
+    return uri if isinstance(uri, str) and uri.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
+
+def _gemini_files_api_tool_part(file: Mapping[str, object], model: str | None) -> VertexPartType | None:
+    from litellm.llms.vertex_ai.gemini.transformation import process_gemini_media
+
+    uri: Final = gemini_files_api_tool_uri(file)
+    if uri is None:
         return None
     format_hint: Final = file.get("format") or file.get("mime_type") or file.get("content_type")
-    return _process_gemini_media(uri, format=format_hint if isinstance(format_hint, str) else None, model=model)
+    return process_gemini_media(uri, format=format_hint if isinstance(format_hint, str) else None, model=model)
 
 
 def convert_to_gemini_tool_call_result(
@@ -1613,10 +1619,14 @@ def convert_to_gemini_tool_call_result(
                         except Exception as e:
                             verbose_logger.warning("Failed to process image in tool response: %s", e)
                 elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
-                    metadata = GeminiFileInspectionMetadata()
+                    # Vertex function response parts do not support Gemini file inspection fields.
+                    file_fields: Final = (
+                        {**content, **(as_str_mapping(content.get("file")) or {})}
+                        if allow_gemini_file_references
+                        else {}
+                    )
+                    metadata: Final = encode_gemini_file_inspection_metadata(file_fields, model=model)
                     if allow_gemini_file_references:
-                        file_fields: Final = {**content, **(as_str_mapping(content.get("file")) or {})}
-                        metadata = encode_gemini_file_inspection_metadata(file_fields)
                         source_part: Final = _gemini_files_api_tool_part(file_fields, model)
                         if source_part is not None and "file_data" in source_part:
                             if supports_media_in_tool_response:
@@ -1641,13 +1651,13 @@ def convert_to_gemini_tool_call_result(
                         try:
                             file_obj = convert_to_anthropic_image_obj(file_data, format=None)
                             media_parts.append(
-                                {
-                                    "inline_data": BlobType(
+                                FunctionResponsePartType(
+                                    inline_data=BlobType(
                                         data=file_obj["data"],
                                         mime_type=file_obj["media_type"],
                                     ),
                                     **(metadata if supports_media_in_tool_response else {}),
-                                }
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
