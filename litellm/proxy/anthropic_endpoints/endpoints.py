@@ -219,6 +219,8 @@ async def anthropic_response(
         # only affects the wire response.
         if litellm.strip_anthropic_total_tokens:
             _strip_total_tokens_from_anthropic_response(result)
+        if isinstance(result, dict):
+            result.pop("_hidden_params", None)
         return result
     except ModifyResponseException as e:
         block_headers: Final = litellm_call_id_headers(base_llm_response_processor.litellm_call_id) or _NO_HEADERS

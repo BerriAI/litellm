@@ -3516,3 +3516,35 @@ async def test_a_repeat_of_a_request_whose_max_tokens_was_clamped_is_served_from
     repeat: Final = await send({})
 
     assert repeat.id == first.id
+
+
+def test_set_cached_hidden_param_on_dict_response() -> None:
+    """Non-streaming Anthropic /v1/messages responses are raw dicts.
+    _set_cached_hidden_param must stamp cache_key and cache_hit into _hidden_params
+    so proxy headers (x-litellm-cache-key) can be populated on cache hits (#52585).
+    """
+    from litellm.caching.caching_handler import _set_cached_hidden_param
+    from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
+
+    dict_response = {
+        "id": "msg_01234",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello world"}],
+        "model": "claude-3-5-sonnet",
+        "usage": {"input_tokens": 12, "output_tokens": 4},
+    }
+
+    _set_cached_hidden_param(dict_response, "cache_key", "caching:test-key-abc")
+    _set_cached_hidden_param(dict_response, "cache_hit", True)
+
+    assert HIDDEN_PARAMS_ATTR in dict_response
+    assert dict_response[HIDDEN_PARAMS_ATTR]["cache_key"] == "caching:test-key-abc"
+    assert dict_response[HIDDEN_PARAMS_ATTR]["cache_hit"] is True
+
+    # Ensure get_hidden_params reads it correctly
+    hidden = get_hidden_params(dict_response)
+    assert hidden is not None
+    assert hidden["cache_key"] == "caching:test-key-abc"
+    assert hidden["cache_hit"] is True
+

@@ -31,7 +31,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -336,12 +336,17 @@ def _is_cache_miss(cached_result: object) -> bool:
 
 
 def _set_cached_hidden_param(response: object, key: str, value: object) -> None:
+    if response is None:
+        return
     if isinstance(response, TextCompletionResponse):
         setattr(response.hidden_params, key, value)
         return
-    hidden_params: Final = get_hidden_params(response)
-    if hidden_params is not None:
-        hidden_params[key] = value
+    try:
+        set_hidden_param(response, key, value)
+    except Exception:
+        hidden_params: Final = get_hidden_params(response)
+        if hidden_params is not None:
+            hidden_params[key] = value
 
 
 class _CachedEmbeddingRecord(LiteLLMBaseModel):
