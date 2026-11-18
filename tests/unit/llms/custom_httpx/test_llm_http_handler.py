@@ -6948,6 +6948,66 @@ async def test_responses_after_a_stored_response_call_on_the_same_extra_headers_
     assert route.calls[-1].request.headers.get_list("authorization") == ["Bearer fake-second-deployment-key"]
 
 
+_MANTLE_RESPONSES_CALLS: Final = MappingProxyType(
+    {
+        "create": (litellm.responses, litellm.aresponses),
+        "compact": (litellm.compact_responses, litellm.acompact_responses),
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("call_name", tuple(_MANTLE_RESPONSES_CALLS))
+@pytest.mark.parametrize(
+    "caller_header_names", (("authorization", "openai-project"), ("Authorization", "OpenAI-Project"))
+)
+@pytest.mark.parametrize(
+    ("auth_params", "configured_authorization_prefix"),
+    (
+        ({"api_key": "fake-configured-key"}, "Bearer fake-configured-key"),
+        (
+            {"aws_access_key_id": "AKIAFAKEFAKEFAKEFAKE", "aws_secret_access_key": "fake-secret"},
+            "AWS4-HMAC-SHA256 Credential=AKIAFAKEFAKEFAKEFAKE/",
+        ),
+    ),
+    ids=("bearer", "sigv4"),
+)
+async def test_bedrock_mantle_responses_send_only_the_configured_key_and_project_over_caller_headers(
+    is_async: bool,
+    call_name: str,
+    caller_header_names: tuple[str, str],
+    auth_params: Mapping[str, str],
+    configured_authorization_prefix: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    route: Final = respx_mock.post(url__regex=r"https://responses\.example\.com/.*").respond(
+        200, json=_responses_body("openai.gpt-6.1-sol")
+    )
+    authorization_name, project_name = caller_header_names
+    sync_call, async_call = _MANTLE_RESPONSES_CALLS[call_name]
+    async with _responses_http_client(is_async) as client:
+        kwargs: Final = {
+            **auth_params,
+            "model": "bedrock_mantle/openai.gpt-6.1-sol",
+            "input": "hello",
+            "api_base": "https://responses.example.com",
+            "aws_region_name": "us-east-1",
+            "aws_bedrock_project_id": "proj_configured",
+            "extra_headers": {authorization_name: "Bearer fake-caller-key", project_name: "proj_caller"},
+            "client": client,
+        }
+        await async_call(**kwargs) if is_async else sync_call(**kwargs)
+    request: Final = route.calls[0].request
+    authorization: Final = request.headers.get_list("authorization")
+    assert len(authorization) == 1
+    assert authorization[0].startswith(configured_authorization_prefix)
+    assert request.headers.get_list("openai-project") == ["proj_configured"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", (False, True))
 async def test_responses_sends_a_bytes_caller_header_value_as_given(
