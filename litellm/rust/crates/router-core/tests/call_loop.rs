@@ -2148,3 +2148,55 @@ async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_
         ])
     );
 }
+
+fn queue_rejected() -> AttemptError {
+    let mut rejected = AttemptError::new(FailureKind::QueueRejected, Some(503));
+    rejected.classes = vec![
+        "DynamicQueueFullError".into(),
+        "ServiceUnavailableError".into(),
+    ];
+    rejected
+}
+
+fn event_count(host: &ScriptedHost, name: &str) -> usize {
+    host.events
+        .lock()
+        .iter()
+        .filter(|event| serde_json::to_value(event).unwrap()["event"] == name)
+        .count()
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_queue_rejection_ends_the_request_with_no_retry_fallback_or_cooldown(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![queue_rejected()]));
+    let router = router(
+        config,
+        json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.queue_rejected()));
+    assert_eq!((host.retries(), host.selected().len()), (0, 1));
+    assert_eq!(event_count(&host, "AttemptFailed"), 0);
+    assert_eq!(event_count(&host, "CooldownSet"), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_queue_rejection_on_a_fallback_hop_ends_the_request_with_that_rejection() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![queue_rejected()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(matches!(refused, Err(Error::Attempt(failed)) if failed.queue_rejected()));
+    assert_eq!(host.selected(), vec!["p1".to_owned(), "b1".to_owned()]);
+}

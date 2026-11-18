@@ -713,15 +713,17 @@ def _relayed(head: object) -> bool:
     return isinstance(head, MessagesStreamHead) and head.relayed
 
 
-def stream_failure(
+async def stream_failure(
     logger: Logging,
     endpoint_type: str,
     request_body: dict[str, object],
     chunks: list[bytes],
     error: Exception,
     head: object,
-) -> Coroutine[object, object, None]:
+    detached: bool,
+) -> None:
     from litellm._logging import verbose_proxy_logger
+    from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
@@ -731,10 +733,12 @@ def stream_failure(
     # stamps it earlier.
     if logger.model_call_details.get("cache_hit") is not True:
         logger.model_call_details.pop("cache_hit", None)
-    return PassThroughStreamingHandler.schedule_stream_failure_logging(
+    await PassThroughStreamingHandler.schedule_stream_failure_logging(
         litellm_logging_obj=logger,
         endpoint_type=EndpointType(endpoint_type),
         request_body=request_body,
         raw_bytes=chunks,
         exception=error,
     )
+    if detached and not closing_superseded_attempt():
+        await logger.report_detached_stream_failure(error)

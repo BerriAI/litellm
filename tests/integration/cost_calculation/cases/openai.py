@@ -7037,8 +7037,8 @@ GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
     ),
 )
 
-GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
-    name="gpt-6-luna-responses_cache_write_12h_no_12h_rate",
+GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_cache_write_12h",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
     model="gpt-6-luna",
     endpoint="/v1/responses",
@@ -7078,12 +7078,12 @@ GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.0016078,
-        input_cost=0.0014178,
+        spend=0.0018578,
+        input_cost=0.0016678,
         output_cost=0.00019,
         prompt_tokens=12928,
         completion_tokens=380,
-        cache_creation_cost=0.000625,
+        cache_creation_cost=0.000875,
     ),
 )
 
@@ -12169,12 +12169,12 @@ GPT_6_LUNA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=3.561e-05, input_cost=3.361e-05, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_read_cost=3.331e-05),
 )
 GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-luna",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
     {"input_tokens": 3334, "input_tokens_details": {"cache_write_tokens": 3331, "cache_write_tokens_details": {"ttl_12h_tokens": 3331, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3339},
-    ExactExpected(spend=0.000419175, input_cost=0.000416675, output_cost=2.5e-06, prompt_tokens=3334, completion_tokens=5, cache_creation_cost=0.000416375),
+    ExactExpected(spend=0.00083555, input_cost=0.00083305, output_cost=2.5e-06, prompt_tokens=3334, completion_tokens=5, cache_creation_cost=0.00083275),
 )
 GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
     GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
@@ -12201,7 +12201,7 @@ GPT_6_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.00078386, input_cost=0.00073986, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_read_cost=0.00073326),
 )
 GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-sol",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12233,7 +12233,7 @@ GPT_6_ASTRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.004272, input_cost=0.004032, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.003996),
 )
 GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-astra",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12265,7 +12265,7 @@ GPT_6_1_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.000379, input_cost=0.000339, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000333),
 )
 GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-sol",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12297,7 +12297,7 @@ GPT_6_1_TERRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.000195185, input_cost=0.000174585, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000171495),
 )
 GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-terra",
     "responses_prompt_cache_write_12h",
     _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
@@ -12313,7 +12313,7 @@ GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.0204604225, input_cost=0.0100638725, output_cost=0.00039655, prompt_tokens=8657, completion_tokens=77, tool_usage_cost=0.01, cache_creation_cost=0.0057358125),
 )
 GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-luna",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12321,7 +12321,7 @@ GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.00041855, input_cost=0.00041605, output_cost=2.5e-06, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.00041575),
 )
 GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-sol",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12329,7 +12329,7 @@ GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.00921635, input_cost=0.00915035, output_cost=6.6e-05, prompt_tokens=3328, completion_tokens=6, cache_creation_cost=0.00914375),
 )
 GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6-astra",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12337,7 +12337,7 @@ GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.050196, input_cost=0.049896, output_cost=0.0003, prompt_tokens=3327, completion_tokens=5, cache_creation_cost=0.04986),
 )
 GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-sol",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12345,7 +12345,7 @@ GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
     ExactExpected(spend=0.008371, input_cost=0.008321, output_cost=5e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.008315),
 )
 GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     "gpt-6.1-terra",
     "responses_prompt_cache_write_30m",
     _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
@@ -12467,13 +12467,346 @@ GPT_4O_MINI_TTS_SPEECH: Final = CostTrackingTestCase(
     model="gpt-4o-mini-tts",
     endpoint="/v1/audio/speech",
     request={"input": "The pricing harness says hello.", "voice": "alloy", "response_format": "mp3"},
-    response=BinaryResponse(content_type="audio/mpeg", length=2048),
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'data: {"type":"speech.audio.delta","audio":"c2NyaXB0ZWQgYXVkaW8="}',
+            'data: {"type":"speech.audio.done","usage":{"input_tokens":6,"output_tokens":50,"total_tokens":56}}',
+            "data: [DONE]",
+        ),
+    ),
     expected=ExactExpected(
-        spend=3.66e-06, input_cost=3.66e-06, output_cost=0.0, prompt_tokens=0, completion_tokens=0
+        spend=0.00060366, input_cost=3.66e-06, output_cost=0.0006, prompt_tokens=6, completion_tokens=50
+    ),
+)
+
+GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-responses_native_stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": True},
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            "event: response.created\n"
+            "data: "
+            '{"type":"response.created","response":{"id":"resp_$REQUEST_ID","object":"response","created_at":1793550482,"status":"in_progress","access_programs":{"cyber":"standard"},"background":false,"completed_at":null,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-6.1-terra","moderation":null,"output":[],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"24h","reasoning":{"context":"all_turns","effort":"medium","mode":"standard","summary":null},"safety_identifier":null,"service_tier":"auto","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":0.98,"truncation":"disabled","usage":null,"user":null,"metadata":{}},"sequence_number":0}',
+            "event: response.in_progress\n"
+            "data: "
+            '{"type":"response.in_progress","response":{"id":"resp_$REQUEST_ID","object":"response","created_at":1793550482,"status":"in_progress","access_programs":{"cyber":"standard"},"background":false,"completed_at":null,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-6.1-terra","moderation":null,"output":[],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"24h","reasoning":{"context":"all_turns","effort":"medium","mode":"standard","summary":null},"safety_identifier":null,"service_tier":"auto","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":0.98,"truncation":"disabled","usage":null,"user":null,"metadata":{}},"sequence_number":1}',
+            "event: response.output_item.added\n"
+            "data: "
+            '{"type":"response.output_item.added","item":{"id":"rs_$REQUEST_ID","type":"reasoning","content":[],"encrypted_content":"gAAAAABq52iT_lK9OyCJUuDXlzdJ3FX1QD01svdydIIJBHfWCL4eWlT26dAxoavxpPSzcTXNUZtcdR7EzrVqR0IyhCd-kPJJ9FdF_pomv_LUSaQf3Xal2znb3ByAz642c8jmew8nkfNiqHsgclkggndAbe13DZt_jmEb07JtnhKFEsu7qbQA4lVksJOe9ovwGqC5fKxYs2OSQz-hDrFkBPKZbtCNgRNixPq7D79_v9_azyHfVxK7MvpqvIBfiObNtZwBhLlL4HXKnA__BHGjAVYveH4RDKKTvHCcfObqw0RE00I9IMe3AE5LjkdwiUAXPVJe9IbinfcLeXWAXMOAbJCSF4k-OWBYtmbpaibyCZQZN6Yh_BubpFnJtsGiQVdZMtlyx4HuxvLAetIo9ppz7UEPLe0teaPWaxHUqMOpERl1ZcQJFmQEghxMPM2rk5sBBFgBr3tlQUmpxJEYT9A3N5WK9izrs9khZc9fazDDZrrSJ2wJdo5Yo0oXbJV3it2a_7UlfNNfLe_GHal4GSor5C_iki1dLhCkHLZAFdv-MgHeUXd9BTaH7Uc-yyCcN_LUpCS30QRVLOPZB86sr6ximq6nHasYknhDv4e52kHyGIgFMlFZxumypFe4JMVNBpHHBdNBpsdeD_Z1EPO8kpn7RNF6qch0KO2LDkNkSbW-NU5-OUXEosDW5wb84DF-1kctFpUfTwtI_vk0KwINbVcRLh0vHgNPwXEIUKPHKi4SU_tKyXc2m9DCirhhCjcdbRgAI2cEezxlLoE3qqrUg1VK1RxhEDcb7djiec4uZ9W8yZhLQURx9QnK5NXH_59MiNZpS54EbmiVYLkh19EQ1Widqm8eMz1xgv7Lyox-faHsUeESUbIb3BowijB_w3inKxzBbIipc0IdbRq2OSqbfLDEXn9ffcdIpjmpKcctgw0zjkIxU7_LuL3o2EM--iSgXPHN8v54EBpTpGrOKqKhJhleKkeAFwX_XR5lzGuwr78xf4H_h-ERbEoypFTI6e9r8Brrbkd3Ai4kjDy5lrZ6wh5LMpCpOuoFBu6DCl2GQtcSmimdKkx1QpjKAVwpx6OdlOAUr_Uf17XXvhQe_BACsL6F5l3dYFHwZ7-IPnhvXGvW3-EaeD35x9TaZQ-d3DRKHlvKBgtZ6c7wgk969UOB1cxLvd975MGZsuZbg2CjSqfD12U3rW35gnDDW7j2lBrUYuOKTF1bf2nO5ocl","summary":[]},"output_index":0,"sequence_number":2}',
+            "event: response.output_item.done\n"
+            "data: "
+            '{"type":"response.output_item.done","item":{"id":"rs_$REQUEST_ID","type":"reasoning","content":[],"encrypted_content":"gAAAAABq52iUqG8tEb_xF36BEfJWBH58SYtrRaBLB3-SJOeRPsdWLdX9L98t_9G6f9D11g6oIqiUS93TVazEp8z4jT1KZYIZb26G_i5LC_Xl72OqnIMDW2JoOopESrZ_ozSnTf9T6GANMZHhaUfQyx8mmUm3phdC1xYtFC_RKsXiNjDUL_7Tm6XE2SCgLICljezY17L94CNpuL0zrhQPoFOjdXeo4mCsKiBn4SAzC4-Y1qbM7KZOlCZSDxg-Dj5GEco1r2qzdq04RhvfVwDgHgvz4SXWLoDEfl4DkARGzkEflQAzjb7Ob_bB7vIjmEtaiI8fpAutCFTrDHSIuhmCuQVZMFaY-Hs6cuZ7TnFJlwEZV0Uz1mdD1-Z0E7UAZ9_H4uVsVTq256GHDl-Y6aaRhw0gqNzGgVkc-0TiGoOHA1kvHnTL4lkauEVK7HuTCcwc5k1GjPldyqoxOgvYJ4Bhf-Rbc-D3rueq9bTc2DB9zarCThtPfBydh0HxYr0ouh4iSdZVkU4Jnt_v7e6AM9uJ3Ycgio-BRXj4G6XL03kr5EqWsJ6uLW1pVWcFbegx4lBxIO0nkp0op0OYS-M3O9KUKry_-JpIrl0i-PVJvMTQunAFbmDzG8iPag7TQ2R5gUw56RLPFLGtTNzTVcrk4L-JxrSf5PWR94qwi2sag43lGiM-S0Karaa1W4hmyXcTuCeKRm0oaEDcMYmub0AG0JEzwj-AMYJ3UlgKywkBOSPhm_q-IKN94bvqiGoqwQJ4otj8AildzeMXCl60R_o0mbC6Wt-mhbw36e4O3TCt26iw2I2vR6Z9iWHck1jOq6Bt7WiwNdsJLZxGhSG3j3fvaKYMUSak29o7DpNytkBI9ZJmRDIVEqaefGetMJndEqvHsfZVfMYcV07YJjyy2YoLdGAc24p0YAl4UAOV5Yd9KNpbk_NB3TPlNQS75rgMUC8lLbNWhGSrZrQu1b3MSAZHSlzLhgo1RUk3bntG1tRBHdgkGhsXi9bkwuX7ffuzh1GSZ-fY71NvwtVbNqUfFwwWMB--_w9_G6qf9GFzVssRsYEJ_fVhz2paLLsmltaWAKXte5FM9ThfTsXJ-9YYQY0Xkcm0xcnXhSUobJcx0RQnJZSzbOEa985wgZ-9kMntbgS6W0dYxDwksArG-aOeoJXP99YNJKKCVmTwMmSrqEChhXefM_mtFRRUJuYoB8wbh-Dv2fs-XjM__E2DQ0r6bcNtrsnNNZiKwDhoPY-6fn2ygn0dTDepfoxjQ3u9RMbiRo5KORN39h0MmaA8oATrG9MLLKxlcc4mK_VIsokt6YOoKdew7I4aO7uGfxf6S8grunxuRsCHAJy0RlQAWzd2xS7Jt1A8uuZx5CVb_mixDaJqhryePU93EM39rIlDzv1DrYDO_y35QBdNSY8ZeaSCFu2dXvl-OgGCrzyj--7aATJP9pVY3joUhL9bg5aaLvPRTFBilSqkfu0uTE3x-RDcckVn8tjCabG6sX25hf1HcYmSNI7z6yLHnQWtYmIrR5pRjti2Mm069ezFHVuMkPZq7OlO6zo-ZWRMR1k5-cNcB0K_542rNST-mu87Qxv1gBMoAsN7RH-pQRD7yX--fdPfudQiIADessceNMtHpgK3oqVN4G3wCbkdE-z5UYBmAWschMjymShjR5Y5p9VmFe92_xW_D68O_Arj3mqTEl024Byf7MIiJVR3Ks49aPtfc2_-fDeKfwvu5nL-JiOPMeve8HAFI-k--5a5sp_Br3K0yzE5TfcVi2mAdMN18AGMvHk6u9fj0GI2DxlCPcI3hhRwBK2pVOZBRShzecHdYLgj8Bu2WT4zLiJMEXbqQQ_0MZS6C0cmnkSjjgvrZu7V5j0n7ivOOSKkMVKcC57pcqrwWCOLWSbeIakPFDCf5JeGnXQgaueI2wElpnalKn8J4g7Xf-q9rmW7Kxcw03hTabY-QlQC3QPLF7F3XsHadqecRZEb2-qVqksGW1nyVaDgwojdj6qCoGTHwls3vmYFnTwPwWnYgkEzQfyRefmCOkeUUat_kkXtcGmwmqbTwc-XTLHTbcPjy8WUAQc2gvctGhavLAotLT-G9vt4_0wbPgd297k5D9rRIF3z0kjOT1rEJRbDiEuCwsXQYT1WQEEFayko3XOy0wWzGDqvk7LFU4jZUaemP6TK2QfY50D4wwfoBCOhfZzfPqW8YcCLRTPiFQAu3ch-c90UdQqGgDf1v6uUP7-7_QkCugHq83eeL3JHAGGd4DcUZv_PlSF5EFpaHvE60iIOBIaC-lBqOs_5BWWhS0o=","summary":[]},"output_index":0,"sequence_number":3}',
+            "event: response.output_item.added\n"
+            "data: "
+            '{"type":"response.output_item.added","item":{"id":"msg_$REQUEST_ID","type":"message","status":"in_progress","content":[],"phase":"final_answer","role":"assistant"},"output_index":1,"sequence_number":4}',
+            "event: response.content_part.added\n"
+            "data: "
+            '{"type":"response.content_part.added","content_index":0,"item_id":"msg_$REQUEST_ID","output_index":1,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"},"sequence_number":5}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"BNlrxoKanmvoh","output_index":1,"sequence_number":6}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"d6wAn19psL70","output_index":1,"sequence_number":7}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"jMGY8bec","output_index":1,"sequence_number":8}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"HmpVCzj8PFzc","output_index":1,"sequence_number":9}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"9Vjs4mK0JawGR1","output_index":1,"sequence_number":10}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"HqaRQ2JEQ","output_index":1,"sequence_number":11}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"gdho1n5Vt","output_index":1,"sequence_number":12}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"K87IZj","output_index":1,"sequence_number":13}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"x5JBl1t1t7fr","output_index":1,"sequence_number":14}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"gjt97uyl","output_index":1,"sequence_number":15}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"q1LP8GolRM9Pfk7","output_index":1,"sequence_number":16}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"TYZMPgoiJYwGJ","output_index":1,"sequence_number":17}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"I3Gw9kr6Cq7g8","output_index":1,"sequence_number":18}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"Zz0A6WnHpDAVPnP","output_index":1,"sequence_number":19}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"5LEGsKITSF","output_index":1,"sequence_number":20}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"Nr6ahaM","output_index":1,"sequence_number":21}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"hEetz35s15FDz","output_index":1,"sequence_number":22}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"O5kMNPuVTYr","output_index":1,"sequence_number":23}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"HHChpZ","output_index":1,"sequence_number":24}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"aYh85gozY4Zp","output_index":1,"sequence_number":25}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"gQG8S0pMKCom","output_index":1,"sequence_number":26}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"jqOoYUeCiN","output_index":1,"sequence_number":27}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"FLNhK86Yqg2gYgq","output_index":1,"sequence_number":28}',
+            "event: response.output_text.done\n"
+            "data: "
+            '{"type":"response.output_text.done","content_index":0,"item_id":"msg_$REQUEST_ID","logprobs":[],"output_index":1,"sequence_number":29,"text":"scripted '
+            'response"}',
+            "event: response.content_part.done\n"
+            "data: "
+            '{"type":"response.content_part.done","content_index":0,"item_id":"msg_$REQUEST_ID","output_index":1,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"},"sequence_number":30}',
+            "event: response.output_item.done\n"
+            "data: "
+            '{"type":"response.output_item.done","item":{"id":"msg_$REQUEST_ID","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"}],"phase":"final_answer","role":"assistant"},"output_index":1,"sequence_number":31}',
+            "event: response.completed\n"
+            "data: "
+            '{"type":"response.completed","response":{"id":"resp_$REQUEST_ID","object":"response","created_at":1793550482,"status":"completed","access_programs":{"cyber":"standard"},"background":false,"completed_at":1793550484,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-6.1-terra","moderation":null,"output":[{"id":"rs_$REQUEST_ID","type":"reasoning","content":[],"encrypted_content":"gAAAAABq52iUDgldbCdlDfQqIlheMaTv1sfoxtG261Dz8GrQlERV2ayPHJ69kxZNRAN1bCj6d-W2ssHd962G1wjgtm-8BLs8RZluhpSxA-JaIERag4nuIzMeMAZWJGNCaXSHKsqO9hZl50GLt0EfC_VUD2KvZov4FN-uG31ydbOVojI5SspKq-iRh4HQ0cJPq67gQ47gep8zg2xUToLoQdm1sy4N_CnR0JJ-qKsHo19Mwi07y3ZYBJOm3bBGVRwjkqkkC85oP7xkWHU_CmHVYnOCLvtXfej8VEpHQ2kUJj6ZWSh7VfMCKynvj1vnZb2aVJ-IngO8qVpKjFx_hatfJH2HVOiu0Tg5pXZZkcihdR_nTBX_qFVvFuyxvFtafg45R8kL9nWfBNmM59yVuTz4rv2PTyAc2rKe59L_yBO_s9GJ8ENywKZICvB1tbbCIzBLgA7ovBhfnQPxY1VedCO2geHKwFlEcU2ePNzg58C-I9C3qG6ywU50-gbEiy4ECLayaOIVyjJbjwjcu8HLmmko_UKqhNOZ_PvQyt3Gg4QLeY2nTatNL71iPj3DobKSQq_gi2n7oJ0wN7asqPMWfec5EPq7lQxDlwpUas28Yu0Lpf_uEgLJn-VHPeVAw3vpeRblKdC_df6Y6v8jY5H9Htg0bV1qvg1Ow_hnHVHvB4QZyf46hU89lAwYiOPzofrUd_rUO3EHRZ_4Bu4gulI0LySulXbBSM98PXLwN8Ml-lVPqpJ2FZ6gRQtgZyTGmFk_DOdGdUz-1vwR61zYolDajZu6y7Y9Xlg8JydYBAOZN2Clf8BKbZ-5O13W5ks9UyNHIe7AUnYjIuu8a38T5zof1W1nRFDfrJFYiu5ul_zcNyIWF6v5fEAKIbnNYSXdTWwVZEBEkz3dHdZoJ_AEJIIUTzd5GN-JlBijdiwarOFqgGtOpNHr89MC1pSEOK9AucKWsOsYZxRTnSVYHGxWn9tgDLG733Skm7-rodmYstnys9SDHjJcUWtBImSmttFDq0xtnuTvCpV9AfoHCEoktmr-zbzn2f2goIyb8SvChNkzAAGHkkOIa-5_JWD2u7nCBgEYhv16brPKIJzHEfR6UNUUyuZ2hgsHro9mGIEaf7ymM9_SgKkzkJuNk17Xt9JA5bZWYH455SDauQIlUgjOaI_dN2A3DdaW-1-EL2BeRQ2gVinJQctt6gH21S2WATqFDIC5gttMPL2pJi1hR5Fu_g9fz0r4aV-mkeLjsBhOddVbfttFeOtWeVdc2YAig8euR4y29JsKfxAk0kQtSQGN_PZ6C0JVurCYjrsZC24lgzECX9ABqmS1b6spVb-5r--JVa-XEKYeh0hSw55q7qFJJhU2ksTiS0IadfUnAmPPrgHIYs21BnmKTgGaUDT82C_sqT9bVsx65UjycbOvFT7r8DxgBjbD9WnsUntJt2jrwU4Bwy5bYDx6GCX7DtDjoIYMj-Wo9z0seGQXgLm0P277RLjZQOOJIKaeukdm9dCCn9NfQoHG73TylMfCxZv__BlvXFNcPn291xBPnn3A9QHIdVrJBA0O8wlqzjUndp3_WNSqyvY9KsJFyh82gcf6OwDL6j46kjELlRhw83p7LneHeGlfLXjtTDuKK1n7LgXmK8HFyLq3axaGqmaoCRIu18bLVsDx6ZrEZy1_s4yS9mOrOkBuq1IBB-L3OeDwvUYKAi3ay5y5_nivHo3rSa3-0PxX0hiPBafXSPtcJOM9dUOm6Pqx8uZfxRWUKkd6D6JNgbLcHiZfj85DHOSOtk-mD9kpL08HfBIwybzP0gX3uoJJT8mLsPRTM2UyWWOmUq2NnMbIp4GHUHADdFSs00IQDxFnF2ARAlp4yUTGWlUnHMQdd4Nigc9M80TOL3RnDDnHeNLLEzfpz19YPZgvyQl_TSN2WIJKgE7Iv7pTcUq5r_Fo0-NX4WTgIbGAdbR973gXvOiAQOrF0cOazZUyZxI7qjNuSvn7fbif7xk0WG5McD5FyC_-W6kaVV2Fc_H_XG6zRTVZMrl-zgj1jrVXtwwXXMM-qCO9T3O0ULf4zwAj5ZOsssw1064Z0ETsQCWv-MLdS3mQpZfCkhr9afabZXxyjvKkeje9G-RkAa3D8B-bqGTMoBsfu5zTDEAFLUP2Af8qsOzoRpEh8VYvnHQVO4LT_h4KLEVuswCzS1v3MWHjbZ4Bmi7UkyRf_a0LTJXjyMYTQyhMf21k92ghq8UL8_z-DC2SxIPylOIwsipgeIUzoHx_bNNAwwyuQhZhQ1eMsrbnpCzH9WmjQWSlnQ5rKcFmnWw=","summary":[]},{"id":"msg_$REQUEST_ID","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"}],"phase":"final_answer","role":"assistant"}],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"24h","reasoning":{"context":"all_turns","effort":"medium","mode":"standard","summary":null},"safety_identifier":null,"service_tier":"default","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":0.98,"truncation":"disabled","usage":{"input_tokens":1840,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":412,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2252},"user":null,"metadata":{}},"sequence_number":32}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-messages_bridged_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "responses native fixture"}],
+    },
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-messages_bridged_stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "responses native fixture"}],
+        "stream": True,
+    },
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-responses_deployment_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/responses",
+    deployment=Deployment(model="openai/responses/gpt-6.1-terra"),
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_CHAT_BRIDGED_JSON: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-chat_bridged_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    deployment=Deployment(model="openai/responses/gpt-6.1-terra"),
+    request={"model": "$MODEL", "messages": [{"role": "user", "content": "responses native fixture"}], "stream": False},
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_CACHE_READ: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-cache_read",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
+                        "single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1793550524,
+            "model": "gpt-6.1-terra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Material: alpha, beta, gamma, and delta; city and weather not specified.",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12928,
+                "completion_tokens": 380,
+                "total_tokens": 13308,
+                "prompt_tokens_details": {"cached_tokens": 12288, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.003249032, input_cost=0.001292032, output_cost=0.001957, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+GPT_6_1_TERRA_CACHE_WRITE_5M: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-cache_write_5m",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
+                        "single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1793550522,
+            "model": "gpt-6.1-terra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The material mentions alpha, beta, gamma, and delta; no city or "
+                        "weather is specified.",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12928,
+                "completion_tokens": 380,
+                "total_tokens": 13308,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12288, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.018437, input_cost=0.01648, output_cost=0.001957, prompt_tokens=12928, completion_tokens=380
     ),
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM,
+    GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM,
+    GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_1_TERRA_CHAT_BRIDGED_JSON,
+    GPT_6_1_TERRA_CACHE_READ,
+    GPT_6_1_TERRA_CACHE_WRITE_5M,
     GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
     GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
     GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
@@ -12661,7 +12994,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
     GPT_5_6_RESPONSES_CACHE_WRITE_12H,
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,
@@ -12835,6 +13168,8 @@ BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[t
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(plain=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM),
     StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
     StreamParityTestCase(
         plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
@@ -12891,6 +13226,11 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(native=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
+    BridgeCostParityTestCase(native=GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_TERRA_CHAT_BRIDGED_JSON),
     *bridge_pairs(
         (
             GPT_5_6_RESPONSES_NATIVE_JSON,

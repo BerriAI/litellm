@@ -210,6 +210,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
         "guardrail_spend": 0,
+        "customer_margin_spend": 0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
     }
@@ -265,6 +266,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
         "guardrail_spend": 0,
+        "customer_margin_spend": 0,
         "total_response_time_ms": 0,
         "timed_requests": 0,
     }

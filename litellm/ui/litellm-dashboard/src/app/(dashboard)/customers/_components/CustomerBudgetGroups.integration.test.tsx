@@ -1,8 +1,17 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
-import { render, screen, fireEvent, waitFor } from "../../../../../tests/test-utils";
+import {
+  render,
+  renderWithProviders,
+  testQueryClient,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from "../../../../../tests/test-utils";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
+import CustomerSettings from "../settings/page";
 import type { Organization } from "./customerHierarchyForms";
 
 const organization: Organization = {
@@ -28,12 +37,78 @@ const json = (body: unknown, status = 200) =>
 
 describe("CustomerBudgetGroups", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     registerBaseUrlGetter(() => "http://localhost");
     fetchMock.mockReset();
     onSaved.mockReset();
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([false, true])("saves rate-only edits through the existing group endpoint, global=%s", async (global) => {
+    fetchMock.mockResolvedValue(json(organization));
+    render(
+      global ? (
+        <CustomerBudgetGroups organization={organization} onSaved={onSaved} global />
+      ) : (
+        <CustomerBudgetGroups organization={organization} onSaved={onSaved} />
+      ),
+    );
+    const rates = within(screen.getByRole("group", { name: "Group 1 rate limits" }));
+    fireEvent.change(rates.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
+    fireEvent.change(rates.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    const request = fetchMock.mock.calls[0][0] as Request;
+    expect(new URL(request.url).pathname).toBe(
+      global
+        ? "/management/v1/customer_organization_budget_groups"
+        : "/management/v1/customer_organizations/org-1/default_budgets",
+    );
+    expect(await request.clone().json()).toEqual({
+      expected_revision: organization.budget_groups_revision,
+      default_budget_template: "Standard",
+      default_budgets: [
+        { budget_id: "standard", name: "Standard", tpm_limit: 50000, rpm_limit: 0 },
+        { budget_id: "old", name: "Old" },
+      ],
+    });
+  });
+
+  it("creates and removes organization groups through the shared editor in Settings", async () => {
+    const user = userEvent.setup();
+    const catalog = { ...organization, default_budget_template_id: null, default_budgets: [] };
+    fetchMock.mockImplementation(async (input) => {
+      const request = input as Request;
+      expect(new URL(request.url).pathname).toBe("/management/v1/customer_organization_budget_groups");
+      return json(
+        request.method === "PATCH"
+          ? {
+              ...catalog,
+              default_budgets: [
+                { budget_id: "new", name: "Starter", budget_limits: [{ budget_duration: "1mo", max_budget: 0 }] },
+              ],
+            }
+          : catalog,
+      );
+    });
+    renderWithProviders(<CustomerSettings />);
+    await user.click(await screen.findByRole("button", { name: "Add budget group" }));
+    fireEvent.change(screen.getByLabelText("Group 1 name"), { target: { value: "Starter" } });
+    fireEvent.change(screen.getByLabelText("Group 1 monthly budget (USD)"), { target: { value: "0" } });
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
+    const request = fetchMock.mock.calls.at(-1)?.[0] as Request;
+    expect(await request.clone().json()).toEqual({
+      expected_revision: organization.budget_groups_revision,
+      default_budget_template: null,
+      default_budgets: [{ name: "Starter", budget_limits: [{ budget_duration: "1mo", max_budget: 0 }] }],
+    });
+    await user.click(screen.getByRole("button", { name: "Remove Starter" }));
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+  });
 
   it("should save additions, edited limits, the new default and deletions together", async () => {
     const user = userEvent.setup();
@@ -81,16 +156,25 @@ describe("CustomerBudgetGroups", () => {
     });
   });
 
-  it("should keep the whole draft after a rejected save and allow retry", async () => {
+  it.each([
+    [false, 409],
+    [true, 409],
+    [false, 204],
+    [true, 204],
+  ] as const)("keeps the draft after rejected save (global %s, status %s)", async (global, status) => {
     const user = userEvent.setup();
-    fetchMock.mockImplementation(async () => json({ detail: "A referenced template cannot be deleted." }, 409));
-    render(<CustomerBudgetGroups organization={organization} onSaved={onSaved} />);
+    const error = status === 204 ? "Unable to load customer" : "A referenced template cannot be deleted.";
+    const source = { ...organization, default_budget_template_id: global ? null : "standard" };
+    fetchMock.mockImplementation(async () =>
+      status === 204 ? new Response(null, { status }) : json({ detail: error }, status),
+    );
+    render(<CustomerBudgetGroups global={global} organization={source} onSaved={onSaved} />);
     fireEvent.change(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" }), {
       target: { value: "15" },
     });
     await user.click(screen.getByRole("button", { name: "Remove Old" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("A referenced template cannot be deleted.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(error);
     expect(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" })).toHaveValue(15);
     expect(screen.queryByDisplayValue("Old")).not.toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();

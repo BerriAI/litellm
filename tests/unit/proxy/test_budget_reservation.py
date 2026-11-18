@@ -28,6 +28,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from tests.unit.proxy.rust_auth_stores import GroupBudget, RustAuthStores, install_rust_auth_stores
 from tests.unit.proxy.spend_tracking.native_budgets_replica import install_native_owner
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
@@ -417,40 +418,37 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
         await release_budget_reservation_on_cancel(reservation)
 
 
-class _ModelAccessGroupBudgetPrisma:
-    """Serves ``LiteLLM_ModelAccessGroupBudgetTable`` rows, recording what reached the database."""
+class _ExplodingPrismaClient:
+    """Model access group budget rows come from the Rust store; a Prisma read is a bug."""
 
-    def __init__(self, **max_budget_by_group) -> None:
-        self.rows = {
-            group: SimpleNamespace(
-                access_group_name=group,
-                spend=7.0,
-                litellm_budget_table=None
-                if max_budget is None
-                else SimpleNamespace(max_budget=max_budget, budget_limits=None),
-            )
-            for group, max_budget in max_budget_by_group.items()
-        }
-        self.batches = []
-        self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many))
-
-    async def _find_many(self, **kwargs):
-        requested = list(kwargs["where"]["access_group_name"]["in"])
-        self.batches.append(requested)
-        return [self.rows[group] for group in requested if group in self.rows]
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"unexpected database access: {name}")
 
 
-async def _model_access_group_counters(matched, **max_budget_by_group):
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
+
+
+def _seed_model_access_group_budgets(stores: RustAuthStores, **max_budget_by_group: float | None) -> None:
+    """``LiteLLM_ModelAccessGroupBudgetTable`` rows as the Rust model access group store serves them."""
+    stores.model_access_group.groups.update(
+        {group: GroupBudget(spend=7.0, max_budget=max_budget) for group, max_budget in max_budget_by_group.items()}
+    )
+
+
+async def _model_access_group_counters(stores: RustAuthStores, matched, **max_budget_by_group):
+    _seed_model_access_group_budgets(stores, **max_budget_by_group)
     return await _get_model_access_group_budget_counters(
         valid_token=UserAPIKeyAuth(api_key="hashed", matched_model_access_groups=matched),
-        prisma_client=_ModelAccessGroupBudgetPrisma(**max_budget_by_group),
+        prisma_client=_ExplodingPrismaClient(),
         user_api_key_cache=UserApiKeyCache(),
     )
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key():
-    counters = await _model_access_group_counters(["premium"], premium=25.0)
+async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key(rust_auth_stores: RustAuthStores):
+    counters = await _model_access_group_counters(rust_auth_stores, ["premium"], premium=25.0)
 
     assert len(counters) == 1
     counter = counters[0]
@@ -463,25 +461,25 @@ async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_without_a_budget_reserves_nothing():
-    assert await _model_access_group_counters(["premium"], premium=None) == []
+async def test_model_access_group_without_a_budget_reserves_nothing(rust_auth_stores: RustAuthStores):
+    assert await _model_access_group_counters(rust_auth_stores, ["premium"], premium=None) == []
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_with_a_zero_budget_reserves_nothing():
+async def test_model_access_group_with_a_zero_budget_reserves_nothing(rust_auth_stores: RustAuthStores):
     """Zero is how a budget is cleared, not a ceiling that blocks every request."""
-    assert await _model_access_group_counters(["premium"], premium=0.0) == []
+    assert await _model_access_group_counters(rust_auth_stores, ["premium"], premium=0.0) == []
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_counters_come_from_the_auth_object():
+async def test_model_access_group_counters_come_from_the_auth_object(rust_auth_stores: RustAuthStores):
     """Auth already resolved which granted groups serve the model; re-deriving it here would drift."""
-    assert await _model_access_group_counters(None, premium=25.0) == []
+    assert await _model_access_group_counters(rust_auth_stores, None, premium=25.0) == []
 
 
 @pytest.mark.asyncio
-async def test_repeated_model_access_group_reserves_once():
-    counters = await _model_access_group_counters(["premium", "premium"], premium=25.0)
+async def test_repeated_model_access_group_reserves_once(rust_auth_stores: RustAuthStores):
+    counters = await _model_access_group_counters(rust_auth_stores, ["premium", "premium"], premium=25.0)
 
     assert [counter.entity_id for counter in counters] == ["premium"]
 

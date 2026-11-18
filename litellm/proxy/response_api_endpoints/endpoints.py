@@ -105,6 +105,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _UNTRUSTED_ROOT_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     ROUTER_RESERVED_METADATA_FIELDS,
     add_guardrails_from_policy_engine,
+    client_pricing_fields_stripped_for,
     is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -1893,11 +1894,12 @@ async def _responses_input_tokens(
         )
 
     request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
+    left_out_fields: Final = counted_fields.keys() | client_pricing_fields_stripped_for(user_api_key_dict)
     try:
         responses_request: Final = await _with_managed_file_id_mapping(
             _with_authorized_previous_response(
                 {
-                    **{name: value for name, value in request_fields.items() if name not in counted_fields},
+                    **{name: value for name, value in request_fields.items() if name not in left_out_fields},
                     **token_fields,
                 },
                 response_id_security,
@@ -1971,6 +1973,7 @@ async def cancel_response(
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
+        polling_cache_ttl,
         proxy_config,
         proxy_logging_obj,
         read_request_body,
@@ -1991,7 +1994,7 @@ async def cancel_response(
         if not redis_usage_cache:
             raise HTTPException(status_code=500, detail="Redis cache not configured.")
 
-        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache)
+        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache, ttl=polling_cache_ttl)
 
         # Get current state to verify it exists
         state: Final = await polling_handler.get_state(response_id)

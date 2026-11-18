@@ -110,7 +110,11 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router
-    from litellm.rust_bridge._native import NativeParallelRequestLimiter, NativeParallelRequestLimiterState
+    from litellm.rust_bridge._native import (
+        NativeModelCapacityState,
+        NativeParallelRequestLimiter,
+        NativeParallelRequestLimiterState,
+    )
     from litellm.types.agents import AgentResponse
 
     Span = _Span
@@ -136,8 +140,12 @@ class RateLimitedModel:
         return requested_limit if requested_limit is not None else limits.get(self.group)
 
 
+def native_rate_limit_store(cache: DualCache) -> RateLimitStore:
+    return RateLimitStore(connect(cache.redis_cache).rate_limits(cache.default_in_memory_ttl))
+
+
 def dynamic_rate_limiter_covers(model_group: str) -> bool:
-    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+    from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
@@ -146,7 +154,7 @@ def dynamic_rate_limiter_covers(model_group: str) -> bool:
     if group is None or (group.tpm is None and group.rpm is None):
         return False
     return any(
-        callback == "dynamic_rate_limiter_v3" or isinstance(callback, PROXY_DynamicRateLimitHandlerV3)
+        callback == "dynamic_rate_limiter_v3" or isinstance(callback, NativeDynamicRateLimiter)
         for callback in litellm.callbacks
     )
 
@@ -775,6 +783,12 @@ class RequestRateLimiterStash:
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
     native_state: "NativeParallelRequestLimiterState | None" = None
+    native_capacity_state: "NativeModelCapacityState | None" = None
+
+    def native_capacity(self, create: Callable[[], "NativeModelCapacityState"]) -> "NativeModelCapacityState":
+        if self.native_capacity_state is None:
+            self.native_capacity_state = create()
+        return self.native_capacity_state
 
 
 @dataclass(frozen=True, slots=True)
@@ -950,6 +964,22 @@ def _mcp_scope(user_api_key_dict: UserAPIKeyAuth | None, server: MCPServer) -> M
     }
 
 
+_GOOGLE_GENAI_CONFIG_FIELDS: Final = ("config", "generationConfig", "generation_config")
+
+
+def _google_genai_config_field(data: object) -> str | None:
+    if not isinstance(data, Mapping):
+        return None
+    return next((field for field in _GOOGLE_GENAI_CONFIG_FIELDS if data.get(field)), None)
+
+
+def _google_genai_request_config(data: object) -> object:
+    config_field: Final = _google_genai_config_field(data)
+    if config_field is None or not isinstance(data, Mapping):
+        return None
+    return data[config_field]
+
+
 def _parse_output_cap_value(raw_value: object) -> int | None:
     if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, str)):
         return None
@@ -1004,10 +1034,8 @@ def _extraction_input_text(data: Mapping[str, object]) -> str:
 
 
 def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
-    if not isinstance(data, dict):
-        return None
     if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-        config: Final = data.get("config") if "config" in data else data.get("generationConfig")
+        config: Final = _google_genai_request_config(data)
         google_cap_values: Final = tuple(
             parsed
             for field in ("maxOutputTokens", "max_output_tokens")
@@ -1016,6 +1044,8 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
             if parsed is not None
         )
         return max(google_cap_values, default=None)
+    if not isinstance(data, dict):
+        return None
     if call_type in RESPONSES_API_CALL_TYPES:
         responses_cap: Final = _parse_output_cap_value(data.get("max_output_tokens"))
         if responses_cap is None:
@@ -1067,6 +1097,7 @@ def _translate_google_genai_native_request(
     data: object,
     call_type: str | None,
 ) -> Mapping[str, object] | None:
+    config: Final = _google_genai_request_config(data)
     contents: Final = data.get("contents") if isinstance(data, dict) else None
     if (
         not isinstance(data, dict)
@@ -1076,7 +1107,6 @@ def _translate_google_genai_native_request(
         return None
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
-    config: Final = data.get("config") if "config" in data else data.get("generationConfig")
     return GoogleGenAIAdapter().translate_generate_content_to_completion(
         model=data.get("model") if isinstance(data.get("model"), str) else "",
         contents=contents,
@@ -1128,11 +1158,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         self.ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self.fail_closed_resolver = fail_closed_resolver
         self.force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
-        self.rate_limits: Final = rate_limit_store or RateLimitStore(
-            connect(internal_usage_cache.dual_cache.redis_cache).rate_limits(
-                internal_usage_cache.dual_cache.default_in_memory_ttl
-            )
-        )
+        self.rate_limits: Final = rate_limit_store or native_rate_limit_store(internal_usage_cache.dual_cache)
 
         self.window_size = rate_limit_window_size()
 
@@ -1422,13 +1448,9 @@ def no_max_tokens_output_floor(
 
 
 def get_output_candidate_count(data: object, call_type: str | None = None) -> int:
+    config: Final = _google_genai_request_config(data) if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES else None
     if not isinstance(data, Mapping):
         return 1
-    config: Final = (
-        (data.get("config") if "config" in data else data.get("generationConfig"))
-        if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES
-        else None
-    )
     candidate_values: Final = (
         data.get("n"),
         data.get("best_of"),
@@ -1445,13 +1467,13 @@ def get_output_candidate_count(data: object, call_type: str | None = None) -> in
 
 
 def write_implicit_output_cap(data: object, call_type: str | None, effective_cap: int) -> bool:
+    google_config_field: Final = _google_genai_config_field(data) or "config"
     if not isinstance(data, dict):
         return False
     if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-        config_field: Final = "config" if "config" in data or "generationConfig" not in data else "generationConfig"
-        config: Final = data.get(config_field)
+        config: Final = data.get(google_config_field)
         if config is None or isinstance(config, dict):
-            data[config_field] = {  # rebind-ok: routed request needs cap
+            data[google_config_field] = {  # rebind-ok: routed request needs cap
                 **(config or {}),
                 "maxOutputTokens": effective_cap,
             }
