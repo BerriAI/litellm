@@ -25,6 +25,7 @@ from tests.unit.test_router.core.scripted_host import (
     completion_response,
     deployment,
     embedding_response,
+    rust_core,
     server_error,
 )
 
@@ -456,6 +457,43 @@ async def test_streaming_acompletion_yields_the_host_stream_chunks_with_routing_
 
 class _RequestState:
     pass
+
+
+class _BackoffInterrupted(BaseException):
+    pass
+
+
+class _InterruptedBackoffHost(ScriptedHost):
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        raise _BackoffInterrupted("backoff interrupted")
+
+    def sleep_sync(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        raise _BackoffInterrupted("backoff interrupted")
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "completion"])
+async def test_an_interrupted_retry_backoff_frees_its_request_without_a_gc_pass(endpoint: str) -> None:
+    host: Final = _InterruptedBackoffHost()
+    host.answer("openai/d1", _raise_server_error)
+    core: Final = rust_core(host, model_list=[deployment("g", "d1")], num_retries=1, retry_after=0)
+
+    async def interrupted_request() -> weakref.ReferenceType[_RequestState]:
+        state: Final = _RequestState()
+        with pytest.raises(_BackoffInterrupted, match="backoff interrupted"):
+            await core.call(endpoint, {"model": "g", "messages": MESSAGES, "metadata": {"state": state}})
+        assert host.deployments_called() == ["d1"]
+        assert len(host.sleeps) == 1
+        host.calls.clear()
+        host.raised.clear()
+        return weakref.ref(state)
+
+    gc.disable()
+    try:
+        assert (await interrupted_request())() is None
+    finally:
+        gc.enable()
 
 
 def _raise_server_error(**_kwargs: object) -> object:
