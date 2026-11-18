@@ -1208,6 +1208,9 @@ jobs:
               tests/unit/proxy/db/test_db_spend_update_writer.py
               tests/unit/proxy/spend_tracking/test_spend_tracking_utils.py
               tests/unit/proxy/hooks/test_proxy_track_cost_callback.py
+              tests/unit/proxy/test_update_spend.py::test_empty_flush_coalesces_baseline_recovery_claims
+              tests/unit/proxy/test_update_spend.py::test_queued_baseline_observation_is_persisted_during_recovery_cooldown
+              tests/unit/proxy/test_update_spend.py::test_baseline_recovery_immediately_retries_a_full_claim
             python-version: "3.12"
             workers: 4
             reruns: 0
