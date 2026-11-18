@@ -755,6 +755,12 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
 
+  it("does not highlight Home on the Lens page", () => {
+    navState.pathname = "/ui/lens";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
+  });
+
   it("expands the parent group of the current nested route and marks the child active", () => {
     navState.pathname = "/ui/search-tools";
     renderWithProviders(<Sidebar {...defaultProps} />);

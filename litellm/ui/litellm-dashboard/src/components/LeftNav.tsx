@@ -501,6 +501,7 @@ const menuGroups: MenuGroup[] = [
 ];
 
 const HOME_ROUTE = "home";
+const ROUTES_OUTSIDE_NAV: ReadonlySet<string> = new Set(["aria", "lens"]);
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
@@ -604,7 +605,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const currentRoute = routeForPathname(usePathname());
-  const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
+  const selectedKey = ROUTES_OUTSIDE_NAV.has(currentRoute) ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
 
