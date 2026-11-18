@@ -12845,3 +12845,48 @@ def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_c
 
     assert len(list(_cache_points(request["messages"]))) == 3
     assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    ("thinking", "sent_thinking"),
+    [
+        pytest.param({"type": "adaptive"}, {"type": "adaptive"}, id="adaptive_is_kept"),
+        pytest.param({"type": "enabled", "budget_tokens": 2000}, None, id="budget_is_dropped"),
+    ],
+)
+def test_modify_params_keeps_adaptive_thinking_when_tool_call_history_has_no_thinking_blocks(
+    thinking: dict[str, object], sent_thinking: dict[str, object] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "user", "content": "Use the add tool to compute 2 + 3."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "add", "arguments": '{"a": 2}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "5"},
+        ],
+        optional_params={
+            "thinking": thinking,
+            "maxTokens": 4096,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add",
+                        "parameters": {"type": "object", "properties": {"a": {"type": "integer"}}},
+                    },
+                }
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("additionalModelRequestFields", {}).get("thinking") == sent_thinking
