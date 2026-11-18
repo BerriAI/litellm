@@ -122,6 +122,7 @@ class SearchDocument(TypedDict):
     queries: ReadOnly[int]
     additional_results: ReadOnly[int]
     adjust: ReadOnly[AdjustFacts | None]
+    max_results: ReadOnly[NotRequired[float | None]]
 
 
 class VideoDocument(TypedDict):

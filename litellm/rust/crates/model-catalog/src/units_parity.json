@@ -1,5 +1,5 @@
 {
- "source": "Captured once from main's Python (532df6ef85, LITELLM_LOCAL_MODEL_COST_MAP=True). `images` holds the per-image fallback of the Vertex AI image calculator with no token usage: the row fields the calculator read, the images and Vertex location of the call and main's total",
+ "source": "Captured once from main's Python (532df6ef85, LITELLM_LOCAL_MODEL_COST_MAP=True). `images` holds the per-image fallback of the Vertex AI, Gemini and Bedrock image calculators with no token usage: the row fields the calculator read, the images and Vertex location of the call and main's total. `search` holds `search_provider_cost_per_query` over rows priced by `max_results_range` tiers: the row's `tiered_pricing`, the queries and `max_results` of the request and main's `(prompt, completion)`",
  "images": [
   {
    "name": "vertex_catalog_regional",
@@ -115,6 +115,462 @@
     "output_cost_per_image": 0.134
    },
    "expected": 0.536
+  },
+  {
+   "name": "gemini_imagen",
+   "model": "imagen-3.0-generate-001",
+   "provider": "gemini",
+   "calculator": "per_image",
+   "images": 2,
+   "row": {
+    "output_cost_per_image": 0.04
+   },
+   "expected": 0.08
+  },
+  {
+   "name": "gemini_flash_image",
+   "model": "gemini-2.5-flash-image",
+   "provider": "gemini",
+   "calculator": "per_image",
+   "images": 1,
+   "row": {
+    "output_cost_per_image": 0.039
+   },
+   "expected": 0.039
+  },
+  {
+   "name": "bedrock_stability1_default",
+   "model": "1024-x-1024/50-steps/stability.stable-diffusion-xl-v1",
+   "provider": "bedrock",
+   "calculator": "per_image",
+   "images": 2,
+   "row": {
+    "output_cost_per_image": 0.04
+   },
+   "expected": 0.08
+  },
+  {
+   "name": "bedrock_stability1_max_steps",
+   "model": "1024-x-1024/max-steps/stability.stable-diffusion-xl-v1",
+   "provider": "bedrock",
+   "calculator": "per_image",
+   "images": 1,
+   "row": {
+    "output_cost_per_image": 0.08
+   },
+   "expected": 0.08
+  },
+  {
+   "name": "bedrock_stability1_small",
+   "model": "512-x-512/50-steps/stability.stable-diffusion-xl-v0",
+   "provider": "bedrock",
+   "calculator": "per_image",
+   "images": 3,
+   "row": {
+    "output_cost_per_image": 0.018
+   },
+   "expected": 0.05399999999999999
+  },
+  {
+   "name": "bedrock_stability3",
+   "model": "stability.sd3-large-v1:0",
+   "provider": "bedrock",
+   "calculator": "per_image",
+   "images": 2,
+   "row": {
+    "output_cost_per_image": 0.08
+   },
+   "expected": 0.16
+  },
+  {
+   "name": "bedrock_nova_canvas",
+   "model": "amazon.nova-canvas-v1:0",
+   "provider": "bedrock",
+   "calculator": "per_image",
+   "images": 2,
+   "row": {
+    "output_cost_per_image": 0.06
+   },
+   "expected": 0.12
+  },
+  {
+   "name": "bedrock_titan",
+   "model": "amazon.titan-image-generator-v1",
+   "provider": "bedrock",
+   "calculator": "per_image",
+   "images": 3,
+   "row": {
+    "output_cost_per_image": 0.008
+   },
+   "expected": 0.024
+  },
+  {
+   "name": "bedrock_titan_no_images",
+   "model": "amazon.titan-image-generator-v1",
+   "provider": "bedrock",
+   "calculator": "per_image",
+   "images": 0,
+   "row": {
+    "output_cost_per_image": 0.008
+   },
+   "expected": 0.0
+  }
+ ],
+ "search": [
+  {
+   "name": "exa_default_results",
+   "model": "exa_ai/search",
+   "provider": "exa_ai",
+   "queries": 1,
+   "max_results": null,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.005,
+     "max_results_range": [
+      0,
+      25
+     ]
+    },
+    {
+     "input_cost_per_query": 0.025,
+     "max_results_range": [
+      26,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.005,
+    0.0
+   ]
+  },
+  {
+   "name": "exa_low_tier",
+   "model": "exa_ai/search",
+   "provider": "exa_ai",
+   "queries": 2,
+   "max_results": 5,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.005,
+     "max_results_range": [
+      0,
+      25
+     ]
+    },
+    {
+     "input_cost_per_query": 0.025,
+     "max_results_range": [
+      26,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.01,
+    0.0
+   ]
+  },
+  {
+   "name": "exa_tier_upper_edge",
+   "model": "exa_ai/search",
+   "provider": "exa_ai",
+   "queries": 1,
+   "max_results": 25,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.005,
+     "max_results_range": [
+      0,
+      25
+     ]
+    },
+    {
+     "input_cost_per_query": 0.025,
+     "max_results_range": [
+      26,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.005,
+    0.0
+   ]
+  },
+  {
+   "name": "exa_next_tier_lower_edge",
+   "model": "exa_ai/search",
+   "provider": "exa_ai",
+   "queries": 3,
+   "max_results": 26,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.005,
+     "max_results_range": [
+      0,
+      25
+     ]
+    },
+    {
+     "input_cost_per_query": 0.025,
+     "max_results_range": [
+      26,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.07500000000000001,
+    0.0
+   ]
+  },
+  {
+   "name": "exa_last_tier",
+   "model": "exa_ai/search",
+   "provider": "exa_ai",
+   "queries": 1,
+   "max_results": 100,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.005,
+     "max_results_range": [
+      0,
+      25
+     ]
+    },
+    {
+     "input_cost_per_query": 0.025,
+     "max_results_range": [
+      26,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.025,
+    0.0
+   ]
+  },
+  {
+   "name": "exa_past_every_tier",
+   "model": "exa_ai/search",
+   "provider": "exa_ai",
+   "queries": 2,
+   "max_results": 101,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.005,
+     "max_results_range": [
+      0,
+      25
+     ]
+    },
+    {
+     "input_cost_per_query": 0.025,
+     "max_results_range": [
+      26,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.05,
+    0.0
+   ]
+  },
+  {
+   "name": "exa_below_every_tier",
+   "model": "exa_ai/search",
+   "provider": "exa_ai",
+   "queries": 1,
+   "max_results": -1,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.005,
+     "max_results_range": [
+      0,
+      25
+     ]
+    },
+    {
+     "input_cost_per_query": 0.025,
+     "max_results_range": [
+      26,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.025,
+    0.0
+   ]
+  },
+  {
+   "name": "firecrawl_default",
+   "model": "firecrawl/search",
+   "provider": "firecrawl",
+   "queries": 4,
+   "max_results": null,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.00166,
+     "max_results_range": [
+      1,
+      10
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00332,
+     "max_results_range": [
+      11,
+      20
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00498,
+     "max_results_range": [
+      21,
+      30
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00664,
+     "max_results_range": [
+      31,
+      40
+     ]
+    },
+    {
+     "input_cost_per_query": 0.0083,
+     "max_results_range": [
+      41,
+      50
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00996,
+     "max_results_range": [
+      51,
+      60
+     ]
+    },
+    {
+     "input_cost_per_query": 0.01162,
+     "max_results_range": [
+      61,
+      70
+     ]
+    },
+    {
+     "input_cost_per_query": 0.01328,
+     "max_results_range": [
+      71,
+      80
+     ]
+    },
+    {
+     "input_cost_per_query": 0.01494,
+     "max_results_range": [
+      81,
+      90
+     ]
+    },
+    {
+     "input_cost_per_query": 0.0166,
+     "max_results_range": [
+      91,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.00664,
+    0.0
+   ]
+  },
+  {
+   "name": "firecrawl_many",
+   "model": "firecrawl/search",
+   "provider": "firecrawl",
+   "queries": 1,
+   "max_results": 1000,
+   "tiered_pricing": [
+    {
+     "input_cost_per_query": 0.00166,
+     "max_results_range": [
+      1,
+      10
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00332,
+     "max_results_range": [
+      11,
+      20
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00498,
+     "max_results_range": [
+      21,
+      30
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00664,
+     "max_results_range": [
+      31,
+      40
+     ]
+    },
+    {
+     "input_cost_per_query": 0.0083,
+     "max_results_range": [
+      41,
+      50
+     ]
+    },
+    {
+     "input_cost_per_query": 0.00996,
+     "max_results_range": [
+      51,
+      60
+     ]
+    },
+    {
+     "input_cost_per_query": 0.01162,
+     "max_results_range": [
+      61,
+      70
+     ]
+    },
+    {
+     "input_cost_per_query": 0.01328,
+     "max_results_range": [
+      71,
+      80
+     ]
+    },
+    {
+     "input_cost_per_query": 0.01494,
+     "max_results_range": [
+      81,
+      90
+     ]
+    },
+    {
+     "input_cost_per_query": 0.0166,
+     "max_results_range": [
+      91,
+      100
+     ]
+    }
+   ],
+   "expected": [
+    0.0166,
+    0.0
+   ]
   }
  ]
 }
