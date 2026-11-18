@@ -5,11 +5,11 @@ use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, Router, RouterCache, RouterConfig,
-    RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest, RouterResponse, RoutingContext,
-    SeededRandomness, SelectStage, Served, SuccessReport, UsageWindow, call::StreamOrigin,
-    fallback::Fallbacks, health::current_minute, host::UncountedRetries, select,
-    select::PassThrough,
+    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted, Router,
+    RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
+    RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
+    UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
+    host::UncountedRetries, select, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -38,6 +38,8 @@ struct ScriptedHost {
     /// The callback filters pin to this deployment until an attempt of the request failed on it,
     /// as `encrypted_content_affinity` does.
     pinned: Option<&'static str>,
+    /// A pick of this name is answered this way, as a pre-routing hook reroutes it.
+    pre_routes: Option<(&'static str, PreRouted)>,
 }
 
 impl ScriptedHost {
@@ -118,6 +120,14 @@ impl RouterHost for ScriptedHost {
                 ..Served::new(attempt.deployment.id.clone(), 10)
             }),
         }
+    }
+
+    async fn pre_route(&self, ask: &PreRoute<'_>) -> Result<Option<PreRouted>, Error> {
+        Ok(self
+            .pre_routes
+            .as_ref()
+            .filter(|(name, _)| *name == ask.name)
+            .map(|(_, routed)| routed.clone()))
     }
 
     async fn select(
@@ -524,6 +534,100 @@ async fn stream_retries_that_all_fail_hand_back_the_host_error_of_the_last_one(
         (selected.len(), selected[0] == selected[1], ended.raised),
         (2, false, Some(Raised(selected[1].clone())))
     );
+}
+
+fn to_primary() -> PreRouted {
+    PreRouted::Model("primary".to_owned())
+}
+
+/// `primary`, served for the group `unused` a session bound the request to.
+fn to_primary_bound() -> PreRouted {
+    PreRouted::Bound {
+        model: "primary".to_owned(),
+        group: "unused".to_owned(),
+    }
+}
+
+/// A pre-routing hook reroutes `context` to `primary`, and the pick of `primary` then fails.
+#[rstest]
+#[case::nothing_in_it_is_healthy(to_primary(), "primary", true, None, false)]
+#[case::a_filter_raises(to_primary(), "primary", false, Some(rate_limited()), false)]
+#[case::its_routing_group_is_gone(to_primary(), "primary", false, None, true)]
+#[case::by_the_chain_of_the_group_it_is_bound_to(to_primary_bound(), "unused", true, None, false)]
+#[tokio::test]
+async fn a_pre_routed_group_whose_pick_fails_falls_back_by_its_own_chain(
+    #[case] routed: PreRouted,
+    #[case] chain_of: &str,
+    #[case] cooling: bool,
+    #[case] filter_failure: Option<AttemptError>,
+    #[case] stale: bool,
+) {
+    let mut config = tiers(false);
+    if stale {
+        config.routing_group_members = Some([("primary".to_owned(), "gone".to_owned())].into());
+    }
+    let host = Arc::new(ScriptedHost {
+        pre_routes: Some(("context", routed)),
+        pick_failures: Mutex::new(filter_failure.into_iter().collect()),
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{chain_of: ["backup"]}]}),
+        host.clone(),
+    );
+    if cooling {
+        router
+            .health()
+            .add_cooldown("p1", &server_error(), Duration::from_secs(60))
+            .await
+            .unwrap();
+    }
+    let response = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                model: "context".to_owned(),
+                pre_routes: true,
+                filter_tags: true,
+                ..RouterRequest::default()
+            },
+        )
+        .await
+        .map(|response| (response.deployment_id, response.attempted_fallbacks));
+    assert_eq!(response.ok(), Some(("b1".to_owned(), 1)));
+}
+
+#[rstest]
+#[case::the_group_it_was_routed_to(to_primary(), "primary")]
+#[case::the_group_it_is_bound_to(to_primary_bound(), "unused")]
+#[tokio::test]
+async fn a_pre_routed_group_whose_attempt_fails_falls_back_by_the_chain_of(
+    #[case] routed: PreRouted,
+    #[case] chain_of: &str,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_routes: Some(("context", routed)),
+        ..ScriptedHost::failing("primary", vec![server_error()])
+    });
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{chain_of: ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                model: "context".to_owned(),
+                pre_routes: true,
+                ..RouterRequest::default()
+            },
+        )
+        .await
+        .map(|response| (response.deployment_id, response.attempted_fallbacks));
+    assert_eq!(response.ok(), Some(("b1".to_owned(), 1)));
+    assert_eq!(host.selected(), ["p1", "b1"]);
 }
 
 #[rstest]
