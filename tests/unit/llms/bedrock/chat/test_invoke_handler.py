@@ -1435,6 +1435,11 @@ async def test_converse_stream_bills_the_tier_reported_in_metadata(
     )
 
     expected_cost: Final = usage["inputTokens"] * input_rate + usage["outputTokens"] * output_rate
+    assert tuple((chunk.choices[0].delta.content or "", chunk.choices[0].finish_reason) for chunk in chunks[:-1]) == (
+        ("hi", None),
+        ("", "stop"),
+    )
+    assert chunks[-1].choices == []
     assert chunks[-1].usage.cost == pytest.approx(expected_cost)
     assert chunks[-1].model_dump().get("service_tier") == served_tier
 

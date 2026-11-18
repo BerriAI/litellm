@@ -1515,9 +1515,11 @@ class CustomStreamWrapper:
                     return model_response
 
                 if getattr(model_response, "usage", None) is not None:
-                    return model_response.model_copy(
-                        update={"choices": [choice for choice in model_response.choices if _carries_payload(choice)]}
-                    )
+                    payload_choices: Final = [choice for choice in model_response.choices if _carries_payload(choice)]
+                    if not payload_choices and self.custom_llm_provider == LlmProviders.BEDROCK.value:
+                        self._record_usage_only_chunk(model_response)
+                        return
+                    return model_response.model_copy(update={"choices": payload_choices})
                 return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
