@@ -30,7 +30,7 @@ pub use encoding::DecodingError;
 pub use host_answer::HostAnswer;
 pub use litellm_inference::Error;
 pub use pre_request::PreRequestHooks;
-pub use pricing::{PricedCall, Pricing, PricingIdentity};
+pub use pricing::{PricedCall, Pricing, PricingIdentity, billable_tier};
 pub use safeguards::Safeguards;
 pub use transport::{Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader};
 pub use types::{

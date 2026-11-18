@@ -52,6 +52,8 @@ mod _native {
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
+    use crate::cost::billable_service_tier;
+    #[pymodule_export]
     use crate::cost::{
         NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeRateCard,
         NativeTokenUsage, NativeUnpriced,

@@ -170,9 +170,10 @@ pub(crate) struct RequestedPricing {
     pub(crate) inject_stream_cost: bool,
 }
 
-/// `_resolve_billable_service_tier`: a served tier that names a priced tier wins, one that names base pricing means
-/// standard, and otherwise the request decides, `auto` meaning standard
-fn billable_tier(requested: Option<&str>, served: Option<&str>) -> Option<String> {
+/// The service tier a call bills (main's `_resolve_billable_service_tier`, which Python now calls): a served tier
+/// that names a priced tier wins, one that names base pricing means standard, and otherwise the request decides, `auto`
+/// meaning standard
+pub fn billable_tier(requested: Option<&str>, served: Option<&str>) -> Option<String> {
     const PRICED: [&str; 5] = ["flex", "balanced", "priority", "fast", "ultrafast"];
     const BASE: [&str; 2] = ["default", "standard"];
     let served = served.map(str::to_lowercase);

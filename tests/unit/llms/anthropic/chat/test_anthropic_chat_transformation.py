@@ -5198,7 +5198,9 @@ def test_a_reported_web_search_keeps_the_speed_uplift_of_an_overriding_row(monke
     )
     searched: Final = cost_per_token(
         model="claude-probe-unsearched",
-        usage=Usage(prompt_tokens=1000, completion_tokens=1000, speed="fast", server_tool_use={"web_search_requests": 2}),
+        usage=Usage(
+            prompt_tokens=1000, completion_tokens=1000, speed="fast", server_tool_use={"web_search_requests": 2}
+        ),
         model_info=row,
     )
 
@@ -5218,7 +5220,9 @@ def test_a_model_rust_leaves_to_python_still_bills_its_speed_uplift():
     rule: Final = {key: value for key, value in _FAST_MODE_ROW.items() if key != "litellm_provider"}
     set_fallback_generalizations([{"name": "probe", "pattern": "^claude-probe-rule-", "model_info": rule}])
     try:
-        plain: Final = cost_per_token(model="claude-probe-rule-1", usage=Usage(prompt_tokens=1000, completion_tokens=1000))
+        plain: Final = cost_per_token(
+            model="claude-probe-rule-1", usage=Usage(prompt_tokens=1000, completion_tokens=1000)
+        )
         fast: Final = cost_per_token(
             model="claude-probe-rule-1", usage=Usage(prompt_tokens=1000, completion_tokens=1000, speed="fast")
         )

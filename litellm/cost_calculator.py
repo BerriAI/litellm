@@ -62,7 +62,6 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
@@ -142,7 +141,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.rust_bridge._native import NativeReceipt, NativeUnpriced
+from litellm.rust_bridge._native import NativeReceipt, NativeUnpriced, billable_service_tier
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import (
     DecisionsResponse,
@@ -1330,9 +1329,6 @@ def _normalize_service_tier(service_tier: object) -> str | None:
     return service_tier
 
 
-_BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
-
-
 def _served_image_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
     """Image requests never send a tier upstream, so only the tier the provider reports can price them."""
     return _resolve_billable_service_tier(
@@ -1343,12 +1339,9 @@ def _served_image_service_tier(completion_response: object, usage_object: Usage 
 
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
     """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
-    served_lower: Final = served.lower() if isinstance(served, str) else None
-    if served_lower is not None and served_lower in _SERVICE_TIER_TO_COST_KEY_SUFFIX:
-        return served_lower
-    if served_lower in _BASE_PRICING_SERVICE_TIERS:
-        return None
-    return _normalize_service_tier(requested)
+    return billable_service_tier(
+        requested if isinstance(requested, str) else None, served if isinstance(served, str) else None
+    )
 
 
 def _served_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
@@ -1775,19 +1768,25 @@ def _hidden_params_of(completion_response: object) -> Mapping[str, object]:
     return as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or _NO_HIDDEN_PARAMS
 
 
-def _web_search_requests_for_rust(completion_response: object, usage: Usage) -> int | None | Literal[False]:
-    """The web search count the Rust core bills, or ``False`` when the response reports web search another way."""
-    if isinstance(completion_response, ModelResponse):
-        if StandardBuiltInToolCostTracking.response_includes_annotation_type(
-            response_object=completion_response, annotation_type="url_citation"
-        ):
-            return False
-        details: Final = usage.prompt_tokens_details
-        if details is not None and getattr(details, "web_search_requests", None) is not None:
-            return False
-        return get_web_search_requests_from_usage(usage)
+def _reports_web_search_another_way(completion_response: object, usage: Usage) -> bool:
+    """The response reports web search through ``url_citation`` annotations or prompt token details, which
+    ``completion_cost`` bills the old way."""
+    if not isinstance(completion_response, ModelResponse):
+        return False
+    if StandardBuiltInToolCostTracking.response_includes_annotation_type(
+        response_object=completion_response, annotation_type="url_citation"
+    ):
+        return True
+    details: Final = usage.prompt_tokens_details
+    return details is not None and getattr(details, "web_search_requests", None) is not None
+
+
+def _web_search_requests_for_rust(completion_response: object, usage: Usage) -> int | None:
+    """The web search count the Rust core bills: the usage's, else a raw Messages response's."""
     reported: Final = get_web_search_requests_from_usage(usage)
-    return reported if reported is not None else get_anthropic_web_search_requests_from_response(completion_response)
+    if reported is not None or isinstance(completion_response, ModelResponse):
+        return reported
+    return get_anthropic_web_search_requests_from_response(completion_response)
 
 
 def _rust_priced_cost(
@@ -1827,13 +1826,12 @@ def _rust_priced_cost(
     hidden_models: Final = (hidden_params.get("model"), hidden_params.get("litellm_model_name"))
     tools_params: Final[Mapping[str, object]] = standard_built_in_tools_params or _NO_HIDDEN_PARAMS
     web_search_options: Final[object] = tools_params.get("web_search_options")
-    web_search_requests: Final = _web_search_requests_for_rust(response, usage)
-    search_context: Final[object] = (as_str_mapping(web_search_options) or _NO_HIDDEN_PARAMS).get(
-        "search_context_size"
-    )
+    search_context: Final[object] = (as_str_mapping(web_search_options) or _NO_HIDDEN_PARAMS).get("search_context_size")
     if hidden_params.get("custom_llm_provider", custom_llm_provider) != custom_llm_provider:
         return None
-    if not (hidden_region is None or isinstance(hidden_region, str)) or web_search_requests is False:
+    if not (hidden_region is None or isinstance(hidden_region, str)):
+        return None
+    if _reports_web_search_another_way(response, usage):
         return None
     if any(isinstance(name, str) and azure_ai_is_model_router_name(name) for name in hidden_models):
         return None
@@ -1861,7 +1859,7 @@ def _rust_priced_cost(
         priced_usage(
             usage,
             web_search_use(
-                web_search_requests if web_search_requests is not None else get_web_search_requests_from_usage(usage),
+                _web_search_requests_for_rust(response, usage),
                 search_context if isinstance(search_context, str) else None,
             ),
         ),

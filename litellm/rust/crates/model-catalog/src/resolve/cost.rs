@@ -180,41 +180,42 @@ impl<T: LiveTable> Snapshot<T> {
             }
         };
         let region = call.region.as_deref().filter(|_| !explicit);
-        let steps = ordered.into_iter().map(|model| {
-            let step = match &bedrock_registration {
-                Some(key) => Step::Row(key.clone(), RowProvenance::Registered),
-                None => self.priced_key(model, provider, region),
-            };
-            (model, step)
-        });
-        let mut rows: Vec<Tried> = Vec::new();
-        for (model, step) in steps {
-            match step {
-                Step::Row(key, provenance) => rows.push(Tried {
-                    model: model.to_owned(),
-                    row: RowRef {
-                        provenance: match call.custom_pricing
-                            && call.deployment_id.as_deref() == Some(&key)
-                        {
-                            true => RowProvenance::Registered,
-                            false => provenance,
-                        },
-                        key,
-                        provider: call.provider.clone(),
-                    },
-                }),
-                Step::Skip => {}
-                Step::Defer(deferral) => {
-                    return Ok(CandidateRows {
-                        rows,
-                        then: AfterRows::Deferred(deferral),
-                    });
-                }
-            }
-        }
-        Ok(CandidateRows {
-            rows,
-            then: AfterRows::Exhausted,
+        let step = |model| match &bedrock_registration {
+            Some(key) => Step::Row(key.clone(), RowProvenance::Registered),
+            None => self.priced_key(model, provider, region),
+        };
+        let tried = |model: &str, key: String, provenance: RowProvenance| Tried {
+            model: model.to_owned(),
+            row: RowRef {
+                provenance: match call.custom_pricing && call.deployment_id.as_deref() == Some(&key)
+                {
+                    true => RowProvenance::Registered,
+                    false => provenance,
+                },
+                key,
+                provider: call.provider.clone(),
+            },
+        };
+        let walked =
+            ordered
+                .into_iter()
+                .try_fold(Vec::new(), |rows: Vec<Tried>, model| match step(model) {
+                    Step::Row(key, provenance) => Ok(rows
+                        .into_iter()
+                        .chain([tried(model, key, provenance)])
+                        .collect()),
+                    Step::Skip => Ok(rows),
+                    Step::Defer(deferral) => Err((rows, deferral)),
+                });
+        Ok(match walked {
+            Ok(rows) => CandidateRows {
+                rows,
+                then: AfterRows::Exhausted,
+            },
+            Err((rows, deferral)) => CandidateRows {
+                rows,
+                then: AfterRows::Deferred(deferral),
+            },
         })
     }
 
