@@ -278,6 +278,90 @@ def test_streaming_redaction_drops_delta_audio(key: str) -> None:
     assert SECRET not in str(response.choices[0].delta), response
 
 
+def _images() -> list[dict[str, object]]:
+    return [
+        {"type": "image_url", "index": 0, "image_url": {"url": f"data:image/png;base64,{SECRET}"}},
+        {"type": "image_url", "index": 1, "image_url": {"url": f"https://example.com/signed/{SECRET}.png"}},
+    ]
+
+
+def _image_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "here", "images": _images()}}],
+        usage={"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
+    )
+
+
+def _image_delta_choices() -> dict[str, object]:
+    return {"choices": [{"index": 0, "delta": {"content": "here", "images": _images()}}]}
+
+
+@pytest.mark.parametrize(
+    ("details", "result"),
+    [
+        pytest.param({}, _image_response(), id="message_object"),
+        pytest.param({}, _image_response().model_dump(), id="message_dict"),
+        pytest.param({}, _image_delta_choices(), id="delta_dict"),
+        pytest.param(
+            {"stream": True, "complete_streaming_response": ModelResponseStream(**_image_delta_choices())},
+            None,
+            id="stream_chunk",
+        ),
+        pytest.param({"standard_logging_object": {"response": _image_response().model_dump()}}, None, id="logged"),
+        pytest.param({"standard_logging_object": {"response": _image_delta_choices()}}, None, id="logged_delta"),
+    ],
+)
+def test_redaction_drops_generated_images_from_chat_completions(details: dict[str, object], result: object) -> None:
+    assert SECRET in str(details) + str(result)
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+
+
+def test_image_redaction_keeps_the_client_response_and_usage() -> None:
+    client_response: Final = _image_response()
+
+    redacted: Final = perform_redaction({}, client_response)
+
+    assert client_response.choices[0].message.images == _images()
+    assert redacted.usage == client_response.usage
+
+
+def _image_generation_response() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="gpt-image-2",
+        object="response",
+        status="completed",
+        output=[{"type": "image_generation_call", "id": "ig_1", "status": "completed", "result": SECRET}],
+        usage={"input_tokens": 3, "output_tokens": 5, "total_tokens": 8},
+    )
+
+
+@pytest.mark.parametrize("surface", ["object", "dict", "logged", "stream"])
+def test_redaction_hides_image_generation_results_in_responses_api_output(surface: str) -> None:
+    client_response: Final = _image_generation_response()
+    details: Final[dict[str, object]] = (
+        {"standard_logging_object": {"response": client_response.model_dump()}}
+        if surface == "logged"
+        else {"stream": True, "complete_streaming_response": _image_generation_response()}
+        if surface == "stream"
+        else {}
+    )
+    result: Final = (
+        client_response if surface == "object" else client_response.model_dump() if surface == "dict" else None
+    )
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+    assert client_response.output[0].result == SECRET
+    if surface == "object":
+        assert redacted.usage == client_response.usage
+
+
 _SECRET_URL: Final = f"https://example.com/?q={SECRET}"
 _WEB_SEARCH_CALL: Final = TypeAdapter(ResponseFunctionWebSearch)
 
