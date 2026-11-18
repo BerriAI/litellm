@@ -2154,6 +2154,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         drop_params: bool = False,
         model_info: Mapping[str, object] | None = None,
+        deployment_base_model: str | None = None,
     ) -> tuple[dict, dict, dict, OutputConfigBlock | None]:
         """Prepare and separate request parameters."""
         # Consume the internal ``_output_config_normalized`` marker set by
@@ -2257,7 +2258,9 @@ class AmazonConverseConfig(BaseConfig):
                         self._validate_anthropic_adaptive_effort(model=model, effort=effort)
                     additional_request_params["output_config"] = anthropic_output_config
 
-        if _has_native_text_format(output_config) and self._is_openai_gpt_reasoning_model(model):
+        if _has_native_text_format(output_config) and any(
+            self._is_openai_gpt_reasoning_model(name) for name in (model, deployment_base_model or "")
+        ):
             additional_request_params["text"] = _text_with_strict_format(additional_request_params.get("text"))
 
         return (
@@ -2518,7 +2521,13 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
-        ) = self._prepare_request_params(optional_params, model, drop_params, deployment_model_info(litellm_params))
+        ) = self._prepare_request_params(
+            optional_params,
+            model,
+            drop_params,
+            deployment_model_info(litellm_params),
+            self._deployment_base_model(litellm_params or {}),
+        )
 
         original_tools: Final = inference_params.pop("tools", [])
 
