@@ -16,7 +16,6 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
-import litellm._logging
 from litellm import verbose_logger
 from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
@@ -630,7 +629,7 @@ def _priced_tokens(
     completion_tokens: int = 0,
     response_time_ms: float | None = 0.0,
     custom_llm_provider: str | None = None,
-    region_name=None,
+    region_name: object = None,
     prompt_characters: int | None = None,
     completion_characters: int | None = None,
     cache_creation_input_tokens: int | None = 0,
