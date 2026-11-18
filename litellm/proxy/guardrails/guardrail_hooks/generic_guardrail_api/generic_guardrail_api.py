@@ -575,10 +575,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         if request_data is None:
             request_data = {}
 
-        request_body: Final = request_data.get("body") or {}
-
         # Merge additional provider specific params from config and dynamic params
-        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_body) or {}
+        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data) or {}
         additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata
