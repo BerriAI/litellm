@@ -177,9 +177,8 @@ def with_provider_reply(failure: BaseException, provider_reply: object) -> BaseE
         return failure
     if not _upstream_body(provider_reply):
         return failure
-    reply: Final = error_response_without_credentials(
-        provider_reply.status_code, provider_reply, _PROVIDER_REPLY_FALLBACK_URL
-    )
+    status_code: Final = current.status_code if isinstance(current, httpx.Response) else provider_reply.status_code
+    reply: Final = error_response_without_credentials(status_code, provider_reply, _PROVIDER_REPLY_FALLBACK_URL)
     reply.headers = httpx.Headers(current.headers if isinstance(current, httpx.Response) else None)
     reply.request = _request_without_credentials(current, _PROVIDER_REPLY_FALLBACK_URL)
     setattr(failure, _RESPONSE_ATTRIBUTE, reply)

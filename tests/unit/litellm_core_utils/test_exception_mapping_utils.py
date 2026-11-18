@@ -3813,6 +3813,25 @@ def test_mapped_anthropic_error_exposes_the_provider_reply(status_code: int, map
     assert caught.value.response.json() == _PROVIDER_WIRE_BODY
 
 
+def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet_exception_mapping):
+    wire_body: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    original: Final = AnthropicError(status_code=529, message=json.dumps(wire_body))
+    original.response = httpx.Response(529, json=wire_body, request=original.request)
+
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original,
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert (caught.value.status_code, caught.value.response.status_code) == (500, 500)
+    assert caught.value.provider_status_code == 529
+    assert caught.value.response.json() == wire_body
+
+
 def test_litellm_proxy_error_keeps_the_reply_body_beside_the_forwarded_headers():
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 

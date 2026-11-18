@@ -67,6 +67,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
 )
 from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
+from litellm.llms.minimax.videos.transformation import MinimaxVideoConfig
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
@@ -7801,3 +7802,18 @@ def test_handle_error_attaches_only_a_provider_reply_that_has_a_body():
     assert without_body.value.status_code == 400
     assert without_body.value.response.text == ""
     assert without_body.value.response.request.url == "https://docs.litellm.ai/docs"
+
+
+def test_handle_error_keeps_the_status_a_provider_config_remapped():
+    wire_body: Final = b'{"base_resp":{"status_code":1000,"status_msg":"record not found"}}'
+    request: Final = httpx.Request("GET", "https://provider.example/v1/query/video_generation")
+    rejected: Final = httpx.HTTPStatusError(
+        "rejected", request=request, response=httpx.Response(500, content=wire_body, request=request)
+    )
+
+    with pytest.raises(BaseLLMException) as caught:
+        BaseLLMHTTPHandler()._handle_error(e=rejected, provider_config=MinimaxVideoConfig())
+
+    assert caught.value.status_code == 400
+    assert caught.value.response.status_code == 400
+    assert caught.value.response.content == wire_body
