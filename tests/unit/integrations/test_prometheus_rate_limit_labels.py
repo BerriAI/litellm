@@ -25,7 +25,8 @@ from litellm.exceptions import (
     RateLimitErrorCategory,
     RateLimitType,
 )
-from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus import PrometheusLogger, _prometheus_labels_from_context
+from litellm.integrations.prometheus_helpers import PrometheusLabelFactoryContext
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.types.integrations.prometheus import (
@@ -86,6 +87,20 @@ def test_should_accept_rate_limit_fields_on_user_api_key_label_values():
     )
     assert enum_values.rate_limit_category == "litellm_rate_limit"
     assert enum_values.rate_limit_type == "requests"
+
+
+@pytest.mark.parametrize("metadata", [{}, {"rate_limit_type": "department"}, {"rate-limit-type": ""}])
+def test_rate_limit_dimensions_preserve_custom_label_precedence_without_changing_context(
+    metadata: Mapping[str, str],
+) -> None:
+    enum_values: Final = UserAPIKeyLabelValues(custom_metadata_labels=metadata)
+    context: Final = PrometheusLabelFactoryContext(enum_values)
+    requests: Final = _prometheus_labels_from_context(["rate_limit_type"], context, rate_limit_type="requests")
+    tokens: Final = _prometheus_labels_from_context(["rate_limit_type"], context, rate_limit_type="tokens")
+    assert requests == {"rate_limit_type": next(iter(metadata.values()), "requests")}
+    assert tokens == {"rate_limit_type": next(iter(metadata.values()), "tokens")}
+    assert context.enum_values.rate_limit_type is None
+    assert context.sanitized_enum["rate_limit_type"] is None
 
 
 # ---------------------------------------------------------------------------
