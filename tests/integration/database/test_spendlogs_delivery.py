@@ -36,6 +36,9 @@ def delivery_database(request: pytest.FixtureRequest) -> Iterator[psycopg.Connec
             updated_at timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         connection.execute((_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text())
+        connection.execute(
+            (_MIGRATIONS / "20261118132000_spendlog_delivery_batch_receipt_index/migration.sql").read_text()
+        )
         yield connection
 
 
@@ -410,6 +413,30 @@ async def test_backlog_reads_only_unapplied_deliveries_however_many_receipts_are
 
     backlog = await AccountingDeliveryRepository(delivery_client).backlog()
     assert (backlog.pending_count, backlog.parked_count) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_storage_count_does_not_scan_non_batch_receipts(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    from litellm.repositories.accounting_delivery_repository import _STORAGE
+
+    delivery_database.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, state, applied_at) '
+        "SELECT 'receipt-' || n, 'receipt-' || n, jsonb_build_object('payload', repeat(md5(n::text), 32)), "
+        "n % 10000 = 0, 'applied', CURRENT_TIMESTAMP FROM generate_series(1, 20000) AS n"
+    )
+    delivery_database.execute('ANALYZE "LiteLLM_SpendLogDelivery"')
+    explained = delivery_database.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_STORAGE}").fetchone()
+    assert explained is not None
+    plan = explained[0][0]["Plan"]
+    table_pages = delivery_database.execute(
+        """SELECT relpages FROM pg_class WHERE oid = '"LiteLLM_SpendLogDelivery"'::regclass"""
+    ).fetchone()
+    assert table_pages is not None and table_pages[0] > 1000
+    assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < table_pages[0] / 20
+
+    assert (await AccountingDeliveryRepository(delivery_client).storage()).batch_count == 2
 
 
 @pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
