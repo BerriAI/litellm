@@ -102,6 +102,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
 from litellm.responses.mcp.parked_stream_dispatch import held_round_spend
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.object_permission import row_without_empty_auth_profile_grants
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
 
@@ -6910,7 +6911,9 @@ class PrismaClient:
                 _data: dict = {}
                 if response is not None:
                     try:
-                        _data = response.model_dump()
+                        _data = row_without_empty_auth_profile_grants(  # rebind-ok: pre-existing fallback slot
+                            response.model_dump()
+                        )
                     except Exception:
                         _data = response.dict()  # pyright: ignore[reportDeprecated]  # pydantic-v1 row fallback
                 return {"token": token, "data": _data}

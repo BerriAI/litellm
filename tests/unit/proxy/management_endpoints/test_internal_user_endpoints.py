@@ -6175,3 +6175,95 @@ async def test_user_info_v2_without_budget_windows_reads_no_window_spend(mocker)
 
     assert response.budget_limits_usage is None
     get_current_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_bulk_update_of_all_users_cannot_grant_an_mcp_auth_profile(mocker: MockerFixture) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+
+    with pytest.raises(HTTPException) as refused:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(
+                all_users=True, user_updates={"object_permission": {"mcp_auth_profiles": ["ana-bots"]}}
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert refused.value.detail == {"error": "mcp_auth_profiles can be set on keys, teams and agents, not on a user."}
+    prisma_client.db.litellm_usertable.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent_permission",
+    [{"mcp_servers": ["github"], "mcp_auth_profiles": []}, {"mcp_servers": ["github"]}],
+    ids=["empty-grant-sent", "grant-not-sent"],
+)
+async def test_a_user_update_never_writes_the_auth_profile_grant_of_a_row_its_key_shares(
+    mocker: MockerFixture, sent_permission: Mapping[str, object]
+) -> None:
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    mock_prisma_client: Final = _object_permission_mocks(mocker, existing_object_permission_id="perm-shared")
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = mocker.AsyncMock(
+        return_value=LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-shared", mcp_servers=["analytics"], mcp_auth_profiles=("ana-bots",)
+        )
+    )
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id="target-user", object_permission=sent_permission),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    written: Final = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]
+    assert written["update"]["mcp_servers"] == ["github"]
+    assert ("mcp_auth_profiles" in written["create"], "mcp_auth_profiles" in written["update"]) == (False, False)
+
+
+@pytest.mark.parametrize("granted_by", ["request", "default_internal_user_params"])
+def test_a_new_user_permission_granting_an_mcp_auth_profile_is_refused_whether_sent_or_defaulted(
+    monkeypatch: pytest.MonkeyPatch, granted_by: str
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_internal_new_user_params
+
+    granting: Final = {"mcp_auth_profiles": ["ana-bots"]}
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"object_permission": granting} if granted_by == "default_internal_user_params" else None,
+    )
+    data: Final = NewUserRequest(
+        user_email="new@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        object_permission=granting if granted_by == "request" else None,
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        _update_internal_new_user_params(data.model_dump(exclude_unset=True), data)
+
+    assert refused.value.detail == {"error": "mcp_auth_profiles can be set on keys, teams and agents, not on a user."}
+
+
+def test_a_new_user_permission_never_carries_an_empty_auth_profile_grant() -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_internal_new_user_params
+
+    data: Final = NewUserRequest(
+        user_email="new@example.com", object_permission={"mcp_servers": ["github"], "mcp_auth_profiles": []}
+    )
+
+    permission: Final = _update_internal_new_user_params(data.json(), data)["object_permission"]
+    assert (permission["mcp_servers"], "mcp_auth_profiles" in permission) == (["github"], False)

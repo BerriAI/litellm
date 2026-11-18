@@ -212,6 +212,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
 )
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import with_canonical_auth_profile_grants
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
@@ -260,6 +261,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.object_permission import response_without_empty_auth_profile_grants
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -2032,6 +2034,11 @@ async def new_team(
             llm_router=llm_router,
         )
 
+        data_json = data.json()
+        await _normalize_team_auth_profile_grants(
+            data_json, None, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN, prisma_client
+        )
+
         ## ADD TO MODEL TABLE
         _model_id = None
         if data.model_aliases is not None and isinstance(data.model_aliases, dict):
@@ -2043,8 +2050,6 @@ async def new_team(
             model_dict: Final = await _model_db(prisma_client).create({**litellm_modeltable.json(exclude_none=True)})
 
             _model_id = model_dict.id
-
-        data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
         await enforce_all_proxy_mcp_servers_grant_is_admin_only(
@@ -2928,6 +2933,12 @@ async def update_team(
                     },
                 }
 
+        await _normalize_team_auth_profile_grants(
+            updated_kv,  # pyright: ignore[reportUnknownArgumentType]  # the team update payload is an untyped legacy dict
+            existing_team_row.object_permission_id,
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            prisma_client,
+        )
         _current_member_budget_id: Final = (existing_team_row.metadata or {}).get("team_member_budget_id")
         if "team_member_budget_duration" in _team_member_fields_in_request:
             await TeamMemberBudgetHandler.move_members_to_team_reset_window(
@@ -3050,7 +3061,10 @@ async def update_team(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
 
-        return {"team_id": team_row.team_id, "data": team_row}
+        return {
+            "team_id": team_row.team_id,
+            "data": response_without_empty_auth_profile_grants(team_row),
+        }
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -3148,6 +3162,20 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_tea
             w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
             initialized_windows.append(w)
         updated_kv["budget_limits"] = json.dumps(initialized_windows)
+
+
+async def _normalize_team_auth_profile_grants(
+    data_json: dict[str, object],  # mutable-ok: the legacy team write payload is updated in place
+    existing_object_permission_id: str | None,
+    is_proxy_admin: bool,
+    prisma_client: PrismaClient | None,
+) -> None:
+    sent: Final[object] = data_json.get("object_permission")
+    permission: Final = await with_canonical_auth_profile_grants(
+        sent, existing_object_permission_id, is_proxy_admin, prisma_client
+    )
+    if permission is not None:
+        data_json["object_permission"] = dict(permission)  # rebind-ok: the team write carries the canonical grant
 
 
 async def handle_update_object_permission(
@@ -7013,11 +7041,13 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
-    return await append_team_models(
-        data=data,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
+    return response_without_empty_auth_profile_grants(
+        await append_team_models(
+            data=data,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     )
 
 
@@ -7153,7 +7183,7 @@ async def team_model_delete(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return updated_team
+    return response_without_empty_auth_profile_grants(updated_team)
 
 
 @router.get(

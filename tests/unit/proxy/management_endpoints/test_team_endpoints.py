@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,7 +14,7 @@ from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, stat
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
@@ -20139,3 +20139,181 @@ async def test_team_info_reports_current_spend_per_budget_window():
         window_duration="1d",
         window_start=datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc),
     )
+
+
+class _ModelAddPermissionRow(BaseModel, frozen=True):
+    object_permission_id: str
+    mcp_servers: tuple[str, ...]
+    mcp_auth_profiles: tuple[str, ...]
+
+
+class _ModelAddTeamRow(BaseModel, frozen=True):
+    team_id: str
+    models: tuple[str, ...]
+    object_permission_id: str
+    object_permission: _ModelAddPermissionRow
+
+
+@pytest.mark.asyncio
+async def test_team_model_add_answers_a_team_without_grants_without_the_grant_field() -> None:
+    from fastapi.encoders import jsonable_encoder
+
+    from litellm.proxy._types import LitellmUserRoles, TeamModelAddRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import team_model_add
+
+    team_row: Final = _ModelAddTeamRow(
+        team_id="team-1234",
+        models=("gpt-4",),
+        object_permission_id="op-1234",
+        object_permission=_ModelAddPermissionRow(
+            object_permission_id="op-1234", mcp_servers=("analytics",), mcp_auth_profiles=()
+        ),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.management_endpoints.team_endpoints.cache_team_object", new_callable=AsyncMock),
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
+
+        response: Final = await team_model_add(
+            data=TeamModelAddRequest(team_id="team-1234", models=["gpt-4"]),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    assert jsonable_encoder(response)["object_permission"] == {
+        "object_permission_id": "op-1234",
+        "mcp_servers": ["analytics"],
+    }
+
+
+class _WriteRecordingTable:
+    def __init__(self, name: str, rows: Mapping[str, object], writes: list[tuple[str, str, object]]) -> None:
+        self._name = name
+        self._rows = rows
+        self._writes = writes
+
+    def __getattr__(self, operation: str) -> object:
+        async def run(*args: object, **kwargs: object) -> object:
+            if operation in ("find_unique", "find_first"):
+                return self._rows.get(self._name)
+            if operation in ("find_many", "group_by"):
+                return []
+            if operation == "count":
+                return 0
+            self._writes.append((self._name, operation, kwargs.get("data")))
+            return self._rows.get(self._name) or SimpleNamespace(
+                budget_id="budget_123", id="model-1", object_permission_id="perm-new"
+            )
+
+        return run
+
+
+class _WriteRecordingDb:
+    def __init__(self, rows: Mapping[str, object], writes: list[tuple[str, str, object]]) -> None:
+        self._rows = rows
+        self._writes = writes
+
+    def __getattr__(self, name: str) -> _WriteRecordingTable:
+        if not name.startswith("litellm_"):
+            raise AttributeError(name)
+        return _WriteRecordingTable(name, self._rows, self._writes)
+
+    @asynccontextmanager
+    async def tx(self) -> AsyncIterator["_WriteRecordingDb"]:
+        yield self
+
+    async def query_raw(self, query: str, *args: object) -> list[object]:
+        return []
+
+
+@contextmanager
+def _team_database(writes: list[tuple[str, str, object]]) -> Iterator[None]:
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team_row: Final = LiteLLM_TeamTable(team_id="t1", team_alias="t1", metadata={"team_member_budget_id": "budget_123"})
+    prisma: Final = MagicMock()
+    prisma.db = _WriteRecordingDb({"litellm_teamtable": team_row}, writes)
+    prisma.writer_db = prisma.db
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        yield
+
+
+_TEAM_ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["update", "new"])
+async def test_a_refused_auth_profile_grant_writes_nothing_on_a_team(
+    operation: str, disable_audit_logging_for_mocked_team: None
+) -> None:
+    from litellm.proxy._types import NewTeamRequest, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team, update_team
+
+    writes: Final[list[tuple[str, str, object]]] = []  # mutable-ok: records the database writes
+    grant: Final = {"mcp_auth_profiles": ["tickets-botz"]}
+    write: Final = (
+        update_team(
+            data=UpdateTeamRequest(team_id="t1", team_member_budget=50.0, object_permission=grant),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=_TEAM_ADMIN,
+        )
+        if operation == "update"
+        else new_team(
+            data=NewTeamRequest(team_alias="t2", model_aliases={"fast": "gpt-4o-mini"}, object_permission=grant),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=_TEAM_ADMIN,
+        )
+    )
+    with _team_database(writes), pytest.raises(ProxyException) as refusal:
+        await write
+
+    assert "tickets-botz" in str(refusal.value.message)
+    assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_a_team_update_with_a_member_budget_stores_the_canonical_grant(
+    monkeypatch: pytest.MonkeyPatch, disable_audit_logging_for_mocked_team: None
+) -> None:
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer
+
+    monkeypatch.setitem(
+        global_mcp_server_manager.config_mcp_servers,
+        "analytics",
+        MCPServer(
+            server_id="analytics",
+            name="analytics",
+            url="https://analytics.example/mcp",
+            transport=MCPTransport.http,
+            additional_auth=(MCPAuthProfile(id="ana-bots", auth_type=MCPAuth.bearer_token, authentication_token="t"),),
+        ),
+    )
+    writes: Final[list[tuple[str, str, object]]] = []  # mutable-ok: records the database writes
+    with _team_database(writes):
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id="t1", team_member_budget=50.0, object_permission={"mcp_auth_profiles": ["ANA-Bots"]}
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=_TEAM_ADMIN,
+        )
+
+    permission_writes: Final = [data for table, _, data in writes if table == "litellm_objectpermissiontable"]
+    assert [write["create"]["mcp_auth_profiles"] for write in permission_writes] == [["ana-bots"]]
+    assert ("litellm_budgettable", "update") in {(table, operation) for table, operation, _ in writes}

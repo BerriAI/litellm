@@ -28,6 +28,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     hash_token_if_needed,
 )
 from litellm.secret_managers.base_secret_manager import BaseSecretManager
+from litellm.types.object_permission import empty_auth_profile_grants_exclusion
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -146,7 +147,12 @@ class KeyManagementEventHooks:
                     object_id=hash_token_if_needed(data.key),
                     action="updated",
                     updated_values=json.dumps(updated_fields, default=str),
-                    before_value=json.dumps(existing_key_row.json(exclude_none=True), default=str),
+                    before_value=json.dumps(
+                        existing_key_row.json(
+                            exclude_none=True, exclude=empty_auth_profile_grants_exclusion(existing_key_row)
+                        ),
+                        default=str,
+                    ),
                 ),
                 user_api_key_dict,
             )

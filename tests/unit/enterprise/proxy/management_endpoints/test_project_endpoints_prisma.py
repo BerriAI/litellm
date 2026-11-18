@@ -2188,3 +2188,15 @@ async def test_project_update_with_only_top_level_fields_keeps_the_stored_metada
     )
 
     assert _written_project_data(mock_prisma)["metadata"] == {**_stored_project_metadata(), **top_level_fields}
+
+
+@pytest.mark.asyncio
+async def test_a_project_update_cannot_grant_an_mcp_auth_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_prisma: Final = _project_update_mocks(monkeypatch, {})
+
+    with pytest.raises(ProxyException) as error:
+        await _run_project_update("project-grant", object_permission={"mcp_auth_profiles": ["ana-bots"]})
+
+    assert error.value.code == "400"
+    assert "not on a project" in error.value.message
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()

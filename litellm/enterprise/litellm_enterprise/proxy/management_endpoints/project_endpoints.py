@@ -35,6 +35,7 @@ from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import refuse_auth_profile_grants
 from litellm.proxy.management_helpers.model_quota_policy import (
     ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
     REQUIRE_BOTH_LIMITS,
@@ -456,6 +457,7 @@ async def _set_project_object_permission(
     Creates the LiteLLM_ObjectPermissionTable record for the project.
     Returns the object_permission_id if created, otherwise None.
     """
+    refuse_auth_profile_grants("project", data.object_permission)
     if prisma_client is None:
         return None
 
@@ -657,6 +659,7 @@ async def new_project(
                 router_model_routes(llm_router, data.team_id),
             )
 
+        refuse_auth_profile_grants("project", data.object_permission)
         # Generate project_id if not provided
         if data.project_id is None:
             data.project_id = str(uuid.uuid4())
@@ -917,6 +920,7 @@ async def update_project(
             )
 
         # Prepare update data
+        refuse_auth_profile_grants("project", data.object_permission)
         await validate_scalar_budget_attachment(prisma_client, data.budget_id)
         update_data = _jsonified(prisma_client, merged_request.model_dump(exclude_none=True, exclude={"project_id"}))
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name

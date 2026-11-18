@@ -1699,9 +1699,10 @@ async def test_key_info_shows_auth_profile_grants_only_when_the_row_has_them(
     assert result == {"token": "hashed", "object_permission_id": "perm-1", "object_permission": expected_permission}
 
 
-def test_team_and_agent_permission_payloads_omit_auth_profile_grants_they_do_not_set() -> None:
+def test_team_agent_and_request_permission_payloads_omit_auth_profile_grants_they_do_not_set() -> None:
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
     from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.management_endpoints.request_base import LiteLLM_ObjectPermissionBase
 
     stored_row: Final = {"object_permission_id": "perm-1", "mcp_servers": ["analytics"], "mcp_auth_profiles": []}
 
@@ -1719,3 +1720,7 @@ def test_team_and_agent_permission_payloads_omit_auth_profile_grants_they_do_not
     assert AgentResponse(
         agent_id="a", agent_name="a", agent_card_params={}, object_permission=stored_row
     ).object_permission == {"object_permission_id": "perm-1", "mcp_servers": ["analytics"]}
+    assert "mcp_auth_profiles" not in LiteLLM_ObjectPermissionBase(mcp_servers=["analytics"]).model_dump()
+    assert LiteLLM_ObjectPermissionBase(mcp_auth_profiles=[]).model_dump(exclude_unset=True) == {
+        "mcp_auth_profiles": []
+    }, "an explicit empty list clears the key's grants and must reach the write"

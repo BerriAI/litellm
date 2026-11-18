@@ -10588,6 +10588,105 @@ async def test_default_key_generate_params_object_permission_not_rejected_for_no
     assert created_data["vector_stores"] == ["default-vs"]
 
 
+def _prisma_storing_profiles(monkeypatch: pytest.MonkeyPatch, *stored: SimpleNamespace) -> AsyncMock:
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None, object_permission=None)
+    )
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm-grant")
+    )
+    mock_prisma_client.db.litellm_mcpauthprofiletable.find_many = AsyncMock(return_value=list(stored))
+    mock_prisma_client.writer_db = mock_prisma_client.db
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    return mock_prisma_client
+
+
+async def _generate_personal_key_with_default_grant(monkeypatch: pytest.MonkeyPatch, *grant: str) -> None:
+    monkeypatch.setattr(
+        litellm, "default_key_generate_params", {"object_permission": {"mcp_auth_profiles": list(grant)}}
+    )
+    await _common_key_generation_helper(
+        data=GenerateKeyRequest(user_id="alice"),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-alice", user_id="alice"),
+        litellm_changed_by=None,
+        team_table=None,
+    )
+
+
+async def test_a_default_key_grant_is_written_spelled_as_the_stored_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_prisma_client: Final = _prisma_storing_profiles(
+        monkeypatch, SimpleNamespace(profile_id="Ana-Bots", profile_id_normalized="ana-bots", server_id="analytics")
+    )
+
+    await _generate_personal_key_with_default_grant(monkeypatch, "ANA-bots")
+
+    created: Final = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    assert created["mcp_auth_profiles"] == ["Ana-Bots"]
+
+
+async def test_a_requested_key_grant_is_validated_once_and_written_spelled_as_the_stored_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma_client: Final = _prisma_storing_profiles(
+        monkeypatch, SimpleNamespace(profile_id="Ana-Bots", profile_id_normalized="ana-bots", server_id="analytics")
+    )
+
+    await _common_key_generation_helper(
+        data=GenerateKeyRequest(user_id="alice", object_permission={"mcp_auth_profiles": ["ANA-bots"]}),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin"),
+        litellm_changed_by=None,
+        team_table=None,
+    )
+
+    created: Final = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    assert created["mcp_auth_profiles"] == ["Ana-Bots"]
+    assert mock_prisma_client.db.litellm_mcpauthprofiletable.find_many.await_count == 1
+
+
+async def test_a_default_key_grant_naming_no_profile_refuses_key_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_prisma_client: Final = _prisma_storing_profiles(monkeypatch)
+
+    with pytest.raises(HTTPException) as refused:
+        await _generate_personal_key_with_default_grant(monkeypatch, "no-such-profile")
+
+    assert (refused.value.status_code, refused.value.detail) == (
+        400,
+        {"error": "Unknown MCP auth profile ids in mcp_auth_profiles: no-such-profile"},
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("granted_by", ["request", "default_key_generate_params"])
+async def test_a_refused_key_grant_writes_no_soft_budget_row(monkeypatch: pytest.MonkeyPatch, granted_by: str) -> None:
+    mock_prisma_client: Final = _prisma_storing_profiles(monkeypatch)
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    mock_prisma_client.jsonify_object = MagicMock(side_effect=lambda row: row)
+    grant: Final = {"mcp_auth_profiles": ["no-such-profile"]}
+    if granted_by == "default_key_generate_params":
+        monkeypatch.setattr(litellm, "default_key_generate_params", {"object_permission": grant})
+
+    with pytest.raises(HTTPException) as refused:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                user_id="alice", soft_budget=5.0, object_permission=grant if granted_by == "request" else None
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin"
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert refused.value.status_code == 400
+    mock_prisma_client.db.litellm_budgettable.create.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_build_key_filter_member_team_service_accounts():
     """

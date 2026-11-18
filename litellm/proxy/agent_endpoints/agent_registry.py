@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
 from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import with_canonical_auth_profile_grants
 from litellm.proxy.management_helpers.object_permission_utils import (
     prepare_object_permission_upsert,
 )
@@ -157,7 +158,9 @@ async def _permission_write(
     raw: Final = incoming.get("object_permission")
     if raw is None:
         return None
-    permission: Final = _AGENT_PARAMS_ADAPTER.validate_python(raw)
+    permission: Final = await with_canonical_auth_profile_grants(
+        _AGENT_PARAMS_ADAPTER.validate_python(raw), existing_id, True, client
+    )
     prepared: Final = await prepare_object_permission_upsert(permission, existing_id, client)
     if existing_id is None:
         created: Final[AgentPermissionWrite] = {"create": prepared.record}
