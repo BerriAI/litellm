@@ -30,9 +30,7 @@ ANTHROPIC_MESSAGES_ROUTES: Final[frozenset[str]] = frozenset(
     }
 )
 ANTHROPIC_PASS_THROUGH_PREFIX: Final = "/anthropic/"
-ANTHROPIC_SHAPED_MODEL_LIST_ROUTES: Final[frozenset[str]] = frozenset(
-    {"/v1/models", "/models", "/claude_code_gateway/v1/models"}
-)
+ANTHROPIC_VERSIONED_ROUTES: Final = frozenset({"/v1/models", "/models", "/claude_code_gateway/v1/models", "/v1/skills"})
 PROXY_ERROR_TYPE_BY_STATUS: Final[Mapping[int, AnthropicErrorType]] = MappingProxyType(
     {**ANTHROPIC_ERROR_TYPE_MAP, 402: "billing_error", 409: "conflict_error", 504: "timeout_error"}
 )
@@ -47,11 +45,17 @@ def proxy_error_type(status_code: int) -> AnthropicErrorType:
     return "invalid_request_error"
 
 
+def _is_at_or_under(route: str, root: str) -> bool:
+    return route == root or route.startswith(f"{root}/")
+
+
 def uses_anthropic_error_envelope(request: Request) -> bool:
     route: Final = get_request_route(request)
     if route in ANTHROPIC_MESSAGES_ROUTES or route.startswith(ANTHROPIC_PASS_THROUGH_PREFIX):
         return True
-    return route in ANTHROPIC_SHAPED_MODEL_LIST_ROUTES and "anthropic-version" in request.headers
+    if "anthropic-version" not in request.headers:
+        return False
+    return any(_is_at_or_under(route, root) for root in ANTHROPIC_VERSIONED_ROUTES)
 
 
 def route_error_content(

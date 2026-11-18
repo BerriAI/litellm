@@ -271,27 +271,48 @@ async def test_openai_exception_handler_keeps_the_openai_envelope_off_the_messag
     }
 
 
+_ANTHROPIC_VERSION: Final = ((b"anthropic-version", b"2023-06-01"),)
+_ANTHROPIC_VERSION_GATED_PATHS: Final = (
+    "/v1/models",
+    "/models",
+    "/claude_code_gateway/v1/models",
+    "/v1/models/claude-haiku-5-5",
+    "/models/claude-haiku-5-5",
+    "/v1/skills",
+    "/v1/skills/skill_01AbCdEf",
+)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ("/v1/models", "/models", "/claude_code_gateway/v1/models"))
-async def test_a_model_list_request_answers_errors_in_the_shape_its_listing_takes(path: str) -> None:
+@pytest.mark.parametrize("path", _ANTHROPIC_VERSION_GATED_PATHS)
+async def test_an_anthropic_sdk_route_answers_errors_in_the_shape_its_caller_asked_for(path: str) -> None:
     anthropic: Final = await openai_exception_handler(
-        request=_make_request(path=path, headers=[(b"anthropic-version", b"2023-06-01")]),
-        exc=_model_access_denied_exception(),
+        request=_make_request(path=path, headers=_ANTHROPIC_VERSION), exc=_model_access_denied_exception()
     )
     openai: Final = await openai_exception_handler(
         request=_make_request(path=path), exc=_model_access_denied_exception()
     )
 
-    assert json.loads(anthropic.body)["error"]["type"] == "permission_error"
-    assert json.loads(anthropic.body)["type"] == "error"
+    assert (anthropic.status_code, openai.status_code) == (403, 403)
+    assert json.loads(anthropic.body) == {
+        "type": "error",
+        "error": {
+            "type": "permission_error",
+            "message": "Team not allowed to access model. Tried to access gpt-5.6",
+            "litellm_error_type": "team_model_access_denied",
+        },
+    }
     assert json.loads(openai.body)["error"]["type"] == "team_model_access_denied"
     assert "type" not in json.loads(openai.body)
 
 
 @pytest.mark.asyncio
-async def test_openai_exception_handler_keeps_the_openai_envelope_on_other_anthropic_routes() -> None:
+@pytest.mark.parametrize("path", ("/v1/skillsets", "/v1/model/info", "/v1/chat/completions"))
+async def test_a_route_outside_the_anthropic_sdk_surface_keeps_the_openai_envelope_with_anthropic_version(
+    path: str,
+) -> None:
     response: Final = await openai_exception_handler(
-        request=_make_request(path="/v1/skills"), exc=_model_access_denied_exception()
+        request=_make_request(path=path, headers=_ANTHROPIC_VERSION), exc=_model_access_denied_exception()
     )
     body: Final = json.loads(response.body)
 
@@ -731,6 +752,37 @@ async def test_http_exception_on_a_plain_http_request_keeps_the_default_json_bod
     assert response is not None
     assert response.status_code == 404
     assert json.loads(bytes(response.body)) == {"detail": "not found"}
+
+
+@pytest.mark.asyncio
+async def test_a_missing_model_looked_up_by_an_anthropic_client_answers_the_anthropic_not_found_error() -> None:
+    message: Final = "The model `no-such-model` does not exist or is not accessible"
+    request: Final = _make_request(path="/v1/models/no-such-model", headers=_ANTHROPIC_VERSION)
+
+    response: Final = await otlp_http_exception_handler(request, HTTPException(404, message))
+
+    assert response is not None
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body)) == {"type": "error", "error": {"type": "not_found_error", "message": message}}
+
+
+@pytest.mark.asyncio
+async def test_a_skill_search_refusal_to_an_anthropic_client_keeps_its_litellm_error_code() -> None:
+    detail: Final = {"error": "skill_search_not_configured", "message": "Skill search needs an embedding model"}
+    request: Final = _make_request(path="/v1/skills", headers=_ANTHROPIC_VERSION)
+
+    response: Final = await otlp_http_exception_handler(request, HTTPException(400, detail))
+
+    assert response is not None
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body)) == {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "skill_search_not_configured",
+            "provider_specific_fields": detail,
+        },
+    }
 
 
 @pytest.mark.asyncio

@@ -775,3 +775,38 @@ def test_anthropic_messages_preserves_image_document_and_tool_result_blocks(gate
         expected_message: Final = _MESSAGE.validate_python({**expected_response, "model": model})
         assert response.model_dump(mode="json") == expected_message.model_dump(mode="json"), response
         assert len(wire.drain()) == 1
+
+
+def test_the_anthropic_sdk_reads_proxy_refusals_on_the_model_and_skills_routes_as_anthropic_errors(
+    gateway: Gateway,
+) -> None:
+    missing_model: Final = "no-such-model-" + uuid.uuid4().hex
+    refused: Final = {
+        "type": "error",
+        "error": {
+            "type": "authentication_error",
+            "message": "Authentication Error, Invalid API key provided.",
+            "litellm_error_type": "token_not_found_in_db",
+        },
+    }
+    base_url: Final = str(gateway.client.base_url)
+    with (
+        anthropic.Anthropic(base_url=base_url, api_key=gateway.key, max_retries=0) as member,
+        anthropic.Anthropic(base_url=base_url, api_key=f"sk-{uuid.uuid4().hex}", max_retries=0) as stranger,
+    ):
+        with pytest.raises(anthropic.NotFoundError) as not_found:
+            member.models.retrieve(missing_model)
+        with pytest.raises(anthropic.AuthenticationError) as skills_refusal:
+            stranger.beta.skills.list()
+        with pytest.raises(anthropic.AuthenticationError) as model_refusal:
+            stranger.models.retrieve("claude-haiku-4-5")
+
+    assert not_found.value.body == {
+        "type": "error",
+        "error": {
+            "type": "not_found_error",
+            "message": f"The model `{missing_model}` does not exist or is not accessible",
+        },
+    }, not_found.value.response.text
+    assert skills_refusal.value.body == refused, skills_refusal.value.response.text
+    assert model_refusal.value.body == refused, model_refusal.value.response.text

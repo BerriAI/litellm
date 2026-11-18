@@ -67,7 +67,11 @@ class _AnthropicErrorResponse(BaseModel):
 
 GENERIC_ERROR: Final = _ProxyError(message=GENERIC_MESSAGE, type="token_not_found_in_db", param="key", code="401")
 MESSAGES_PATH: Final = "/v1/messages"
-ANTHROPIC_ENVELOPE_PATHS: Final = frozenset({MESSAGES_PATH, "/anthropic/v1/messages"})
+ANTHROPIC_MODEL_RETRIEVE_PATH: Final = "/v1/models/claude-haiku-4-5"
+ANTHROPIC_SKILLS_PATH: Final = "/v1/skills"
+ANTHROPIC_ENVELOPE_PATHS: Final = frozenset(
+    {MESSAGES_PATH, "/anthropic/v1/messages", ANTHROPIC_MODEL_RETRIEVE_PATH, ANTHROPIC_SKILLS_PATH}
+)
 ANTHROPIC_GENERIC_ERROR: Final = _AnthropicErrorDetail(
     type="authentication_error", message=GENERIC_MESSAGE, litellm_error_type=GENERIC_ERROR.type
 )
@@ -92,6 +96,8 @@ ROUTES: Final[Mapping[str, _Route]] = {
     "embeddings": _Route("POST", "/v1/embeddings", {"model": MODEL, "input": "unknown key"}, "authorization"),
     "completions": _Route("POST", "/v1/completions", {"model": MODEL, "prompt": "unknown key"}, "authorization"),
     "models": _Route("GET", "/v1/models", None, "authorization"),
+    "anthropic_model_retrieve": _Route("GET", ANTHROPIC_MODEL_RETRIEVE_PATH, None, "x-api-key"),
+    "anthropic_skills": _Route("GET", ANTHROPIC_SKILLS_PATH, None, "x-api-key"),
     "anthropic_passthrough": _Route("POST", "/anthropic/v1/messages", MESSAGES, "x-api-key"),
     "gemini_passthrough": _Route("POST", "/gemini/v1beta/models/gemini-2.5-flash:generateContent", GEMINI, "query"),
     "key_info": _Route("GET", "/key/info", None, "authorization"),
