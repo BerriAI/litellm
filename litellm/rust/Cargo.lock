@@ -4590,7 +4590,6 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "aws-credential-types",
  "aws-sdk-secretsmanager",
  "azure_core",
@@ -4847,7 +4846,6 @@ name = "litellm-router-core"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
- "async-trait",
  "jiff",
  "litellm-cache",
  "litellm-python-compat",
