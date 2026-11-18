@@ -13,7 +13,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -92,22 +91,6 @@ def _correlated_row(kwargs: Mapping[str, object]) -> Mapping[str, object] | None
     }
 
 
-class _ChargedRequest(TypedDict, total=False):
-    """The accounting payload fields a Lens record reads, typed narrowly."""
-
-    call_type: ReadOnly[str | None]
-    api_key: ReadOnly[str | None]
-    team_id: ReadOnly[str | None]
-    organization_id: ReadOnly[str | None]
-    user: ReadOnly[str | None]
-    model: ReadOnly[str | None]
-    model_group: ReadOnly[str | None]
-    custom_llm_provider: ReadOnly[str | None]
-    status: ReadOnly[str | None]
-    session_id: ReadOnly[str | None]
-
-
-_CHARGED: Final = TypeAdapter(_ChargedRequest)
 _ACCOUNTING_TEXT: Final = (
     "call_type",
     "api_key",
@@ -123,20 +106,33 @@ _ACCOUNTING_TEXT: Final = (
 _SCOPE: Final = ("api_key", "team_id", "user", "organization_id")
 
 
-def _charged(payload: "SpendLogsPayload") -> _ChargedRequest:
-    try:
-        return _CHARGED.validate_python(payload)
-    except ValidationError:
-        return _ChargedRequest()
+def _text(accounting: Mapping[str, object], name: str) -> str:
+    value: Final = accounting.get(name)
+    return value if isinstance(value, str) else ""
 
 
-def _accounting_row(charged: _ChargedRequest) -> Mapping[str, object]:
-    return {name: charged.get(name) or "" for name in _ACCOUNTING_TEXT}
+def _malformed(accounting: Mapping[str, object], name: str) -> bool:
+    value: Final = accounting.get(name)
+    return value is not None and not isinstance(value, str)
 
 
-def _charge_scope(charged: _ChargedRequest) -> Mapping[str, object]:
-    """The key, team, user and organization the accounting delivery charged, which outrank the callback's view."""
-    return {name: value for name in _SCOPE if (value := charged.get(name))}
+def _accounting_row(accounting: Mapping[str, object]) -> Mapping[str, object]:
+    return {name: _text(accounting, name) for name in _ACCOUNTING_TEXT}
+
+
+def _charge_scope(accounting: Mapping[str, object]) -> Mapping[str, object]:
+    """The key, team, user and organization the accounting delivery charged, each kept on its own.
+
+    A charged owner field outranks the callback's. One that is present but not text is not trusted, and
+    the callback cannot fill it in: it is left empty.
+    """
+    charged: Final = {name: value for name in _SCOPE if (value := _text(accounting, name))}
+    unowned: Final = {name: "" for name in _SCOPE if _malformed(accounting, name)}
+    return {**charged, **unowned}
+
+
+def _scope_is_trusted(accounting: Mapping[str, object]) -> bool:
+    return not any(_malformed(accounting, name) for name in _SCOPE)
 
 
 def _spill(
@@ -182,18 +178,19 @@ def lens_export(
     capabilities: LedgerCapabilities,
     payload_limit: int,
 ) -> LensExport:
+    accounting: Final[Mapping[str, object]] = payload
     correlated: Final = _correlated_row(kwargs)
-    charged: Final = _charged(payload)
-    base: Final = correlated if correlated is not None else _accounting_row(charged)
+    base: Final = correlated if correlated is not None else _accounting_row(accounting)
     event_time_ms: Final = _millis(start_time)
+    keeps_content: Final = keep_content and correlated is not None and _scope_is_trusted(accounting)
     owner: Final = {
         **{name: _storable(value) for name, value in base.items()},
-        **_charge_scope(charged),
+        **_charge_scope(accounting),
         "request_id": payload["request_id"],
         "spend": payload["spend"],
         "start_time": event_time_ms,
         "end_time": _millis(end_time),
-        **({} if keep_content and correlated is not None else _REQUEST_ONLY_FIELDS),
+        **({} if keeps_content else _REQUEST_ONLY_FIELDS),
     }
     metadata: Final = str(owner.get("metadata") or "")
     spilled: Final = tuple(

@@ -228,21 +228,85 @@ def test_message_logging_off_still_exports_no_body(monkeypatch: pytest.MonkeyPat
     assert export["record"]["messages"] == ""
 
 
-def test_an_unreadable_accounting_scope_falls_back_to_the_callback_scope() -> None:
+def _callback_claims(kwargs: dict[str, object], *, team: str, key: str, user: str) -> dict[str, object]:
+    logged = dict(kwargs["standard_logging_object"])  # pyright: ignore[reportArgumentType]  # test-built mapping
+    metadata = {
+        **dict(logged["metadata"]),  # pyright: ignore[reportArgumentType]  # test-built mapping
+        "user_api_key_team_id": team,
+        "user_api_key_hash": key,
+        "user_api_key_user_id": user,
+    }
+    return {**kwargs, "standard_logging_object": {**logged, "metadata": metadata}}
+
+
+def test_a_malformed_unrelated_field_keeps_every_billed_owner_and_their_body() -> None:
+    body = "雪" * 2000
+    kwargs = _callback_claims(_kwargs(messages=body), team="callback-team", key="callback-key", user="callback-user")
+    accounting = {
+        **_accounting(),
+        "team_id": "billed-team",
+        "api_key": "billed-key",
+        "user": "billed-user",
+        "organization_id": "billed-org",
+        "model_group": 5,
+        "status": 7,
+    }
+
     export = lens_export(
-        {**_accounting(), "team_id": 5},  # pyright: ignore[reportArgumentType]  # deliberately mistyped accounting payload
-        _kwargs(),
+        accounting,  # pyright: ignore[reportArgumentType]  # deliberately mistyped unrelated accounting fields
+        kwargs,
         start_time=START,
         end_time=END,
         keep_content=True,
-        capabilities=INLINE,
-        payload_limit=1024,
+        capabilities=STORE,
+        payload_limit=1024 * 1024,
     )
 
-    assert export["record"]["spend"] == 0.25
-    assert export["record"]["request_id"] == "accounting-request"
-    assert export["record"]["team_id"] == "team"
-    assert export["record"]["api_key"] == "hash"
+    record = export["record"]
+    assert (record["team_id"], record["api_key"], record["user"], record["organization_id"]) == (
+        "billed-team",
+        "billed-key",
+        "billed-user",
+        "billed-org",
+    )
+    [payload] = export["payloads"]
+    assert (payload["team_id"], payload["api_key"], payload["content"]) == ("billed-team", "billed-key", body)
+
+
+@pytest.mark.parametrize("malformed_owner", ["team_id", "api_key", "user", "organization_id"])
+def test_a_malformed_billed_owner_is_never_claimed_by_the_callback_and_exports_cost_only(
+    malformed_owner: str,
+) -> None:
+    kwargs = _callback_claims(
+        _kwargs(messages="雪" * 2000), team="callback-team", key="callback-key", user="callback-user"
+    )
+    accounting = {
+        **_accounting(),
+        "team_id": "billed-team",
+        "api_key": "billed-key",
+        "user": "billed-user",
+        malformed_owner: 5,
+    }
+
+    export = lens_export(
+        accounting,  # pyright: ignore[reportArgumentType]  # deliberately mistyped billed owner
+        kwargs,
+        start_time=START,
+        end_time=END,
+        keep_content=True,
+        capabilities=STORE,
+        payload_limit=1024 * 1024,
+    )
+
+    record = export["record"]
+    assert record[malformed_owner] == ""
+    assert "callback-team" not in record.values()
+    assert "callback-key" not in record.values()
+    assert "callback-user" not in record.values()
+    assert export["payloads"] == ()
+    assert (record["messages"], record["response"], record["metadata"]) == ("", "", "")
+    assert record["spend"] == 0.25
+    assert record["request_id"] == "accounting-request"
 
 
 def test_message_logging_off_keeps_an_error_without_echoed_input(monkeypatch: pytest.MonkeyPatch) -> None:
