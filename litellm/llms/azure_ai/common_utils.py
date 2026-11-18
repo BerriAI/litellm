@@ -17,6 +17,7 @@ AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-S
 AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
 OPENAI_V1_PATH: Final = ("openai", "v1")
 CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")
+_OPENAI_V1_ROUTES: Final = (CHAT_COMPLETIONS_PATH, ("responses",), ("responses", "compact"))
 FOUNDRY_PROJECT_PATH_PREFIX: Final = ("api", "projects")
 
 
@@ -172,7 +173,9 @@ def _is_foundry_v1_base(api_base: str) -> bool:
     if foundry_project_root(base_url):
         return True
     segments: Final = _path_segments(base_url)
-    route_free: Final = segments[:-2] if segments[-2:] == CHAT_COMPLETIONS_PATH else segments
+    route_free: Final = next(
+        (segments[: -len(route)] for route in _OPENAI_V1_ROUTES if segments[-len(route) :] == route), segments
+    )
     return route_free[-2:] == OPENAI_V1_PATH
 
 

@@ -124,6 +124,9 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
         (f"{FOUNDRY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
         (RESOURCE_V1_BASE, AzureAIResponsesAPIConfig),
         ("https://res.openai.azure.com/openai/v1", AzureAIResponsesAPIConfig),
+        ("https://res.openai.azure.com/openai/v1/responses", AzureAIResponsesAPIConfig),
+        (f"{RESOURCE_V1_BASE}/responses/compact", AzureAIResponsesAPIConfig),
+        (f"{RESOURCE_V1_BASE}/chat/completions", AzureAIResponsesAPIConfig),
         ("https://res.cognitiveservices.azure.com/openai/v1", NoneType),
         ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", NoneType),
         ("https://res.services.ai.azure.com/models", NoneType),
@@ -378,134 +381,197 @@ RESPONSES_CALLS: Final = (
 )
 
 
-@pytest.mark.asyncio
-@respx.mock
-@pytest.mark.parametrize("url_regex,call", RESPONSES_CALLS)
-async def test_a_model_router_drops_custom_tools_under_drop_params(url_regex, call):
-    route: Final = respx.post(url__regex=url_regex).mock(
-        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
-    )
-
-    await call(
-        model="azure_ai/model_router/model-router",
-        input="What is the weather in SF?",
-        tools=[WEATHER_TOOL, CUSTOM_TOOL],
-        api_base=FOUNDRY_PROJECT_BASE,
-        api_key="fake-key",
-        drop_params=True,
-    )
-
-    assert [tool["name"] for tool in json.loads(route.calls.last.request.content)["tools"]] == ["get_weather"]
-
-
-@pytest.mark.asyncio
-@respx.mock
-@pytest.mark.parametrize(
-    "tool_choice,sent_tool_choice", [({"type": "custom", "name": "apply_patch"}, None), ("auto", "auto")]
-)
-@pytest.mark.parametrize("tools", [[WEATHER_TOOL, CUSTOM_TOOL], [WEATHER_TOOL]], ids=["with_custom", "function_only"])
-async def test_a_model_router_drops_only_a_tool_choice_naming_a_custom_tool(tools, tool_choice, sent_tool_choice):
-    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
-    )
-
-    await litellm.aresponses(
-        model="azure_ai/model_router/model-router",
-        input="What is the weather in SF?",
-        tools=tools,
-        tool_choice=tool_choice,
-        api_base=FOUNDRY_PROJECT_BASE,
-        api_key="fake-key",
-        drop_params=True,
-    )
-
-    assert json.loads(route.calls.last.request.content).get("tool_choice") == sent_tool_choice
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_model_router_drops_tool_choice_with_its_last_custom_tool():
-    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
-    )
-
-    await litellm.aresponses(
-        model="azure_ai/model_router/model-router",
-        input="Fix the typo in README.md",
-        tools=[CUSTOM_TOOL],
-        tool_choice="required",
-        api_base=FOUNDRY_PROJECT_BASE,
-        api_key="fake-key",
-        drop_params=True,
-    )
-
-    sent: Final = json.loads(route.calls.last.request.content)
-    assert "tools" not in sent
-    assert "tool_choice" not in sent
-
-
-NAMESPACE_TOOL: Final = {
-    "type": "namespace",
-    "name": "editor",
-    "description": "Edit files",
-    "tools": [WEATHER_TOOL, CUSTOM_TOOL],
+PATCH_GRAMMAR: Final = {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"}
+ROUTER_PATCH_TOOL: Final = {
+    "type": "function",
+    "name": "apply_patch",
+    "description": "Apply a patch\n\nFormat:\n```lark\nstart: /.+/\n```",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string", "description": "The apply_patch content following the specified format"}
+        },
+        "required": ["content"],
+    },
 }
 
 
-@pytest.mark.asyncio
-@respx.mock
-@pytest.mark.parametrize(
-    "tools,sent_tools",
-    [
-        ([NAMESPACE_TOOL], [{**NAMESPACE_TOOL, "tools": [WEATHER_TOOL]}]),
-        ([WEATHER_TOOL, {**NAMESPACE_TOOL, "tools": [CUSTOM_TOOL]}], [WEATHER_TOOL]),
-    ],
-)
-async def test_a_model_router_drops_custom_tools_inside_a_namespace(tools, sent_tools):
-    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+async def _sent_router_request(call, url_regex: str, **params: object) -> dict:
+    route: Final = respx.post(url__regex=url_regex).mock(
         return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
     )
-
-    await litellm.aresponses(
+    await call(
         model="azure_ai/model_router/model-router",
-        input="What is the weather in SF?",
-        tools=tools,
+        input="Fix the typo in README.md",
         api_base=FOUNDRY_PROJECT_BASE,
         api_key="fake-key",
-        drop_params=True,
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("url_regex,call", RESPONSES_CALLS)
+async def test_a_model_router_sends_custom_tools_as_function_tools(url_regex, call):
+    sent: Final = await _sent_router_request(
+        call, url_regex, tools=[WEATHER_TOOL, {**CUSTOM_TOOL, "format": PATCH_GRAMMAR}]
     )
 
-    assert json.loads(route.calls.last.request.content)["tools"] == sent_tools
+    assert sent["tools"] == [WEATHER_TOOL, ROUTER_PATCH_TOOL]
 
 
 @pytest.mark.asyncio
 @respx.mock
 @pytest.mark.parametrize(
-    "allowed,sent_tool_choice",
+    "tool_choice,sent_tool_choice",
+    [
+        ({"type": "custom", "name": "apply_patch"}, {"type": "function", "name": "apply_patch"}),
+        (
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "custom", "name": "apply_patch"}, WEATHER_TOOL],
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "function", "name": "apply_patch"}, WEATHER_TOOL],
+            },
+        ),
+        ("required", "required"),
+    ],
+)
+async def test_a_model_router_points_a_custom_tool_choice_at_its_function_tool(tool_choice, sent_tool_choice):
+    sent: Final = await _sent_router_request(
+        litellm.aresponses, r".*/responses(\?.*)?$", tools=[WEATHER_TOOL, CUSTOM_TOOL], tool_choice=tool_choice
+    )
+
+    assert sent["tool_choice"] == sent_tool_choice
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_model_router_sends_custom_tools_inside_a_namespace_as_function_tools():
+    namespace: Final = {"type": "namespace", "name": "editor", "description": "Edit files"}
+    sent: Final = await _sent_router_request(
+        litellm.aresponses,
+        r".*/responses(\?.*)?$",
+        tools=[{**namespace, "tools": [WEATHER_TOOL, {**CUSTOM_TOOL, "format": PATCH_GRAMMAR}]}],
+    )
+
+    assert sent["tools"] == [{**namespace, "tools": [WEATHER_TOOL, ROUTER_PATCH_TOOL]}]
+
+
+def _function_call(name: str, arguments: str) -> dict:
+    return {
+        "type": "function_call",
+        "id": f"fc_{name}",
+        "call_id": f"call_{name}",
+        "name": name,
+        "arguments": arguments,
+        "status": "completed",
+    }
+
+
+PATCH_TEXT: Final = "*** Begin Patch\n*** End Patch"
+ROUTER_PATCH_CALL: Final = _function_call("apply_patch", json.dumps({"content": PATCH_TEXT}))
+ROUTER_WEATHER_CALL: Final = _function_call("get_weather", json.dumps({"city": "SF"}))
+CUSTOM_PATCH_CALL: Final = {
+    "type": "custom_tool_call",
+    "id": "fc_apply_patch",
+    "call_id": "call_apply_patch",
+    "name": "apply_patch",
+    "input": PATCH_TEXT,
+    "status": "completed",
+}
+
+
+def _dumped_item(item: object) -> dict:
+    return item if isinstance(item, dict) else item.model_dump(exclude_none=True)
+
+
+def _dumped_output(response: object) -> list[dict]:
+    return [_dumped_item(item) for item in response.output]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "model,tools,expected_output",
     [
         (
-            [{"type": "custom", "name": "apply_patch"}, {"type": "function", "name": "get_weather"}],
-            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+            "azure_ai/model_router/model-router",
+            [WEATHER_TOOL, CUSTOM_TOOL],
+            [CUSTOM_PATCH_CALL, ROUTER_WEATHER_CALL],
         ),
-        ([{"type": "custom", "name": "apply_patch"}], None),
+        (
+            "azure_ai/model_router/model-router",
+            [WEATHER_TOOL, {**WEATHER_TOOL, "name": "apply_patch"}],
+            [ROUTER_PATCH_CALL, ROUTER_WEATHER_CALL],
+        ),
+        ("azure_ai/gpt-4.1", [WEATHER_TOOL, CUSTOM_TOOL], [ROUTER_PATCH_CALL, ROUTER_WEATHER_CALL]),
     ],
+    ids=["router_custom_tool", "router_function_tool_with_that_name", "default_model"],
 )
-async def test_a_model_router_drops_custom_tools_from_an_allowed_tools_choice(allowed, sent_tool_choice):
-    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+async def test_a_model_router_answers_a_custom_tool_call_as_one(model, tools, expected_output):
+    respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(
+            200,
+            json={**_responses_payload("gpt-5-nano"), "output": [ROUTER_PATCH_CALL, ROUTER_WEATHER_CALL]},
+        )
     )
 
-    await litellm.aresponses(
+    response: Final = await litellm.aresponses(
+        model=model, input="Fix the typo in README.md", tools=tools, api_base=FOUNDRY_PROJECT_BASE, api_key="fake-key"
+    )
+
+    assert _dumped_output(response) == expected_output
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_streamed_model_router_finishes_a_custom_tool_call_as_one():
+    in_progress: Final = {**ROUTER_PATCH_CALL, "arguments": "", "status": "in_progress"}
+    completed: Final = {**_responses_payload("gpt-5-nano"), "output": [ROUTER_PATCH_CALL]}
+    stream_body: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in (
+            {"type": "response.created", "response": {**completed, "status": "in_progress", "output": []}},
+            {"type": "response.output_item.added", "output_index": 0, "item": in_progress},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_apply_patch",
+                "output_index": 0,
+                "delta": ROUTER_PATCH_CALL["arguments"],
+            },
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_apply_patch",
+                "output_index": 0,
+                "arguments": ROUTER_PATCH_CALL["arguments"],
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": ROUTER_PATCH_CALL},
+            {"type": "response.completed", "response": completed},
+        )
+    )
+    respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = await litellm.aresponses(
         model="azure_ai/model_router/model-router",
-        input="What is the weather in SF?",
-        tools=[WEATHER_TOOL, CUSTOM_TOOL],
-        tool_choice={"type": "allowed_tools", "mode": "required", "tools": allowed},
+        input="Fix the typo in README.md",
+        tools=[CUSTOM_TOOL],
+        stream=True,
         api_base=FOUNDRY_PROJECT_BASE,
         api_key="fake-key",
-        drop_params=True,
     )
+    events: Final = {event.type: event async for event in stream}
 
-    assert json.loads(route.calls.last.request.content).get("tool_choice") == sent_tool_choice
+    assert _dumped_item(events["response.output_item.added"].item)["type"] == "function_call"
+    assert _dumped_item(events["response.output_item.done"].item) == CUSTOM_PATCH_CALL
+    assert _dumped_output(events["response.completed"].response) == [CUSTOM_PATCH_CALL]
 
 
 CUSTOM_TOOL_HISTORY: Final = [
@@ -563,24 +629,6 @@ async def test_a_default_foundry_model_keeps_custom_tool_history():
 
     sent_types: Final = [item["type"] for item in json.loads(route.calls.last.request.content)["input"]]
     assert sent_types == ["message", "custom_tool_call", "custom_tool_call_output"]
-
-
-@pytest.mark.asyncio
-@respx.mock
-@pytest.mark.parametrize("url_regex,call", RESPONSES_CALLS)
-async def test_a_model_router_rejects_custom_tools_without_drop_params(url_regex, call):
-    route: Final = respx.post(url__regex=url_regex)
-
-    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
-        await call(
-            model="azure_ai/model_router/model-router",
-            input="What is the weather in SF?",
-            tools=[CUSTOM_TOOL],
-            api_base=FOUNDRY_PROJECT_BASE,
-            api_key="fake-key",
-        )
-
-    assert not route.called
 
 
 @pytest.mark.asyncio
