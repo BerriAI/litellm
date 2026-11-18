@@ -27,6 +27,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsResponseValidationError,
     catalog_mode,
+    has_json_input,
     image_media_type,
     image_param,
     input_images,
@@ -37,6 +38,7 @@ from litellm.llms.base_llm.decisions.transformation import (
     with_images_where,
     with_inlined_images,
     with_readable_raw_prompt_cache_breakpoints,
+    without_json_input,
     without_prompt_cache_breakpoints,
     without_raw_prompt_cache_breakpoints,
 )
@@ -519,6 +521,7 @@ def _unsupported_params(
     refuses_prompt_cache_options: Final = (
         ir_request.prompt_cache_options is not None and not provider_config.supports_prompt_cache
     )
+    refuses_json_input: Final = has_json_input(ir_request.input) and not provider_config.supports_json_input
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -529,6 +532,7 @@ def _unsupported_params(
         *(("developer and system messages",) if refuses_developer_and_system_messages else ()),
         *(("prompt_cache_key",) if refuses_prompt_cache_key else ()),
         *(("prompt_cache_options",) if refuses_prompt_cache_options else ()),
+        *(("input_json",) if refuses_json_input else ()),
     )
 
 
@@ -562,7 +566,10 @@ def _without_unsupported_params(
     headers: Mapping[str, str],
     support: _ResolvedSupport,
 ) -> DecisionsIRRequest:
-    supported_input: Final = _supported_messages(ir_request.input, provider_config)
+    supported_messages: Final = _supported_messages(ir_request.input, provider_config)
+    supported_input: Final = (
+        supported_messages if provider_config.supports_json_input else without_json_input(supported_messages)
+    )
     return replace(
         ir_request,
         input=(

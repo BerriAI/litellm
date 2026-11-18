@@ -63428,7 +63428,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
@@ -63472,6 +63472,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -86458,7 +86470,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
@@ -86502,6 +86514,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role

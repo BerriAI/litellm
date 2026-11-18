@@ -356,6 +356,7 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     supports_prompt_cache = True
     supports_developer_and_system_messages = True
     supports_images = True
+    supports_json_input = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"

@@ -12075,6 +12075,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -12109,7 +12141,7 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
@@ -13599,6 +13631,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -13633,7 +13697,7 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
