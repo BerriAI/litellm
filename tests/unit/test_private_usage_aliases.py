@@ -1461,13 +1461,6 @@ ALIAS_CASES: Final = (
         "call_type_has_image_response",
         False,
     ),
-    (
-        "litellm.litellm_core_utils.llm_cost_calc.utils",
-        "",
-        "_generic_cost_per_character",
-        "generic_cost_per_character",
-        False,
-    ),
     ("litellm.litellm_core_utils.llm_cost_calc.utils", "", "_get_cost_per_unit", "get_cost_per_unit", False),
     (
         "litellm.litellm_core_utils.llm_cost_calc.utils",
