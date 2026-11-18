@@ -614,6 +614,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         auto_summary_level: str = "detailed",
         *,
         drop_params: bool = True,
+        preserve_system_instructions: bool = False,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -635,8 +636,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         system: Final = anthropic_request.get("system")
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
-            if isinstance(system, list)
-            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
+            if isinstance(system, (str, list)) and not preserve_system_instructions
             else ()
         )
         if developer_parts:

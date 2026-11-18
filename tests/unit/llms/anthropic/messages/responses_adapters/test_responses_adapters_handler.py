@@ -52,6 +52,23 @@ CHAT_COMPLETIONS_SSE_BODY = (
 )
 
 
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("nested", [False, True])
+def test_chained_turn_keeps_system_out_of_stored_input(continuation, nested):
+    forwarded = {"extra_body": continuation} if nested else continuation
+    kwargs = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    assert kwargs["instructions"] == "Be brief."
+    assert kwargs["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
