@@ -3231,6 +3231,7 @@
     "page": {
       "title": "Projects",
       "description": "Manage projects within your teams",
+      "enterpriseNotice": "This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <pricing>here</pricing>.",
       "createButton": "Create Project",
       "searchPlaceholder": "Search projects by name, ID, description, or team...",
       "clearSearch": "Clear search"
