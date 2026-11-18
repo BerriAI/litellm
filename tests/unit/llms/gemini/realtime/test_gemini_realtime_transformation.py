@@ -10,6 +10,7 @@ import pytest
 import litellm
 from litellm.llms.gemini.realtime.transformation import GEMINI_LIVE_DOCUMENTED_VOICES, GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
 
@@ -1970,7 +1971,7 @@ def _events_per_frame(
     config: GeminiRealtimeConfig,
     frames: Sequence[Mapping[str, object]],
     state: RealtimeResponseTransformInput | None = None,
-) -> tuple[list[dict], ...]:
+) -> tuple[list[OpenAIRealtimeEvents], ...]:
     if not frames:
         return ()
     current_state: Final = state if state is not None else _initial_audio_state()
@@ -1980,11 +1981,18 @@ def _events_per_frame(
         MagicMock(litellm_trace_id="trace_interruption"),
         realtime_response_transform_input=current_state,
     )
-    next_state: Final = cast(
-        RealtimeResponseTransformInput,
-        {**current_state, **{key: value for key, value in result.items() if key != "response"}},
-    )
-    return (cast(list[dict], result["response"]), *_events_per_frame(config, frames[1:], next_state))
+    next_state: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": result["session_configuration_request"],
+        "current_output_item_id": result["current_output_item_id"],
+        "current_response_id": result["current_response_id"],
+        "current_conversation_id": result["current_conversation_id"],
+        "current_delta_chunks": result["current_delta_chunks"],
+        "current_item_chunks": result["current_item_chunks"],
+        "current_delta_type": result["current_delta_type"],
+    }
+    response: Final = result["response"]
+    frame_events: Final = response if isinstance(response, list) else [response]
+    return (frame_events, *_events_per_frame(config, frames[1:], next_state))
 
 
 def test_gemini_interruption_closes_item_incomplete_and_reports_one_cancelled_response_done():
@@ -2143,6 +2151,33 @@ def test_gemini_transcript_first_turn_closes_its_item_on_generation_complete():
     ), generation_complete
     statuses = [(event["type"], event["response"]["status"]) for event in turn_complete]
     assert statuses == [("response.done", "completed")], turn_complete
+
+
+@pytest.mark.parametrize("opening_frame", [_AUDIO_MODEL_TURN, _TRANSCRIPT_TURN], ids=["audio-first", "transcript-first"])
+def test_gemini_generation_and_turn_complete_in_one_frame_close_the_item_and_the_response(opening_frame):
+    opened, closing = _events_per_frame(
+        GeminiRealtimeConfig(),
+        [
+            opening_frame,
+            {"serverContent": {"generationComplete": True, "turnComplete": True}, "usageMetadata": _INTERRUPTION_USAGE},
+        ],
+    )
+    response_id = opened[0]["response"]["id"]
+    item_id = opened[1]["item"]["id"]
+
+    audio_done, part_done, item_done, response_done = closing
+    assert [
+        (audio_done["type"], audio_done["item_id"]),
+        (part_done["type"], part_done["item_id"]),
+        (item_done["type"], item_done["item"]["id"], item_done["item"]["status"]),
+        (response_done["type"], response_done["response"]["id"], response_done["response"]["status"]),
+    ] == [
+        ("response.output_audio.done", item_id),
+        ("response.content_part.done", item_id),
+        ("response.output_item.done", item_id, "completed"),
+        ("response.done", response_id, "completed"),
+    ], closing
+    assert response_done["response"]["usage"]["total_tokens"] == 42, response_done
 
 
 def test_gemini_interruption_with_no_open_response_emits_nothing():

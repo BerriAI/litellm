@@ -70,9 +70,9 @@ from ..common_utils import encode_unserializable_types, get_api_key_from_env
 
 MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents]] = {
     "setupComplete": OpenAIRealtimeEventTypes.SESSION_CREATED,
-    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "serverContent.turnComplete": OpenAIRealtimeEventTypes.RESPONSE_DONE,
     "serverContent.interrupted": OpenAIRealtimeEventTypes.RESPONSE_DONE,
+    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "toolCall": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
 }
 
@@ -1399,7 +1399,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     ) -> OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents:
         if isinstance(value, dict):
             model_turn_event = value.get("modelTurn")
-            generation_complete_event = value.get("generationComplete")
+            generation_complete_event = value.get("generationComplete") if "turnComplete" not in value else None
         else:
             model_turn_event = None
             generation_complete_event = None
@@ -1762,33 +1762,38 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
                 if "interrupted" in json_message["serverContent"]:
                     self._cancelled_response_id = current_response_id
-                    if (
-                        current_output_item_id is not None
-                        and current_delta_type is not None
-                        and current_output_item_id != self._closed_output_item_id
-                    ):
-                        interrupted_content_done_event = self.transform_content_done_event(
-                            delta_chunks=current_delta_chunks,
+                if (
+                    current_output_item_id not in (None, self._closed_output_item_id)
+                    and current_delta_type is not None
+                    and any(flag in json_message["serverContent"] for flag in ("interrupted", "generationComplete"))
+                ):
+                    closing_content_done_event = self.transform_content_done_event(
+                        delta_chunks=current_delta_chunks,
+                        current_output_item_id=current_output_item_id,
+                        current_response_id=current_response_id,
+                        delta_type=current_delta_type,
+                    )
+                    returned_message.append(closing_content_done_event)
+                    returned_message.extend(
+                        self.return_additional_content_done_events(
                             current_output_item_id=current_output_item_id,
                             current_response_id=current_response_id,
+                            delta_done_event=closing_content_done_event,
                             delta_type=current_delta_type,
+                            item_status=(
+                                "incomplete" if "interrupted" in json_message["serverContent"] else "completed"
+                            ),
                         )
-                        returned_message.append(interrupted_content_done_event)
-                        returned_message.extend(
-                            self.return_additional_content_done_events(
-                                current_output_item_id=current_output_item_id,
-                                current_response_id=current_response_id,
-                                delta_done_event=interrupted_content_done_event,
-                                delta_type=current_delta_type,
-                                item_status="incomplete",
-                            )
-                        )
-                        self._closed_output_item_id = current_output_item_id
-                    if "turnComplete" not in json_message["serverContent"]:
-                        if "usageMetadata" in json_message:
-                            self._pending_usage_metadata = json_message["usageMetadata"]
-                        server_content_handled = True
-                        continue
+                    )
+                    self._closed_output_item_id = current_output_item_id
+                if (
+                    "interrupted" in json_message["serverContent"]
+                    and "turnComplete" not in json_message["serverContent"]
+                ):
+                    if "usageMetadata" in json_message:
+                        self._pending_usage_metadata = json_message["usageMetadata"]
+                    server_content_handled = True
+                    continue
                 _has_pending_function_call = current_item_chunks and any(
                     chunk.get("item", {}).get("type") == "function_call" for chunk in current_item_chunks
                 )
