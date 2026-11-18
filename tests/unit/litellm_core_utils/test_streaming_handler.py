@@ -4810,6 +4810,16 @@ class _KeyIterableChunk:
         return self._fields.get(key, default)
 
 
+class _PopOnReadDict(dict[str, object]):
+    def __getitem__(self, key: str) -> object:
+        return self.pop(key)
+
+
+class _NoneForMissingKeyDict(dict[str, object]):
+    def __missing__(self, key: str) -> None:
+        return None
+
+
 class _SelfIteratingKeysChunk(_KeyIterableChunk):
     def __init__(self, fields: dict[str, object]) -> None:
         super().__init__(fields)
@@ -4896,6 +4906,42 @@ def test_custom_provider_stream_keeps_tool_call_and_provider_fields_of_chunk_obj
     assert ["https://example.com"] in [getattr(chunk, "citations", None) for chunk in streamed]
     assert assembled.choices[0].message.tool_calls[0].function.name == "get_weather"
     assert assembled.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            [
+                _PopOnReadDict(text="hel", is_finished=False, finish_reason="", usage=None, id="evt-0"),
+                {"text": "lo", "is_finished": True, "finish_reason": "length", "usage": None},
+            ],
+            id="dict-subclass-removing-keys-it-returns",
+        ),
+        pytest.param(
+            [
+                _NoneForMissingKeyDict(is_finished=False, finish_reason="", usage=None, role="assistant"),
+                _NoneForMissingKeyDict(text="hello", is_finished=True, finish_reason="length", usage=None),
+            ],
+            id="dict-subclass-returning-none-for-missing-key",
+        ),
+    ],
+)
+def test_custom_provider_stream_keeps_values_read_from_dict_subclass_chunks_with_extra_keys(
+    monkeypatch: pytest.MonkeyPatch, chunks: list[dict[str, object]]
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "hello"
+    assert assembled.choices[0].finish_reason == "length"
 
 
 @pytest.mark.parametrize(
