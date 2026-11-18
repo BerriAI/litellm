@@ -401,7 +401,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         start_time: datetime.datetime,
         call_type: str,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse | None:
         """
@@ -1087,7 +1087,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         model: str,
         args: tuple[object, ...],
-        custom_llm_provider: str | None = None,
+        custom_llm_provider: object = None,
     ) -> object:
         """
         Internal method to process the cached result

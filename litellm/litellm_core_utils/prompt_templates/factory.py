@@ -2145,7 +2145,11 @@ def _placed_and_paired(
     return _pair_tool_calls_with_results(placed) if litellm.modify_params else placed
 
 
-_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
+_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, object]
+
+
+class _SuffixMatcher(Protocol):
+    def endswith(self, suffix: str, /) -> bool: ...
 
 
 def _is_server_tool_result(block: Mapping[str, object]) -> bool:
@@ -3228,7 +3232,7 @@ def anthropic_messages_pt(
             new_messages.append({"role": "user", "content": [placeholder]})
 
         # Track unique tool IDs in this merge block to avoid duplication
-        unique_tool_ids: set[str] = set()
+        unique_tool_ids: set[object] = set()
 
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
@@ -3311,7 +3315,7 @@ def anthropic_messages_pt(
                         if _current_group:
                             server_tool_groups.append(_current_group)
                         _current_group = [item]
-                    elif item_type.endswith("_tool_result"):
+                    elif require_attributes(item_type, _SuffixMatcher, "endswith").endswith("_tool_result"):
                         _current_group.append(item)
                     elif item_type == "tool_use":
                         regular_tool_uses.append(item)

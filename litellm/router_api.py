@@ -1893,7 +1893,7 @@ class RoutingContext:
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: the selection cores take a dict
         *,
         kind: SelectKind = "pick",
-        messages: list[dict[str, str]] | None = None,  # mutable-ok: the selection cores take a list
+        messages: Sequence[Mapping[str, object]] | None = None,
         input: str | list[object] | None = None,  # mutable-ok: the selection cores take a list
         specific_deployment: bool | None = False,
         parent_otel_span: "Span | None" = None,

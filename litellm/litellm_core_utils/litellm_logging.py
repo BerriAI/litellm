@@ -767,6 +767,10 @@ class _McpStructuredResult(Protocol):
     is_error: bool
 
 
+class _ColdStorageS3Logger(Protocol):
+    s3_path: str | None
+
+
 def _callback_control_params(litellm_params: object) -> dict[str, object]:
     mapping: Final = as_str_mapping(litellm_params)
     if isinstance(mapping, dict):
@@ -8145,8 +8149,12 @@ class StandardLoggingPayloadSetup:
                 custom_logger: Final = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
                     cold_storage_custom_logger
                 )
-                if custom_logger and hasattr(custom_logger, "s3_path") and getattr(custom_logger, "s3_path"):
-                    s3_path = getattr(custom_logger, "s3_path")
+                if (
+                    custom_logger
+                    and has_attributes(custom_logger, _ColdStorageS3Logger, "s3_path")
+                    and custom_logger.s3_path
+                ):
+                    s3_path = custom_logger.s3_path
                 from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
 
                 if isinstance(custom_logger, S3V2Logger):

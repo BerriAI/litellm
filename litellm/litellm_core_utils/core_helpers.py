@@ -430,7 +430,7 @@ def coerce_token_limit(value: object) -> int | None:
     return None
 
 
-_FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
+_FINISH_REASON_MAP: Final[Mapping[str, OpenAIChatCompletionFinishReason]] = {
     # Anthropic
     "stop_sequence": "stop",
     "end_turn": "stop",
@@ -500,7 +500,7 @@ def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
 
 
 def remove_index_from_tool_calls(
-    messages: list[AllMessageValues] | None,
+    messages: Sequence[AllMessageValues] | None,
 ):
     if messages is not None:
         for message in messages:
@@ -707,7 +707,7 @@ def unbind_budget_reservation_from_callbacks(litellm_params: Mapping[str, object
 def reconstruct_model_name(
     model_name: str,
     custom_llm_provider: str | None,
-    metadata: dict,
+    metadata: Mapping,
 ) -> str:
     """Reconstruct full model name with provider prefix for logging."""
     # Check if deployment model name from router metadata is available (has original prefix)
@@ -1029,9 +1029,9 @@ def filter_internal_params(data: Mapping[str, _Value]) -> dict[str, _Value]:
 
 
 def redact_nested_match_and_regex_keys(
-    payload: dict | list[Any] | str | None,
+    payload: dict | list[dict[str, object]] | str | None,
     keys: Collection[str] = ("match", "regex"),
-) -> dict | list[Any] | str | None:
+) -> dict | list[dict[str, object]] | str | None:
     """
     Deep-copy `payload` and replace every configured string field with "[REDACTED]"
     anywhere in nested dict/list structures.
@@ -1041,7 +1041,7 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
+        redacted: Final[dict | list[dict[str, object]] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 

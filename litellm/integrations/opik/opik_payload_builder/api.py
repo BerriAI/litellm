@@ -15,7 +15,7 @@ _STANDARD_LOGGING_FIELDS: Final = TypeAdapter(Mapping[str, object], config=Confi
 
 def build_opik_payload(
     kwargs: dict[str, Any],
-    response_obj: dict[str, Any],
+    response_obj: Mapping[str, object],
     start_time: datetime,
     end_time: datetime,
     project_name: str,

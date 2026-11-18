@@ -862,9 +862,10 @@ def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
 
 def _model_field_default(settings_class: type[BaseModel], field_name: str) -> object:
     field_info: Final = settings_class.model_fields.get(field_name)
-    if field_info is None or field_info.default is PydanticUndefined:
+    if field_info is None:
         return None
-    return cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    default: Final = cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    return None if default is PydanticUndefined else default
 
 
 def _ui_setting_source(

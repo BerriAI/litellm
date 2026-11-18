@@ -65,7 +65,7 @@ import websockets
 import websockets.exceptions
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
-from pydantic.fields import FieldInfo, PydanticUndefined
+from pydantic.fields import PydanticUndefined
 from pydantic.main import IncEx
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
@@ -6002,7 +6002,16 @@ def _restore_environment(keys: frozenset[str], values: Mapping[str, str]) -> Non
             os.environ[key] = value
 
 
-def _get_field_default(field_info: FieldInfo) -> JsonValue:
+class _FieldWithDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+
+
+def _field_default(field_info: _FieldWithDefault) -> object:
+    return field_info.default
+
+
+def _get_field_default(field_info: _FieldWithDefault) -> JsonValue:
     if field_info.default is PydanticUndefined:
         return None
     return cast(JsonValue, field_info.default)  # cast-ok: Pydantic field defaults are JSON values at runtime
@@ -21416,6 +21425,15 @@ def _preserve_redacted_plugin_keys(incoming: object, existing: object) -> object
     return [resolve(p) for p in incoming]
 
 
+class _FieldValueUpdate(Protocol):
+    @property
+    def field_value(self) -> object: ...
+
+
+def _requested_field_value(update: _FieldValueUpdate) -> object:
+    return update.field_value
+
+
 @router.post(
     "/config/field/update",
     tags=["config.yaml"],
@@ -21450,7 +21468,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
-    requested_value: Final = _UNTYPED_VALUE.validate_python(data.field_value)
+    requested_value: Final = _requested_field_value(data)
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _persist_general_settings_ui_litellm_field(data.field_name, requested_value, user_api_key_dict)
 
@@ -22005,7 +22023,7 @@ async def get_config_list(
                             is_full_admin,
                         ),
                         stored_in_db=_stored_in_db,
-                        field_default_value=field_info.default,
+                        field_default_value=_field_default(field_info),
                         nested_fields=nested_fields,
                         source=_source,
                         editable=_source != "config",
@@ -22032,7 +22050,7 @@ async def get_config_list(
                     field_description=field_info.description or "",
                     field_value=_redact_general_setting_value(field_name, _field_value, is_full_admin),
                     stored_in_db=_stored_in_db,
-                    field_default_value=field_info.default,
+                    field_default_value=_field_default(field_info),
                     nested_fields=nested_fields,
                     source=_source,
                     editable=_source != "config",

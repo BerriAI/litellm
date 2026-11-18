@@ -310,6 +310,22 @@ class _ServicePrincipalPage(Protocol):
     def get(self, key: Literal["@odata.nextLink"]) -> str | None: ...
 
 
+class _GraphDirectoryObject(Protocol):
+    def get(self, key: str) -> str | None: ...
+
+
+class _GraphGroupsPage(Protocol):
+    @overload
+    def get(
+        self,
+        key: Literal["value"],
+        default: Sequence["_GraphDirectoryObject"],
+    ) -> Sequence["_GraphDirectoryObject"]: ...
+
+    @overload
+    def get(self, key: Literal["@odata.context", "@odata.nextLink"]) -> str | None: ...
+
+
 def _hash_cli_sso_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
@@ -4981,7 +4997,9 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = require_attributes(
+            _DECODED_JSON.validate_python(response.json()), _GraphGroupsPage, "get"
+        )
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")
@@ -4999,7 +5017,7 @@ class MicrosoftSSOHandler:
 
     @staticmethod
     async def _cast_graph_api_response_dict(
-        response: dict,
+        response: _GraphGroupsPage,
     ) -> MicrosoftGraphAPIUserGroupResponse:
         directory_objects: Final[list[MicrosoftGraphAPIUserGroupDirectoryObject]] = []
         for _object in response.get("value", []):

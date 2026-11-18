@@ -51,7 +51,12 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    decoded_json_object,
+)
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -337,8 +342,12 @@ def _string_keyed_mapping(value: object) -> Mapping[str, object] | None:
     return None
 
 
+async def _json_request_value(request: Request) -> object:
+    return _DECODED_JSON.validate_python(await request.json())
+
+
 async def _json_request_body(request: Request) -> Mapping[str, object]:
-    return await request.json()
+    return decoded_json_object(await _json_request_value(request))
 
 
 _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -1880,7 +1889,7 @@ async def bedrock_proxy_route(
     agent_runtime_aws: Final = BedrockAgentRuntimeAWS()
     # Assuming the body contains JSON data, parse it
     try:
-        data: Final = await _json_request_body(request)
+        data: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await run_aws_signing(
@@ -1976,11 +1985,12 @@ async def comprehend_medical_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
@@ -2244,11 +2254,12 @@ async def transcribe_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Request body must be valid JSON: {e}")
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not an Amazon Transcribe request member")

@@ -30,7 +30,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -395,6 +395,16 @@ class _TeamTable(_TeamLookupTable, Protocol):
     ) -> Awaitable[LiteLLM_TeamTable]: ...
 
 
+class _TeamTableDatabase(Protocol):
+    @property
+    def litellm_teamtable(self) -> _TeamTable: ...
+
+
+class _TeamTableClient(Protocol):
+    @property
+    def db(self) -> _TeamTableDatabase: ...
+
+
 def _proxy_model_table(prisma_client: PrismaClient) -> _ProxyModelTable:
     return ModelRepository(prisma_client).table
 
@@ -404,7 +414,7 @@ def _repo_team_table(prisma_client: PrismaClient) -> _TeamLookupTable:
 
 
 def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
-    return prisma_client.db.litellm_teamtable
+    return require_attributes(prisma_client, _TeamTableClient, "db").db.litellm_teamtable
 
 
 def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_ModelTable]":

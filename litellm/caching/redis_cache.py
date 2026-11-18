@@ -964,7 +964,7 @@ class RedisCache(BaseCache):
             )
             raise e
 
-    def async_register_script(self, script: str) -> Callable[..., Awaitable[Any]]:
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[object]]:
         """
         Register a Lua script with Redis asynchronously.
         Works with both standalone Redis and Redis Cluster.

@@ -4071,7 +4071,7 @@ class ComplexityRouter(CustomLogger):
     async def _model_group_can_serve(
         self,
         model_name: str,
-        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
+        messages: Sequence[Mapping[str, object]] | None,
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
     ) -> bool:

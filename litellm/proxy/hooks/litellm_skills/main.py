@@ -26,7 +26,7 @@ Usage:
 
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -90,6 +90,14 @@ class _HasContent(Protocol):
     def content(self) -> object: ...
 
 
+class _HasStartsWith(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+class _HasGet(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
+
+
 @with_config(ConfigDict(extra="allow", strict=True))
 class _CodeExecutionToolArgs(TypedDict, total=False):
     code: ReadOnly[str]
@@ -113,6 +121,12 @@ def _first_choice(response: _ChatCompletion) -> _ChatChoice:
 
 def _dict_or_none(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
+
+
+def _sized_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 class SkillsInjectionHook(CustomLogger):
@@ -448,9 +462,11 @@ class SkillsInjectionHook(CustomLogger):
         # Check if any tool call needs execution (litellm_code_execution or skill tool)
         has_executable_tool = False
         for tc in tool_calls:
-            tool_name: str = tc.get("name", "")
+            tool_name = tc.get("name", "")
             # Execute if it's litellm_code_execution OR a skill tool (litellm_skill_xxx)
-            if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value or tool_name.startswith(LITELLM_SKILL_ID_PREFIX):
+            if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value or require_attributes(
+                tool_name, _HasStartsWith, "startswith"
+            ).startswith(LITELLM_SKILL_ID_PREFIX):
                 has_executable_tool = True
                 break
 
@@ -466,7 +482,7 @@ class SkillsInjectionHook(CustomLogger):
             skill_files=all_skill_files,
         )
 
-    def _extract_tool_calls(self, response: object) -> list[dict[str, Any]]:
+    def _extract_tool_calls(self, response: object) -> Sequence[Mapping[str, object]]:
         """Extract tool calls from response, handling both formats."""
         tool_calls: Final = []
 
@@ -588,15 +604,15 @@ class SkillsInjectionHook(CustomLogger):
             # Process tool calls
             tool_results = []
             for tc in tool_calls:
-                tool_name: str = tc.get("name", "")
+                tool_name = tc.get("name", "")
                 tool_id = tc.get("id", "")
-                tool_input: Mapping[str, str] = tc.get("input", {})
+                tool_input = tc.get("input", {})
 
                 # Execute if it's litellm_code_execution OR a skill tool
                 if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
-                    code = tool_input.get("code", "")
+                    code = require_attributes(tool_input, _HasGet, "get").get("code", "")
                     result = await self._execute_code(code, skill_files, executor, generated_files)
-                elif tool_name.startswith(LITELLM_SKILL_ID_PREFIX):
+                elif require_attributes(tool_name, _HasStartsWith, "startswith").startswith(LITELLM_SKILL_ID_PREFIX):
                     # Skill tool - execute the skill's code
                     result = await self._execute_skill_tool(
                         tool_name, tool_input, skill_files, executor, generated_files
@@ -636,14 +652,14 @@ class SkillsInjectionHook(CustomLogger):
 
     async def _execute_code(
         self,
-        code: str,
+        code: object,
         skill_files: dict[str, bytes],
         executor: "SkillsSandboxExecutor",
         generated_files: list[dict[str, object]],
     ) -> str:
         """Execute code in sandbox and return result string."""
         try:
-            verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))
+            verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", _sized_len(code))
 
             exec_result: Final = executor.execute(code=code, skill_files=skill_files)
 
@@ -672,8 +688,8 @@ class SkillsInjectionHook(CustomLogger):
 
     async def _execute_skill_tool(
         self,
-        tool_name: str,
-        tool_input: Mapping[str, str],
+        tool_name: object,
+        tool_input: object,
         skill_files: dict[str, bytes],
         executor: "SkillsSandboxExecutor",
         generated_files: list[dict[str, object]],

@@ -1739,7 +1739,7 @@ class PrometheusLogger(CustomLogger):
 
     def _track_end_user_metric_series(
         self,
-        metric: Any,
+        metric: object,
         metric_name: DEFINED_PROMETHEUS_METRICS,
         labels: Mapping[str, str | None],
     ) -> None:

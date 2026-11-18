@@ -11,7 +11,9 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+
+from typing_extensions import Buffer
 
 from litellm import DualCache
 from litellm._internal_context import with_service_target
@@ -47,6 +49,19 @@ return current
 
 # Default TTL for session iteration counters (1 hour)
 DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _script_count(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 class _PROXY_MaxIterationsHandler(CustomLogger):
@@ -191,11 +206,11 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         """
         if self.increment_script is not None:
             try:
-                result: Final[int] = await self.increment_script(
+                result: Final = await self.increment_script(
                     keys=[cache_key],
                     args=[self.ttl],
                 )
-                return int(result)
+                return _script_count(result)
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "MaxIterationsHandler: Redis failed, falling back to in-memory: %s",

@@ -107,7 +107,7 @@ class SkillsSandboxExecutor:
 
     def execute(
         self,
-        code: str,
+        code: object,
         skill_files: dict[str, bytes],
         requirements: str | None = None,
     ) -> _SandboxExecution:
