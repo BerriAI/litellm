@@ -8455,7 +8455,7 @@
       "aiGateway": "AI Gateway",
       "chatDescription": "Chat UI for using LLMs, MCPs, Agents",
       "chatDisabled": "Admins can enable in Settings",
-      "moyaiDescription": "Cloud Coding Agent",
+      "lensDescription": "Agent traces and findings",
       "trigger": "Switch workspace, current: {{workspace}}"
     },
     "navDisplayName": {
