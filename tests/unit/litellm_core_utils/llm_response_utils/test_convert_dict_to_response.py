@@ -322,6 +322,23 @@ _SCALAR_DEFAULTS = {
 }
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("reuse_response", [False, True])
+def test_convert_to_image_response_preserves_typed_svg_usage(reuse_response: bool) -> None:
+    svg_usage: Final = {
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 5, "total_tokens": 30,
+    }
+    result: Final = convert_to_model_response_object(
+        response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
+        response_type="image_generation",
+        model_response_object=ImageResponse() if reuse_response else None,
+    )
+    assert result.svg_usage is not None
+    assert result.svg_usage.model_dump() == svg_usage
+    assert result.model_dump()["svg_usage"] == svg_usage
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_basic():
     # Test basic conversion with minimal input
     response_dict = {

@@ -2843,6 +2843,16 @@ class ImageObject(OpenAIImage):
             return self.dict()
 
 
+class ImageSVGUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+
+
 class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     image_tokens: int
     """The number of image tokens in the input prompt."""
@@ -2870,6 +2880,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    svg_usage: ImageSVGUsage | None = None
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2957,7 +2968,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-        super().__init__(created=created, data=_data, usage=_usage)
+        svg_usage: Final = (
+            ImageSVGUsage.model_validate(kwargs["svg_usage"]) if kwargs.get("svg_usage") is not None else None
+        )
+        super().__init__(created=created, data=_data, usage=_usage, svg_usage=svg_usage)
 
         self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
