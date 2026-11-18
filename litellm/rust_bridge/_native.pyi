@@ -1946,6 +1946,7 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+def messages_optional_params() -> list[str]: ...
 
 @final
 class NativeModelCapacityState:
