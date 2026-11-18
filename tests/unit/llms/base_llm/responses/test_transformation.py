@@ -777,7 +777,7 @@ def setup_and_teardown_router_unit():
     loop.close()
     asyncio.set_event_loop(None)
 
-def _make_router() -> Router:
+def _make_router(num_retries: int | None = None) -> Router:
     return Router(
         model_list=[
             {
@@ -794,7 +794,8 @@ def _make_router() -> Router:
                     "api_key": "sk-test",
                 },
             },
-        ]
+        ],
+        num_retries=num_retries,
     )
 
 def _make_completed_event(input_tokens: int, output_tokens: int, total_tokens: int) -> ResponseCompletedEvent:
@@ -1169,7 +1170,7 @@ async def test_aresponses_fallback_on_in_stream_error_event():
     from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ErrorEvent, ErrorEventError
 
-    router = _make_router()
+    router = _make_router(num_retries=0)
 
     error_payload = {
         "type": "error",

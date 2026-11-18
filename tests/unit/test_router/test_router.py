@@ -6381,7 +6381,7 @@ class _AsyncList:
         return item
 
 
-def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
+def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo", num_retries: int | None = None):
     return litellm.Router(
         model_list=[
             {
@@ -6394,6 +6394,7 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
             },
         ],
         fallbacks=[{primary: [secondary]}],
+        num_retries=num_retries,
     )
 
 
@@ -7033,7 +7034,7 @@ async def test_aresponses_streaming_iterator_falls_back_on_transport_drop_before
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_surfaces_transport_drop_when_no_fallback_lands():
     transport_error: Final = httpx.ReadError("Response payload is not completed")
-    router: Final = _make_router_with_fallback()
+    router: Final = _make_router_with_fallback(num_retries=0)
     src: Final = _make_native_responses_iterator(
         sse_payloads=_RESPONSES_LIFECYCLE_PAYLOADS, trailing_error=transport_error
     )
