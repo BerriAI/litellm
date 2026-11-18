@@ -22,6 +22,12 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture(autouse=True)
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 # ---------------------------------------------------------------------------

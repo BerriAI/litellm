@@ -1,4 +1,3 @@
-import os
 from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, NoReturn
 
@@ -11,12 +10,13 @@ from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
-    AZURE_AI_AGENTS_SCOPE,
     AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
     AzureFoundryModelInfo,
     api_key_header_for_base,
     foundry_project_root,
     get_azure_ai_auth_headers,
+    with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.types.llms.azure_ai import FoundryAgentReference
 from litellm.types.llms.openai import (
@@ -39,7 +39,8 @@ _RESPONSE_FIELDS: Final = TypeAdapter(dict[str, object])
 
 def _responses_url(api_base: str) -> str:
     base_url: Final = httpx.URL(api_base)
-    return str(base_url.copy_with(path="/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH)), query=None))
+    responses_path: Final = "/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH))
+    return str(base_url.copy_with(path=responses_path, params=without_api_version(base_url)))
 
 
 def _without_agent_instructions(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
@@ -79,13 +80,7 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         params: Final = litellm_params or GenericLiteLLMParams()
         api_base: Final = AzureFoundryModelInfo.get_api_base(params.api_base)
         on_project: Final = api_base is not None and bool(foundry_project_root(httpx.URL(api_base)))
-        auth_params: Final = (
-            params.model_copy(
-                update={"azure_scope": params.azure_scope or os.getenv("AZURE_SCOPE") or AZURE_AI_AGENTS_SCOPE}
-            )
-            if on_project
-            else params
-        )
+        auth_params: Final = with_foundry_project_scope(params, api_base)
         auth_headers: Final = get_azure_ai_auth_headers(
             api_key=AzureFoundryModelInfo.get_api_key(params.api_key),
             litellm_params=auth_params.model_dump(),

@@ -229,6 +229,10 @@ class CallerCredentialAuthenticationError(AuthenticationError):
     caller's credential, so routers must not cool down the shared deployment."""
 
 
+class DeploymentCredentialAuthenticationError(AuthenticationError):
+    pass
+
+
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):
     def __init__(
@@ -277,9 +281,9 @@ class NotFoundError(openai.NotFoundError):
 class BadRequestError(openai.BadRequestError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -366,6 +370,10 @@ class VectorStoreSearchError(BadRequestError):
 
 
 class MalformedRequestFieldError(BadRequestError):
+    pass
+
+
+class MissingMessageRoleError(MalformedRequestFieldError):
     pass
 
 
@@ -605,6 +613,24 @@ class CallerCredentialRateLimitError(RateLimitError):
     credential, so routers must not cool down the shared deployment."""
 
 
+class RequestOverDeploymentTpmError(RateLimitError):
+    """429 raised when one request alone is estimated over the tpm limit of every deployment
+    it could route to, unavailable ones included, so a retry can never clear it. Loggers and
+    Prometheus keep naming it ``RateLimitError``, as they named this refusal before."""
+
+    logged_error_class: Final = "RateLimitError"
+    prometheus_exception_class_name: Final = "RateLimitError"
+
+
+class SyncRequestOverDeploymentTpmError(RequestOverDeploymentTpmError, ValueError):
+    """The sync ``Router``'s form, still a ``ValueError`` as the sync refusal was before."""
+
+
+def logged_class_name(error: BaseException) -> str:
+    logged: Final[object] = getattr(error, "logged_error_class", None)
+    return logged if isinstance(logged, str) else type(error).__name__
+
+
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
 class ContextWindowExceededError(BadRequestError):
     def __init__(
@@ -783,9 +809,9 @@ class ContentPolicyViolationError(BadRequestError):
 class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: object,
+        model: object,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -1068,7 +1094,7 @@ class OpenAIError(openai.OpenAIError):
 class UnsupportedParamsError(BadRequestError):
     def __init__(
         self,
-        message,
+        message: str,
         llm_provider: str | None = None,
         model: str | None = None,
         status_code: int = 400,
@@ -1077,17 +1103,17 @@ class UnsupportedParamsError(BadRequestError):
         max_retries: int | None = None,
         num_retries: int | None = None,
     ):
-        self.status_code = 400
-        self.message = f"litellm.UnsupportedParamsError: {message}"
-        self.model = model
-        self.llm_provider = llm_provider
-        self.litellm_debug_info = litellm_debug_info
-        response = response or httpx.Response(
-            status_code=self.status_code,
-            request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response,
+            litellm_debug_info=litellm_debug_info,
+            max_retries=max_retries,
+            num_retries=num_retries,
         )
-        self.max_retries = max_retries
-        self.num_retries = num_retries
+        self.message = f"litellm.UnsupportedParamsError: {message}"
+        self.args = (self.message,)
 
 
 LITELLM_EXCEPTION_TYPES: Final = [
@@ -1285,7 +1311,10 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.model = model
         self.llm_provider = llm_provider
         self.original_exception = original_exception
-        self.litellm_debug_info = litellm_debug_info
+        inherited_debug_info: Final[object] = getattr(original_exception, "litellm_debug_info", None)
+        self.litellm_debug_info = litellm_debug_info or (
+            inherited_debug_info if isinstance(inherited_debug_info, str) else None
+        )
         self.max_retries = max_retries
         self.num_retries = num_retries
         self.generated_content = generated_content
