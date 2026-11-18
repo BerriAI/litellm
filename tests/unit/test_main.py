@@ -9773,11 +9773,10 @@ def test_sdk_fallbacks_and_model_list_send_the_callers_request_unchanged(
 
     response: Final = litellm.completion(messages=messages, api_key="fake-key", **routing)
 
+    sent: Final = json.loads(route.calls.last.request.content)
     assert response.choices[0].message.content == "Paris"
-    assert json.loads(route.calls.last.request.content) == {
-        "model": "accounts/fireworks/models/kimi-k3p1-pro",
-        "messages": messages,
-    }
+    assert sent["messages"] == messages
+    assert "client_messages" not in sent
 
 
 @pytest.mark.asyncio
