@@ -8995,7 +8995,7 @@ def _spend_log_export_rows(rows: Sequence[Mapping[str, object]]) -> tuple[Mappin
         {
             key: value
             for key, value in row.items()
-            if key not in {"accounting_payload", "accounting_log_disabled", "accounting_delivery_id"}
+            if key not in {"accounting_payload", "accounting_log_disabled", "accounting_delivery_id", "lens_export"}
         }
         for row in rows
         if row.get("accounting_log_disabled") is not True
@@ -9529,7 +9529,9 @@ def _is_transient_spend_log_write_error(e: Exception) -> bool:
     )
 
 
-_ACCOUNTING_ONLY_KEYS: Final = frozenset({"request_id", "call_type", "accounting_payload", "accounting_delivery_id"})
+_ACCOUNTING_ONLY_KEYS: Final = frozenset(
+    {"request_id", "call_type", "accounting_payload", "accounting_delivery_id", "lens_export"}
+)
 
 
 def _carries_a_charge(row: Mapping[str, object]) -> bool:

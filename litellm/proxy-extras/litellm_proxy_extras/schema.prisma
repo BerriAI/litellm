@@ -2343,6 +2343,42 @@ model LiteLLM_SpendLogDelivery {
   @@index([request_id])
 }
 
+model LiteLLM_LensLedgerExport {
+  event_id        String    @id
+  request_id      String
+  event           Json
+  attempts        Int       @default(0)
+  next_attempt_at DateTime  @default(now())
+  lease_owner     String?
+  lease_until     DateTime?
+  last_error      String?
+  parked_at       DateTime?
+  created_at      DateTime  @default(now())
+
+  @@index([parked_at, next_attempt_at])
+}
+
+model LiteLLM_LensLedgerPayload {
+  event_id        String
+  field           String
+  team_id         String
+  api_key         String
+  event_time_ms   BigInt
+  content         String
+  bytes           Int
+  sha256          String
+  attempts        Int       @default(0)
+  next_attempt_at DateTime  @default(now())
+  lease_owner     String?
+  lease_until     DateTime?
+  last_error      String?
+  parked_at       DateTime?
+  created_at      DateTime  @default(now())
+
+  @@id([event_id, field])
+  @@index([parked_at, next_attempt_at])
+}
+
 model LiteLLM_SubscriptionAccountTable {
   subscription_account_id String @id @default(uuid())
   custom_llm_provider String

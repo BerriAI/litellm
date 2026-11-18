@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import Literal
 
 from pydantic import ConfigDict, Field
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -93,3 +94,50 @@ class SpendLogRecord(TypedDict):
     metadata: ReadOnly[str]
     messages: ReadOnly[str]
     response: ReadOnly[str]
+
+
+class LedgerCapabilities(LiteLLMBaseModel):
+    """What a Lens service advertises on /internal/status for gateway ledger export."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    versions: tuple[int, ...] = ()
+    payload_store: bool = False
+    inline_bytes: int = Field(default=1024 * 1024, ge=256)
+    preview_bytes: int = Field(default=1024 * 1024, ge=256)
+
+
+class LensStatus(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    ledger: LedgerCapabilities | None = None
+
+
+class LedgerResult(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    event_id: str
+    status: Literal["stored", "rejected"]
+    reason: str | None = None
+
+
+class LedgerResults(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    version: int
+    results: tuple[LedgerResult, ...]
+
+
+class LensPayload(TypedDict):
+    field: ReadOnly[Literal["messages", "response"]]
+    team_id: ReadOnly[str]
+    api_key: ReadOnly[str]
+    event_time_ms: ReadOnly[int]
+    content: ReadOnly[str]
+    bytes: ReadOnly[int]
+    sha256: ReadOnly[str]
+
+
+class LensExport(TypedDict):
+    record: ReadOnly[Mapping[str, object]]
+    payloads: ReadOnly[Sequence[LensPayload]]

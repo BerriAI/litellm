@@ -7,10 +7,12 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
-from collections.abc import Mapping, Sequence
+import hashlib
+import re
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import timedelta
 from importlib import import_module
-from itertools import groupby
+from itertools import chain, groupby
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
 from pydantic import TypeAdapter
@@ -21,6 +23,7 @@ from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
+from litellm.tracing.types import LensExport
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
@@ -149,7 +152,13 @@ def _accounting_payload(value: object) -> Mapping[str, object]:
     )
 
 
-_ACCOUNTING_ONLY_FIELDS: Final = frozenset({"accounting_payload", "accounting_log_disabled", "accounting_delivery_id"})
+_ACCOUNTING_ONLY_FIELDS: Final = frozenset(
+    {"accounting_payload", "accounting_log_disabled", "accounting_delivery_id", "lens_export"}
+)
+
+
+_LENS_EXPORT: Final = TypeAdapter(LensExport)
+_LENS_EVENT_ID: Final = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _settles_once(row: Mapping[str, object]) -> bool:
@@ -159,6 +168,48 @@ def _settles_once(row: Mapping[str, object]) -> bool:
 
 def _delivery_id(row: Mapping[str, object]) -> str:
     return str(row["accounting_delivery_id"]) if not _settles_once(row) else str(row["request_id"])
+
+
+def _lens_event_id(delivery_id: str) -> str:
+    """A delivery id Lens accepts as an object key segment; job cost rows reuse arbitrary request ids."""
+    if _LENS_EVENT_ID.fullmatch(delivery_id):
+        return delivery_id
+    return hashlib.sha256(delivery_id.encode()).hexdigest()
+
+
+def _lens_payload_rows(event_id: str, export: LensExport) -> Iterator[Mapping[str, object]]:
+    for body in export["payloads"]:
+        yield {"event_id": event_id, **body}
+
+
+async def _insert_lens_exports(transaction: LedgerTransaction, rows: Sequence[Mapping[str, object]]) -> None:
+    exports: Final = tuple(
+        (_lens_event_id(_delivery_id(row)), str(row["request_id"]), _LENS_EXPORT.validate_python(row["lens_export"]))
+        for row in rows
+    )
+    await transaction.execute_raw(
+        'INSERT INTO "LiteLLM_LensLedgerExport" (event_id, request_id, event) '
+        "SELECT event_id, request_id, event FROM jsonb_to_recordset($1::jsonb) "
+        "AS inputs(event_id text, request_id text, event jsonb) ON CONFLICT (event_id) DO NOTHING",
+        safe_dumps(
+            [
+                {"event_id": event_id, "request_id": request_id, "event": export["record"]}
+                for event_id, request_id, export in exports
+            ],
+            non_finite_as_null=True,
+        ),
+    )
+    payloads: Final = tuple(chain.from_iterable(_lens_payload_rows(event_id, export) for event_id, _, export in exports))
+    if payloads:
+        await transaction.execute_raw(
+            'INSERT INTO "LiteLLM_LensLedgerPayload" '
+            "(event_id, field, team_id, api_key, event_time_ms, content, bytes, sha256) "
+            "SELECT event_id, field, team_id, api_key, event_time_ms, content, bytes, sha256 "
+            "FROM jsonb_to_recordset($1::jsonb) AS inputs(event_id text, field text, team_id text, api_key text, "
+            "event_time_ms bigint, content text, bytes integer, sha256 text) "
+            "ON CONFLICT (event_id, field) DO NOTHING",
+            safe_dumps(list(payloads)),
+        )
 
 
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
@@ -215,6 +266,9 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
                 'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id = ANY($1::text[])', list(charged_by_legacy)
             )
         accepted: Final = accepted_ids - charged_by_legacy
+        exports: Final = tuple(row for row in rows if _delivery_id(row) in accepted and "lens_export" in row)
+        if exports:
+            await _insert_lens_exports(transaction, exports)
         local_rows: Final = tuple(
             {key: value for key, value in row.items() if key not in _ACCOUNTING_ONLY_FIELDS}
             for row in rows

@@ -250,6 +250,7 @@ def _cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool) -> M
             "call_type": payload["call_type"],
             "accounting_payload": payload["accounting_payload"],
             "accounting_log_disabled": True,
+            **({"lens_export": payload["lens_export"]} if "lens_export" in payload else {}),
         }
     return MappingProxyType({field: value for field, value in payload.items() if field in _COST_CLAIM_FIELDS})
 
@@ -821,6 +822,7 @@ class DBSpendUpdateWriter:
             customer_accounting_counters,
             disable_spend_logs,
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy proxy configuration is narrowed below
+            lens_ledger_capabilities,
             litellm_proxy_budget_name,
             prisma_client,
         )
@@ -918,6 +920,18 @@ class DBSpendUpdateWriter:
                 and payload["status"] == "failure"
                 and proxy_settings.get("disable_error_logs") is True
             )
+            if use_ledger and lens_ledger_capabilities is not None:
+                from litellm.tracing.ledger_record import LENS_EXPORT_KEY, lens_export, max_payload_bytes
+
+                payload[LENS_EXPORT_KEY] = lens_export(
+                    payload,
+                    kwargs or {},
+                    start_time=start_time,
+                    end_time=end_time,
+                    keep_content=keep_spend_logs,
+                    capabilities=lens_ledger_capabilities,
+                    payload_limit=max_payload_bytes(),
+                )
             if not await self._record_spend_log(
                 payload=payload,
                 prisma_client=prisma_client,

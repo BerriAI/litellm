@@ -247,6 +247,8 @@ if TYPE_CHECKING:
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+    from litellm.proxy.tracing_runtime import LedgerExportOptions
+    from litellm.tracing.types import LedgerCapabilities
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
     Span = _Span | Any
@@ -1673,6 +1675,21 @@ def register_prompt_cache_alerts(
 
 
 @asynccontextmanager
+def _lens_ledger_options(database: "PrismaClient | None") -> "LedgerExportOptions | None":
+    from litellm.proxy.tracing_runtime import LedgerExportOptions
+    from litellm.repositories.accounting_delivery_repository import LedgerDatabase
+    from litellm.tracing.ledger_export import ExportSettings
+
+    if database is None or general_settings.get("use_spend_logs_ledger", True) is False:
+        return None
+    return LedgerExportOptions(
+        enabled=general_settings.get("lens_ledger_export") is True,
+        database=cast(LedgerDatabase, database),  # cast-ok: PrismaClient.tx owns writer routing for the outbox
+        publish=_publish_lens_ledger,
+        settings=ExportSettings.from_env(),
+    )
+
+
 async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
         prisma_client, \
@@ -2055,6 +2072,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
+        ledger=_lens_ledger_options(prisma_client),
     ) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver, "database": database}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
@@ -3345,6 +3363,12 @@ _BATCH_WRITE_JITTER_MAX_SECONDS: Final = 5
 proxy_config_reload_interval_seconds = PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 litellm_master_key_hash = None
 disable_spend_logs = False
+lens_ledger_capabilities: "LedgerCapabilities | None" = None
+
+
+def _publish_lens_ledger(capabilities: "LedgerCapabilities | None") -> None:
+    global lens_ledger_capabilities  # noqa: PLW0603  # update_database reads the active Lens ledger contract per request
+    lens_ledger_capabilities = capabilities  # rebind-ok: published by the tracing lifespan
 litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()
 jwt_http_handler: Final = JwksHTTPHandler()
 ui_login_enabled: bool = True

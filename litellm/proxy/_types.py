@@ -2595,6 +2595,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
+    lens_ledger_export: bool = Field(
+        False,
+        description="Commit each accepted spend delivery to a durable Lens outbox and export it from there instead of the in-memory Lens callback. Needs the spend ledger, a database and a Lens service that supports ledger export. Set to false to return to the callback; records already committed keep draining.",
+    )
+
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
@@ -4004,6 +4009,7 @@ class SpendLogsMetadata(TypedDict):
 
 class SpendLogsPayload(TypedDict):
     accounting_payload: NotRequired[Mapping[str, object]]  # writable-ok: capture before buffering
+    lens_export: NotRequired[Mapping[str, object]]  # writable-ok: committed to the Lens outbox with its delivery
     accounting_log_disabled: NotRequired[bool]  # writable-ok: capture logging mode before buffering
     accounting_delivery_id: NotRequired[str]  # writable-ok: assigned once before buffering
     request_id: str
