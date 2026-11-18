@@ -6271,3 +6271,96 @@ async def test_a_row_without_a_caller_session_or_cost_adds_nothing(litellm_param
 
     assert await totals.read("hashed-key", "cc-session-1") is None
     assert await totals.read("hashed-key", "minted-1") is None
+
+
+def _spend_commit_client() -> tuple[MagicMock, MagicMock]:
+    mock_batcher: Final = MagicMock()
+    mock_batcher.litellm_verificationtoken = MagicMock()
+    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
+    mock_batcher.litellm_usertable = MagicMock()
+    mock_batcher.litellm_usertable.update_many = MagicMock()
+    mock_batcher.litellm_teamtable = MagicMock()
+    mock_batcher.litellm_teamtable.update_many = MagicMock()
+    mock_transaction: Final = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+    return mock_prisma_client, mock_batcher
+
+
+@pytest.mark.asyncio
+async def test_buffered_key_spend_is_applied_to_the_budget_period_that_incurred_it() -> None:
+    old_period: Final = "2026-11-01T00:00:00.000000"
+    new_period: Final = "2026-11-02T00:00:00.000000"
+    prisma, batcher = _spend_commit_client()
+    transactions: Final = {
+        "user_list_transactions": {"user-1": 2.0},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {"hashed-key": 5.0},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+        "baseline_spend": [
+            {
+                "field": "key_list_transactions",
+                "entity_id": "hashed-key",
+                "amount": 2.0,
+                "budget_reset_at": old_period,
+            },
+            {
+                "field": "key_list_transactions",
+                "entity_id": "hashed-key",
+                "amount": 3.0,
+                "budget_reset_at": new_period,
+            },
+            {
+                "field": "user_list_transactions",
+                "entity_id": "user-1",
+                "amount": 2.0,
+                "budget_reset_at": old_period,
+            },
+        ],
+    }
+
+    await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+        prisma_client=prisma,
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+        db_spend_update_transactions=transactions,
+    )
+
+    key_calls: Final = batcher.litellm_verificationtoken.update_many.call_args_list
+    assert [update.kwargs["where"] for update in key_calls] == [
+        {"token": "hashed-key"},
+        {"token": "hashed-key", "budget_reset_at": datetime.fromisoformat(old_period)},
+        {"token": "hashed-key"},
+        {"token": "hashed-key", "budget_reset_at": datetime.fromisoformat(new_period)},
+    ]
+    assert [update.kwargs["data"].get("spend") for update in key_calls] == [
+        None,
+        {"increment": 2.0},
+        None,
+        {"increment": 3.0},
+    ]
+    assert [update.kwargs["data"].get("total_spend") for update in key_calls] == [
+        {"increment": 2.0},
+        None,
+        {"increment": 3.0},
+        None,
+    ]
+    user_call: Final = batcher.litellm_usertable.update_many.call_args
+    assert user_call.kwargs["where"] == {
+        "user_id": "user-1",
+        "budget_reset_at": datetime.fromisoformat(old_period),
+    }
+    assert user_call.kwargs["data"] == {"spend": {"increment": 2.0}}

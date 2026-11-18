@@ -74,6 +74,61 @@ def test_the_same_window_in_a_new_period_is_charged_to_its_own_row() -> None:
     assert windows == [(_NOW.isoformat(), 0.25), (next_day.isoformat(), 0.5)]
 
 
+def test_baseline_entity_spend_from_different_budget_periods_stays_split() -> None:
+    old_period: Final = "2026-11-01T00:00:00.000000"
+    new_period: Final = "2026-11-02T00:00:00.000000"
+
+    def row(spend: float, period: str) -> Mapping[str, object]:
+        payload: Final = dict(_payload(spend))
+        metadata: Final = json.loads(str(payload["metadata"]))
+        metadata["accounting_budget_periods"] = [
+            {
+                "table": "LiteLLM_VerificationToken",
+                "entity_id": "key",
+                "budget_reset_at": period,
+            }
+        ]
+        return {**payload, "metadata": json.dumps(metadata)}
+
+    contributions: Final = project_deliveries(
+        (DeliveryProjection(row(2, old_period)), DeliveryProjection(row(3, new_period)))
+    )
+
+    assert sorted(_spend(contributions, "LiteLLM_VerificationToken")) == [2, 3]
+    transactions: Final = entity_transactions(contributions)
+    assert transactions["key_list_transactions"] == {"key": 5}
+    assert transactions["baseline_spend"] == [
+        {
+            "field": "key_list_transactions",
+            "entity_id": "key",
+            "amount": 2,
+            "budget_reset_at": old_period,
+        },
+        {
+            "field": "key_list_transactions",
+            "entity_id": "key",
+            "amount": 3,
+            "budget_reset_at": new_period,
+        },
+    ]
+
+
+def test_baseline_entity_spend_in_one_budget_period_still_sums() -> None:
+    period: Final = "2026-11-01T00:00:00.000000"
+
+    def row(spend: float) -> Mapping[str, object]:
+        payload: Final = dict(_payload(spend))
+        metadata: Final = json.loads(str(payload["metadata"]))
+        metadata["accounting_budget_periods"] = [
+            {"table": "LiteLLM_VerificationToken", "entity_id": "key", "budget_reset_at": period}
+        ]
+        return {**payload, "metadata": json.dumps(metadata)}
+
+    contributions: Final = project_deliveries((DeliveryProjection(row(2)), DeliveryProjection(row(3))))
+
+    assert _spend(contributions, "LiteLLM_VerificationToken") == (5,)
+
+
 def test_entity_transactions_key_memberships_the_way_the_writer_applies_them() -> None:
     transactions: Final = entity_transactions(project_deliveries((DeliveryProjection(_payload(0.25)),)))
 

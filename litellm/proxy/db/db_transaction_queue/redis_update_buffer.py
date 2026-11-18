@@ -6,10 +6,11 @@ This is to prevent deadlocks and improve reliability
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from functools import partial, reduce
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import TypeAdapter
@@ -35,6 +36,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     BaseDailySpendTransaction,
+    BaselineSpendCharge,
     DailyAgentSpendTransaction,
     DailyCustomerMemberSpendTransaction,
     DailyEndUserSpendTransaction,
@@ -46,6 +48,11 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
+)
+from litellm.proxy.db.baseline_spend_period import (
+    read_baseline_spend,
+    spend_queue_items,
+    summed_baseline_charges,
 )
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
@@ -94,6 +101,14 @@ _SpendTransactionField: TypeAlias = Literal[
     "customer_team_list_transactions",
     "customer_member_list_transactions",
 ]
+
+_BASELINE_QUEUE_ENTITIES: Final = MappingProxyType(
+    {
+        "key_list_transactions": Litellm_EntityType.KEY,
+        "user_list_transactions": Litellm_EntityType.USER,
+        "team_list_transactions": Litellm_EntityType.TEAM,
+    }
+)
 
 _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
     "user_list_transactions",
@@ -521,17 +536,24 @@ class RedisUpdateBuffer:
                     db_spend_update_transactions.get("customer_member_list_transactions"),
                 ),
             ]
+            charges: Final = read_baseline_spend(db_spend_update_transactions)
             for entity_type, entities in entity_entries:
                 if not entities:
                     continue
-                for entity_id, cost in entities.items():
-                    await spend_update_queue.add_update(
-                        SpendUpdateQueueItem(
-                            entity_type=entity_type,
-                            entity_id=entity_id,
-                            response_cost=cost,
-                        )
+                field: Final = next(
+                    (name for name, queued_type in _BASELINE_QUEUE_ENTITIES.items() if queued_type is entity_type),
+                    None,
+                )
+                items: Final = (
+                    spend_queue_items(entity_type, entities, charges, field)
+                    if field is not None
+                    else tuple(
+                        SpendUpdateQueueItem(entity_type=entity_type, entity_id=entity_id, response_cost=cost)
+                        for entity_id, cost in entities.items()
                     )
+                )
+                for item in items:
+                    await spend_update_queue.add_update(item)
 
         daily_pairs: Final[list[tuple[Mapping[str, BaseDailySpendTransaction] | None, DailySpendUpdateQueue]]] = [
             (daily_spend_update_transactions, daily_spend_update_queue),
@@ -1078,7 +1100,8 @@ class RedisUpdateBuffer:
         """
         Combines the list of transactions into a single DBSpendUpdateTransactions object
         """
-        return DBSpendUpdateTransactions(
+        charges: Final = _merged_baseline_spend(list_of_transactions)
+        combined: Final = DBSpendUpdateTransactions(
             user_list_transactions=_merged_entity_transactions(list_of_transactions, "user_list_transactions"),
             end_user_list_transactions=_merged_entity_transactions(list_of_transactions, "end_user_list_transactions"),
             key_list_transactions=_merged_entity_transactions(list_of_transactions, "key_list_transactions"),
@@ -1106,6 +1129,9 @@ class RedisUpdateBuffer:
                 list_of_transactions, "customer_member_list_transactions"
             ),
         )
+        if not charges:
+            return combined
+        return _with_baseline_spend(combined, charges)
 
     async def _emit_new_item_added_to_redis_buffer_event(
         self,
@@ -1123,3 +1149,38 @@ class RedisUpdateBuffer:
                 },
             )
         )
+
+
+def _with_baseline_spend(
+    combined: DBSpendUpdateTransactions, charges: Sequence[BaselineSpendCharge]
+) -> DBSpendUpdateTransactions:
+    return DBSpendUpdateTransactions(
+        user_list_transactions=combined["user_list_transactions"],
+        end_user_list_transactions=combined["end_user_list_transactions"],
+        key_list_transactions=combined["key_list_transactions"],
+        team_list_transactions=combined["team_list_transactions"],
+        team_member_list_transactions=combined["team_member_list_transactions"],
+        org_list_transactions=combined["org_list_transactions"],
+        org_member_list_transactions=combined["org_member_list_transactions"],
+        project_list_transactions=combined.get("project_list_transactions"),
+        tag_list_transactions=combined["tag_list_transactions"],
+        agent_list_transactions=combined["agent_list_transactions"],
+        model_access_group_list_transactions=combined.get("model_access_group_list_transactions"),
+        customer_org_list_transactions=combined.get("customer_org_list_transactions"),
+        customer_team_list_transactions=combined.get("customer_team_list_transactions"),
+        customer_member_list_transactions=combined.get("customer_member_list_transactions"),
+        baseline_spend=list(charges),
+    )
+
+
+def _merged_baseline_spend(
+    list_of_transactions: Sequence[DBSpendUpdateTransactions],
+) -> tuple[BaselineSpendCharge, ...]:
+    return summed_baseline_charges(tuple(_baseline_charges(list_of_transactions)))
+
+
+def _baseline_charges(
+    list_of_transactions: Sequence[DBSpendUpdateTransactions],
+) -> Iterator[BaselineSpendCharge]:
+    for transaction in list_of_transactions:
+        yield from read_baseline_spend(transaction)

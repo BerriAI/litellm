@@ -360,3 +360,51 @@ async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
     )
     assert aggregated["user_list_transactions"]["user1"] == 200 * 0.5
     assert aggregated["key_list_transactions"]["key1"] == 300 * 1.0
+
+
+@pytest.mark.asyncio
+async def test_spend_queue_keeps_charges_from_different_budget_periods_apart(spend_queue: SpendUpdateQueue) -> None:
+    old_period: Final = "2026-11-01T00:00:00.000000"
+    new_period: Final = "2026-11-02T00:00:00.000000"
+    await spend_queue.add_update(
+        SpendUpdateQueueItem(
+            entity_type=Litellm_EntityType.KEY,
+            entity_id="key-1",
+            response_cost=2,
+            budget_reset_at=old_period,
+        )
+    )
+    await spend_queue.add_update(
+        SpendUpdateQueueItem(
+            entity_type=Litellm_EntityType.KEY,
+            entity_id="key-1",
+            response_cost=3,
+            budget_reset_at=new_period,
+        )
+    )
+    await spend_queue.add_update(
+        SpendUpdateQueueItem(
+            entity_type=Litellm_EntityType.KEY,
+            entity_id="key-1",
+            response_cost=1,
+            budget_reset_at=old_period,
+        )
+    )
+
+    aggregated: Final = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    assert aggregated["key_list_transactions"] == {"key-1": 6}
+    assert aggregated["baseline_spend"] == [
+        {
+            "field": "key_list_transactions",
+            "entity_id": "key-1",
+            "amount": 3,
+            "budget_reset_at": old_period,
+        },
+        {
+            "field": "key_list_transactions",
+            "entity_id": "key-1",
+            "amount": 3,
+            "budget_reset_at": new_period,
+        },
+    ]

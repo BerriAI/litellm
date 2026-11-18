@@ -8,6 +8,10 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     SpendUpdateQueueItem,
 )
+from litellm.proxy.db.baseline_spend_period import (
+    baseline_charges_from_queue_items,
+    spend_queue_group_key,
+)
 from litellm.proxy.db.db_transaction_queue.base_update_queue import (
     BaseUpdateQueue,
     service_logger_obj,
@@ -66,9 +70,9 @@ class SpendUpdateQueue(BaseUpdateQueue):
         This is used to reduce the size of the in-memory queue by aggregating updates by entity type + id
 
 
-        Aggregate updates by entity type + id
+        Aggregate updates by entity type, id, and originating budget period.
 
-        eg.
+        Two charges for one entity in different periods stay separate. eg.
 
         ```
         [
@@ -113,7 +117,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         Value=SpendUpdateQueueItem
         """
         for update in updates:
-            _key = f"{update.get('entity_type')}:{update.get('entity_id')}"
+            _key = spend_queue_group_key(update)
             if _key not in _in_memory_map:
                 # avoid mutating caller-owned dicts while aggregating queue entries
                 _in_memory_map[_key] = update.copy()
@@ -231,6 +235,9 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
             transactions_dict[entity_id] += response_cost or 0
 
+        charges: Final = baseline_charges_from_queue_items(updates)
+        if charges:
+            db_spend_update_transactions["baseline_spend"] = list(charges)
         return db_spend_update_transactions
 
     async def _emit_new_item_added_to_queue_event(

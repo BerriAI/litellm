@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import chain
@@ -15,6 +15,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
 from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KEY, CustomerUsageAttribution
+from litellm.proxy.db.baseline_spend_period import BASELINE_SPEND_FIELDS, canonical_budget_reset_at
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.model_usage_rollup import date_from_start_time, utc_date_from_start_time
@@ -71,6 +72,37 @@ def _spend(table: str, key: tuple[tuple[str, str], ...], spend: float) -> Contri
     return Contribution(table, key, (("spend", spend),))
 
 
+def _baseline_periods(metadata: Mapping[str, object]) -> Mapping[tuple[str, str], str]:
+    raw: Final = metadata.get("accounting_budget_periods")
+    if not isinstance(raw, (list, tuple)):
+        return MappingProxyType({})
+    return MappingProxyType(dict(_baseline_period_pairs(raw)))
+
+
+def _baseline_period_pairs(raw: Sequence[object]) -> Iterator[tuple[tuple[str, str], str]]:
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        table: Final = item.get("table")
+        entity_id: Final = item.get("entity_id")
+        period: Final = canonical_budget_reset_at(item.get("budget_reset_at"))
+        if (
+            isinstance(table, str)
+            and table in BASELINE_SPEND_FIELDS
+            and isinstance(entity_id, str)
+            and period is not None
+        ):
+            yield (table, entity_id), period
+
+
+def _entity_spend(
+    table: str, key: tuple[tuple[str, str], ...], spend: float, budget_reset_at: str | None
+) -> Contribution:
+    if budget_reset_at is None:
+        return _spend(table, key, spend)
+    return Contribution(table, key, (("spend", spend),), (("budget_reset_at", budget_reset_at),))
+
+
 _CUSTOMER_ID_KEYS: Final = ("customer_org_id", "customer_team_id", "customer_member_id")
 
 
@@ -111,9 +143,10 @@ def _entity_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
         ("LiteLLM_ProjectTable", "project_id", entities.get("project_id")),
     )
     groups: Final = _STRINGS.validate_python(metadata.get("accounting_model_access_groups", ()))
+    periods: Final = _baseline_periods(metadata)
     return (
         *(
-            _spend(table, ((column, identity),), spend)
+            _entity_spend(table, ((column, identity),), spend, periods.get((table, identity)))
             for table, column, identity in identities
             if isinstance(identity, str)
         ),

@@ -996,3 +996,53 @@ async def test_buffer_without_redis_installed_skips_redis_work_when_no_cache_is_
     await buffer.store_tool_discoveries_in_redis(queue)
 
     assert queue.flush() == [{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]
+
+
+def test_redis_spend_buffer_keeps_each_budget_period_when_batches_are_combined() -> None:
+    old_period: Final = "2026-11-01T00:00:00.000000"
+    new_period: Final = "2026-11-02T00:00:00.000000"
+
+    def batch(amount: float, period: str | None) -> dict[str, object]:
+        transactions: dict[str, object] = {
+            "user_list_transactions": {},
+            "end_user_list_transactions": {},
+            "key_list_transactions": {"key-1": amount},
+            "team_list_transactions": {},
+            "team_member_list_transactions": {},
+            "org_list_transactions": {},
+            "tag_list_transactions": {},
+            "agent_list_transactions": {},
+        }
+        if period is not None:
+            transactions["baseline_spend"] = [
+                {
+                    "field": "key_list_transactions",
+                    "entity_id": "key-1",
+                    "amount": amount,
+                    "budget_reset_at": period,
+                }
+            ]
+        return transactions
+
+    combined: Final = RedisUpdateBuffer._combine_list_of_transactions(
+        [batch(2, old_period), batch(3, new_period), batch(4, None)]
+    )
+
+    assert combined["key_list_transactions"] == {"key-1": 9}
+    assert combined["baseline_spend"] == [
+        {
+            "field": "key_list_transactions",
+            "entity_id": "key-1",
+            "amount": 2,
+            "budget_reset_at": old_period,
+        },
+        {
+            "field": "key_list_transactions",
+            "entity_id": "key-1",
+            "amount": 3,
+            "budget_reset_at": new_period,
+        },
+    ]
+    decoded: Final = json.loads(safe_dumps(combined))
+    assert decoded["baseline_spend"] == combined["baseline_spend"]
+    assert decoded["key_list_transactions"] == {"key-1": 9}

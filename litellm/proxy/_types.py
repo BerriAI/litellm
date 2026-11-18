@@ -5500,6 +5500,20 @@ class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
     customer_org_id: ReadOnly[str]
 
 
+class BaselineSpendCharge(TypedDict):
+    """One buffered baseline spend charge, kept apart from the summed float map.
+
+    ``budget_reset_at`` is the canonical naive-UTC timestamp of the window the
+    request was priced in. The float maps stay summed by entity id so a reader
+    from the previous release still sees a number.
+    """
+
+    field: ReadOnly[str]
+    entity_id: ReadOnly[str]
+    amount: ReadOnly[float]
+    budget_reset_at: ReadOnly[str]
+
+
 class DBSpendUpdateTransactions(TypedDict):
     """
     Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database
@@ -5519,12 +5533,14 @@ class DBSpendUpdateTransactions(TypedDict):
     customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    baseline_spend: NotRequired[ReadOnly[Sequence[BaselineSpendCharge]]]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):
     entity_type: Litellm_EntityType
     entity_id: str
     response_cost: float | None
+    budget_reset_at: ReadOnly[str | None]
 
 
 class ToolDiscoveryQueueItem(TypedDict, total=False):

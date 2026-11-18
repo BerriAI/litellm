@@ -8,6 +8,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.db.baseline_spend_period import AccountingBudgetPeriod, accounting_budget_periods
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
 from litellm.proxy.spend_tracking.savings import SavingsSpend, compute_savings_spend, marks_gateway_injection
@@ -17,6 +18,10 @@ if TYPE_CHECKING:
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _JSON_SAFE_INTEGER: Final = 2**53 - 1
+
+
+def _text_or_none(value: str | None) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
@@ -72,9 +77,20 @@ def build_accounting_payload(
     model_access_groups: Sequence[str],
     windows: Sequence[Mapping[str, object]],
     router: "Callable[[], Router | None]",
+    budget_periods: Sequence[AccountingBudgetPeriod] | None = None,
 ) -> Mapping[str, object]:
     metadata: Final = _FIELDS.validate_json(payload["metadata"])
     savings: Final = _savings_or_zero(payload, metadata, router)
+    periods: Final = (
+        tuple(budget_periods)
+        if budget_periods is not None
+        else accounting_budget_periods(
+            api_key=_text_or_none(entities.get("api_key")),
+            user_id=_text_or_none(entities.get("user")),
+            team_id=_text_or_none(entities.get("team_id")),
+            metadata=metadata,
+        )
+    )
     accounting_metadata: Final = {
         **{key: _accounting_metadata_field(key, value) for key, value in metadata.items() if key in _METADATA_FIELDS},
         "accounting_entities": entities,
@@ -83,6 +99,7 @@ def build_accounting_payload(
         "accounting_customer_margin_spend": customer_margin_share_of_spend(metadata, payload["spend"]),
         "accounting_model_access_groups": model_access_groups,
         "accounting_windows": windows,
+        "accounting_budget_periods": [dict(period) for period in periods],
     }
     return _FIELDS.validate_python(
         safe_json_structure(

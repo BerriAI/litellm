@@ -748,6 +748,41 @@ async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(stat
     assert legacy["failed_requests"] == int(status == "failure")
 
 
+def test_accounting_payload_keeps_the_budget_period_the_request_was_priced_in() -> None:
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "period-model",
+            "custom_llm_provider": "openai",
+            "call_type": "acompletion",
+            "litellm_call_id": "period-request",
+            "litellm_params": {"metadata": {"user_api_key": "hashed-key", "status": "success"}},
+        },
+        response_obj=ModelResponse(
+            id="period-request", model="period-model", usage=Usage(prompt_tokens=1, completion_tokens=1)
+        ),
+        start_time=_NOW,
+        end_time=_NOW,
+    )
+    metadata: Final = json.loads(payload["metadata"])
+    metadata["user_api_key_budget_reset_at"] = "2026-11-01T00:00:00+00:00"
+    metadata["user_api_key_team_budget_reset_at"] = "2026-12-01T00:00:00Z"
+    accounting: Final = build_accounting_payload(
+        {**payload, "spend": 1.5, "metadata": json.dumps(metadata)},
+        entities={"api_key": "hashed-key", "user": "user-1", "team_id": "team-1"},
+        model_access_groups=(),
+        windows=(),
+        router=lambda: None,
+    )
+    recorded: Final = accounting["metadata"]["accounting_budget_periods"]
+    assert {(item["table"], item["entity_id"], item["budget_reset_at"]) for item in recorded} == {
+        ("LiteLLM_VerificationToken", "hashed-key", "2026-11-01T00:00:00.000000"),
+        ("LiteLLM_TeamTable", "team-1", "2026-12-01T00:00:00.000000"),
+    }
+    key_charge: Final = next(item for item in project(accounting) if item.table == "LiteLLM_VerificationToken")
+    assert dict(key_charge.values)["budget_reset_at"] == "2026-11-01T00:00:00.000000"
+    assert dict(key_charge.increments)["spend"] == 1.5
+
+
 def test_receipts_without_customer_identity_do_not_create_customer_daily_rows() -> None:
     row: Final = {
         "startTime": _NOW,

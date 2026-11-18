@@ -59,6 +59,14 @@ from litellm.proxy._types import (
     ToolDiscoveryQueueItem,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
+from litellm.proxy.db.baseline_spend_period import (
+    AccountingBudgetPeriod,
+    accounting_budget_periods,
+    applied_baseline_spend,
+    budget_reset_at_for_where,
+    read_baseline_spend,
+    request_budget_metadata,
+)
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
@@ -256,6 +264,53 @@ def _cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool) -> M
 
 class _SpendIncrement(TypedDict):
     increment: ReadOnly[float]
+
+
+def _period_for(periods: Sequence[AccountingBudgetPeriod], table: str) -> str | None:
+    return next((period["budget_reset_at"] for period in periods if period.get("table") == table), None)
+
+
+def _spend_queue_item(
+    entity_type: Litellm_EntityType,
+    entity_id: str,
+    response_cost: float | None,
+    budget_reset_at: str | None,
+) -> SpendUpdateQueueItem:
+    if budget_reset_at is None:
+        return SpendUpdateQueueItem(entity_type=entity_type, entity_id=entity_id, response_cost=response_cost)
+    return SpendUpdateQueueItem(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        response_cost=response_cost,
+        budget_reset_at=budget_reset_at,
+    )
+
+
+def _key_spend_writes(
+    entity_id: str, amount: float, budget_reset_at: str | None, last_active: datetime
+) -> tuple[tuple[Mapping[str, object], Mapping[str, object]], ...]:
+    increment: Final[_SpendIncrement] = {"increment": amount}
+    if budget_reset_at is None:
+        return (
+            (
+                {"token": entity_id},
+                {"spend": increment, "total_spend": increment, "last_active": last_active},
+            ),
+        )
+    return (
+        ({"token": entity_id}, {"total_spend": increment, "last_active": last_active}),
+        (
+            {"token": entity_id, "budget_reset_at": budget_reset_at_for_where(budget_reset_at)},
+            {"spend": increment},
+        ),
+    )
+
+
+def _windowed_identity_where(identity_field: str, entity_id: str, budget_reset_at: str | None) -> Mapping[str, object]:
+    identity: Final = {identity_field: entity_id}
+    if budget_reset_at is None:
+        return identity
+    return {**identity, "budget_reset_at": budget_reset_at_for_where(budget_reset_at)}
 
 
 class _MemberSpendRow(TypedDict):
@@ -878,6 +933,16 @@ class DBSpendUpdateWriter:
             if team_id:
                 payload["team_id"] = team_id
 
+            budget_metadata: Final = request_budget_metadata(kwargs)
+            recorded_api_key: Final = _persistable_api_key(
+                hashed_token if isinstance(hashed_token, str) else None, payload.get("api_key") or ""
+            )
+            budget_periods: Final = accounting_budget_periods(
+                api_key=recorded_api_key,
+                user_id=user_id,
+                team_id=team_id,
+                metadata=budget_metadata,
+            )
             if use_ledger:
                 from litellm.accounting.snapshot import build_accounting_payload
 
@@ -886,7 +951,7 @@ class DBSpendUpdateWriter:
                 payload["accounting_payload"] = build_accounting_payload(
                     payload,
                     entities={
-                        "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
+                        "api_key": recorded_api_key,
                         "user": user_id,
                         "end_user": end_user_id,
                         "team_id": team_id,
@@ -899,6 +964,7 @@ class DBSpendUpdateWriter:
                     model_access_groups=debitable_model_access_groups(
                         get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                     ),
+                    budget_periods=budget_periods,
                     windows=await accounting_window_keys(
                         hashed_token,
                         team_id,
@@ -962,6 +1028,9 @@ class DBSpendUpdateWriter:
                         payload=payload,
                         request_model_access_groups=get_request_model_access_groups(request_fields),
                         customer_hierarchy=customer_hierarchy,
+                        key_budget_reset_at=_period_for(budget_periods, "LiteLLM_VerificationToken"),
+                        user_budget_reset_at=_period_for(budget_periods, "LiteLLM_UserTable"),
+                        team_budget_reset_at=_period_for(budget_periods, "LiteLLM_TeamTable"),
                     ),
                     task_name="spend rollups",
                 )
@@ -1429,6 +1498,9 @@ class DBSpendUpdateWriter:
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
         customer_hierarchy: CustomerHierarchyIds | None = None,
+        key_budget_reset_at: str | None = None,
+        user_budget_reset_at: str | None = None,
+        team_budget_reset_at: str | None = None,
     ):
         """
         Runs every spend-update helper for one request. Each helper goes through
@@ -1445,18 +1517,28 @@ class DBSpendUpdateWriter:
                 prisma_client=prisma_client,
                 litellm_proxy_budget_name=litellm_proxy_budget_name,
                 end_user_id=end_user_id,
+                budget_reset_at=user_budget_reset_at,
             ),
             payload=payload_copy,
         )
         await self._run_spend_update_step(
             "_update_key_db",
-            self._update_key_db(response_cost=response_cost, hashed_token=hashed_token, prisma_client=prisma_client),
+            self._update_key_db(
+                response_cost=response_cost,
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+                budget_reset_at=key_budget_reset_at,
+            ),
             payload=payload_copy,
         )
         await self._run_spend_update_step(
             "_update_team_db",
             self._update_team_db(
-                response_cost=response_cost, team_id=team_id, user_id=user_id, prisma_client=prisma_client
+                response_cost=response_cost,
+                team_id=team_id,
+                user_id=user_id,
+                prisma_client=prisma_client,
+                budget_reset_at=team_budget_reset_at,
             ),
             payload=payload_copy,
         )
@@ -1558,17 +1640,14 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         hashed_token: str | None,
         prisma_client: PrismaClient | None,
+        budget_reset_at: str | None = None,
     ):
         try:
             if hashed_token is None or prisma_client is None:
                 return
 
             await self.spend_update_queue.add_update(
-                update=SpendUpdateQueueItem(
-                    entity_type=Litellm_EntityType.KEY,
-                    entity_id=hashed_token,
-                    response_cost=response_cost,
-                )
+                update=_spend_queue_item(Litellm_EntityType.KEY, hashed_token, response_cost, budget_reset_at)
             )
         except Exception as e:
             spend_log_error("Update Key DB Call failed to execute - %s", str(e), exc=e)
@@ -1581,6 +1660,7 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient | None,
         litellm_proxy_budget_name: str | None,
         end_user_id: str | None = None,
+        budget_reset_at: str | None = None,
     ):
         """
         - Update that user's row
@@ -1595,10 +1675,11 @@ class DBSpendUpdateWriter:
                 for _id in user_ids:
                     if _id is not None:
                         await self.spend_update_queue.add_update(
-                            update=SpendUpdateQueueItem(
-                                entity_type=Litellm_EntityType.USER,
-                                entity_id=_id,
-                                response_cost=response_cost,
+                            update=_spend_queue_item(
+                                Litellm_EntityType.USER,
+                                _id,
+                                response_cost,
+                                budget_reset_at if _id == user_id else None,
                             )
                         )
 
@@ -1627,6 +1708,7 @@ class DBSpendUpdateWriter:
         team_id: str | None,
         user_id: str | None,
         prisma_client: PrismaClient | None,
+        budget_reset_at: str | None = None,
     ):
         try:
             if team_id is None or prisma_client is None:
@@ -1636,11 +1718,7 @@ class DBSpendUpdateWriter:
                 return
 
             await self.spend_update_queue.add_update(
-                update=SpendUpdateQueueItem(
-                    entity_type=Litellm_EntityType.TEAM,
-                    entity_id=team_id,
-                    response_cost=response_cost,
-                )
+                update=_spend_queue_item(Litellm_EntityType.TEAM, team_id, response_cost, budget_reset_at)
             )
 
             try:
@@ -2605,13 +2683,17 @@ class DBSpendUpdateWriter:
                     ) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
-                            for team_id, response_cost in sorted(team_list_transactions.items()):
+                            for item in applied_baseline_spend(
+                                team_list_transactions,
+                                read_baseline_spend(db_spend_update_transactions),
+                                "team_list_transactions",
+                            ):
                                 verbose_proxy_logger.debug(
-                                    "Updating spend for team id=%s by %s", team_id, response_cost
+                                    "Updating spend for team id=%s by %s", item.entity_id, item.amount
                                 )
                                 batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"team_id": team_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    where=_windowed_identity_where("team_id", item.entity_id, item.budget_reset_at),
+                                    data={"spend": {"increment": item.amount}},
                                 )
                     break
                 except Exception as e:
@@ -2641,10 +2723,14 @@ class DBSpendUpdateWriter:
                             # Sort by ID for consistent lock ordering across pods to prevent deadlocks.
                             # batch_() issues statements sequentially within the tx, so iteration
                             # order = lock acquisition order.
-                            for user_id, response_cost in sorted(user_list_transactions.items()):
+                            for item in applied_baseline_spend(
+                                user_list_transactions,
+                                read_baseline_spend(db_spend_update_transactions),
+                                "user_list_transactions",
+                            ):
                                 batcher.litellm_usertable.update_many(
-                                    where={"user_id": user_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    where=_windowed_identity_where("user_id", item.entity_id, item.budget_reset_at),
+                                    data={"spend": {"increment": item.amount}},
                                 )
                     break
                 except Exception as e:
@@ -2735,16 +2821,21 @@ class DBSpendUpdateWriter:
                     ) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by token for consistent lock ordering across pods to prevent deadlocks.
-                            for token, response_cost in sorted(key_list_transactions.items()):
-                                spend_increment: _SpendIncrement = {"increment": response_cost}
-                                batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"token": token},
-                                    data={
-                                        "spend": spend_increment,
-                                        "total_spend": spend_increment,
-                                        "last_active": datetime.now(timezone.utc),
-                                    },
-                                )
+                            for item in applied_baseline_spend(
+                                key_list_transactions,
+                                read_baseline_spend(db_spend_update_transactions),
+                                "key_list_transactions",
+                            ):
+                                for where, data in _key_spend_writes(
+                                    item.entity_id,
+                                    item.amount,
+                                    item.budget_reset_at,
+                                    datetime.now(timezone.utc),
+                                ):
+                                    batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                        where=where,
+                                        data=data,
+                                    )
                     break
                 except Exception as e:
                     if outer_transaction is not None:

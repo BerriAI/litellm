@@ -1,20 +1,20 @@
-from collections.abc import Iterable
+import math
+from collections.abc import Iterable, Iterator, Sequence
 from itertools import chain, groupby
 from typing import TYPE_CHECKING, Final
 from urllib.parse import quote
 
 from litellm.accounting.projection import Contribution, project
+from litellm.proxy._types import BaselineSpendCharge
+from litellm.proxy.db.baseline_spend_period import BASELINE_SPEND_FIELDS, summed_baseline_charges
 from litellm.repositories.accounting_delivery_repository import DeliveryProjection
 
 
-def _destination(contribution: Contribution) -> tuple[str, tuple[tuple[str, str], ...], str]:
-    return (
-        contribution.table,
-        contribution.key,
-        (dict(contribution.values).get("window_start") or "")
-        if contribution.table == "LiteLLM_BudgetWindowSpend"
-        else "",
-    )
+def _destination(contribution: Contribution) -> tuple[str, tuple[tuple[str, str], ...], str, str]:
+    values: Final = dict(contribution.values)
+    window: Final = values.get("window_start") or "" if contribution.table == "LiteLLM_BudgetWindowSpend" else ""
+    period: Final = values.get("budget_reset_at") or "" if contribution.table in BASELINE_SPEND_FIELDS else ""
+    return (contribution.table, contribution.key, window, period)
 
 
 def _sum(contributions: tuple[Contribution, ...]) -> Contribution:
@@ -42,7 +42,8 @@ def project_deliveries(deliveries: Iterable[DeliveryProjection]) -> tuple[Contri
 
 
 def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpdateTransactions":
-    return {
+    charges: Final = _baseline_charges(contributions)
+    transactions: Final = {
         "user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_UserTable")),
         "end_user_list_transactions": dict(_entity_totals(contributions, "LiteLLM_EndUserTable")),
         "key_list_transactions": dict(_entity_totals(contributions, "LiteLLM_VerificationToken")),
@@ -59,13 +60,47 @@ def entity_transactions(contributions: tuple[Contribution, ...]) -> "DBSpendUpda
         "customer_org_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerOrganizationTable")),
         "customer_team_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerTeamTable")),
         "customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_CustomerMemberTable")),
+        **({"baseline_spend": list(charges)} if charges else {}),
     }
+    return transactions
 
 
 def _entity_totals(contributions: tuple[Contribution, ...], table: str) -> tuple[tuple[str, float], ...]:
-    return tuple(
-        (_entity_key(item), float(dict(item.increments)["spend"])) for item in contributions if item.table == table
+    """Sum every charge for an entity, including charges that belong to different budget periods."""
+    return _summed_by_entity(
+        tuple(
+            (_entity_key(item), float(dict(item.increments)["spend"])) for item in contributions if item.table == table
+        )
     )
+
+
+def _summed_by_entity(rows: Sequence[tuple[str, float]]) -> tuple[tuple[str, float], ...]:
+    ordered: Final = tuple(sorted(rows, key=lambda row: row[0]))
+    return tuple(
+        _summed_entity(entity_id, tuple(group)) for entity_id, group in groupby(ordered, key=lambda row: row[0])
+    )
+
+
+def _summed_entity(entity_id: str, rows: Sequence[tuple[str, float]]) -> tuple[str, float]:
+    return entity_id, math.fsum(amount for _, amount in rows)
+
+
+def _baseline_charges(contributions: Sequence[Contribution]) -> tuple[BaselineSpendCharge, ...]:
+    return summed_baseline_charges(tuple(_baseline_charge_rows(contributions)))
+
+
+def _baseline_charge_rows(contributions: Sequence[Contribution]) -> Iterator[BaselineSpendCharge]:
+    for item in contributions:
+        field: Final = BASELINE_SPEND_FIELDS.get(item.table)
+        period: Final = dict(item.values).get("budget_reset_at")
+        if field is None or not isinstance(period, str) or not period:
+            continue
+        yield BaselineSpendCharge(
+            field=field,
+            entity_id=_entity_key(item),
+            amount=float(dict(item.increments)["spend"]),
+            budget_reset_at=period,
+        )
 
 
 def _entity_key(item: Contribution) -> str:
