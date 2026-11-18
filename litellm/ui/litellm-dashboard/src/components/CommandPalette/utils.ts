@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { labelText, routeOf, sectionText, type MenuGroup } from "@/components/leftnav";
+import { labelText, routeOf, sectionText, type MenuGroup } from "@/components/LeftNav";
 import { keepTerminology, type Term } from "@/lib/terminology";
 import i18n from "@/i18n/i18n";
 

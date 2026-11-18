@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use litellm_redis_types::Ignored;
 use serde_json::Value;
 
@@ -34,25 +36,57 @@ pub enum FromUrl {
     Rediss,
 }
 
+/// How `_merge_redis_kwargs` reads a fallback: `get_secret` turns `true` and `false` into a bool, and
+/// `get_secret_str` treats that bool as unset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Read {
+    Secret,
+    SecretStr,
+}
+
+/// The condition `_merge_redis_kwargs` reads a fallback under, so a secret Python never asks for is never
+/// filled in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum When {
+    Always,
+    /// No `credential_provider` is set.
+    WithoutProvider,
+    /// Azure AD is on and GCP IAM is not.
+    AzureAd,
+    /// AWS IAM is on and neither GCP IAM nor Azure AD is.
+    AwsIam,
+}
+
+/// The names `_merge_redis_kwargs` reads when the merged kwargs lack the setting.
+#[derive(Clone, Copy, Debug)]
+pub struct Fallback {
+    pub names: &'static [&'static str],
+    pub read: Read,
+    pub when: When,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Setting {
-    pub kwarg: &'static str,
     pub handling: Handling,
     pub from_url: FromUrl,
     /// `_get_redis_env_kwarg_mapping` reads it as `REDIS_<KWARG>`.
     pub environment: bool,
-    /// The names `_merge_redis_kwargs` reads with `get_secret` when the merged kwargs lack the setting.
-    pub fallback: &'static [&'static str],
+    pub fallback: Option<Fallback>,
+    /// It names where Redis is, so a configured one hides the environment's url.
+    pub target: bool,
+    /// `Cache` names it as a parameter, so a null `cache_params` value is dropped.
+    pub named_by_cache: bool,
 }
 
 impl Setting {
-    const fn new(kwarg: &'static str, handling: Handling) -> Self {
+    const fn new(handling: Handling) -> Self {
         Self {
-            kwarg,
             handling,
             from_url: FromUrl::No,
             environment: false,
-            fallback: &[],
+            fallback: None,
+            target: false,
+            named_by_cache: false,
         }
     }
 
@@ -67,13 +101,25 @@ impl Setting {
         Self { from_url, ..self }
     }
 
-    const fn or_secrets(self, fallback: &'static [&'static str]) -> Self {
-        Self { fallback, ..self }
+    const fn or_secrets(self, when: When, read: Read, names: &'static [&'static str]) -> Self {
+        Self {
+            fallback: Some(Fallback { names, read, when }),
+            ..self
+        }
     }
 
-    pub fn environment_name(&self) -> Option<String> {
-        self.environment
-            .then(|| format!("REDIS_{}", self.kwarg.to_ascii_uppercase()))
+    const fn target(self) -> Self {
+        Self {
+            target: true,
+            ..self
+        }
+    }
+
+    const fn named_by_cache(self) -> Self {
+        Self {
+            named_by_cache: true,
+            ..self
+        }
     }
 
     pub fn is_read(&self) -> bool {
@@ -91,36 +137,26 @@ impl Setting {
     }
 }
 
-const fn read(kwarg: &'static str) -> Setting {
-    Setting::new(kwarg, Handling::Read)
+const fn read() -> Setting {
+    Setting::new(Handling::Read)
 }
 
-const fn warn(kwarg: &'static str, consequence: &'static str) -> Setting {
-    Setting::new(
-        kwarg,
-        Handling::Warn {
-            consequence,
-            met: None,
-        },
-    )
+const fn warn(consequence: &'static str) -> Setting {
+    Setting::new(Handling::Warn {
+        consequence,
+        met: None,
+    })
 }
 
-const fn warn_unless(
-    kwarg: &'static str,
-    consequence: &'static str,
-    met: fn(&Value) -> bool,
-) -> Setting {
-    Setting::new(
-        kwarg,
-        Handling::Warn {
-            consequence,
-            met: Some(met),
-        },
-    )
+const fn warn_unless(consequence: &'static str, met: fn(&Value) -> bool) -> Setting {
+    Setting::new(Handling::Warn {
+        consequence,
+        met: Some(met),
+    })
 }
 
-const fn reject(kwarg: &'static str, check: &'static str, asked: Asked) -> Setting {
-    Setting::new(kwarg, Handling::Reject { check, asked })
+const fn reject(check: &'static str, asked: Asked) -> Setting {
+    Setting::new(Handling::Reject { check, asked })
 }
 
 const NO_EQUIVALENT: &str = "the Rust client has no equivalent";
@@ -132,122 +168,281 @@ const RUSTLS: &str = "rustls negotiates TLS 1.2+ with its own ECDHE AEAD suites"
 const REVOCATION: &str = "OCSP revocation checks";
 const OCSP: &str = "it only configures ssl_validate_ocsp, which the Rust client refuses when set";
 const VERIFY_FLAGS: &str = "X.509 verify flags such as CRL checking";
+const NO_CONNECTION_CAP: &str = "the Rust client has no connection cap";
+const NOT_CALLABLE: &str =
+    "the Python object is not callable from Rust, so static username and password are used";
 
-/// Every Redis kwarg redis-py or `litellm/_redis.py` accepts, one row each. `redis-py-kwargs.json` records which
-/// redis-py versions and `REDIS_*` names accept them, and `tests/catalog.rs` keeps the two in step.
-pub const SETTINGS: &[Setting] = &[
-    warn("address_remap", OWN_CLUSTER),
-    warn("auto_close_connection_pool", OWN_STACK),
-    read("aws_iam_auth").env(),
-    read("aws_iam_cache_name").env(),
-    read("aws_iam_region")
-        .env()
-        .or_secrets(&["AWS_REGION", "AWS_DEFAULT_REGION"]),
-    read("aws_iam_serverless").env(),
-    read("aws_iam_user_name").env(),
-    read("azure_client_id")
-        .env()
-        .or_secrets(&["AZURE_CLIENT_ID"]),
-    read("azure_client_secret")
-        .env()
-        .or_secrets(&["AZURE_CLIENT_SECRET"]),
-    read("azure_redis_ad_token")
-        .env()
-        .or_secrets(&["REDIS_AZURE_AD_TOKEN"]),
-    read("azure_tenant_id")
-        .env()
-        .or_secrets(&["AZURE_TENANT_ID"]),
-    warn("cache", NO_EQUIVALENT).env(),
-    warn("cache_config", NO_EQUIVALENT).env(),
-    warn("charset", NO_EQUIVALENT).env(),
-    warn("client_name", NO_EQUIVALENT).env(),
-    warn("cluster_error_retry_attempts", OWN_CLUSTER),
-    warn("command_packer", OWN_CONNECTION),
-    warn("connection_class", OWN_STACK),
-    warn("connection_error_retry_attempts", OWN_CLUSTER),
-    warn("connection_pool", OWN_STACK),
-    read("credential_provider"),
-    read("db").env().in_url(FromUrl::Any),
-    warn("decode_responses", NO_EQUIVALENT).env(),
-    warn("driver_info", NO_EQUIVALENT),
-    warn("dynamic_startup_nodes", OWN_CLUSTER),
-    warn("encoder_class", OWN_CONNECTION),
-    warn("encoding", NO_EQUIVALENT).env(),
-    warn("encoding_errors", NO_EQUIVALENT).env(),
-    warn("errors", NO_EQUIVALENT).env(),
-    warn("event_dispatcher", OWN_STACK).env(),
-    read("gcp_service_account")
-        .env()
-        .or_secrets(&["REDIS_GCP_SERVICE_ACCOUNT"]),
-    read("gcp_ssl_ca_certs")
-        .env()
-        .or_secrets(&["REDIS_GCP_SSL_CA_CERTS"]),
-    read("health_check_interval").env().in_url(FromUrl::Any),
-    read("host").env(),
-    warn("legacy_responses", NO_EQUIVALENT),
-    warn("lib_name", NO_EQUIVALENT).env(),
-    warn("lib_version", NO_EQUIVALENT).env(),
-    warn("load_balancing_strategy", OWN_CLUSTER),
-    warn("maint_notifications_config", MAINTENANCE),
-    warn("maint_notifications_pool_handler", MAINTENANCE),
-    warn("maintenance_notification_hash", MAINTENANCE),
-    warn("maintenance_state", MAINTENANCE),
-    warn("max_connections", "the Rust client has no connection cap").env(),
-    read("namespace"),
-    warn("orig_host_address", MAINTENANCE),
-    warn("orig_socket_connect_timeout", MAINTENANCE),
-    warn("orig_socket_timeout", MAINTENANCE),
-    warn("oss_cluster_maint_notifications_handler", MAINTENANCE),
-    warn("parser", OWN_CONNECTION),
-    warn("parser_class", OWN_CONNECTION),
-    read("password").env().in_url(FromUrl::Any),
-    warn("path", OWN_CLUSTER),
-    warn("policy_resolver", OWN_CLUSTER),
-    read("port").env(),
-    warn("protocol", NO_EQUIVALENT).env(),
-    warn("read_from_replicas", OWN_CLUSTER),
-    warn(
-        "redis_connect_func",
-        "the Python object is not callable from Rust, so static username and password are used",
-    )
-    .env(),
-    warn("reinitialize_steps", OWN_CLUSTER),
-    warn("require_full_coverage", OWN_CLUSTER),
-    warn("retry", OWN_STACK),
-    warn("retry_on_error", NO_EQUIVALENT).env(),
-    warn("retry_on_timeout", NO_EQUIVALENT).env(),
-    read("sentinel_nodes").or_secrets(&["REDIS_SENTINEL_NODES"]),
-    read("sentinel_password").or_secrets(&["REDIS_SENTINEL_PASSWORD"]),
-    read("service_name").or_secrets(&["REDIS_SERVICE_NAME"]),
-    warn("single_connection_client", NO_EQUIVALENT).env(),
-    read("socket_connect_timeout").env().in_url(FromUrl::Any),
-    read("socket_keepalive").env(),
-    warn("socket_keepalive_options", NO_EQUIVALENT).env(),
-    warn("socket_read_size", OWN_CONNECTION),
-    read("socket_timeout").env().in_url(FromUrl::Any),
-    warn("socket_type", OWN_CONNECTION),
-    read("ssl").env(),
-    read("ssl_ca_certs").env().in_url(FromUrl::Rediss),
-    read("ssl_ca_data").env().in_url(FromUrl::Rediss),
-    read("ssl_ca_path").env().in_url(FromUrl::Rediss),
-    read("ssl_cert_reqs").env().in_url(FromUrl::Rediss),
-    read("ssl_certfile").env().in_url(FromUrl::Rediss),
-    read("ssl_check_hostname").env().in_url(FromUrl::Rediss),
-    warn("ssl_ciphers", RUSTLS).env(),
-    reject("ssl_exclude_verify_flags", VERIFY_FLAGS, Asked::WhenSet),
-    reject("ssl_include_verify_flags", VERIFY_FLAGS, Asked::WhenSet),
-    read("ssl_keyfile").env().in_url(FromUrl::Rediss),
-    warn_unless("ssl_min_version", RUSTLS, is_met_by_rustls).env(),
-    warn("ssl_ocsp_context", OCSP).env(),
-    warn("ssl_ocsp_expected_cert", OCSP).env(),
-    read("ssl_password").env().in_url(FromUrl::Rediss),
-    reject("ssl_validate_ocsp", REVOCATION, Asked::WhenTrue).env(),
-    reject("ssl_validate_ocsp_stapled", REVOCATION, Asked::WhenTrue).env(),
-    read("startup_nodes").or_secrets(&["REDIS_CLUSTER_NODES"]),
-    read("unix_socket_path").env(),
-    read("url").env(),
-    read("username").env().in_url(FromUrl::Any),
-];
+/// Every Redis kwarg redis-py or `litellm/_redis.py` accepts, spelled in snake case. `redis-py-kwargs.json`
+/// records which redis-py versions and `REDIS_*` names accept them, and `tests/catalog.rs` keeps the two in step.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::EnumIter,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum Kwarg {
+    AddressRemap,
+    AutoCloseConnectionPool,
+    AwsIamAuth,
+    AwsIamCacheName,
+    AwsIamRegion,
+    AwsIamServerless,
+    AwsIamUserName,
+    AzureClientId,
+    AzureClientSecret,
+    AzureRedisAdToken,
+    AzureTenantId,
+    Cache,
+    CacheConfig,
+    Charset,
+    ClientName,
+    ClusterErrorRetryAttempts,
+    CommandPacker,
+    ConnectionClass,
+    ConnectionErrorRetryAttempts,
+    ConnectionPool,
+    CredentialProvider,
+    Db,
+    DecodeResponses,
+    DriverInfo,
+    DynamicStartupNodes,
+    EncoderClass,
+    Encoding,
+    EncodingErrors,
+    Errors,
+    EventDispatcher,
+    GcpServiceAccount,
+    GcpSslCaCerts,
+    HealthCheckInterval,
+    Host,
+    LegacyResponses,
+    LibName,
+    LibVersion,
+    LoadBalancingStrategy,
+    MaintNotificationsConfig,
+    MaintNotificationsPoolHandler,
+    MaintenanceNotificationHash,
+    MaintenanceState,
+    MaxConnections,
+    Namespace,
+    OrigHostAddress,
+    OrigSocketConnectTimeout,
+    OrigSocketTimeout,
+    OssClusterMaintNotificationsHandler,
+    Parser,
+    ParserClass,
+    Password,
+    Path,
+    PolicyResolver,
+    Port,
+    Protocol,
+    ReadFromReplicas,
+    RedisConnectFunc,
+    ReinitializeSteps,
+    RequireFullCoverage,
+    Retry,
+    RetryOnError,
+    RetryOnTimeout,
+    SentinelNodes,
+    SentinelPassword,
+    ServiceName,
+    SingleConnectionClient,
+    SocketConnectTimeout,
+    SocketKeepalive,
+    SocketKeepaliveOptions,
+    SocketReadSize,
+    SocketTimeout,
+    SocketType,
+    Ssl,
+    SslCaCerts,
+    SslCaData,
+    SslCaPath,
+    SslCertReqs,
+    SslCertfile,
+    SslCheckHostname,
+    SslCiphers,
+    SslExcludeVerifyFlags,
+    SslIncludeVerifyFlags,
+    SslKeyfile,
+    SslMinVersion,
+    SslOcspContext,
+    SslOcspExpectedCert,
+    SslPassword,
+    SslValidateOcsp,
+    SslValidateOcspStapled,
+    StartupNodes,
+    UnixSocketPath,
+    Url,
+    Username,
+}
+
+impl Kwarg {
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn environment_name(self) -> Option<String> {
+        self.setting()
+            .environment
+            .then(|| format!("REDIS_{}", self.name().to_ascii_uppercase()))
+    }
+
+    /// Every environment or secret name the merge can read the kwarg from.
+    pub fn source_names(self) -> impl Iterator<Item = String> {
+        let fallback = self
+            .setting()
+            .fallback
+            .map_or(&[][..], |fallback| fallback.names);
+        self.environment_name()
+            .into_iter()
+            .chain(fallback.iter().map(|name| (*name).to_owned()))
+    }
+
+    /// The whole answer for the kwarg: how it is handled and where else it is read from.
+    pub fn setting(self) -> Setting {
+        match self {
+            Self::AddressRemap => warn(OWN_CLUSTER),
+            Self::AutoCloseConnectionPool => warn(OWN_STACK),
+            Self::AwsIamAuth => read().env(),
+            Self::AwsIamCacheName => read().env(),
+            Self::AwsIamRegion => read().env().or_secrets(
+                When::AwsIam,
+                Read::SecretStr,
+                &["AWS_REGION", "AWS_DEFAULT_REGION"],
+            ),
+            Self::AwsIamServerless => read().env(),
+            Self::AwsIamUserName => read().env(),
+            Self::AzureClientId => {
+                read()
+                    .env()
+                    .or_secrets(When::AzureAd, Read::SecretStr, &["AZURE_CLIENT_ID"])
+            }
+            Self::AzureClientSecret => {
+                read()
+                    .env()
+                    .or_secrets(When::AzureAd, Read::SecretStr, &["AZURE_CLIENT_SECRET"])
+            }
+            Self::AzureRedisAdToken => read().env().or_secrets(
+                When::WithoutProvider,
+                Read::Secret,
+                &["REDIS_AZURE_AD_TOKEN"],
+            ),
+            Self::AzureTenantId => {
+                read()
+                    .env()
+                    .or_secrets(When::AzureAd, Read::SecretStr, &["AZURE_TENANT_ID"])
+            }
+            Self::Cache => warn(NO_EQUIVALENT).env(),
+            Self::CacheConfig => warn(NO_EQUIVALENT).env(),
+            Self::Charset => warn(NO_EQUIVALENT).env(),
+            Self::ClientName => warn(NO_EQUIVALENT).env(),
+            Self::ClusterErrorRetryAttempts => warn(OWN_CLUSTER),
+            Self::CommandPacker => warn(OWN_CONNECTION),
+            Self::ConnectionClass => warn(OWN_STACK),
+            Self::ConnectionErrorRetryAttempts => warn(OWN_CLUSTER),
+            Self::ConnectionPool => warn(OWN_STACK),
+            Self::CredentialProvider => read(),
+            Self::Db => read().env().in_url(FromUrl::Any),
+            Self::DecodeResponses => warn(NO_EQUIVALENT).env(),
+            Self::DriverInfo => warn(NO_EQUIVALENT),
+            Self::DynamicStartupNodes => warn(OWN_CLUSTER),
+            Self::EncoderClass => warn(OWN_CONNECTION),
+            Self::Encoding => warn(NO_EQUIVALENT).env(),
+            Self::EncodingErrors => warn(NO_EQUIVALENT).env(),
+            Self::Errors => warn(NO_EQUIVALENT).env(),
+            Self::EventDispatcher => warn(OWN_STACK).env(),
+            Self::GcpServiceAccount => read().env().named_by_cache().or_secrets(
+                When::WithoutProvider,
+                Read::SecretStr,
+                &["REDIS_GCP_SERVICE_ACCOUNT"],
+            ),
+            Self::GcpSslCaCerts => read().env().named_by_cache().or_secrets(
+                When::WithoutProvider,
+                Read::SecretStr,
+                &["REDIS_GCP_SSL_CA_CERTS"],
+            ),
+            Self::HealthCheckInterval => read().env().in_url(FromUrl::Any),
+            Self::Host => read().env().target().named_by_cache(),
+            Self::LegacyResponses => warn(NO_EQUIVALENT),
+            Self::LibName => warn(NO_EQUIVALENT).env(),
+            Self::LibVersion => warn(NO_EQUIVALENT).env(),
+            Self::LoadBalancingStrategy => warn(OWN_CLUSTER),
+            Self::MaintNotificationsConfig => warn(MAINTENANCE),
+            Self::MaintNotificationsPoolHandler => warn(MAINTENANCE),
+            Self::MaintenanceNotificationHash => warn(MAINTENANCE),
+            Self::MaintenanceState => warn(MAINTENANCE),
+            Self::MaxConnections => warn(NO_CONNECTION_CAP).env(),
+            Self::Namespace => read().named_by_cache(),
+            Self::OrigHostAddress => warn(MAINTENANCE),
+            Self::OrigSocketConnectTimeout => warn(MAINTENANCE),
+            Self::OrigSocketTimeout => warn(MAINTENANCE),
+            Self::OssClusterMaintNotificationsHandler => warn(MAINTENANCE),
+            Self::Parser => warn(OWN_CONNECTION),
+            Self::ParserClass => warn(OWN_CONNECTION),
+            Self::Password => read().env().in_url(FromUrl::Any).named_by_cache(),
+            Self::Path => warn(OWN_CLUSTER),
+            Self::PolicyResolver => warn(OWN_CLUSTER),
+            Self::Port => read().env().named_by_cache(),
+            Self::Protocol => warn(NO_EQUIVALENT).env(),
+            Self::ReadFromReplicas => warn(OWN_CLUSTER),
+            Self::RedisConnectFunc => warn(NOT_CALLABLE).env(),
+            Self::ReinitializeSteps => warn(OWN_CLUSTER),
+            Self::RequireFullCoverage => warn(OWN_CLUSTER),
+            Self::Retry => warn(OWN_STACK),
+            Self::RetryOnError => warn(NO_EQUIVALENT).env(),
+            Self::RetryOnTimeout => warn(NO_EQUIVALENT).env(),
+            Self::SentinelNodes => {
+                read()
+                    .target()
+                    .or_secrets(When::Always, Read::Secret, &["REDIS_SENTINEL_NODES"])
+            }
+            Self::SentinelPassword => {
+                read().or_secrets(When::Always, Read::SecretStr, &["REDIS_SENTINEL_PASSWORD"])
+            }
+            Self::ServiceName => {
+                read().or_secrets(When::Always, Read::Secret, &["REDIS_SERVICE_NAME"])
+            }
+            Self::SingleConnectionClient => warn(NO_EQUIVALENT).env(),
+            Self::SocketConnectTimeout => read().env().in_url(FromUrl::Any),
+            Self::SocketKeepalive => read().env(),
+            Self::SocketKeepaliveOptions => warn(NO_EQUIVALENT).env(),
+            Self::SocketReadSize => warn(OWN_CONNECTION),
+            Self::SocketTimeout => read().env().in_url(FromUrl::Any).named_by_cache(),
+            Self::SocketType => warn(OWN_CONNECTION),
+            Self::Ssl => read().env(),
+            Self::SslCaCerts => read().env().in_url(FromUrl::Rediss),
+            Self::SslCaData => read().env().in_url(FromUrl::Rediss),
+            Self::SslCaPath => read().env().in_url(FromUrl::Rediss),
+            Self::SslCertReqs => read().env().in_url(FromUrl::Rediss),
+            Self::SslCertfile => read().env().in_url(FromUrl::Rediss),
+            Self::SslCheckHostname => read().env().in_url(FromUrl::Rediss),
+            Self::SslCiphers => warn(RUSTLS).env(),
+            Self::SslExcludeVerifyFlags => reject(VERIFY_FLAGS, Asked::WhenSet),
+            Self::SslIncludeVerifyFlags => reject(VERIFY_FLAGS, Asked::WhenSet),
+            Self::SslKeyfile => read().env().in_url(FromUrl::Rediss),
+            Self::SslMinVersion => warn_unless(RUSTLS, is_met_by_rustls).env(),
+            Self::SslOcspContext => warn(OCSP).env(),
+            Self::SslOcspExpectedCert => warn(OCSP).env(),
+            Self::SslPassword => read().env().in_url(FromUrl::Rediss),
+            Self::SslValidateOcsp => reject(REVOCATION, Asked::WhenTrue).env(),
+            Self::SslValidateOcspStapled => reject(REVOCATION, Asked::WhenTrue).env(),
+            Self::StartupNodes => read().target().named_by_cache().or_secrets(
+                When::Always,
+                Read::Secret,
+                &["REDIS_CLUSTER_NODES"],
+            ),
+            Self::UnixSocketPath => read().env(),
+            Self::Url => read().env().target(),
+            Self::Username => read().env().in_url(FromUrl::Any),
+        }
+    }
+}
 
 // rustls only speaks TLS 1.2 and 1.3, so a minimum of 1.2 or lower is already met. redis-py takes an
 // ssl.TLSVersion, which reaches Rust as its name or its value
@@ -265,8 +460,9 @@ fn is_met_by_rustls(value: &Value) -> bool {
     }
 }
 
-pub fn setting(kwarg: &str) -> Option<&'static Setting> {
-    SETTINGS.iter().find(|setting| setting.kwarg == kwarg)
+/// A name with no variant is not a Redis setting.
+pub(crate) fn setting(kwarg: &str) -> Option<Setting> {
+    Kwarg::from_str(kwarg).ok().map(Kwarg::setting)
 }
 
 /// The check a `Reject` row stands for and which values ask for it.

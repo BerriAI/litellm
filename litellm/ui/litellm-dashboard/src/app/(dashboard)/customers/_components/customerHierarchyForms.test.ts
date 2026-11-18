@@ -95,6 +95,34 @@ describe("customer hierarchy settings payloads", () => {
     });
   });
 
+  it.each([null, 100])("edits a monthly window while retaining the yearly and scalar %s limits", (max_budget) => {
+    const windows = [
+      { budget_duration: "1mo", max_budget: 50 },
+      { budget_duration: "12mo", max_budget: 500 },
+    ];
+    const entity: CustomerHierarchyEntity = {
+      kind: "organization",
+      record: {
+        ...organization,
+        budget_id: "custom",
+        budget: { ...organization.budget, max_budget, budget_duration: null, budget_limits: windows },
+      },
+    };
+    const fields = customerHierarchyFields(entity);
+    expect(fields.maxBudget).toBe("50");
+    expect(buildCustomerHierarchyPatch(entity, { ...fields, maxBudget: "0" })).toMatchObject({
+      patch: {
+        body: {
+          budget: {
+            max_budget,
+            budget_duration: null,
+            budget_limits: [{ budget_duration: "1mo", max_budget: 0 }, windows[1]],
+          },
+        },
+      },
+    });
+  });
+
   it("should clear an explicit budget when disabled", () => {
     const entity: CustomerHierarchyEntity = {
       kind: "team",

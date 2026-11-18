@@ -8,10 +8,11 @@
 import asyncio
 import functools
 import itertools
+import tempfile
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
+from typing import IO, Any, BinaryIO, Final, NoReturn, Protocol, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -32,6 +33,7 @@ import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
+from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model, should_replace_model_in_jsonl
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
@@ -70,6 +72,7 @@ from litellm.proxy.openai_files_endpoints.batch_file_validation import (
 )
 from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     EMPTY_MAPPING,
+    REWRITE_SPOOL_BYTES,
     BatchScanResult,
     raise_nothing_to_submit,
     raise_public,
@@ -80,6 +83,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     apply_team_provider_credentials,
     authorize_model_for_key,
+    batch_row_model_for_deployment,
     deployment_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -113,6 +117,7 @@ from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
     FileListPage,
+    FileTypes,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -384,6 +389,22 @@ def get_model_from_json_obj(json_object: dict) -> str | None:
     return body.get("model") if isinstance(body, dict) else None
 
 
+def _rewrite_alias_rows_to_deployment_model(
+    file: FileTypes, alias: str, deployment_model: str, provider: str, spool: IO[bytes]
+) -> FileTypes:
+    rewritten: Final = rewrite_rows_naming_model(
+        file_content=file,
+        model=alias,
+        new_model=batch_row_model_for_deployment(deployment_model, provider),
+        output_file=spool,
+    )
+    if rewritten is not spool:
+        return file
+    if isinstance(file, tuple):
+        return (file[0], spool, file[2] if len(file) > 2 else None)
+    return ("modified_file.jsonl", spool, "application/jsonl")
+
+
 async def _deprecated_loadbalanced_create_file(
     llm_router: Router | None,
     router_model: str,
@@ -475,11 +496,30 @@ async def route_create_file(
             keep_request_buckets=True,
         )
 
-        # Create the file with model credentials
-        response = await litellm.acreate_file(
-            **_create_file_request,
-            custom_llm_provider=credentials["custom_llm_provider"],
-        )
+        with tempfile.SpooledTemporaryFile(max_size=REWRITE_SPOOL_BYTES) as rewrite_spool:
+            upload_request: Final[CreateFileRequest] = (
+                {
+                    **_create_file_request,
+                    "file": await asyncio.to_thread(
+                        _rewrite_alias_rows_to_deployment_model,
+                        _create_file_request["file"],
+                        model,
+                        credentials["model"],
+                        credentials["custom_llm_provider"],
+                        rewrite_spool,
+                    ),
+                }
+                if should_replace_model_in_jsonl(
+                    purpose=purpose, passthrough=_create_file_request.get("passthrough") is True
+                )
+                else _create_file_request
+            )
+
+            # Create the file with model credentials
+            response = await litellm.acreate_file(
+                **upload_request,
+                custom_llm_provider=credentials["custom_llm_provider"],
+            )
 
         # Encode the file ID with model information
         if response and hasattr(response, "id") and response.id:
@@ -531,7 +571,7 @@ async def route_create_file(
             _create_file_request=_create_file_request,
         )
     else:
-        apply_team_provider_credentials(
+        await apply_team_provider_credentials(
             data=cast(dict, _create_file_request),  # cast-ok: TypedDict is a plain dict at runtime; merged in place
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
@@ -1150,7 +1190,7 @@ async def get_file_content(
             )
 
             if not should_route:
-                apply_team_provider_credentials(
+                await apply_team_provider_credentials(
                     data=data,
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
@@ -1415,7 +1455,7 @@ async def get_file(
             # Remove file_id from data to avoid "multiple values for keyword argument" error
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
-            apply_team_provider_credentials(
+            await apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1634,7 +1674,7 @@ async def delete_file(
             )
         else:
             data.pop("file_id", None)
-            apply_team_provider_credentials(
+            await apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -2036,7 +2076,7 @@ async def list_files(
                 )
             else:
                 resolved_custom_llm_provider: Final = custom_llm_provider or "openai"
-                apply_team_provider_credentials(
+                await apply_team_provider_credentials(
                     data=data,
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
