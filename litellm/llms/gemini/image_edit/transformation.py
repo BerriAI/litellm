@@ -7,6 +7,7 @@ import httpx
 from httpx._types import RequestFiles
 
 import litellm
+from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -63,6 +64,11 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             model=model,
             supported_params=self.get_supported_openai_params(model),
             parse_image_config_string=True,
+        )
+
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        return image_request_count(
+            image_edit_optional_request_params.get("sampleCount"), model=model, llm_provider="gemini"
         )
 
     def validate_environment(

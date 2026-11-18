@@ -19,7 +19,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
@@ -240,6 +239,8 @@ class PassThroughStreamingHandler:
                 # ``cost_injection_active`` already requires ``model_name`` to
                 # be truthy; pin to a typed local so mypy narrows ``Optional[str]``
                 # -> ``str`` for the per-chunk call site.
+                from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
                 assert model_name is not None
                 resolved_model_name: Final[str] = model_name
                 pending = b""

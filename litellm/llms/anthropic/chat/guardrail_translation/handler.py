@@ -574,6 +574,11 @@ def _parse_sse_event(adapter: TypeAdapter[_SSEEventT], event_type: str, data_lin
     return None
 
 
+def _mapping_type(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    return mapping.get("type") if mapping is not None else None
+
+
 class AnthropicMessagesHandler(BaseTranslation):
     """Process Anthropic messages with guardrails.
 
@@ -698,6 +703,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index: Final = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []
+        if open_index is not None and self._is_unsigned_thinking_block(responses_so_far, open_index):
+            chunks.append(
+                _sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": open_index,
+                        "delta": {"type": "signature_delta", "signature": ""},
+                    },
+                )
+            )
         if open_index is not None:
             chunks.append(_sse("content_block_stop", {"type": "content_block_stop", "index": open_index}))
         chunks += [
@@ -729,6 +745,18 @@ class AnthropicMessagesHandler(BaseTranslation):
             _sse("message_stop", {"type": "message_stop"}),
         ]
         return chunks
+
+    @staticmethod
+    def _is_unsigned_thinking_block(responses_so_far: Sequence[object], index: int) -> bool:
+        events: Final = tuple(
+            event
+            for event in chain.from_iterable(map(AnthropicMessagesHandler._iter_sse_events, responses_so_far))
+            if event.get("index") == index
+        )
+        return any(
+            event.get("type") == "content_block_start" and _mapping_type(event.get("content_block")) == "thinking"
+            for event in events
+        ) and not any(_mapping_type(event.get("delta")) == "signature_delta" for event in events)
 
     @staticmethod
     def _content_block_state(

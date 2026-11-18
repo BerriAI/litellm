@@ -418,6 +418,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vertex_ai",
         "/cohere",
         "/cursor",
+        "/cursor-cli",
         "/gemini",
         "/anthropic",
         "/langfuse",
@@ -610,6 +611,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/info",
         "/key/health",
         "/team/info",
+        "/management/v1/teams/{team_id}/members",
         "/team/list",
         "/v2/team/list",
         "/organization/list",
@@ -631,6 +633,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
+        "/get/reference_exchange_rates",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -699,6 +702,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/list",
             "/v2/team/list",
             "/team/info",
+            "/management/v1/teams/{team_id}/members",
             "/team/block",
             "/team/unblock",
             "/team/available",
@@ -908,6 +912,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/update",
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members",
         "/management/v1/teams/{team_id}/members/bulk_delete",
         "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",

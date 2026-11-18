@@ -3,6 +3,7 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
+from datetime import datetime
 from functools import cache
 from itertools import takewhile
 from types import MappingProxyType
@@ -67,10 +68,14 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    logs_every_failed_attempt: ClassVar[bool] = False
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
     wants_failed_prompt_token_estimate: ClassVar[bool] = False
     wants_chat_completion_hooks_on_bridged_chat: ClassVar[bool] = False
+    runs_on_no_log_requests: ClassVar[bool] = False
+    """Proxy accounting hooks that must see every request, ``no-log`` ones included. A class named ``_PROXY_*``
+    counts as one without setting this."""
 
     enforces_request_content: bool = False
     """
@@ -197,6 +202,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
+
+    async def async_log_failed_attempt(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        await self.async_log_failure_event(kwargs, None, start_time, end_time)
 
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""

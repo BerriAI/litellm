@@ -87,11 +87,14 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     s3_media_uris,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    FinishEvidence,
+    finish_evidence_of,
     finite_cost,
     get_or_create_metadata_bucket,
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    map_finish_reason,
     proxy_request_headers,
     redact_nested_match_and_regex_keys,
     require_attributes,
@@ -108,6 +111,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     guardrail_entries,
     guardrail_information_cost,
+    object_items,
     object_mapping,
 )
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -119,6 +123,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_output_texts,
 )
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -175,9 +180,9 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROXY_MaxParallelRequestsHandler_v3,
+    ParallelRequestLimiterHook,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
@@ -365,6 +370,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    Choices,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
@@ -588,6 +594,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
+    chunk_source: Final[object] = chunks
     if not isinstance(chunks, list) or not chunks:
         return False
     verbose_proxy_logger.debug(
@@ -616,7 +623,46 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     partial_usage: Final = getattr(partial_response, "usage", None)
     if isinstance(partial_usage, Usage):
         backfill_missing_cache_usage_fields(partial_usage)
+    if isinstance(partial_response, ModelResponse):
+        partial_response.choices = list(
+            _choices_without_unobserved_finish_reasons(
+                partial_response.choices,
+                ChunkProcessor.choice_indices_with_observed_finish_reason(object_items(chunk_source)),
+                finish_evidence_of(response),
+            )
+        )
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
+
+
+def _choices_without_unobserved_finish_reasons(
+    choices: Sequence[Choices], observed_indices: frozenset[int], evidence: FinishEvidence
+) -> tuple[Choices, ...]:
+    """Finish reasons the stream recorded per choice off the provider's frames decide every choice: the
+    terminal chunk the stream emits can carry another choice's index, so the assembled chunks cannot."""
+    if evidence.by_choice:
+        return tuple(
+            _with_received_finish_reason(choice, _indexed_finish_reason(choice.index, len(choices), evidence.by_choice))
+            for choice in choices
+        )
+    single_choice_reason: Final = evidence.unindexed if len(choices) == 1 else None
+    return tuple(
+        choice if choice.index in observed_indices else _with_received_finish_reason(choice, single_choice_reason)
+        for choice in choices
+    )
+
+
+def _indexed_finish_reason(choice_index: int, choice_count: int, by_choice: Mapping[int, str]) -> str | None:
+    if choice_count == 1 and len(by_choice) == 1:
+        return next(iter(by_choice.values()))
+    return by_choice.get(choice_index)
+
+
+def _with_received_finish_reason(choice: Choices, received_finish_reason: str | None) -> Choices:
+    if received_finish_reason is None:
+        return choice.model_copy(update={"finish_reason": "finish_reason_unspecified"})
+    finish_reason: Final = map_finish_reason(received_finish_reason)
+    ends_a_tool_call_turn: Final = finish_reason == "stop" and bool(choice.message.tool_calls)
+    return choice.model_copy(update={"finish_reason": "tool_calls" if ends_a_tool_call_turn else finish_reason})
 
 
 async def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]) -> None:
@@ -2565,11 +2611,11 @@ async def _release_pre_call_hold(
     ``post_call_failure_hook``. The dynamic rate limiter admits through its own inner limiter, so its team-share
     reservation is released alongside the registered limiter's slot and tokens."""
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    dynamic_limiters: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        PROXY_DynamicRateLimitHandlerV3
+    natives: Final = dict.fromkeys(
+        callback for callback in litellm.callbacks if isinstance(callback, NativeDynamicRateLimiter)
     )
-    for holder in (limiter, *dynamic_limiters):
-        if not isinstance(holder, (PROXY_MaxParallelRequestsHandler_v3, PROXY_DynamicRateLimitHandlerV3)):
+    for holder in (limiter, *natives):
+        if not isinstance(holder, ParallelRequestLimiterHook | NativeDynamicRateLimiter):
             continue
         await holder.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the limiter hooks take the proxy's bare request dict
             request_data=dict(request_data), original_exception=refusal, user_api_key_dict=user_api_key_dict
@@ -3401,14 +3447,7 @@ class ProxyBaseLLMRequestProcessing:
                 original_model,
                 fallback_models,
             )
-            raw_router_settings: Final = _DECODED_JSON.validate_python(
-                _REQUEST_FIELDS.validate_python(rate_limited_data).get("router_settings_override")
-            )
-            group_alias: Final = _DECODED_JSON.validate_python(
-                _REQUEST_FIELDS.validate_python(raw_router_settings).get("model_group_alias")
-                if isinstance(raw_router_settings, Mapping)
-                else None
-            )
+            group_alias: Final = router_settings.get("model_group_alias") if router_settings is not None else None
             await _release_pre_call_hold(
                 proxy_logging_obj, _REQUEST_FIELDS.validate_python(rate_limited_data), original_exc, user_api_key_dict
             )

@@ -19,6 +19,7 @@ from litellm.constants import (
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -34,6 +35,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -564,6 +566,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
         BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
@@ -843,6 +846,8 @@ def _encrypt_if_plaintext(key: str, value: object) -> object:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
         # this path; production always has a master key so encryption proceeds.
+        if fips_mode_active():
+            raise
         return value
 
 

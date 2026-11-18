@@ -50,6 +50,9 @@ def create_config_class(provider: SimpleProviderConfig):
     base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
     class JSONProviderConfig(base_class):
+        def get_attribution_headers(self) -> Mapping[str, str]:
+            return provider.get_attribution_headers()
+
         def _flattens_content_lists(self) -> bool:
             return bool(provider.special_handling.get("convert_content_list_to_string"))
 
