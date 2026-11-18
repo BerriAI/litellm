@@ -1,14 +1,13 @@
 //! The `transcription` kind, a port of the transcription branch of `cost_per_token` (`cost_calculator.py`) and of
 //! `cost_per_second` (`llms/openai/cost_calculation.py`): the file's seconds at a positive `output_cost_per_second`
 //! on the completion side, else at `input_cost_per_second` on the prompt side. A call whose usage reports tokens on a
-//! row that declares token rates, or declares no per-second rate, is `NotPorted`, since main bills it through the
-//! generic token path
+//! row that declares token rates, or declares no per-second rate, bills its tokens through `generic_cost_per_token`
 
 use crate::price::{Channel, InputUnit, Meter, OutputUnit, TokenKind};
-use crate::query::{Header, Kind};
+use crate::query::Header;
 use crate::receipt::{PriceOutcome, Unpriced};
 use crate::row::RowSource;
-use crate::units;
+use crate::units::{self, TokenBilled};
 use crate::usage::{Media, Usage};
 
 const INPUT_SECOND: Meter = Meter::Input(InputUnit::Second);
@@ -23,9 +22,9 @@ pub struct TranscriptionQuery {
     pub header: Header,
     /// The billed length of the audio
     pub seconds: f64,
-    /// The response reported prompt or completion tokens
+    /// The token usage, when the response reported prompt or completion tokens
     #[cfg_attr(feature = "serde", serde(default))]
-    pub tokens: bool,
+    pub tokens: Option<TokenBilled>,
 }
 
 pub(crate) fn price<S: RowSource>(source: &S, query: &TranscriptionQuery) -> PriceOutcome {
@@ -41,8 +40,12 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &TranscriptionQuery) -> Pri
     ];
     let declares_tokens = token_meters.iter().any(|meter| listed(meter).is_some());
     let declares_seconds = listed(&INPUT_SECOND).is_some() || listed(&OUTPUT_SECOND).is_some();
-    if query.tokens && (declares_tokens || !declares_seconds) {
-        return Unpriced::NotPorted(Kind::Transcription).into();
+    if let Some(tokens) = query
+        .tokens
+        .as_ref()
+        .filter(|_| declares_tokens || !declares_seconds)
+    {
+        return units::generic_tokens(source, &query.header, tokens);
     }
     let media = match (
         listed(&OUTPUT_SECOND).filter(|rate| rate.get() > 0.0),
@@ -89,7 +92,8 @@ mod parity {
 
     use super::{TranscriptionQuery, price};
     use crate::receipt::PriceOutcome;
-    use crate::testing::{TestSource, expected_sides, fixture_case, header, units_row};
+    use crate::testing::{TestSource, expected_sides, fixture_case, header, row_ref, units_row};
+    use crate::units::TokenBilled;
 
     const FIXTURE: &str = include_str!("../fixtures/transcription_parity.json");
 
@@ -111,7 +115,10 @@ mod parity {
         let query = TranscriptionQuery {
             header: header(case["provider"].as_str().unwrap(), model),
             seconds: case["seconds"].as_f64().unwrap(),
-            tokens: case["tokens"].as_bool().unwrap(),
+            tokens: case["tokens"].as_bool().unwrap().then(|| TokenBilled {
+                row: row_ref(model),
+                usage: Default::default(),
+            }),
         };
         let sides = match price(&source, &query) {
             PriceOutcome::Priced(receipt) => (receipt.prompt.get(), receipt.completion.get()),
@@ -127,7 +134,7 @@ mod tests {
 
     use super::*;
     use crate::price::ServiceTier;
-    use crate::testing::{BASE, TestRow, TestSource, header, priced, prices, row_ref};
+    use crate::testing::{BASE, TestRow, TestSource, header, priced, prices, row_ref, usage};
 
     fn row(rates: &[(Meter, f64)]) -> TestRow {
         TestRow {
@@ -145,7 +152,10 @@ mod tests {
         TranscriptionQuery {
             header: header("openai", "whisper-1"),
             seconds: 61.37,
-            tokens,
+            tokens: tokens.then(|| TokenBilled {
+                row: row_ref("tokens-row"),
+                usage: usage(1_000, 200),
+            }),
         }
     }
 
@@ -178,15 +188,17 @@ mod tests {
         assert_eq!(sides(&source, true), (0.0001 * 61.37, 0.0));
     }
 
+    /// The tokens bill on the row `generic_cost_per_token` read, not the declared entry, whose rates decide only whether
+    /// tokens bill at all
     #[rstest]
-    #[case::token_row(row(&[(INPUT_SECOND, 0.0001), (Meter::TEXT_INPUT, 1.0)]))]
+    #[case::token_row(row(&[(INPUT_SECOND, 0.0001), (Meter::TEXT_INPUT, 9.0)]))]
     #[case::no_second_rate(row(&[]))]
-    fn reported_tokens_on_a_row_main_bills_by_token_are_not_ported(#[case] token_row: TestRow) {
-        let source = TestSource::with_row("whisper-1", token_row);
-        assert_eq!(
-            price(&source, &query(true)),
-            Unpriced::NotPorted(Kind::Transcription).into()
+    fn reported_tokens_on_a_row_main_bills_by_token_bill_by_token(#[case] declared: TestRow) {
+        let source = TestSource::with_row("whisper-1", declared).and_row(
+            "tokens-row",
+            row(&[(Meter::TEXT_INPUT, 1e-6), (Meter::TEXT_OUTPUT, 4e-6)]),
         );
+        assert_eq!(sides(&source, true), (1e-6 * 1_000.0, 4e-6 * 200.0));
     }
 
     #[rstest]

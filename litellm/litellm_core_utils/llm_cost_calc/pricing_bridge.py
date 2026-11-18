@@ -99,7 +99,16 @@ class OcrDocument(TypedDict):
     catalog_deferred: ReadOnly[bool]
 
 
-class SpeechDocument(TypedDict):
+class TokenFacts(TypedDict):
+    """The token usage a speech or transcription response reported, billed by ``generic_cost_per_token``'s rules on
+    the row passed beside the document when the call's row prices tokens."""
+
+    tokens: ReadOnly[NotRequired[BilledUsage | None]]
+    service_tier: ReadOnly[NotRequired[str | None]]
+    data_residency: ReadOnly[NotRequired[str | None]]
+
+
+class SpeechDocument(TokenFacts):
     kind: ReadOnly[Literal["speech"]]
     model: ReadOnly[str]
     provider: ReadOnly[str]
@@ -107,12 +116,11 @@ class SpeechDocument(TypedDict):
     generations: ReadOnly[int | None]
 
 
-class TranscriptionDocument(TypedDict):
+class TranscriptionDocument(TokenFacts):
     kind: ReadOnly[Literal["transcription"]]
     model: ReadOnly[str]
     provider: ReadOnly[str]
     seconds: ReadOnly[float]
-    tokens: ReadOnly[bool]
 
 
 class SearchDocument(TypedDict):
