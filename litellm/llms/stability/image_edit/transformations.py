@@ -6,6 +6,7 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -172,7 +173,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,

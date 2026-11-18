@@ -167,7 +167,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -253,13 +253,13 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def _prepare_reference_images(
         self,
-        image: FileTypes | list[FileTypes],
+        image: FileTypes | Sequence[FileTypes | None],
         image_edit_optional_request_params: Mapping[str, object],
     ) -> list[dict[str, object]]:
         """
         Prepare reference images in the correct Imagen API format
         """
-        images: list[FileTypes]
+        images: Sequence[object]
         if isinstance(image, list):
             images = image
         else:

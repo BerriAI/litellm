@@ -1,4 +1,5 @@
 import json
+import sys
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
+    parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     parse_tool_call_arguments,
@@ -88,6 +90,19 @@ def _json_finish_reason(value: object) -> OpenAIChatCompletionFinishReason:
     if isinstance(value, str):
         return map_finish_reason(value)
     return _NON_STRING_FINISH_REASONS.get(value) or map_finish_reason(str(value))
+
+
+def _regex_subject_error(value: object) -> TypeError:
+    detail: Final = f", got {type(value).__name__!r}" if sys.version_info >= (3, 11) else ""
+    return TypeError(f"expected string or bytes-like object{detail}")
+
+
+def _split_json_reasoning_content(content: object) -> tuple[str | None, object]:
+    if isinstance(content, str):
+        return parse_content_for_reasoning(content)
+    if not content:
+        return None, content
+    raise _regex_subject_error(content)
 
 
 def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
@@ -421,11 +436,7 @@ class OllamaChatConfig(BaseConfig):
                 del message_slots["thinking"]
             elif decoded_json_object(response_json_message).get("content") is not None:
                 # parse reasoning content from content
-                from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
-                    parse_content_for_reasoning,
-                )
-
-                reasoning_content, content = parse_content_for_reasoning(response_json["message"]["content"])
+                reasoning_content, content = _split_json_reasoning_content(subscript(response_json_message, "content"))
                 content_slots: Final = require_attributes(response_json_message, _SupportsSetItem, "__setitem__")
                 content_slots["reasoning_content"] = reasoning_content
                 content_slots["content"] = content

@@ -15,7 +15,6 @@ from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     NoReturn,
@@ -157,6 +156,21 @@ class _MutableJsonObject(Protocol):
 
 class _GetsLitellmParams(Protocol):
     def __call__(self, key: str, default: Mapping[str, object], /) -> LiteLLM_Params: ...
+
+
+class _GetsByKey(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _assignable(container: object) -> _SupportsSetItem:
+    if isinstance(container, _SupportsSetItem):
+        return container
+    raise TypeError(f"'{type(container).__name__}' object does not support item assignment")
 
 
 class _PostStreamingDeploymentHook(Protocol):
@@ -3529,9 +3543,12 @@ class ManagedResponsesWebSocketHandler:
         }
 
     @staticmethod
-    def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
+    def _update_proxy_request(call_kwargs: dict[str, object], model: str) -> None:
         """Update proxy_server_request body so spend logs record the full request."""
-        proxy_server_request = (call_kwargs.get("litellm_metadata") or {}).get("proxy_server_request") or {}
+        litellm_metadata: Final = require_attributes(
+            call_kwargs.get("litellm_metadata") or dict[str, object](), _GetsByKey, "get"
+        )
+        proxy_server_request = litellm_metadata.get("proxy_server_request") or {}
         if not isinstance(proxy_server_request, dict):
             return
         body: Final = dict(proxy_server_request.get("body") or {})
@@ -3544,7 +3561,7 @@ class ManagedResponsesWebSocketHandler:
         proxy_server_request = {**proxy_server_request, "body": body}
         if "litellm_metadata" not in call_kwargs:
             call_kwargs["litellm_metadata"] = {}
-        call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
+        _assignable(call_kwargs["litellm_metadata"])["proxy_server_request"] = proxy_server_request
         call_kwargs["proxy_server_request"] = proxy_server_request
 
     async def _stream_and_forward(self, model: str, call_kwargs: dict[str, object]) -> object:

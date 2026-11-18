@@ -117,6 +117,16 @@ class _BudgetedCustomerFilter(TypedDict):
     budget_id: ReadOnly[_IsNotNull]
 
 
+class _DeploymentFailureLabelValues(TypedDict):
+    api_key_alias: ReadOnly[str | None]
+    user_email: ReadOnly[object]
+    team: ReadOnly[str | None]
+    team_alias: ReadOnly[str | None]
+    hashed_api_key: ReadOnly[str | None]
+    client_ip: ReadOnly[object]
+    user_agent: ReadOnly[object]
+
+
 _BudgetRowT: Final = TypeVar("_BudgetRowT")
 _TableRowT: Final = TypeVar("_TableRowT", bound=BaseModel)
 
@@ -3319,7 +3329,7 @@ class PrometheusLogger(CustomLogger):
         for all successful requests (both streaming and non-streaming).
         """
 
-    def _safe_get(self, obj: object, key: str, default: object = None) -> Any:
+    def _safe_get(self, obj: object, key: str, default: object = None) -> object:
         """Get value from dict or Pydantic model."""
         if obj is None:
             return default
@@ -3327,7 +3337,7 @@ class PrometheusLogger(CustomLogger):
             return obj.get(key, default)
         return getattr(obj, key, default)
 
-    def _extract_deployment_failure_label_values(self, request_kwargs: dict) -> dict[str, str | None]:
+    def _extract_deployment_failure_label_values(self, request_kwargs: dict) -> _DeploymentFailureLabelValues:
         """
         Extract label values for deployment failure metrics from all available
         sources in request_kwargs. Falls back to litellm_params metadata and
@@ -3364,7 +3374,7 @@ class PrometheusLogger(CustomLogger):
                 return getattr(user_api_key_auth, "key_alias", None)
             return None
 
-        def _get_user_email() -> str | None:
+        def _get_user_email() -> object:
             from_metadata: Final = _metadata.get("user_api_key_user_email")
             if from_metadata is not None:
                 return from_metadata

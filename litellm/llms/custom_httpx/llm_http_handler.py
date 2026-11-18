@@ -7514,7 +7514,7 @@ class BaseLLMHTTPHandler:
     def image_edit_handler(
         self,
         model: str,
-        image: Any,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         prompt: str | None,
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_request_params: dict,
@@ -7639,7 +7639,7 @@ class BaseLLMHTTPHandler:
     async def async_image_edit_handler(
         self,
         model: str,
-        image: FileTypes,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         prompt: str | None,
         image_edit_provider_config: BaseImageEditConfig,
         image_edit_optional_request_params: dict,

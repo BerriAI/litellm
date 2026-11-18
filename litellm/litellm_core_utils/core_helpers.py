@@ -250,6 +250,27 @@ def iter_items(value: object) -> Iterable[object]:
     raise TypeError(f"'{type(value).__name__}' object is not iterable")
 
 
+def _unconvertible_update_element(index: int) -> TypeError:
+    if sys.version_info < (3, 14):
+        return TypeError(f"cannot convert dictionary update sequence element #{index} to a sequence")
+    error: Final = TypeError("object is not iterable")
+    error.add_note(f"Cannot convert dictionary update sequence element #{index} to a sequence")
+    return error
+
+
+def _update_pair(index: int, element: object) -> tuple[object, object]:
+    if not isinstance(element, (_SupportsIter, _SupportsGetItem)):
+        raise _unconvertible_update_element(index)
+    fields: Final = tuple(iter_items(element))
+    if len(fields) != 2:
+        raise ValueError(f"dictionary update sequence element #{index} has length {len(fields)}; 2 is required")
+    return fields[0], fields[1]
+
+
+def dict_from_pairs(value: object) -> Mapping[object, object]:
+    return dict(_update_pair(index, element) for index, element in enumerate(iter_items(value)))
+
+
 @runtime_checkable
 class _SupportsContains(Protocol):
     def __contains__(self, key: object, /) -> bool: ...

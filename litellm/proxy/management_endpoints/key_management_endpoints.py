@@ -1209,8 +1209,8 @@ _READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
 
 
 def _is_safe_preset_route_transition(
-    incoming_allowed_routes: Sequence[str] | None,
-    existing_allowed_routes: Sequence[str] | None,
+    incoming_allowed_routes: Sequence[object] | None,
+    existing_allowed_routes: Sequence[object] | None,
 ) -> bool:
     """
     True when every route on BOTH sides is a safe `key_type` preset bucket

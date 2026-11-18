@@ -19,7 +19,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.web_identity_session_policy import BEDROCK_BATCHES_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.types.llms.bedrock import (
     BedrockCreateBatchRequest,
-    BedrockCreateBatchResponse,
     BedrockInputDataConfig,
     BedrockOutputDataConfig,
     BedrockS3InputDataConfig,
@@ -320,11 +319,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         Transform Bedrock batch creation response to LiteLLM format.
         """
         try:
-            response_data: Final[BedrockCreateBatchResponse] = raw_response.json()
+            decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse Bedrock batch response: {e}")
 
-        # Extract information from typed Bedrock response
+        response_data: Final = decoded_json_object(decoded_response)
         job_arn: Final = response_data.get("jobArn", "")
         status_str: Final[str] = str(response_data.get("status", "Submitted"))
 
@@ -360,27 +359,29 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         original_request: Final = litellm_params.get("original_batch_request", {})
 
         # Create LiteLLM batch object
-        return LiteLLMBatch(
-            id=job_arn,  # Use ARN as the batch ID
-            object="batch",
-            endpoint=original_request.get("endpoint", "/v1/chat/completions"),
-            errors=None,
-            input_file_id=original_request.get("input_file_id", ""),
-            completion_window=original_request.get("completion_window", "24h"),
-            status=openai_status,
-            output_file_id=None,  # Will be populated when job completes
-            error_file_id=None,
-            created_at=int(time.time()),
-            in_progress_at=int(time.time()) if status_str == "InProgress" else None,
-            expires_at=None,
-            finalizing_at=None,
-            completed_at=None,
-            failed_at=None,
-            expired_at=None,
-            cancelling_at=None,
-            cancelled_at=None,
-            request_counts=None,
-            metadata=self._get_openai_compatible_batch_metadata(original_request.get("metadata", {})),
+        return LiteLLMBatch.model_validate(
+            {
+                "id": job_arn,  # Use ARN as the batch ID
+                "object": "batch",
+                "endpoint": original_request.get("endpoint", "/v1/chat/completions"),
+                "errors": None,
+                "input_file_id": original_request.get("input_file_id", ""),
+                "completion_window": original_request.get("completion_window", "24h"),
+                "status": openai_status,
+                "output_file_id": None,  # Will be populated when job completes
+                "error_file_id": None,
+                "created_at": int(time.time()),
+                "in_progress_at": int(time.time()) if status_str == "InProgress" else None,
+                "expires_at": None,
+                "finalizing_at": None,
+                "completed_at": None,
+                "failed_at": None,
+                "expired_at": None,
+                "cancelling_at": None,
+                "cancelled_at": None,
+                "request_counts": None,
+                "metadata": self._get_openai_compatible_batch_metadata(original_request.get("metadata", {})),
+            }
         )
 
     @staticmethod
