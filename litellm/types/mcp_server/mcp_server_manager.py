@@ -135,6 +135,14 @@ class MCPAuthProfile(LiteLLMBaseModel):
         default=None, repr=False, validation_alias=AliasChoices("authentication_token", "auth_value")
     )
 
+    @model_validator(mode="after")
+    def _oauth2_flow_matches_auth_type(self) -> Self:
+        if self.auth_type == MCPAuth.oauth2 and self.oauth2_flow != "client_credentials":
+            raise ValueError("an oauth2 profile requires oauth2_flow client_credentials")
+        if self.auth_type != MCPAuth.oauth2 and self.oauth2_flow is not None:
+            raise ValueError("oauth2_flow is only valid for an oauth2 profile")
+        return self
+
 
 _FIELD_DUMP: Final = TypeAdapter(Mapping[str, object])
 
