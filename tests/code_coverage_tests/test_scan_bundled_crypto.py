@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 
-REPO_ROOT: Final = Path(__file__).resolve().parents[4]
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 SCAN_SCRIPT: Final = REPO_ROOT / "litellm/deploy/docker/scan_bundled_crypto.sh"
 PASS_ONE: Final = "PASS: all 1 ELF binaries accounted for (inventoried, system-linked, or waived)\n"
 FAIL_ONE: Final = "FAIL: 1 of 1 ELF binaries unaccounted for (see above)\n"

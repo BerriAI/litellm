@@ -402,7 +402,6 @@ jobs:
             runner: ubuntu-latest-16-cores
             test-path: >-
               tests/unit/test_*.py
-              tests/unit/deploy
             python-version: "3.12"
             workers: 8
             reruns: 2
