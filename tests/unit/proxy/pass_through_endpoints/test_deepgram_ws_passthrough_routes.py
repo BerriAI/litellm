@@ -2,6 +2,7 @@
 target URL."""
 
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
@@ -17,7 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import WEBSOCKET_CLOSE_REASON_MAX_BYTES
-from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, install_model_cost_map
 from litellm.llms.deepgram.common_utils import DeepgramSpeakMeter
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
@@ -30,6 +31,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 )
 from litellm.proxy.utils import hash_token
 from litellm.types.passthrough_endpoints.pass_through_endpoints import WebSocketSessionMeter
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 GET_CREDENTIALS: Final = (
     "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
@@ -422,7 +424,7 @@ def test_deepgram_listen_authorizes_the_model_it_will_actually_send_upstream(que
         patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
             "litellm.proxy.proxy_server",
             master_key="sk-master",
-            prisma_client=MagicMock(),
+            prisma_client=prisma_with_empty_config(),
             user_api_key_cache=cache,
             llm_model_list=None,
             llm_router=None,
@@ -460,7 +462,7 @@ def test_deepgram_listen_strips_a_second_model_that_would_outrank_the_authorized
         patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
             "litellm.proxy.proxy_server",
             master_key="sk-master",
-            prisma_client=MagicMock(),
+            prisma_client=prisma_with_empty_config(),
             user_api_key_cache=cache,
             llm_model_list=None,
             llm_router=None,
@@ -546,7 +548,9 @@ async def test_deepgram_speak_bills_at_the_connect_time_rate_after_a_cost_map_re
 
     relay: Final = await _serve_speak(_FakeWebSocket("/deepgram/v1/speak", "model=aura-2-thalia-en"))
     meters: Final = [call.meter for call in relay.calls if isinstance(call.meter, DeepgramSpeakMeter)]
-    adopt_model_cost_map({key: row for key, row in litellm.model_cost.items() if key != "deepgram/aura-2"})
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    reloaded: Final = {key: row for key, row in litellm.model_cost.items() if key != "deepgram/aura-2"}
+    assert isinstance(install_model_cost_map(json.dumps(reloaded).encode()), ModelCostMapReloaded)
 
     assert [meter.price(47).response_cost for meter in meters] == [47 * rate]
 
@@ -640,7 +644,7 @@ def test_deepgram_speak_relays_only_the_voice_the_key_was_checked_against(
     with patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
         "litellm.proxy.proxy_server",
         master_key="sk-master",
-        prisma_client=MagicMock(),
+        prisma_client=prisma_with_empty_config(),
         user_api_key_cache=cache,
         llm_model_list=None,
         llm_router=None,
@@ -671,7 +675,7 @@ def test_deepgram_speak_refuses_a_voice_the_key_is_not_allowed(query: str, monke
     with patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
         "litellm.proxy.proxy_server",
         master_key="sk-master",
-        prisma_client=MagicMock(),
+        prisma_client=prisma_with_empty_config(),
         user_api_key_cache=cache,
         llm_model_list=None,
         llm_router=None,

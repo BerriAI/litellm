@@ -8,6 +8,7 @@
 # Standard library imports
 import json
 import os
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import quote
 
@@ -71,6 +72,12 @@ class _PillarProtectHTTPClient(Protocol):
         json: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> _PillarProtectHTTPResponse: ...
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def _encode_json_for_header(data: object) -> str:
@@ -725,7 +732,7 @@ class PillarGuardrail(CustomGuardrail):
         )
         return payload
 
-    async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, Any]) -> _PillarProtectResponse:
+    async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, object]) -> _PillarProtectResponse:
         """
         Call the Pillar API and return the response.
 
@@ -737,7 +744,7 @@ class PillarGuardrail(CustomGuardrail):
             Pillar API response as dictionary
         """
         verbose_proxy_logger.debug(
-            "Pillar Guardrail: Scanning %s messages for security threats", len(payload.get("messages", []))
+            "Pillar Guardrail: Scanning %s messages for security threats", _json_len(payload.get("messages", []))
         )
         response: Final = await self.async_handler.post(
             url=f"{self.api_base}/api/v1/protect",

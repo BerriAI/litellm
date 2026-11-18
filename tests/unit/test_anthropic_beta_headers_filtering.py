@@ -99,7 +99,9 @@ class TestAnthropicBetaHeadersFiltering:
         filtered = filter_and_transform_beta_headers(
             beta_headers=all_headers, provider=provider
         )
-        assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai"))
+        # Bedrock InvokeModel serves the compact-2026-09-04 `compaction` parameter; Converse does not.
+        # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+        assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai", "bedrock"))
         assert ("mid-conversation-tool-changes-2026-07-01" in filtered) is (provider != "bedrock_converse")
 
         for header in unsupported_headers:

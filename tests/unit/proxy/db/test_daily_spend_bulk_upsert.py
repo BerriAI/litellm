@@ -1,8 +1,11 @@
 """Tests for the single-statement daily spend upsert (LIT-5291)."""
 
+import hashlib
+import json
 import re
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Final
 
 import pytest
 
@@ -88,10 +91,10 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 25 bound columns per row plus the inlined updated_at, so the row count is what
+    # 27 bound columns per row plus the inlined updated_at, so the row count is what
     # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 25
-    assert "$2500::text" in sql
+    assert len(params) == 100 * 27
+    assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
@@ -111,6 +114,8 @@ def test_conflict_target_is_the_full_unique_constraint():
         "prompt_tokens",
         "completion_tokens",
         "spend",
+        "guardrail_spend",
+        "customer_margin_spend",
         "api_requests",
         "successful_requests",
         "failed_requests",
@@ -126,9 +131,7 @@ def test_counters_increment_rather_than_overwrite(column):
 
 
 def test_request_id_is_preserved_when_a_later_batch_carries_none():
-    sql, params = build_bulk_upsert(
-        TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(request_id=None),))
-    )
+    sql, params = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(request_id=None),)))
 
     assert '"request_id" = COALESCE(EXCLUDED."request_id", "LiteLLM_DailyTagSpend"."request_id")' in sql
     assert None in params
@@ -208,3 +211,83 @@ async def test_writer_survives_a_transaction_whose_key_columns_are_null():
     _, params = prisma_client.db.statements[0]
     assert None not in params[:9]
     assert transactions == {}
+
+
+def test_customer_daily_rows_keep_historical_parent_attribution_when_member_id_is_reused():
+    table = DAILY_SPEND_TABLES["customer_member"]
+    first = {
+        **tag_txn(),
+        "customer_member_id": "member",
+        "customer_team_id": "team-before",
+        "customer_org_id": "org-before",
+    }
+    second = {**first, "customer_team_id": "team-after", "customer_org_id": "org-after", "spend": 0.75}
+    merged = merge_by_conflict_key(table, (first, first, second))
+    assert len(merged) == 2
+    assert {(row["customer_team_id"], row["customer_org_id"], row["spend"]) for _, row in merged} == {
+        ("team-before", "org-before", 0.5),
+        ("team-after", "org-after", 0.75),
+    }
+    sql, params = build_bulk_upsert(table, merged)
+    assert 'ON CONFLICT ("id")' in sql
+    assert all(identity in params for identity in ("member", "team-before", "org-before", "team-after", "org-after"))
+    row_ids = {params[index] for index in range(0, len(params), len(params) // 2)}
+    assert len(row_ids) == 2
+    assert row_ids == {params[0] for _, _ in (build_bulk_upsert(table, merged[:1]),)} | {
+        build_bulk_upsert(table, merged[1:])[1][0]
+    }
+
+
+def test_customer_daily_aliases_of_one_model_keep_separate_rows_under_a_stable_id():
+    table = DAILY_SPEND_TABLES["customer_member"]
+    base = {**tag_txn(), "customer_member_id": "member", "customer_team_id": "team", "customer_org_id": "org"}
+    merged = merge_by_conflict_key(
+        table,
+        (
+            {**base, "model_group": "alias-a"},
+            {**base, "model_group": "alias-a", "spend": 0.25},
+            {**base, "model_group": "alias-b"},
+        ),
+    )
+    assert sorted((row["model_group"], row["spend"]) for _, row in merged) == [("alias-a", 0.5), ("alias-b", 0.25)]
+    _, params = build_bulk_upsert(table, merged)
+    first_id, second_id = params[0], params[len(params) // 2]
+    assert first_id != second_id
+    assert build_bulk_upsert(table, merged[:1])[1][0] == first_id
+
+
+def test_app_daily_rows_split_but_empty_app_preserves_the_pre_app_hash() -> None:
+    table: Final = DAILY_SPEND_TABLES["customer_member"]
+    base: Final = {
+        **tag_txn(),
+        "customer_member_id": "member",
+        "customer_team_id": "team",
+        "customer_org_id": "org",
+    }
+    legacy_columns: Final = (
+        "customer_member_id",
+        "customer_team_id",
+        "customer_org_id",
+        "date",
+        "api_key",
+        "model",
+        "custom_llm_provider",
+        "mcp_namespaced_tool_name",
+        "endpoint",
+        "model_group",
+    )
+    legacy_pairs: Final = sorted((column, str(base.get(column) or "")) for column in legacy_columns)
+    legacy_id: Final = hashlib.sha256(json.dumps(legacy_pairs, separators=(",", ":")).encode()).hexdigest()
+    merged: Final = merge_by_conflict_key(
+        table,
+        (
+            base,
+            {**base, "app_id": ""},
+            {**base, "app_id": "app-a"},
+            {**base, "app_id": "app-b"},
+        ),
+    )
+    assert len(merged) == 3
+    ids: Final = tuple(build_bulk_upsert(table, (row,))[1][0] for row in merged)
+    assert len(set(ids)) == 3 and legacy_id in ids
+    assert sorted(row["spend"] for _, row in merged) == [0.25, 0.25, 0.5]

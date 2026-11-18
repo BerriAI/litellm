@@ -1571,3 +1571,35 @@ async def test_mcp_call_masking(
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+class _RecordingPillarClient:
+    def __init__(self) -> None:
+        self.posted: list[dict[str, object]] = []
+
+    async def post(self, **kwargs: object) -> Response:
+        self.posted.append(kwargs)
+        return Response(200, json={"flagged": False}, request=Request("POST", "https://api.pillar.security"))
+
+
+@pytest.mark.asyncio
+async def test_messages_that_are_not_a_list_take_the_api_error_fallback_without_calling_pillar(env_setup):
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-fallback-block",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        fallback_on_error="block",
+    )
+    pillar_client = _RecordingPillarClient()
+    guardrail.async_handler = pillar_client
+
+    with pytest.raises(HTTPException) as excinfo:
+        await guardrail.async_pre_call_hook(
+            data={"model": "gpt-4", "messages": 5},
+            cache=DualCache(),
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+
+    assert excinfo.value.status_code == 503
+    assert pillar_client.posted == []

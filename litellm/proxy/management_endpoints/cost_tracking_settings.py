@@ -29,6 +29,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.prompt_cache_prediction import router as prompt_cache_prediction_router
+from litellm.proxy.spend_tracking.customer_cost_margin import CUSTOMER_MARGIN_KEY, is_valid_customer_margin
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     CostBreakdown,
@@ -253,6 +254,7 @@ async def update_cost_discount_config(
     ```
     """
     from litellm.proxy.proxy_server import (
+        DB_RECONCILE_LOCK,
         prisma_client,
         proxy_config,
         store_model_in_db,
@@ -301,21 +303,13 @@ async def update_cost_discount_config(
             )
 
     try:
-        # Load existing config
-        config: Final = await proxy_config.get_config()
-
-        # Ensure litellm_settings exists
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
-
-        # Update cost_discount_config
-        config["litellm_settings"]["cost_discount_config"] = cost_discount_config
-
-        # Save the updated config to DB
-        await proxy_config.save_config(new_config=config)
-
-        # Update in-memory litellm.cost_discount_config
-        litellm.cost_discount_config = cost_discount_config
+        async with DB_RECONCILE_LOCK:
+            config: Final = await proxy_config.get_config()
+            if "litellm_settings" not in config:
+                config["litellm_settings"] = {}
+            config["litellm_settings"]["cost_discount_config"] = cost_discount_config
+            await proxy_config.save_config(new_config=config)
+            litellm.cost_discount_config = cost_discount_config
 
         verbose_proxy_logger.info("Updated cost_discount_config: %s", cost_discount_config)
 
@@ -397,6 +391,7 @@ async def update_cost_margin_config(
     ```
     """
     from litellm.proxy.proxy_server import (
+        DB_RECONCILE_LOCK,
         prisma_client,
         proxy_config,
         store_model_in_db,
@@ -417,15 +412,23 @@ async def update_cost_margin_config(
     # Validate that all providers are valid LiteLLM providers (except "global")
     invalid_providers: Final = []
     for provider in cost_margin_config:
-        if provider != "global" and provider not in LlmProvidersSet:
+        if provider not in ("global", CUSTOMER_MARGIN_KEY) and provider not in LlmProvidersSet:
             invalid_providers.append(provider)
 
     if invalid_providers:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"Invalid provider(s): {', '.join(invalid_providers)}. Must be valid LiteLLM providers or 'global'. See https://docs.litellm.ai/docs/providers for the full list."
+                "error": f"Invalid provider(s): {', '.join(invalid_providers)}. Must be valid LiteLLM providers, 'global' or 'customer'. See https://docs.litellm.ai/docs/providers for the full list."
             },
+        )
+
+    if CUSTOMER_MARGIN_KEY in cost_margin_config and not is_valid_customer_margin(
+        cost_margin_config[CUSTOMER_MARGIN_KEY]
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Margin for customer requests must be a number between 0 and 10 (0% to 1000%)",
         )
 
     # Validate margin values
@@ -475,21 +478,13 @@ async def update_cost_margin_config(
             )
 
     try:
-        # Load existing config
-        config: Final = await proxy_config.get_config()
-
-        # Ensure litellm_settings exists
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
-
-        # Update cost_margin_config
-        config["litellm_settings"]["cost_margin_config"] = cost_margin_config
-
-        # Save the updated config to DB
-        await proxy_config.save_config(new_config=config)
-
-        # Update in-memory litellm.cost_margin_config
-        litellm.cost_margin_config = cost_margin_config
+        async with DB_RECONCILE_LOCK:
+            config: Final = await proxy_config.get_config()
+            if "litellm_settings" not in config:
+                config["litellm_settings"] = {}
+            config["litellm_settings"]["cost_margin_config"] = cost_margin_config
+            await proxy_config.save_config(new_config=config)
+            litellm.cost_margin_config = cost_margin_config
 
         verbose_proxy_logger.info("Updated cost_margin_config: %s", cost_margin_config)
 
@@ -534,6 +529,7 @@ async def update_block_requests_for_models_without_pricing(
     request: BlockUnpricedModelsRequest,
 ) -> BlockUnpricedModelsResponse:
     from litellm.proxy.proxy_server import (
+        DB_RECONCILE_LOCK,
         prisma_client,
         proxy_config,
         store_model_in_db,
@@ -552,13 +548,13 @@ async def update_block_requests_for_models_without_pricing(
         )
 
     try:
-        config = await proxy_config.get_config()
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
-        config["litellm_settings"]["block_requests_for_models_without_pricing"] = request.enabled
-        await proxy_config.save_config(new_config=config)
-
-        litellm.block_requests_for_models_without_pricing = request.enabled
+        async with DB_RECONCILE_LOCK:
+            config = await proxy_config.get_config()
+            if "litellm_settings" not in config:
+                config["litellm_settings"] = {}
+            config["litellm_settings"]["block_requests_for_models_without_pricing"] = request.enabled
+            await proxy_config.save_config(new_config=config)
+            litellm.block_requests_for_models_without_pricing = request.enabled
         verbose_proxy_logger.info("Updated block_requests_for_models_without_pricing: %s", request.enabled)
 
         return BlockUnpricedModelsResponse(enabled=request.enabled)
