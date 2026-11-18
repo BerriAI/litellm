@@ -11,7 +11,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 
 ## Parity fixtures
 
-`fixtures/*.json` were captured once from main's Python with `LITELLM_LOCAL_MODEL_COST_MAP=True`. Each case holds its inputs (the row fields it read, the billed usage, the config) and main's outputs, and `tokens/parity.rs` and `bound/parity.rs` assert Rust equals them to the last bit. Never replay Python from a test. When a fixture must change, recapture it from main and say why in the commit
+`fixtures/*.json` were captured once from main's Python with `LITELLM_LOCAL_MODEL_COST_MAP=True`. Each case holds its inputs (the row fields it read, the billed usage, the config) and main's outputs, and the `parity` test module of each kind asserts Rust equals them to the last bit. Never replay Python from a test. When a fixture must change, recapture it from main and say why in the commit
 
 ## Copied from main, fix later
 
