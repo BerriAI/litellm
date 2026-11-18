@@ -6070,7 +6070,8 @@ def completion(
         # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
         # (early) check doesn't cover.
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
-        if responses_api_model_info.get("mode") != "responses":
+        routed_to_responses_without_base_model: Final = responses_api_model_info.get("mode") == "responses"
+        if not routed_to_responses_without_base_model:
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -6092,14 +6093,16 @@ def completion(
         if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
-            _raise_if_base_model_bridge_would_drop_a_param(
-                optional_params,
-                custom_llm_provider=custom_llm_provider,
-                model=model,
-                base_model=base_model if isinstance(base_model, str) else None,
-                drop_params=litellm.drop_params is True
-                or normalize_drop_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")) is True,
-            )
+            if not routed_to_responses_without_base_model:
+                _raise_if_base_model_bridge_would_drop_a_param(
+                    optional_params,
+                    custom_llm_provider=custom_llm_provider,
+                    model=model,
+                    base_model=base_model if isinstance(base_model, str) else None,
+                    drop_params=litellm.drop_params is True
+                    or normalize_drop_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params"))
+                    is True,
+                )
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
             if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:

@@ -2199,6 +2199,31 @@ def test_completion_drops_n_and_seed_under_drop_params_when_a_gpt_5_base_model_b
     assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7)])
+def test_completion_keeps_main_handling_when_the_route_not_the_gpt_5_base_model_chose_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str, value: int
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/responses/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"},
+        **{param: value},
+    )
+
+    assert responses_route.call_count == 1
+    assert json.loads(responses_route.calls[0].request.content)["model"] == "qa-prod-reasoner"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
