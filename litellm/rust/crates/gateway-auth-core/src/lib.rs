@@ -271,7 +271,6 @@ mod tests {
         );
     }
 
-    /// A host whose userinfo carries `claims` and maps `client_id=app` to the stored key `record`.
     fn host_mapping_the_client(claims: Value, record: KeyRecord) -> ScriptedHost {
         let key = Keyed {
             record: KeyRecord {
@@ -292,8 +291,6 @@ mod tests {
         }
     }
 
-    /// A chat request whose body names the end user `from-body`, on a proxy that maps JWTs to a
-    /// virtual key by `client_id` and reads the end user from the `end` claim.
     async fn chat(host: &ScriptedHost) -> Authenticated<ScriptedHost> {
         let base = settings();
         let settings = Settings {
@@ -321,6 +318,7 @@ mod tests {
         authenticate_jwt(host, &request, &settings).await
     }
 
+    #[rstest]
     #[tokio::test]
     async fn a_mapped_jwt_has_its_key_checked_for_the_end_user_its_claim_names() {
         let host = host_mapping_the_client(
@@ -353,6 +351,7 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
     async fn a_mapped_jwt_whose_key_is_blocked_is_refused_with_that_key() {
         let blocked = KeyRecord {

@@ -1061,8 +1061,7 @@ mod tests {
         );
     }
 
-    /// `eng` names the team `t3`.
-    fn eng_alias() -> HashMap<&'static str, Result<AliasRead<String>, Error>> {
+    fn eng_alias_for_team_t3() -> HashMap<&'static str, Result<AliasRead<String>, Error>> {
         let aliased = Team {
             team_id: "t3".to_owned(),
             models: Some(Vec::new()),
@@ -1093,7 +1092,7 @@ mod tests {
             managed: Some(agent(AgentMode::Delegated)),
             delegated_team: Some("t5"),
             teams: HashMap::from([("t1", team("t1")), ("t2", team("t2")), ("t5", team("t5"))]),
-            aliases: eng_alias(),
+            aliases: eng_alias_for_team_t3(),
             users: HashMap::from([("u1", user("u1", "proxy_admin", &[]))]),
             ..host(claims)
         };
@@ -1298,16 +1297,14 @@ mod tests {
         );
     }
 
-    /// A route `team_allowed_routes` does not list, as every path under an `include_subpath`
-    /// pass-through endpoint is.
-    const UNDER_AN_ENDPOINT: &str = "/solver/solution/job-1";
+    const UNLISTED_ROUTE_UNDER_AN_ENDPOINT: &str = "/solver/solution/job-1";
 
     #[rstest]
     #[case::the_team_grants_the_endpoint(true, Ok(Some("t1")))]
     #[case::the_team_grants_nothing(
         false,
         Err(JwtDenial::Team(TeamDenial::PassthroughRouteDenied {
-            route: UNDER_AN_ENDPOINT.to_owned(),
+            route: UNLISTED_ROUTE_UNDER_AN_ENDPOINT.to_owned(),
             denied_route: None,
         }).into())
     )]
@@ -1329,11 +1326,11 @@ mod tests {
             team_ids_jwt_field: Some("groups".into()),
             ..config()
         });
-        let forwarded = [UNDER_AN_ENDPOINT.to_owned()];
+        let forwarded = [UNLISTED_ROUTE_UNDER_AN_ENDPOINT.to_owned()];
         let request = JwtRequest {
             auth_enforced_pass_through: true,
             forwarded_routes: ForwardedRoutes(&forwarded),
-            ..request(UNDER_AN_ENDPOINT)
+            ..request(UNLISTED_ROUTE_UNDER_AN_ENDPOINT)
         };
 
         let identity = authorize_with(&host, request, &settings, None).await;
@@ -1880,7 +1877,7 @@ mod tests {
                 ("t2", team("t2")),
                 ("tdef", team("tdef")),
             ]),
-            aliases: eng_alias(),
+            aliases: eng_alias_for_team_t3(),
             users: HashMap::from([("u1", user("u1", "internal_user", &["t1"]))]),
             ..host(claims)
         };
@@ -1905,7 +1902,7 @@ mod tests {
     async fn a_singular_team_claim(#[case] claims: Value, #[case] header: Option<&'static str>) {
         let host = ScriptedHost {
             teams: HashMap::from([("t2", team("t2"))]),
-            aliases: eng_alias(),
+            aliases: eng_alias_for_team_t3(),
             users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
             ..host(claims)
         };
