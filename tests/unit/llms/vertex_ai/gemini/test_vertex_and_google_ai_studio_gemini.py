@@ -6,6 +6,7 @@ import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from itertools import chain, pairwise
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -40,6 +41,7 @@ from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, 
 from litellm.utils import CustomStreamWrapper
 from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
@@ -11471,6 +11473,50 @@ def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
 
     assert chunk.usage.prompt_tokens == 1536 + 1280
     assert chunk.usage.cache_creation_input_tokens == 1280
+
+
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "grounding",
+    [{}, {"webSearchQueries": ["weather"]}, {"groundingChunks": [{"maps": {"uri": "https://maps.google.com/place"}}]}],
+)
+def test_streaming_grounding_cost_matches_nonstream_when_usage_arrives_later(
+    provider: str, grounding: dict[str, object]
+) -> None:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    logging_obj: Final = Logging(
+        model="gemini-2.5-flash",
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="grounding",
+        function_id="grounding",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    candidate: Final = {"content": {"role": "model", "parts": [{"text": "weather"}]}, "groundingMetadata": grounding}
+    metadata: Final = {
+        "promptTokenCount": 100,
+        "toolUsePromptTokenCount": 900,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 1010,
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=logging_obj)
+    iterator.chunk_parser({"candidates": [candidate]})
+    streamed: Final = iterator.chunk_parser({"usageMetadata": metadata})
+    nonstream: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response={"candidates": [candidate], "usageMetadata": metadata},
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        raw_response=httpx.Response(200),
+    )
+    assert streamed is not None
+    assert streamed.usage == nonstream.usage
+    assert litellm.completion_cost(completion_response=streamed, model=f"{provider}/gemini-2.5-flash") == pytest.approx(
+        litellm.completion_cost(completion_response=nonstream, model=f"{provider}/gemini-2.5-flash")
+    )
 
 
 THOUGHT_SUMMARY_REQUESTS: Final = (

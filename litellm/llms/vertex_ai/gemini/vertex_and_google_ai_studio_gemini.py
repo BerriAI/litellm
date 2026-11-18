@@ -2560,6 +2560,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _calculate_usage(
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
+        has_search_grounding: bool = False,
     ) -> Usage:
         if completion_response is not None and "usageMetadata" not in completion_response:
             raise ValueError(f"usageMetadata not found in completion_response. Got={completion_response}")
@@ -2692,7 +2693,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         billable_tool_use_prompt_tokens: Final = (
             0
-            if VertexGeminiConfig._response_has_search_grounding(completion_response)
+            if has_search_grounding or VertexGeminiConfig._response_has_search_grounding(completion_response)
             else (tool_use_prompt_tokens or 0)
         )
         billable_text_tokens: Final = (
@@ -2747,8 +2748,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
         cache_creation_tokens: int = 0,
+        has_search_grounding: bool = False,
     ) -> Usage:
-        return cls._calculate_usage(completion_response, cache_creation_tokens)
+        return cls._calculate_usage(completion_response, cache_creation_tokens, has_search_grounding)
 
     @staticmethod
     def _check_finish_reason(
@@ -4380,7 +4382,7 @@ class ModelResponseIterator:
         if grounding_metadata:
             self._hop_grounding = tuple(grounding_metadata)
         if not self._grounding_offset:
-            return grounding_metadata
+            return self._hop_grounding
         return (*self._grounding_offset, *self._hop_grounding)
 
     def _apply_stream_usage_metadata(
@@ -4389,15 +4391,24 @@ class ModelResponseIterator:
         model_response: "ModelResponseStream",
         grounding_metadata: list[dict],
     ) -> Usage | None:
+        accumulated_grounding: Final = self._grounding_through_this_hop(grounding_metadata)
         if "usageMetadata" not in processed_chunk:
             return None
 
-        usage: Final = VertexGeminiConfig.calculate_usage(
-            completion_response=processed_chunk,
-            cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
+        usage: Final = (
+            VertexGeminiConfig.calculate_usage(
+                completion_response=processed_chunk,
+                cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
+                has_search_grounding=True,
+            )
+            if calculate_grounding_requests(accumulated_grounding).has_billable_grounding()
+            else VertexGeminiConfig.calculate_usage(
+                completion_response=processed_chunk,
+                cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
+            )
         )
 
-        VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
+        VertexGeminiConfig.set_grounding_usage_counters(usage, accumulated_grounding)
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
