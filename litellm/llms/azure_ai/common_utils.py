@@ -4,6 +4,8 @@ from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlparse
 
+import httpx
+
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -12,13 +14,27 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
-AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
+FOUNDRY_HOST_SUFFIX: Final = ".services.ai.azure.com"
+AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (FOUNDRY_HOST_SUFFIX, ".openai.azure.com")
+OPENAI_V1_PATH: Final = ("openai", "v1")
+CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")
+_OPENAI_V1_ROUTES: Final = (CHAT_COMPLETIONS_PATH, ("responses",), ("responses", "compact"))
+FOUNDRY_PROJECT_PATH_PREFIX: Final = ("api", "projects")
+
+
+def _path_segments(base_url: httpx.URL) -> tuple[str, ...]:
+    return tuple(segment for segment in base_url.path.split("/") if segment)
+
+
+def foundry_project_root(base_url: httpx.URL) -> tuple[str, ...]:
+    segments: Final = _path_segments(base_url)
+    return segments[:3] if segments[:2] == FOUNDRY_PROJECT_PATH_PREFIX else ()
 
 
 def is_foundry_model_inference_base(api_base: str) -> bool:
     parsed: Final = urlparse(api_base)
     host: Final = parsed.hostname
-    if host is None or not host.endswith(".services.ai.azure.com"):
+    if host is None or not host.endswith(FOUNDRY_HOST_SUFFIX):
         return False
     return "/openai/deployments" not in parsed.path
 
@@ -149,6 +165,26 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
     if "claude" in model.lower():
         return False
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
+
+
+def _is_foundry_v1_base(api_base: str) -> bool:
+    base_url: Final = httpx.URL(api_base)
+    if not base_url.host.endswith(FOUNDRY_HOST_SUFFIX):
+        return False
+    if foundry_project_root(base_url):
+        return True
+    segments: Final = _path_segments(base_url)
+    route_free: Final = next(
+        (segments[: -len(route)] for route in _OPENAI_V1_ROUTES if segments[-len(route) :] == route), segments
+    )
+    return route_free[-2:] == OPENAI_V1_PATH
+
+
+def is_foundry_v1_model_router(model: str | None, api_base: str | None) -> bool:
+    resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+    if model is None or resolved_base is None or not _is_foundry_v1_base(resolved_base):
+        return False
+    return AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router"
 
 
 def foundry_chat_rejects_function_tools_while_reasoning(
