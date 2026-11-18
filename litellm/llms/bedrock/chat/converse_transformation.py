@@ -578,7 +578,7 @@ class AmazonConverseConfig(BaseConfig):
             api_base=None,
             model_info=model_info,
         )
-        leading_count: Final = self._leading_system_count(with_system_roles)
+        leading_count: Final = _leading_system_count(with_system_roles)
         system_placed: Final = (
             *filter(None, map(_system_text_converse_sends, with_system_roles[:leading_count])),
             *self._mid_conversation_system_as_user(with_system_roles[leading_count:]),
@@ -2042,7 +2042,7 @@ class AmazonConverseConfig(BaseConfig):
         deployment_model: str | None = None,
         model_info: Mapping[str, object] | None = None,
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        leading_count: Final = self._leading_system_count(messages)
+        leading_count: Final = _leading_system_count(messages)
         hoisted: Final = messages[:leading_count]
         remaining: Final = messages[leading_count:]
         system_content_blocks: Final[list[SystemContentBlock]] = []
@@ -2072,10 +2072,6 @@ class AmazonConverseConfig(BaseConfig):
                     if cache_block:
                         system_content_blocks.append(cache_block)
         return list(self._mid_conversation_system_as_user(remaining)), system_content_blocks
-
-    @staticmethod
-    def _leading_system_count(messages: Sequence[AllMessageValues]) -> int:
-        return next((i for i, m in enumerate(messages) if not is_system_message(m)), len(messages))
 
     def _mid_conversation_system_as_user(self, messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
         reordered: Final = tuple(

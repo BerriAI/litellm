@@ -915,14 +915,14 @@ def _add_call(call_id: str) -> dict[str, JsonValue]:
 _ADD_TOOL: Final = {"type": "function", "function": {"name": "add", "parameters": {"type": "object"}}}
 
 
-async def _converse_sent_and_counted(
+async def _converse_inference_and_count_bodies(
     messages: list[dict[str, JsonValue]],
     tools: list[dict[str, JsonValue]],
     model: str = "us.anthropic.claude-haiku-5-5",
     response_format: dict[str, JsonValue] | None = None,
     counted_model: str | None = None,
     continue_settings: dict[str, JsonValue] | None = None,
-) -> tuple[tuple[tuple[JsonValue, str], ...], tuple[tuple[JsonValue, str], ...]]:
+) -> tuple[Mapping[str, JsonValue], Mapping[str, JsonValue]]:
     credentials: Final = {**DEPLOYMENT["litellm_params"], **(continue_settings or {})}
     deployment_model: Final = f"bedrock/{model}"
     chat_params: Final = {"response_format": response_format} if response_format else {}
@@ -952,10 +952,21 @@ async def _converse_sent_and_counted(
     assert result is not None
     assert result.error is False
     assert not _empty_turns(_counted_body(bedrock.requests[0]))
-    return (
-        _sent_system_and_texts(_JSON_BODY.validate_json(inference.requests[0].content)),
-        _sent_system_and_texts(_counted_body(bedrock.requests[0])),
+    return _JSON_BODY.validate_json(inference.requests[0].content), _counted_body(bedrock.requests[0])
+
+
+async def _converse_sent_and_counted(
+    messages: list[dict[str, JsonValue]],
+    tools: list[dict[str, JsonValue]],
+    model: str = "us.anthropic.claude-haiku-5-5",
+    response_format: dict[str, JsonValue] | None = None,
+    counted_model: str | None = None,
+    continue_settings: dict[str, JsonValue] | None = None,
+) -> tuple[tuple[tuple[JsonValue, str], ...], tuple[tuple[JsonValue, str], ...]]:
+    inference_body, counted_body = await _converse_inference_and_count_bodies(
+        messages, tools, model, response_format, counted_model, continue_settings
     )
+    return _sent_system_and_texts(inference_body), _sent_system_and_texts(counted_body)
 
 
 @pytest.mark.asyncio
@@ -1234,6 +1245,62 @@ async def test_claude_converse_count_matches_inference_for_an_earlier_empty_user
         ("user", "And 3+3?"),
     )
     assert counted == converse_sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blank_content",
+    ([], None, "", [{"type": "text", "text": ""}]),
+    ids=("empty_list", "null", "empty_string", "empty_text_block"),
+)
+async def test_claude_converse_count_drops_an_earlier_empty_user_turn_before_a_blank_last_turn(
+    blank_content: JsonValue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    inference_body, counted_body = await _converse_inference_and_count_bodies(
+        [
+            _QUESTION,
+            _ANSWER,
+            {"role": "user", "content": blank_content},
+            {"role": "assistant", "content": "Six."},
+            {"role": "user", "content": ""},
+        ],
+        [],
+    )
+
+    assert _sent_texts(inference_body)[-1][0] == "user"
+    assert counted_body["messages"] == inference_body["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blank_turn",
+    (
+        {"role": "user", "content": "", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}]},
+    ),
+    ids=("marked_turn", "marked_block"),
+)
+async def test_claude_converse_count_keeps_the_cache_point_of_a_blank_last_user_turn(
+    blank_turn: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    inference_body, counted_body = await _converse_inference_and_count_bodies([_QUESTION, _ANSWER, blank_turn], [])
+
+    inference_messages: Final = inference_body["messages"]
+    counted_messages: Final = counted_body["messages"]
+    assert isinstance(inference_messages, list) and isinstance(inference_messages[-1], dict)
+    assert isinstance(counted_messages, list) and isinstance(counted_messages[-1], dict)
+    inference_blocks: Final = inference_messages[-1]["content"]
+    counted_blocks: Final = counted_messages[-1]["content"]
+    assert isinstance(inference_blocks, list) and isinstance(counted_blocks, list)
+    assert any(isinstance(block, dict) and "cachePoint" in block for block in inference_blocks)
+    assert [isinstance(block, dict) and block.get("cache_control") for block in counted_blocks] == [
+        {"type": "ephemeral"}
+    ]
+    assert _sent_texts(counted_body) == _sent_texts(inference_body)
 
 
 @pytest.mark.asyncio

@@ -2731,10 +2731,24 @@ def user_turns_as_converse_sends_them(
         and messages[tail_start - 1].get("role") == "assistant"
         and all(map(is_empty_user_message, messages[tail_start:]))
     )
-    if sends_placeholder_turn:
-        return (*messages[:tail_start], {"role": "user", "content": EMPTY_TEXT_PLACEHOLDER})
-    sent_turns: Final = (_user_turn_as_converse_sends_it(message, user_continue_message) for message in messages)
-    return tuple(turn for turn in sent_turns if turn is not None)
+    leading_turns: Final = messages[:tail_start] if sends_placeholder_turn else messages
+    sent_turns: Final = (_user_turn_as_converse_sends_it(message, user_continue_message) for message in leading_turns)
+    kept_turns: Final = tuple(turn for turn in sent_turns if turn is not None)
+    if not sends_placeholder_turn:
+        return kept_turns
+    return (*kept_turns, _placeholder_user_turn(messages[tail_start:]))
+
+
+def _placeholder_user_turn(trailing_messages: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    marked: Final = _first_cache_marked(trailing_messages)
+    if marked is None:
+        return {"role": "user", "content": EMPTY_TEXT_PLACEHOLDER}
+    placeholder_block: Final = {
+        "type": "text",
+        "text": EMPTY_TEXT_PLACEHOLDER,
+        "cache_control": message_field(marked, "cache_control"),
+    }
+    return {"role": "user", "content": [placeholder_block]}
 
 
 def _with_placeholder_text(block: object) -> object:
@@ -5245,6 +5259,11 @@ def _cache_mark_holders(message: object) -> Sequence[object]:
     return (message, *(as_object_list(message_field(message, "content")) or ()))
 
 
+def _first_cache_marked(trailing_messages: Sequence[object]) -> object | None:
+    holders: Final = itertools.chain.from_iterable(map(_cache_mark_holders, trailing_messages))
+    return next(filter(_has_cache_mark, holders), None)
+
+
 def _bedrock_placeholder_turn(
     trailing_messages: Sequence[object],
     model: str,
@@ -5253,8 +5272,7 @@ def _bedrock_placeholder_turn(
 ) -> BedrockMessageBlock:
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-    holders: Final = itertools.chain.from_iterable(map(_cache_mark_holders, trailing_messages))
-    marked: Final = next(filter(_has_cache_mark, holders), None)
+    marked: Final = _first_cache_marked(trailing_messages)
     cache_point: Final = (
         None
         if marked is None
