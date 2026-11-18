@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.responses.utils import auto_reasoning_summary, without_dropped_store
+from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -167,8 +167,7 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
-    params: Final = extra_kwargs or {}
-    return without_dropped_store(params, params.get("additional_drop_params"))
+    return extra_kwargs or {}
 
 
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
@@ -315,7 +314,9 @@ def _build_responses_kwargs(
         request_data["output_format"] = output_format
 
     caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
-    upstream_store: Final = caller_extra_body.get("store", forwarded_kwargs.get("store"))
+    additional_drop_params: Final = forwarded_kwargs.get("additional_drop_params")
+    drops_store: Final = isinstance(additional_drop_params, list) and "store" in additional_drop_params
+    upstream_store: Final = caller_extra_body.get("store", None if drops_store else forwarded_kwargs.get("store"))
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,

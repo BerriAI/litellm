@@ -5526,9 +5526,7 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> No
         {"instructions": "Caller instructions", **continuation},
     )
     assert request["instructions"] == "Be brief.\nCaller instructions"
-    assert request["input"] == [
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
-    ]
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
 
 
 @pytest.mark.parametrize(
@@ -5543,12 +5541,6 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> No
         ({"extra_body": {"store": False}}, {"store": True}, True),
         ({"extra_body": {"store": True}}, {"store": False}, False),
         ({"store": False}, {}, False),
-        ({"additional_drop_params": ["store"]}, {"store": False}, False),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, False),
-        ({}, {"store": False, "additional_drop_params": ["store"]}, False),
-        ({}, {"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
-        ({}, {"store": True, "extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
-        ({}, {"store": False, "extra_body": {"store": True}, "additional_drop_params": ["extra_body.store"]}, True),
     ],
 )
 def test_system_placement_uses_effective_upstream_store(
@@ -5567,6 +5559,49 @@ def test_system_placement_uses_effective_upstream_store(
         *([_system_input_item("Be brief.")] if system_in_input else []),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
     ]
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_store"),
+    [
+        ({"store": False, "additional_drop_params": ["store"]}, None),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, None),
+        ({"store": False}, False),
+    ],
+)
+def test_chat_store_drops_preserve_upstream_forwarding(params: dict[str, object], expected_store: bool | None) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").respond(
+            200,
+            json={
+                "id": "resp_store_drop",
+                "object": "response",
+                "created_at": 1789788253,
+                "status": "completed",
+                "model": "gpt-6.2-sol",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_store_drop",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+            },
+        )
+        litellm.completion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            **copy.deepcopy(params),
+        )
+    body: Final = json.loads(upstream.calls.last.request.content)
+    assert body.get("store") is expected_store
+    assert ("store" in body) == (expected_store is not None)
+    assert body.get("instructions") == (None if expected_store is False else "Be brief.")
+    assert [item["role"] for item in body["input"]] == (["system", "user"] if expected_store is False else ["user"])
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():

@@ -66,10 +66,6 @@ def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, s
         ({"extra_body": {"store": False}}, True),
         ({"store": False, "extra_body": {"store": True}}, False),
         ({"store": True, "extra_body": {"store": False}}, True),
-        ({"store": False, "additional_drop_params": ["store"]}, False),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
-        ({"store": True, "extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
-        ({"store": False, "extra_body": {"store": True}, "additional_drop_params": ["extra_body.store"]}, True),
     ],
 )
 @pytest.mark.parametrize("system", ["Be brief.", [{"type": "text", "text": "Be brief."}]])
@@ -94,6 +90,31 @@ def test_system_placement_uses_effective_upstream_store(
         ),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "expected_store"),
+    [
+        ({"store": False, "additional_drop_params": ["store"]}, None),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({"store": False}, False),
+        ({"store": True, "extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({"store": False, "extra_body": {"store": True}, "additional_drop_params": ["extra_body.store"]}, True),
+    ],
+)
+async def test_messages_store_drops_preserve_upstream_forwarding(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    params: dict[str, object],
+    expected_store: bool | None,
+) -> None:
+    await _bridge_response(respx_mock, monkeypatch, stream=False, settings={}, system="Be brief.", **params)
+    body: Final = json.loads(respx_mock.calls.last.request.content)
+    assert body.get("store") is expected_store
+    assert ("store" in body) == (expected_store is not None)
+    assert body.get("instructions") == (None if expected_store is False else "Be brief.")
+    assert [item["role"] for item in body["input"]] == (["developer", "user"] if expected_store is False else ["user"])
 
 
 @pytest.mark.parametrize("nested", [False, True])

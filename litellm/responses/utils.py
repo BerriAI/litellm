@@ -61,20 +61,6 @@ def _apply_nested_drop_params(params: dict[str, object], additional_drop_params:
     return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
 
 
-def without_dropped_store(params: Mapping[str, object], additional_drop_params: object) -> dict[str, object]:
-    dropped: Final = additional_drop_params if isinstance(additional_drop_params, list) else ()
-    extra_body: Final = params.get("extra_body")
-    return {
-        key: (
-            {name: value for name, value in extra_body.items() if name != "store"}
-            if key == "extra_body" and isinstance(extra_body, dict) and "extra_body.store" in dropped
-            else value
-        )
-        for key, value in params.items()
-        if not (key == "store" and "store" in dropped or key == "extra_body" and "extra_body" in dropped)
-    }
-
-
 def _output_token_detail(details: object, field: str) -> int | None:
     value: Final = getattr(details, field, None)
     return value if isinstance(value, int) else None
