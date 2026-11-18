@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.exceptions import EndpointNotSupportedByModelError
 from litellm.router_core import RouterCore
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
@@ -46,7 +47,7 @@ def test_text_completion_retries_after_a_deployment_failure(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core = build(make_core, num_retries=1)
-    host.answer("openai/a1", rate_limit())
+    host.answer("openai/a1", rate_limit(), None)
 
     response = text_completion(core)
 
@@ -89,3 +90,19 @@ def test_text_completion_uses_the_request_fallback_list(make_core: MakeCore, hos
 
     assert getattr(response, "model", None) == "openai/b1"
     assert host.deployments_called("text_completion") == ["a1", "b1"]
+
+
+def test_text_completion_is_refused_by_a_deployment_that_serves_no_text(make_core: MakeCore) -> None:
+    core = make_core(
+        model_list=[
+            deployment(
+                "a",
+                "a1",
+                model_info={"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            )
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(EndpointNotSupportedByModelError):
+        text_completion(core)

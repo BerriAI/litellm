@@ -53,7 +53,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     surface_for_call,
 )
 from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, bound_request_queue
-from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
+from litellm.router_utils.endpoint_eligibility import endpoint_for_call
 from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
