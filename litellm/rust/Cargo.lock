@@ -3740,14 +3740,22 @@ dependencies = [
 name = "litellm-callbacks-budgets"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-callbacks",
+ "litellm-circuit-breaker",
  "litellm-coroutine",
  "litellm-python-compat",
+ "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-redis-testing",
+ "litellm-secret-value",
  "litellm-tracing",
  "rstest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]

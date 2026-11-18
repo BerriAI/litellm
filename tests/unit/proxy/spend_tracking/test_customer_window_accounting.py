@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -46,6 +47,8 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerScopeAuth,
 )
 from litellm.types.utils import ModelResponse, Usage
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 LIMITS: Final = (
@@ -68,6 +71,19 @@ def accounting_state(monkeypatch):
     monkeypatch.setattr(ps, "proxy_logging_obj", SimpleNamespace(db_spend_update_writer=writer))
     monkeypatch.setattr(ps, "prisma_client", prisma)
     return backend, writer, prisma
+
+
+class _RustBackend:
+    """The Rust spend counter store the ledger's counter step runs on, installed as the proxy's store and read the way
+    the tests read the fake."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._store: Final = SpendCounterStore(connect(None).spend_counters())
+        monkeypatch.setattr(ps, "spend_counter_store", self._store)
+
+    @property
+    def redis(self) -> Mapping[str, float]:
+        return self._store.snapshot()
 
 
 @pytest.mark.parametrize("scope", ("customer_org", "customer_team", "customer_member"))
@@ -170,12 +186,13 @@ async def test_redis_failure_never_admits_from_incomplete_local_spend(accounting
 @pytest.mark.parametrize("status", ("success", "failure"))
 async def test_real_cost_callback_keeps_customer_scalar_and_window_cost_once(
     accounting_state,
-    monkeypatch,
-    ledger,
-    disable_logs,
+    monkeypatch: pytest.MonkeyPatch,
+    ledger: bool,
+    disable_logs: bool,
     status,
 ):
-    backend, writer, prisma = accounting_state
+    writer, prisma = accounting_state[1:]
+    backend: Final = _RustBackend(monkeypatch) if ledger else accounting_state[0]
     monkeypatch.setattr(ps, "general_settings", {"use_spend_logs_ledger": ledger})
     monkeypatch.setattr(ps, "disable_spend_logs", disable_logs)
     now: Final = datetime.now(timezone.utc)
@@ -247,8 +264,11 @@ async def test_real_cost_callback_keeps_customer_scalar_and_window_cost_once(
 
 
 @pytest.mark.asyncio
-async def test_outer_callback_resolves_cached_hierarchy_into_accounting(accounting_state, monkeypatch):
-    backend, writer, prisma = accounting_state
+async def test_outer_callback_resolves_cached_hierarchy_into_accounting(
+    accounting_state, monkeypatch: pytest.MonkeyPatch
+):
+    writer, prisma = accounting_state[1:]
+    backend: Final = _RustBackend(monkeypatch)
     cache: Final = UserApiKeyCache()
     hierarchy: Final = CustomerHierarchyAuth(
         customer_org_id="org",
@@ -360,9 +380,10 @@ async def test_auth_rejects_redis_outage_with_503(accounting_state):
 @pytest.mark.parametrize("ledger", (False, True))
 @pytest.mark.parametrize("failure", (False, True))
 async def test_admitted_windows_are_charged_during_policy_outage(
-    accounting_state, monkeypatch, member, ledger, failure
+    accounting_state, monkeypatch: pytest.MonkeyPatch, member, ledger: bool, failure
 ):
-    backend, writer, prisma = accounting_state
+    writer, prisma = accounting_state[1:]
+    backend: Final = _RustBackend(monkeypatch) if ledger else accounting_state[0]
     scopes: Final = (
         CustomerScopeAuth(key="customer_org", entity_id="org", budget_limits=LIMITS),
         *(

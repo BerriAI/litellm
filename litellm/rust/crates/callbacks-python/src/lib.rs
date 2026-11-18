@@ -16,6 +16,8 @@ use serde_json::Value;
 mod hosted;
 pub mod payload;
 
+pub use hosted::{host_call_error, run_hosted};
+
 #[pyclass(frozen, name = "RustCallback")]
 pub struct RustCallback {
     callback: Arc<dyn ErasedCallback>,
@@ -162,13 +164,7 @@ impl RustCallback {
             .then(|| payload::running_loop(py))
             .flatten();
         Ok(Execution::new(
-            hosted::HostedExecution::new(
-                Arc::clone(&self.callback),
-                input,
-                state,
-                render_loop,
-                host,
-            ),
+            hosted::callback_execution(Arc::clone(&self.callback), input, state, render_loop, host),
             execution_steps,
         ))
     }
