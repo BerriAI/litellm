@@ -6949,8 +6949,14 @@ class TestCancelOnDisconnect:
             await await_llm_call_cancelling_on_disconnect(request, llm_call)
 
     async def _drive_base_process_llm_request(
-        self, monkeypatch, general_settings: dict, llm_call, request: Request, *, process_in_python: bool = False
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        general_settings: dict[str, object],
+        llm_call: Callable[[], Awaitable[object]],
+        request: Request,
+        *,
+        process_in_python: bool = False,
+    ) -> object:
         from litellm.proxy._types import UserAPIKeyAuth
 
         logging_obj = MagicMock()
@@ -7036,11 +7042,13 @@ class TestCancelOnDisconnect:
         assert upstream_cancelled.is_set()
 
     @pytest.mark.parametrize("cancel_on_disconnect", (False, True))
-    async def test_cancelled_python_request_cancels_its_upstream_task(self, monkeypatch, cancel_on_disconnect: bool):
+    async def test_cancelled_python_request_cancels_its_upstream_task(
+        self, monkeypatch: pytest.MonkeyPatch, cancel_on_disconnect: bool
+    ) -> None:
         started: Final = asyncio.Event()
         cancelled: Final = asyncio.Event()
 
-        async def llm_call():
+        async def llm_call() -> None:
             started.set()
             try:
                 await asyncio.Event().wait()
