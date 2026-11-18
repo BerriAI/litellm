@@ -117,13 +117,15 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
             {/* Step 1: Base Token Costs */}
             <div className="space-y-2 max-w-2xl">
               {(() => {
-                const cacheReadCost = costBreakdown?.cache_read_cost;
-                const cacheWriteCost = costBreakdown?.cache_creation_cost;
-                const hasCacheReadCost = typeof cacheReadCost === "number";
-                const hasCacheWriteCost = typeof cacheWriteCost === "number";
-                if (hasCacheReadCost || hasCacheWriteCost) {
+                const hasCacheBreakdown =
+                  costBreakdown?.cache_read_cost !== undefined || costBreakdown?.cache_creation_cost !== undefined;
+                if (hasCacheBreakdown) {
                   // Separate line items: Input / Cache Read / Cache Write
-                  const rawCost = isCached ? 0 : (inputCost ?? 0) - (cacheReadCost ?? 0) - (cacheWriteCost ?? 0);
+                  const rawCost = isCached
+                    ? 0
+                    : (inputCost ?? 0) -
+                      (costBreakdown?.cache_read_cost ?? 0) -
+                      (costBreakdown?.cache_creation_cost ?? 0);
                   return (
                     <>
                       <div className="flex text-sm">
@@ -142,13 +144,13 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                           )}
                         </span>
                       </div>
-                      {hasCacheReadCost && (
+                      {(costBreakdown?.cache_read_cost ?? 0) > 0 && (
                         <div className="flex text-sm">
                           <span className="text-muted-foreground font-medium w-1/3">
                             {t("logs.detail.costBreakdown.cacheReadCost")}
                           </span>
                           <span className="text-foreground">
-                            {formatCost(isCached ? 0 : cacheReadCost)}
+                            {formatCost(isCached ? 0 : costBreakdown?.cache_read_cost)}
                             {(cacheReadTokens ?? 0) > 0 && (
                               <span className="text-muted-foreground font-normal ml-1">
                                 {t("logs.detail.costBreakdown.tokens", {
@@ -160,13 +162,13 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                           </span>
                         </div>
                       )}
-                      {hasCacheWriteCost && (
+                      {(costBreakdown?.cache_creation_cost ?? 0) > 0 && (
                         <div className="flex text-sm">
                           <span className="text-muted-foreground font-medium w-1/3">
                             {t("logs.detail.costBreakdown.cacheWriteCost")}
                           </span>
                           <span className="text-foreground">
-                            {formatCost(isCached ? 0 : cacheWriteCost)}
+                            {formatCost(isCached ? 0 : costBreakdown?.cache_creation_cost)}
                             {(cacheCreationTokens ?? 0) > 0 && (
                               <span className="text-muted-foreground font-normal ml-1">
                                 {t("logs.detail.costBreakdown.tokens", {

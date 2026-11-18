@@ -2478,13 +2478,8 @@ def completion_cost(
                             model_info=bedrock_model_info,
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
-                        if _token_type_breakdown.cache_read_tokens > 0 or _token_type_breakdown.cache_read_cost > 0:
-                            _cache_read_cost = _token_type_breakdown.cache_read_cost
-                        if (
-                            _token_type_breakdown.cache_creation_tokens > 0
-                            or _token_type_breakdown.cache_creation_cost > 0
-                        ):
-                            _cache_creation_cost = _token_type_breakdown.cache_creation_cost
+                        _cache_read_cost = _token_type_breakdown.cache_read_cost
+                        _cache_creation_cost = _token_type_breakdown.cache_creation_cost
                         _billed_token_rates = _token_type_breakdown.rates
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,

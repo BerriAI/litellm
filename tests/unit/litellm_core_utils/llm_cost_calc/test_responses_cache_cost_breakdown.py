@@ -14,14 +14,13 @@ activity leaves both fields unset, which is the documented behavior.
 """
 
 from datetime import datetime
-from typing import Final
 
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.utils import Choices, CostPerToken, Message, ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse
 
 MODEL = "gpt-5.6"
 
@@ -112,37 +111,3 @@ def test_cache_fields_stay_unset_when_there_was_no_cache_activity(local_model_co
     assert "cache_read_cost" not in breakdown
     assert "cache_creation_cost" not in breakdown
     assert breakdown["input_cost"] == pytest.approx(1000 * litellm.model_cost[MODEL]["input_cost_per_token"])
-
-
-@pytest.mark.parametrize(
-    ("cached_tokens", "cache_write_tokens", "expected"),
-    [
-        (100, 0, {"cache_read_cost": 0.0}),
-        (0, 200, {"cache_creation_cost": 0.0}),
-        (100, 200, {"cache_read_cost": 0.0, "cache_creation_cost": 0.0}),
-    ],
-)
-def test_free_cache_activity_has_a_recorded_zero_cost(
-    cached_tokens: int, cache_write_tokens: int, expected: dict[str, float]
-) -> None:
-    logging_obj: Final = _logging_obj()
-    rates: Final = CostPerToken(
-        input_cost_per_token=0.001,
-        output_cost_per_token=0.002,
-        cache_read_input_token_cost=0.0,
-        cache_creation_input_token_cost=0.0,
-    )
-    total: Final = litellm.completion_cost(
-        completion_response=_responses_completion(cached_tokens, cache_write_tokens, 10, 5),
-        model=MODEL,
-        custom_llm_provider="openai",
-        custom_cost_per_token=rates,
-        litellm_logging_obj=logging_obj,
-    )
-
-    breakdown: Final = logging_obj.cost_breakdown
-    assert breakdown is not None
-    assert {
-        key: value for key, value in breakdown.items() if key in ("cache_read_cost", "cache_creation_cost")
-    } == expected
-    assert total == pytest.approx(10 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"])
