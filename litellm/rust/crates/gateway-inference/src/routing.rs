@@ -130,8 +130,10 @@ pub(crate) fn route_failure(
     }
 }
 
-/// A route's failed attempt as router-core reads it to decide retries and cooldowns.
-pub fn attempt_failure(error: Error) -> AttemptFailure<Error> {
+/// A route's failed `attempt` as router-core reads it to decide retries and cooldowns. The
+/// failure carries its deployment's own `num_retries`, as Python's exception does, which is the
+/// retry budget when the request names none.
+pub fn attempt_failure(attempt: &Attempt, error: Error) -> AttemptFailure<Error> {
     let facts = match &error {
         Error::Route(route) => route_failure(route, unanswered),
         Error::Ocr(ocr) => ocr
@@ -140,10 +142,13 @@ pub fn attempt_failure(error: Error) -> AttemptFailure<Error> {
         _ => None,
     };
     match facts {
-        Some(facts) => AttemptFailure::Failed {
-            facts,
-            raised: error,
-        },
+        Some(mut facts) => {
+            facts.num_retries = attempt.deployment.num_retries();
+            AttemptFailure::Failed {
+                facts,
+                raised: error,
+            }
+        }
         None => AttemptFailure::Refused(error),
     }
 }

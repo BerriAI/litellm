@@ -32,7 +32,7 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
         self.route
             .run(attempt)
             .await
-            .map_err(routing::attempt_failure)
+            .map_err(|error| routing::attempt_failure(attempt, error))
     }
 
     async fn select(

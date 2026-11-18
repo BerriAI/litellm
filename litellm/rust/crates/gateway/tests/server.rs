@@ -418,6 +418,51 @@ async fn a_failed_deployment_is_retried_on_another_deployment_of_its_group() {
 }
 
 #[rstest]
+#[tokio::test]
+async fn a_deployments_own_num_retries_retries_its_failed_call() {
+    let (failing, healthy) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(json!({"error": {"message": "down"}})),
+        )
+        .mount(&failing)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&healthy)
+        .await;
+    let deployment = |id: &str, upstream: &MockServer, weight: u8| {
+        format!(
+            "  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n      weight: {weight}\n      num_retries: 1\n    model_info:\n      id: {id}\n",
+            upstream.uri()
+        )
+    };
+
+    let response = routed(
+        &format!(
+            "model_list:\n{}{}router_settings:\n  num_retries: 0\n  allowed_fails: 0\n  cooldown_time: 30\ngeneral_settings:\n  master_key: gateway-key\n",
+            deployment("first", &failing, 1),
+            deployment("second", &healthy, 0),
+        ),
+        "primary",
+    )
+    .await;
+
+    assert_eq!(
+        (response.status().as_u16(), routing_headers(&response)),
+        (
+            200,
+            vec![
+                ("x-litellm-model-id", "second"),
+                ("x-litellm-model-group", "primary"),
+                ("x-litellm-attempted-retries", "1"),
+                ("x-litellm-attempted-fallbacks", "0"),
+                ("x-litellm-max-retries", "1"),
+            ]
+        )
+    );
+}
+
 /// A retry policy names litellm's error classes, so a provider's status has to land in the class
 /// the Python proxy puts it in: an overloaded Anthropic answer is an `InternalServerError`.
 #[rstest]
