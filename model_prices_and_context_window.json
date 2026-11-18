@@ -11541,8 +11541,8 @@
     },
     "azure/gpt-image-1.5": {
         "cache_read_input_image_token_cost": 2e-06,
-        "deprecation_date": "2026-12-16",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "deprecation_date": "2027-06-16",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "successor_model": "azure/gpt-image-2",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 5e-06,
@@ -11560,8 +11560,8 @@
     "azure/gpt-image-1.5-2025-12-16": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,
-        "deprecation_date": "2026-12-16",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "deprecation_date": "2027-06-16",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "successor_model": "azure/gpt-image-2",
         "input_cost_per_token": 5e-06,
         "input_cost_per_image_token": 8e-06,
@@ -13020,6 +13020,7 @@
         "mode": "chat",
         "output_cost_per_token": 9e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "successor_model": "azure_ai/mistral-large-4-latest",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
