@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { cachedFormat, formatCurrency, setDisplayCurrency } from "./formats";
+import { cachedFormat, currencySymbol, formatCurrency, getDisplayCurrency, setDisplayCurrency } from "./formats";
 import i18n from "./i18n";
 import en from "./locales/en.json";
 
@@ -158,5 +158,18 @@ describe("display currency set by the proxy", () => {
     setDisplayCurrency("EUR");
     setDisplayCurrency(code);
     expect(i18n.t("format.usd", { val: 1234.5 })).toBe("$1,234.50");
+  });
+});
+
+describe("display currency symbol", () => {
+  it("is the dollar sign until the proxy names a currency, then that currency's symbol", () => {
+    expect([getDisplayCurrency(), currencySymbol()]).toEqual(["USD", "$"]);
+    setDisplayCurrency("EUR");
+    expect([getDisplayCurrency(), currencySymbol()]).toEqual(["EUR", "€"]);
+  });
+
+  it("falls back to the code for a currency with no symbol of its own", () => {
+    setDisplayCurrency("CHF");
+    expect(currencySymbol()).toBe("CHF");
   });
 });

@@ -10,6 +10,7 @@ import {
   getSpendString,
   updateExistingKeys,
 } from "./dataUtils";
+import { setDisplayCurrency } from "@/i18n/formats";
 
 // Import the mocked module
 import { toast } from "@/lib/toast";
@@ -116,6 +117,16 @@ describe("dataUtils", () => {
     it("should format spend with dollar sign", () => {
       expect(getSpendString(1234.5, 2)).toBe("$1,234.50");
       expect(getSpendString(-2500, 0)).toBe("$-2,500");
+    });
+
+    it("uses the display currency's symbol, including in the below-threshold text", () => {
+      setDisplayCurrency("EUR");
+      try {
+        expect(getSpendString(1234.5, 2)).toBe("€1,234.50");
+        expect(getSpendString(0.0000004, 6)).toBe("< €0.000001");
+      } finally {
+        setDisplayCurrency(undefined);
+      }
     });
 
     it("should return threshold string for very small values", () => {

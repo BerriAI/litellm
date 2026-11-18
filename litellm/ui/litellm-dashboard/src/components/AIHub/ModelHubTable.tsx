@@ -1,3 +1,4 @@
+import { currencySymbol } from "@/i18n/formats";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import i18n from "@/i18n/i18n";
 import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
@@ -379,7 +380,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   };
 
   const formatCost = (cost: number) => {
-    return `$${(cost * 1_000_000).toFixed(2)}`;
+    return `${currencySymbol()}${(cost * 1_000_000).toFixed(2)}`;
   };
 
   const handleMakePublicSuccess = () => {

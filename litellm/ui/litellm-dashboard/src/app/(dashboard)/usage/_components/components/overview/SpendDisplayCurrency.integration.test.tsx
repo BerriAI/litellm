@@ -5,6 +5,7 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption } from "@/../tests/test-utils";
 import { referenceRatesKeys } from "@/app/(dashboard)/hooks/referenceRates/useReferenceRates";
+import { setDisplayCurrency } from "@/i18n/formats";
 import { registerErrorHandler } from "@/lib/http/runtime";
 import SpendDisplayCurrency from "./SpendDisplayCurrency";
 
@@ -31,12 +32,24 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setDisplayCurrency(undefined);
   vi.useRealTimers();
   vi.unstubAllGlobals();
   registerErrorHandler(() => {});
 });
 
 describe("SpendDisplayCurrency", () => {
+  it("is not offered when the proxy already reports spend in another currency, since it would convert from USD", () => {
+    setDisplayCurrency("EUR");
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    renderFresh(<SpendDisplayCurrency usdSpend={42.5} loading={false} />);
+
+    expect(screen.queryByRole("combobox", { name: "Spend display" })).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("stays on USD without asking for rates until the selector is opened", () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

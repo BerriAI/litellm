@@ -1,5 +1,6 @@
 "use client";
 
+import { currencySymbol } from "@/i18n/formats";
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
@@ -90,7 +91,7 @@ const formatCapabilityName = (key: string) =>
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 
-const formatCost = (cost: number) => `$${(cost * 1_000_000).toFixed(4)}`;
+const formatCost = (cost: number) => `${currencySymbol()}${(cost * 1_000_000).toFixed(4)}`;
 
 const tokenCostLabel = (model: ModelGroupInfo, cost: number | null | undefined): string => {
   if (model.pass_through_path) return "n/a";

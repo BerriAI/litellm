@@ -1,3 +1,4 @@
+import { currencySymbol } from "@/i18n/formats";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
@@ -291,7 +292,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   };
 
   const formatCost = (cost: number) => {
-    return `$${(cost * 1_000_000).toFixed(4)}`;
+    return `${currencySymbol()}${(cost * 1_000_000).toFixed(4)}`;
   };
 
   const usageSnippet = (model: ModelGroupInfo): string => passThroughSnippet(model) ?? usageExample(model);

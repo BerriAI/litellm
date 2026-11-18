@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setDisplayCurrency } from "@/i18n/formats";
 import type { DailyData } from "@/components/UsagePage/types";
 import {
   bucketSeries,
   bucketTotals,
   colorForModel,
+  formatCompactUsd,
+  formatUsd,
   labelForDate,
   modelColorMap,
   OTHER_COLOR,
@@ -232,5 +235,25 @@ describe("daily key stacks", () => {
       [80, 70],
     ]);
     expect([...bucketTotals(result).values()]).toEqual([100, 150]);
+  });
+});
+
+describe("usage money in the display currency", () => {
+  afterEach(() => setDisplayCurrency(undefined));
+
+  it("keeps dollars by default and switches to the configured currency's symbol", () => {
+    expect([formatUsd(1234.5), formatCompactUsd(0), formatCompactUsd(42.5), formatCompactUsd(1_500)]).toEqual([
+      "$1,234.50",
+      "$0",
+      "$42.50",
+      "$1.5K",
+    ]);
+    setDisplayCurrency("EUR");
+    expect([formatUsd(1234.5), formatCompactUsd(0), formatCompactUsd(42.5), formatCompactUsd(1_500)]).toEqual([
+      "€1,234.50",
+      "€0",
+      "€42.50",
+      "€1.5K",
+    ]);
   });
 });

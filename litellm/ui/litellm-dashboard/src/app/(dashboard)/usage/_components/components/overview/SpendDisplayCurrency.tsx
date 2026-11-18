@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useReferenceRates } from "@/app/(dashboard)/hooks/referenceRates/useReferenceRates";
+import { getDisplayCurrency } from "@/i18n/formats";
 import { estimatedSpend } from "./spendDisplay";
 
 interface SpendDisplayCurrencyProps {
@@ -11,7 +12,12 @@ interface SpendDisplayCurrencyProps {
   loading: boolean;
 }
 
-export default function SpendDisplayCurrency({ usdSpend, loading }: SpendDisplayCurrencyProps) {
+// The estimate converts a USD total, so it has nothing to convert once the proxy reports spend in another currency.
+export default function SpendDisplayCurrency(props: SpendDisplayCurrencyProps) {
+  return getDisplayCurrency() === "USD" ? <SpendEstimate {...props} /> : null;
+}
+
+function SpendEstimate({ usdSpend, loading }: SpendDisplayCurrencyProps) {
   const { t, i18n } = useTranslation();
   const [requested, setRequested] = useState(false);
   const [currency, setCurrency] = useState("USD");

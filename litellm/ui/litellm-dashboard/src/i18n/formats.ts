@@ -66,6 +66,14 @@ export const setDisplayCurrency = (code: string | null | undefined): void => {
   displayCurrency = code ? knownCurrency(code) : DEFAULT_CURRENCY;
 };
 
+export const getDisplayCurrency = (): string => displayCurrency;
+
+/** The display currency's symbol ("$", "€"), for the screens that put it in front of a number they format themselves. */
+export const currencySymbol = (): string =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency: displayCurrency, currencyDisplay: "symbol" })
+    .formatToParts(0)
+    .find((part) => part.type === "currency")?.value ?? displayCurrency;
+
 const numberFormat = (preset: Intl.NumberFormatOptions) => {
   const format = cachedFormat((lng, options: Intl.NumberFormatOptions) => {
     const formatter = new Intl.NumberFormat(lng, { ...options, ...preset });
