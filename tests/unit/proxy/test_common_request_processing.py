@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.bug_report import (
 from litellm.litellm_core_utils.core_helpers import FinishEvidence
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.total_deadline import current_total_deadline
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -5065,7 +5066,7 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
 
 
 class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
-    async def _error_response_cost(self, raise_the_follow_up_error: bool) -> float:
+    async def _error_response_cost(self, raise_the_follow_up_error: bool) -> float | None:
         from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
         from litellm.types.utils import ModelResponse, Usage
 
@@ -5108,7 +5109,8 @@ class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
                 user_api_key_dict=caller,
                 proxy_logging_obj=proxy_logging,
             )
-        return float(raised.value.headers["x-litellm-response-cost"])
+        cost: Final = raised.value.headers.get("x-litellm-response-cost")
+        return float(cost) if cost is not None else None
 
     @pytest.mark.asyncio
     async def test_the_error_response_reports_the_served_first_call_its_failure_row_bills(self) -> None:
@@ -5117,7 +5119,7 @@ class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
         assert await self._error_response_cost(raise_the_follow_up_error=True) == pytest.approx(
             559 * price["input_cost_per_token"] + 113 * price["output_cost_per_token"]
         )
-        assert await self._error_response_cost(raise_the_follow_up_error=False) == 0
+        assert await self._error_response_cost(raise_the_follow_up_error=False) is None
 
 
 @pytest.mark.asyncio
@@ -15006,6 +15008,34 @@ async def test_handle_llm_api_exception_forwards_exactly_the_upstream_headers_of
     assert {name: value for name, value in forwarded.value.headers.items() if name.startswith("llm_provider-")} == {
         f"llm_provider-{name}": value for name, value in upstream_headers.items()
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost", (None, 0, 0.125), ids=("unknown", "finalized-zero", "finalized-nonzero"))
+async def test_failure_cost_header_distinguishes_unknown_from_finalized_cost(cost: float | None) -> None:
+    logging_obj: Final = Logging(
+        model="openai/unpriced-failure-header-test",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="failure-header-test",
+        function_id="failure-header-test",
+    )
+    logging_obj.finalized_cost = (
+        FinalizedCost(amount=cost, breakdown=None, allowance_discount=0.0) if cost is not None else None
+    )
+    processor: Final = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+
+    with pytest.raises(ProxyException) as rejected:
+        await processor.handle_llm_api_exception(
+            e=HTTPException(status_code=502, detail="Post-call rejection"),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="header-test"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        )
+
+    assert rejected.value.code == "502"
+    assert rejected.value.headers.get("x-litellm-response-cost") == (str(cost) if cost is not None else None)
 
 
 @pytest.mark.asyncio

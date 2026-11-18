@@ -5312,7 +5312,7 @@ class ProxyBaseLLMRequestProcessing:
                 else _litellm_logging_obj.finalized_cost.amount
                 if isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
                 and _litellm_logging_obj.finalized_cost is not None
-                else 0
+                else None
             ),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
