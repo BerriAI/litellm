@@ -1137,7 +1137,6 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
-    "https://api.bineric.com/v1",
 ]
 
 
