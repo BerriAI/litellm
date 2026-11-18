@@ -1674,7 +1674,6 @@ def register_prompt_cache_alerts(
     resources.callback(litellm.logging_callback_manager.remove_callback_from_all_lists, logger)
 
 
-@asynccontextmanager
 def _lens_ledger_options(database: "PrismaClient | None") -> "LedgerExportOptions | None":
     from litellm.proxy.tracing_runtime import LedgerExportOptions
     from litellm.repositories.accounting_delivery_repository import LedgerDatabase
@@ -1690,6 +1689,7 @@ def _lens_ledger_options(database: "PrismaClient | None") -> "LedgerExportOption
     )
 
 
+@asynccontextmanager
 async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
         prisma_client, \
