@@ -5187,6 +5187,7 @@ def test_vertex_keeps_a_thinking_level_its_own_row_does_not_declare(monkeypatch:
     _declare_levels(monkeypatch, "vertex_ai")
 
     assert _mapped_thinking("vertex", "low", drop_params=True) == {"thinkingLevel": "low", "includeThoughts": True}
+    assert _mapped_thinking("studio", "low", drop_params=True) == {"thinkingLevel": "low", "includeThoughts": True}
 
 
 def test_undeclared_thinking_level_is_sent_without_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5223,21 +5224,11 @@ def test_turning_thinking_off_survives_because_its_mapped_level_is_declared(
     }
 
 
-@pytest.mark.parametrize(
-    ("declaring_route", "declaring_config", "other_config"),
-    [("gemini", "studio", "vertex"), ("vertex_ai", "vertex", "studio")],
-    ids=["studio_row", "vertex_row"],
-)
-def test_declared_levels_apply_only_to_the_route_whose_row_carries_them(
-    declaring_route: str,
-    declaring_config: Literal["vertex", "studio"],
-    other_config: Literal["vertex", "studio"],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _declare_levels(monkeypatch, declaring_route)
+def test_studio_levels_leave_the_vertex_route_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    _declare_levels(monkeypatch, "gemini")
 
-    assert _mapped_thinking(declaring_config, "low", drop_params=True) == {"includeThoughts": True}
-    assert _mapped_thinking(other_config, "low", drop_params=True) == {"thinkingLevel": "low", "includeThoughts": True}
+    assert _mapped_thinking("studio", "low", drop_params=True) == {"includeThoughts": True}
+    assert _mapped_thinking("vertex", "low", drop_params=True) == {"thinkingLevel": "low", "includeThoughts": True}
 
 
 def test_declared_levels_leave_the_thinking_param_alone(monkeypatch: pytest.MonkeyPatch) -> None:
