@@ -24,7 +24,8 @@ import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -120,7 +121,7 @@ async def test_database_lifespan_disconnects_prisma_after_proxy_shutdown(monkeyp
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -155,7 +156,7 @@ async def test_proxy_shutdown_flushes_every_langfuse_export_channel(monkeypatch)
     flushed = MagicMock(return_value=True)
     monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
-    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", MagicMock(close=AsyncMock()), raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -185,7 +186,7 @@ async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_tim
 
     monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
-    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", MagicMock(close=AsyncMock()), raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -228,7 +229,7 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -269,7 +270,7 @@ async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_befor
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -293,7 +294,7 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -316,7 +317,7 @@ async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_t
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -343,7 +344,7 @@ async def test_database_lifespan_logs_disconnect_error_after_shutdown_instead_of
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
 
     import litellm
 
@@ -993,6 +994,40 @@ async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
     assert counter.exists()
 
 
+class _PromptCacheRegistration:
+    def __init__(self) -> None:
+        self.events: tuple[str, ...] = ()
+
+    def __call__(self, settings: object, prisma: object, resources: AsyncExitStack) -> None:
+        self.events = (*self.events, "registered")
+        resources.callback(self._released)
+
+    def _released(self) -> None:
+        self.events = (*self.events, "released")
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_lifespan_registers_prompt_cache_alerts_and_releases_them_on_exit() -> None:
+    """The lifespan must still run as an async context manager, register on entry and release on exit."""
+    registration: Final = _PromptCacheRegistration()
+    scheduler: Final = AsyncIOScheduler()
+    clean_env: Final = {
+        k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "WORKER_CONFIG")
+    } | {"LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"}
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "register_prompt_cache_alerts", registration),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                assert registration.events == ("registered",)
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+    assert registration.events == ("registered", "released")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("disable_model_info_refresh", "job_scheduled"), [(True, False), (False, True)])
 async def test_proxy_startup_event_honors_disable_model_info_refresh(
@@ -1394,6 +1429,25 @@ async def test_monthly_spend_report_sent_when_the_lock_is_free_or_absent(acquire
 
 
 @pytest.mark.asyncio
+async def test_weekly_spend_report_first_run_is_minutes_ahead_when_the_scheduler_zone_differs_from_the_clock():
+    """TZ=Asia/Calcutta on a host without the legacy alias puts the scheduler on IST through tzdata while
+    datetime.now() stays on UTC, so a naive first run landed hours in the past, past the misfire grace."""
+    local_offset: Final = datetime.now().astimezone().utcoffset() or timedelta(0)
+    scheduler: Final = AsyncIOScheduler(timezone=timezone(local_offset + timedelta(hours=5, minutes=30)))
+    registered_after: Final = datetime.now(timezone.utc)
+
+    await ProxyStartupEvent._initialize_slack_alerting_jobs(
+        scheduler=scheduler,
+        general_settings={},
+        proxy_logging_obj=_make_slack_alerting_proxy_logging(acquire_lock_result=True),
+        prisma_client=MagicMock(),
+    )
+
+    first_run: Final = scheduler.get_job("weekly_spend_report_job").next_run_time
+    assert registered_after < first_run < datetime.now(timezone.utc) + timedelta(seconds=311)
+
+
+@pytest.mark.asyncio
 async def test_spend_report_locks_are_never_released():
     """The lock is a per-window marker, not a mutex: releasing it lets the next pod re-send."""
     jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=True)
@@ -1435,3 +1489,20 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
+
+
+@pytest.mark.parametrize("database_url", ["", "   "])
+@pytest.mark.asyncio
+async def test_a_blank_database_url_boots_the_proxy_as_one_with_no_database(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "database_url_configured", True)
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DIRECT_URL", "WORKER_CONFIG")} | {
+        "DATABASE_URL": database_url,
+        "LITELLM_MASTER_KEY": "sk-blank-database-url-Zx8mPq4LrT7v",
+    }
+    with patch.dict(os.environ, clean_env, clear=True):
+        async with proxy_startup_event(app=None):
+            assert (proxy_server.prisma_client, proxy_server.database_url_configured) == (None, False)

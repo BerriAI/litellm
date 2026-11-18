@@ -36,11 +36,11 @@ _BURST: Final = 12
 _CALLBACK_WINDOW: Final = 15.0
 _STREAMING: Final = (pytest.param(False, id="non-stream"), pytest.param(True, id="stream"))
 _NON_BOOLEAN_FLAGS: Final = (
-    pytest.param(1, True, id="int"),
-    pytest.param("", False, id="empty-string"),
-    pytest.param([], False, id="list"),
-    pytest.param("x" * 5120, True, id="five-kilobytes"),
-    pytest.param(False, False, id="false"),
+    pytest.param(1, id="int"),
+    pytest.param("", id="empty-string"),
+    pytest.param([], id="list"),
+    pytest.param("x" * 5120, id="five-kilobytes"),
+    pytest.param(False, id="false"),
 )
 _UNAUTHORIZED: Final = Reply(
     status=401,
@@ -263,10 +263,8 @@ def test_without_a_fallback_the_flag_still_stays_off_the_wire() -> None:
     assert outcome.errors == (), outcome
 
 
-@pytest.mark.parametrize(("value", "errors_reported"), _NON_BOOLEAN_FLAGS)
-def test_a_non_boolean_flag_stays_off_the_wire_and_the_errors_header_follows_its_truthiness(
-    value: object, errors_reported: bool
-) -> None:
+@pytest.mark.parametrize("value", _NON_BOOLEAN_FLAGS)
+def test_a_flag_other_than_true_stays_off_the_wire_and_reports_no_errors(value: object) -> None:
     with wire_server(_peer) as wire:
         router: Final = _router(wire)
         outcome: Final = _outcome(wire, _complete(router, "primary", stream=False, include_fallback_errors=value))
@@ -274,7 +272,7 @@ def test_a_non_boolean_flag_stays_off_the_wire_and_the_errors_header_follows_its
     assert outcome.hit == ("primary", "backup"), outcome
     assert outcome.text == f"{_ANSWER} backup", outcome
     assert outcome.attempted == 1, outcome
-    assert (len(outcome.errors) == 1) is errors_reported, outcome
+    assert outcome.errors == (), outcome
 
 
 class _Recorder(CustomLogger):

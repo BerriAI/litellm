@@ -1,6 +1,7 @@
 import asyncio
 import io
 from collections.abc import Sequence
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, get_type_hints
@@ -37,6 +38,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
 _IMAGE_GENERATION_MODEL_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
@@ -167,6 +169,16 @@ async def image_generation(
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
+        if "prompt" in data:
+            logging_obj, data = litellm.utils.function_setup(
+                original_function="aimage_generation",
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+                is_async_call=True,
+                **data,
+            )
+            data["litellm_logging_obj"] = logging_obj
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,
@@ -221,7 +233,10 @@ async def image_generation(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.aimage_generation.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
