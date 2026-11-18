@@ -38,6 +38,62 @@ class TestMCPEndUserPermissionGuardrail:
         assert guardrail._extract_mcp_server_name("") is None
         assert guardrail._extract_mcp_server_name(None) is None
 
+    @pytest.mark.parametrize(
+        "request_data, expected",
+        [
+            ({"user_api_key_end_user_id": "eu1"}, "eu1"),
+            ({"litellm_metadata": {"user_api_key_end_user_id": "eu1"}}, "eu1"),
+            # chat completions: the unified guardrail keeps the key fields in metadata
+            ({"metadata": {"user_api_key_end_user_id": "eu1"}}, "eu1"),
+            (
+                {
+                    "litellm_metadata": {"user_api_key_end_user_id": "a"},
+                    "metadata": {"user_api_key_end_user_id": "b"},
+                },
+                "a",
+            ),
+            ({"metadata": "not a dict"}, None),
+            ({}, None),
+        ],
+    )
+    def test_get_end_user_id_from_request_data(self, request_data, expected):
+        assert (
+            MCPEndUserPermissionGuardrail._get_end_user_id_from_request_data(
+                request_data
+            )
+            == expected
+        )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_filters_tools_for_end_user_in_metadata(self):
+        """The end user kept in ``metadata`` (chat completions) still filters the tools"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        guardrail = MCPEndUserPermissionGuardrail()
+        inputs = {
+            "tools": [
+                {"type": "function", "function": {"name": "github-create_issue"}},
+                {"type": "function", "function": {"name": "slack-send_message"}},
+            ]
+        }
+        request_data = {"metadata": {"user_api_key_end_user_id": "end-user-123"}}
+        with patch.object(
+            MCPEndUserPermissionGuardrail,
+            "_fetch_end_user_object",
+            return_value=MagicMock(
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="perm-1",
+                    mcp_servers=["github"],
+                )
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs, request_data=request_data, input_type="request"
+            )
+        assert [t["function"]["name"] for t in result["tools"]] == [
+            "github-create_issue"
+        ]
+
     @pytest.mark.asyncio
     async def test_apply_guardrail_no_end_user(self):
         """Test guardrail when no end_user_id is present"""
