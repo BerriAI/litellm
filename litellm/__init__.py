@@ -702,6 +702,7 @@ kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared mo
 streamlake_models: Final[Set[str]] = set()
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
+flexai_models: Final[Set[str]] = set()
 v0_models: Set = set()
 vispark_models: Final[Set[str]] = set()
 morph_models: Set = set()
@@ -1002,6 +1003,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             wally_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
+        elif value.get("litellm_provider") == "flexai":
+            flexai_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "vispark":
@@ -1185,6 +1188,7 @@ model_list = list(
     | streamlake_models
     | wally_models
     | zerogpu_models
+    | flexai_models
     | v0_models
     | vispark_models
     | morph_models
@@ -1318,6 +1322,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "streamlake": streamlake_models,
         "wally": wally_models,
         "zerogpu": zerogpu_models,
+        "flexai": flexai_models,
         "v0": v0_models,
         "vispark": vispark_models,
         "morph": morph_models,
