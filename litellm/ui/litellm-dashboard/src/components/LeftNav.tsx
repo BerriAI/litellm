@@ -98,7 +98,6 @@ const ICON = { strokeWidth: 1.75 } as const;
 
 interface SidebarProps {
   enabledPagesInternalUsers?: string[] | null;
-  enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
@@ -128,7 +127,6 @@ export interface MenuVisibilityContext {
   isOrgAdmin: boolean;
   isTeamAdmin: boolean;
   enabledPagesInternalUsers?: string[] | null;
-  enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
@@ -147,7 +145,6 @@ const adminPageVisibility = (item: MenuItem, context: MenuVisibilityContext, isA
 
 const projectPageIsVisible = (item: MenuItem, context: MenuVisibilityContext): boolean => {
   if (item.key !== "projects") return true;
-  if (!context.enableProjectsUI) return false;
   return canViewProjectsPage({
     userRole: context.userRole,
     isOrgAdmin: context.isOrgAdmin,
@@ -589,7 +586,6 @@ const groupsOpenFor = (route: string) => {
 
 const Sidebar_: React.FC<SidebarProps> = ({
   enabledPagesInternalUsers,
-  enableProjectsUI,
   disableAgentsForInternalUsers,
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
@@ -635,7 +631,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
       isOrgAdmin,
       isTeamAdmin,
       enabledPagesInternalUsers,
-      enableProjectsUI,
       disableAgentsForInternalUsers,
       allowAgentsForTeamAdmins,
       disableVectorStoresForInternalUsers,
@@ -648,7 +643,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
     allowVectorStoresForTeamAdmins,
     disableAgentsForInternalUsers,
     disableVectorStoresForInternalUsers,
-    enableProjectsUI,
     enabledPagesInternalUsers,
     isOrgAdmin,
     isTeamAdmin,

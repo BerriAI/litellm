@@ -5,7 +5,7 @@ the real one, so every case crosses from the Python host into the core and back.
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -32,7 +32,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key
 from litellm.proxy.management_endpoints import team_endpoints
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through
+from litellm.repositories import rust_database
+from litellm.rust_bridge._native import RustJwtKeyMappingRepository
 from tests.unit.proxy.auth._user_table import UserTable
+from tests.unit.proxy.rust_auth_stores import FakeJwtKeyMappingStore, JwtMapping
 
 JWKS_URL: Final = "https://idp.invalid/keys"
 SIGNING_KEY: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -147,11 +150,6 @@ class _UnreachableUsers(UserTable):
         raise httpx.ConnectError("connection refused")
 
 
-async def _key_mapping(where: Mapping[str, object], **_: object) -> SimpleNamespace | None:
-    mapped: Final = where.get("jwt_claim_value") == MAPPED_CLIENT and not where.get("jwt_issuer")
-    return SimpleNamespace(token=_hash(MAPPED_KEY)) if mapped else None
-
-
 async def _teams_by_alias(where: Mapping[str, object], **_: object) -> list[LiteLLM_TeamTable]:
     return [team for team in TEAMS if team.team_alias is not None and team.team_alias == where.get("team_alias")]
 
@@ -168,14 +166,13 @@ class _Tables(SimpleNamespace):
 
 
 def _prisma(users: UserTable, database_up: bool) -> MagicMock:
-    """A database holding only users and key mappings, whose key, team and user reads fail once it is down."""
+    """A database holding only users, whose key, team and user reads fail once it is down."""
     read: Final = (
         AsyncMock(return_value=None) if database_up else AsyncMock(side_effect=httpx.ConnectError("connection refused"))
     )
     tables: Final = _Tables(
         litellm_teamtable=SimpleNamespace(find_unique=read, find_first=read, find_many=_teams_by_alias),
         litellm_usertable=users,
-        litellm_jwtkeymapping=SimpleNamespace(find_first=AsyncMock(side_effect=_key_mapping)),
     )
     prisma: Final = MagicMock()
     prisma.get_data = read
@@ -220,6 +217,15 @@ async def _reply(call: Call, failure_hook: AsyncMock) -> Served | Refused:
 
 async def _outcome(monkeypatch: pytest.MonkeyPatch, call: Call) -> Outcome:
     users: Final = UserTable() if call.database_up else _UnreachableUsers()
+    mappings: Final = FakeJwtKeyMappingStore([JwtMapping("azp", MAPPED_CLIENT, _hash(MAPPED_KEY))])
+    if not call.database_up:
+        mappings.error = httpx.ConnectError("connection refused")
+    database: Final = rust_database.repository
+
+    def repository(kind: Callable[..., object]) -> object:
+        return mappings if kind is RustJwtKeyMappingRepository else database(kind)
+
+    monkeypatch.setattr(rust_database, "repository", repository)
     added: Final[list[tuple[str, str]]] = []  # mutable-ok: records the team members auth adds
     failure_hook: Final = AsyncMock(return_value=None)
 
