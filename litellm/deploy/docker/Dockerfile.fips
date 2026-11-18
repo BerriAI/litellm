@@ -104,7 +104,10 @@ COPY . .
 RUN rm -rf litellm/proxy/_experimental/out
 COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
-RUN sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm/deploy/docker/build_admin_ui.sh && ./litellm/deploy/docker/build_admin_ui.sh
+# build_admin_ui.sh runs apk add curl when enterprise_colors.json is present, so it needs the same apk login.
+RUN --mount=type=secret,id=cgr-token \
+    sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm/deploy/docker/build_admin_ui.sh && \
+    HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" ./litellm/deploy/docker/build_admin_ui.sh
 
 # litellm-proxy, the opt-in Rust forwarding server, is left out of this image.
 ARG MATURIN_PEP517_ARGS=""

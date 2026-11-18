@@ -18,6 +18,8 @@ inventory="${SCAN_INVENTORY:-$script_dir/fips_elf_inventory.txt}"
 report="${SCAN_REPORT:-/fips-scan-report.txt}"
 failures="$(mktemp)"
 counts="$(mktemp)"
+files="$(mktemp)"
+trap 'rm -f "$failures" "$counts" "$files"' EXIT
 
 normalize() {
   printf '%s\n' "$1" | sed \
@@ -66,12 +68,25 @@ is_waived() {
   esac
 }
 
+if [ "$#" -eq 0 ]; then
+  echo "FAIL: no scan roots given" >&2
+  exit 1
+fi
+for root in "$@"; do
+  if [ ! -e "$root" ]; then
+    echo "FAIL: scan root $root does not exist" >&2
+    exit 1
+  fi
+done
+# find writes to a file rather than a pipe, so set -e stops the scan on any traversal error.
+find "$@" -type f > "$files"
+
 if [ "${SCAN_EMIT_INVENTORY:-}" = "1" ]; then
-  find "$@" -type f 2>/dev/null | while read -r f; do
+  while read -r f; do
     if is_elf "$f"; then
       normalize "$f"
     fi
-  done | sort -u
+  done < "$files" | sort -u
   exit 0
 fi
 
@@ -81,7 +96,7 @@ if [ ! -f "$inventory" ]; then
 fi
 
 : > "$report"
-find "$@" -type f 2>/dev/null | sort | while read -r f; do
+sort "$files" | while read -r f; do
   if ! is_elf "$f"; then
     continue
   fi
@@ -107,6 +122,10 @@ done
 scanned="$(grep -c scanned "$counts" || true)"
 if [ -s "$failures" ]; then
   printf 'FAIL: %s of %s ELF binaries unaccounted for (see above)\n' "$(wc -l < "$failures" | tr -d ' ')" "$scanned"
+  exit 1
+fi
+if [ "$scanned" -eq 0 ]; then
+  printf 'FAIL: no ELF binaries found under %s\n' "$*"
   exit 1
 fi
 printf 'scanned %s ELF binaries\n' "$scanned" >> "$report"
