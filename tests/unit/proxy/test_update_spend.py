@@ -617,6 +617,9 @@ async def test_local_spend_flush_commits_lens_events_and_bodies_with_the_charge(
     }
     bodies: Final = transaction.inserted("LiteLLM_LensLedgerPayload")
     assert [(body["event_id"], body["content"]) for body in bodies] == [("hidden", _BODY), ("visible", _BODY)]
+    [body_statement] = [str(args[0]) for query, args in transaction.executed if "LiteLLM_LensLedgerPayload" in query]
+    assert "雪" in body_statement
+    assert "\\u96ea" not in body_statement
     local: Final = transaction.local_spend_rows()
     assert sorted(row["request_id"] for row in local) == ["request-malformed", "request-visible"]
     assert "雪" not in json.dumps(local, ensure_ascii=False)
@@ -645,3 +648,29 @@ async def test_spend_logs_url_flush_commits_the_native_lens_envelope(monkeypatch
     assert event["event"]["spend"] == 0.25
     posted: Final = json.loads(writer_client.post.await_args.kwargs["data"])
     assert "lens_export" not in posted[0]
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [_envelope("request-visible"), json.dumps(_envelope("request-visible"))],
+    ids=["native_mapping", "queued_text"],
+)
+def test_flush_normalization_keeps_the_lens_envelope_as_queued(envelope: object) -> None:
+    from litellm.proxy.utils import jsonified_spend_log_row
+
+    row: Final = _queued_row("visible", envelope=envelope)
+
+    normalized: Final = jsonified_spend_log_row(_FlushClient(_RecordingLedgerTransaction()), row)  # pyright: ignore[reportArgumentType]  # flush-facing client
+
+    assert normalized["lens_export"] == envelope
+    assert isinstance(normalized["accounting_payload"], str)
+    assert json.loads(str(normalized["accounting_payload"])) == row["accounting_payload"]
+
+
+def test_flush_normalization_leaves_rows_without_an_envelope_unchanged() -> None:
+    from litellm.proxy.utils import PrismaClient, jsonified_spend_log_row
+
+    row: Final = {"request_id": "plain", "metadata": {"tags": ["a"]}, "spend": 0.1}
+    client: Final = _FlushClient(_RecordingLedgerTransaction())
+
+    assert jsonified_spend_log_row(client, row) == PrismaClient.jsonify_object(client, row)  # pyright: ignore[reportArgumentType]  # flush-facing client

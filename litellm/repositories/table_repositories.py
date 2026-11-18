@@ -8,6 +8,7 @@ methods; richer repositories live in their own modules.
 """
 
 import hashlib
+import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import timedelta
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, safe_json_structure
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.chunked_in import find_many_in
@@ -177,6 +178,11 @@ def _lens_event_id(delivery_id: str) -> str:
     return hashlib.sha256(delivery_id.encode()).hexdigest()
 
 
+def _utf8_json(rows: Sequence[Mapping[str, object]]) -> str:
+    """The Lens outbox parameter as UTF-8 JSON, the size the spend log write budget counts it at."""
+    return json.dumps(safe_json_structure(rows, non_finite_as_null=True), ensure_ascii=False, default=str)
+
+
 def _lens_payload_rows(event_id: str, export: LensExport) -> Iterator[Mapping[str, object]]:
     for body in export["payloads"]:
         yield {"event_id": event_id, **body}
@@ -204,12 +210,11 @@ async def _insert_lens_exports(transaction: LedgerTransaction, rows: Sequence[Ma
         'INSERT INTO "LiteLLM_LensLedgerExport" (event_id, request_id, event) '
         "SELECT event_id, request_id, event FROM jsonb_to_recordset($1::jsonb) "
         "AS inputs(event_id text, request_id text, event jsonb) ON CONFLICT (event_id) DO NOTHING",
-        safe_dumps(
+        _utf8_json(
             [
                 {"event_id": event_id, "request_id": request_id, "event": export["record"]}
                 for event_id, request_id, export in exports
-            ],
-            non_finite_as_null=True,
+            ]
         ),
     )
     payloads: Final = tuple(
@@ -223,7 +228,7 @@ async def _insert_lens_exports(transaction: LedgerTransaction, rows: Sequence[Ma
             "FROM jsonb_to_recordset($1::jsonb) AS inputs(event_id text, field text, team_id text, api_key text, "
             "event_time_ms bigint, content text, bytes integer, sha256 text) "
             "ON CONFLICT (event_id, field) DO NOTHING",
-            safe_dumps(list(payloads)),
+            _utf8_json(list(payloads)),
         )
 
 

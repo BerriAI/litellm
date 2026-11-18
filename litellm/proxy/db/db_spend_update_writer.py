@@ -1055,6 +1055,7 @@ class DBSpendUpdateWriter:
         is owned by its delivery row, keyed by its cost row id, in every logging mode, and a
         $0 poll records no delivery so it cannot block the poll that carries the cost.
         """
+        from litellm.proxy.utils import jsonified_spend_log_row
         from litellm.repositories.table_repositories import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
@@ -1071,7 +1072,9 @@ class DBSpendUpdateWriter:
             if "accounting_payload" in payload:
                 if payload["spend"] <= 0:
                     return True
-                accepted: Final = await repository.insert_with_deliveries([prisma_client.jsonify_object(row)]) == 1
+                accepted: Final = (
+                    await repository.insert_with_deliveries([jsonified_spend_log_row(prisma_client, row)]) == 1
+                )
                 if accepted:
                     await _track_guardrail_usage_of_cost_row(payload, prisma_client, disable_spend_logs)
                 return accepted
@@ -1088,7 +1091,9 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.warning(
                 "Could not claim spend row %s for a job's cost, queueing it: %s", request_id, e
             )
-            await self._insert_spend_log_to_db(payload=prisma_client.jsonify_object(row), prisma_client=prisma_client)
+            await self._insert_spend_log_to_db(
+                payload=jsonified_spend_log_row(prisma_client, row), prisma_client=prisma_client
+            )
             return True
         if claimed == 1:
             await _track_guardrail_usage_of_cost_row(payload, prisma_client, disable_spend_logs)

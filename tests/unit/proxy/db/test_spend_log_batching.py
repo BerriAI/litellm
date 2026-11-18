@@ -233,3 +233,54 @@ def test_unserialized_list_payloads_are_measured_not_ignored() -> None:
         1,
         1,
     ]
+
+
+_MULTIBYTE_BODY = json.dumps(
+    [{"role": "user", "content": "".join(chr(0x4E00 + (i * 7919) % 20000) for i in range(100_000))}],
+    ensure_ascii=False,
+    separators=(",", ":"),
+)
+
+
+def _ledger_row(request_id: str, envelope: object) -> Dict[str, Any]:
+    return {**_row(request_id), "lens_export": envelope}
+
+
+def _envelope() -> Dict[str, Any]:
+    return {"record": {"request_id": "r", "messages": "preview"}, "payloads": [{"content": _MULTIBYTE_BODY}]}
+
+
+def test_a_lens_envelope_counts_its_utf8_wire_bytes() -> None:
+    row = _ledger_row("ledger", _envelope())
+
+    columns = {name: value for name, value in row.items() if name != "lens_export"}
+    assert _row_payload_bytes(row) == len(json.dumps(columns)) + len(
+        json.dumps(_envelope(), ensure_ascii=False).encode()
+    )
+    assert _row_payload_bytes(row) < len(json.dumps(row))
+
+
+def test_a_queued_text_envelope_counts_its_encoded_bytes() -> None:
+    text = json.dumps(_envelope())
+    row = _ledger_row("ledger", text)
+
+    columns = {name: value for name, value in row.items() if name != "lens_export"}
+    assert _row_payload_bytes(row) == len(json.dumps(columns)) + len(text.encode())
+
+
+def test_rows_without_a_lens_envelope_are_measured_as_before() -> None:
+    row = {**_row("plain"), "messages": _MULTIBYTE_BODY}
+
+    assert _row_payload_bytes(row) == len(json.dumps(row, default=str))
+
+
+def test_multibyte_ledger_bodies_share_a_statement_within_the_byte_budget() -> None:
+    budget = 2_000_000
+    rows = [_ledger_row(f"ledger-{index}", _envelope()) for index in range(20)]
+
+    batches = list(spend_log_write_batches(rows, max_bytes=budget, max_rows=_ROWS_UNBOUNDED))
+
+    assert [row["request_id"] for batch in batches for row in batch] == [row["request_id"] for row in rows]
+    assert all(sum(_row_payload_bytes(row) for row in batch) <= budget for batch in batches)
+    assert len(batches[0]) == budget // _row_payload_bytes(rows[0])
+    assert len(batches[0]) > budget // len(json.dumps(rows[0]))

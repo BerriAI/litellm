@@ -39,6 +39,20 @@ def max_payload_bytes(environ: Mapping[str, str] = os.environ) -> int:
     return min(requested, MAX_ENCODED_UPLOAD_BYTES)
 
 
+def compact_json(value: object) -> str:
+    """A body as compact UTF-8 JSON, encoded once from its structured form; text bodies are kept verbatim.
+
+    The row builder escapes every non-ASCII character to six bytes, and each later encode of the envelope
+    escapes those escapes again, so a multibyte body counted eight bytes per character against the spend
+    log write budget instead of its three UTF-8 bytes.
+    """
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
 def encoded_upload_bytes(content: str) -> int:
     return len(json.dumps(content, ensure_ascii=False).encode())
 
@@ -72,7 +86,11 @@ def _correlated_row(kwargs: Mapping[str, object]) -> Mapping[str, object] | None
     if str(payload.get("call_type") or "").startswith(_TRACE_ROUTES):
         return None
     row: Final = dict(spend_log_row_from_payload(payload, kwargs))
-    return {**row, "error_str": _redacted_error(row.get("error_str"))}
+    return {
+        **row,
+        **{field: compact_json(payload.get(field)) for field in _CONTENT_FIELDS if row.get(field)},
+        "error_str": _redacted_error(row.get("error_str")),
+    }
 
 
 def _accounting_row(payload: "SpendLogsPayload") -> Mapping[str, object]:

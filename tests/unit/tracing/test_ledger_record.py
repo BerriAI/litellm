@@ -197,3 +197,32 @@ def test_a_request_the_row_builder_cannot_read_still_exports_its_cost() -> None:
     assert export["record"]["request_id"] == "accounting-request"
     assert export["record"]["messages"] == ""
     assert export["payloads"] == ()
+
+
+def test_a_structured_body_is_encoded_once_as_compact_utf8_with_its_digest() -> None:
+    messages = [{"role": "user", "content": "雪" * 2000, "score": 0.1 + 0.2}]
+
+    [payload] = _export(_kwargs(messages=messages), STORE)["payloads"]
+
+    assert payload["content"] == json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+    assert json.loads(payload["content"]) == messages
+    assert "\\u" not in payload["content"]
+    assert payload["bytes"] == len(payload["content"].encode())
+    assert payload["sha256"] == hashlib.sha256(payload["content"].encode()).hexdigest()
+
+
+def test_a_text_body_is_uploaded_verbatim() -> None:
+    body = '{"kept":  "exactly as sent", "n": 1.0000000000000002} ' + "雪" * 2000
+
+    [payload] = _export(_kwargs(messages=body), STORE)["payloads"]
+
+    assert payload["content"] == body
+
+
+def test_message_logging_off_still_exports_no_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+
+    export = _export(_kwargs(messages=[{"role": "user", "content": "雪" * 2000}]), STORE)
+
+    assert export["payloads"] == ()
+    assert export["record"]["messages"] == ""

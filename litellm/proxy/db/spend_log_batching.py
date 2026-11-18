@@ -30,6 +30,7 @@ SpendLogRow = Mapping[str, object]
 
 _STATEMENT_FRAMING_BYTES: Final = len(json.dumps([]))
 _ROW_SEPARATOR_BYTES: Final = len(json.dumps([0, 0])) - len(json.dumps([0])) - len(json.dumps(0))
+_LENS_EXPORT_KEY: Final = "lens_export"
 
 
 def _row_payload_bytes(row: SpendLogRow) -> int:
@@ -55,11 +56,24 @@ def _row_payload_bytes(row: SpendLogRow) -> int:
     loses spend data, since raising here would propagate out of the flush and
     drop every row queued behind it. Such a row is still written, it just does
     not contribute to the budget.
+
+    The Lens ledger envelope is the exception to the ASCII measure: it is written
+    to its outbox as UTF-8 JSON, so it counts its UTF-8 bytes, which is its wire
+    size, rather than the six bytes per character its escaped form would claim.
     """
     try:
-        return len(json.dumps(row, default=str))
+        if _LENS_EXPORT_KEY not in row:
+            return len(json.dumps(row, default=str))
+        rest: Final = {name: value for name, value in row.items() if name != _LENS_EXPORT_KEY}
+        return len(json.dumps(rest, default=str)) + _envelope_bytes(row[_LENS_EXPORT_KEY])
     except (TypeError, ValueError):
         return 0
+
+
+def _envelope_bytes(envelope: object) -> int:
+    if isinstance(envelope, str):
+        return len(envelope.encode())
+    return len(json.dumps(envelope, ensure_ascii=False, default=str).encode())
 
 
 def spend_log_row_bytes(row: SpendLogRow) -> int:

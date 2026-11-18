@@ -8948,7 +8948,7 @@ class ProxyUpdateSpend:
                     else:
                         for j in range(0, len(rows_to_write), BATCH_SIZE):
                             batch = rows_to_write[j : j + BATCH_SIZE]
-                            batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
+                            batch_with_dates = [jsonified_spend_log_row(prisma_client, entry) for entry in batch]
                             isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
                             for statement_rows in spend_log_write_batches(
                                 batch_with_dates,
@@ -9011,6 +9011,18 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
+
+
+def jsonified_spend_log_row(prisma_client: PrismaClient, row: Mapping[str, object]) -> Mapping[str, object]:
+    """``jsonify_object`` for a queued spend log row, leaving the Lens ledger envelope a mapping.
+
+    The envelope never reaches the SpendLogs schema, and encoding it to text here only for the accounting
+    transaction to parse it again re-escaped every escape in its bodies.
+    """
+    if "lens_export" not in row:
+        return prisma_client.jsonify_object({**row})
+    columns: Final = {name: value for name, value in row.items() if name != "lens_export"}
+    return {**prisma_client.jsonify_object(columns), "lens_export": row["lens_export"]}
 
 
 def _spend_log_export_rows(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
