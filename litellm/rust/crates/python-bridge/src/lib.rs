@@ -2,6 +2,7 @@ mod auth;
 mod budgets;
 mod cache;
 mod callable;
+mod callbacks_model_capacity;
 mod coercion;
 mod credentials;
 mod db;
@@ -47,7 +48,9 @@ mod _native {
     #[pymodule_export]
     use crate::budgets::budget_check_decision;
     #[pymodule_export]
-    use crate::db::{NativeDatabase, NativeDatabaseFailure};
+    use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
+    #[pymodule_export]
+    use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -213,6 +216,7 @@ mod tests {
                 "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
+                "DatabaseEndpoint",
                 "NativeDatabase",
                 "NativeDatabaseFailure",
                 "trace_encode_error",
@@ -239,6 +243,8 @@ mod tests {
                 "unsupported_tls_settings",
                 "NativeBudgets",
                 "budget_check_decision",
+                "NativeModelCapacity",
+                "NativeModelCapacityState",
                 "NativeS3Log",
                 "auth_allowed_routes_grant",
                 "auth_first_denied_route",

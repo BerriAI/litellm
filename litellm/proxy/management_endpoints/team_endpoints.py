@@ -1063,13 +1063,19 @@ def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 
 async def get_all_team_memberships(
-    prisma_client: PrismaClient, team_ids: list[str], user_id: str | None = None
+    prisma_client: PrismaClient,
+    team_ids: list[str],
+    user_id: str | None = None,
+    user_ids: Sequence[str] | None = None,
 ) -> list[LiteLLM_TeamMembership]:
     """Get all team memberships for a given user"""
     ## GET ALL MEMBERSHIPS ##
     where_obj: Final[dict[str, dict[str, list[str]]]] = {"team_id": {"in": team_ids}}
     if user_id is not None:
         where_obj["user_id"] = {"in": [user_id]}
+    elif user_ids is not None:
+        # bounded-ok: the only caller passes one members-list page, capped at 100 by TEAM_MEMBERS_LIST_SPEC
+        where_obj["user_id"] = {"in": list(user_ids)}
     # if user_id is None:
     #     where_obj = {"team_id": {"in": team_id}}
     # else:
@@ -4205,6 +4211,24 @@ async def _team_member_delete(
     return existing_team_row, tuple(fresh_members), tuple(new_team_members)
 
 
+async def _roster_user_id_for_email(
+    prisma_client: PrismaClient, roster: Sequence[Member], user_email: str | None
+) -> str | None:
+    """The first roster entry `/team/info` shows with this email: its roster email, else its user row's."""
+    if not user_email:
+        return None
+    users_with_email: Final = await _user_db(prisma_client).find_many(where={"user_email": user_email})
+    user_ids_with_email: Final = frozenset(user.user_id for user in users_with_email)
+    return next(
+        (
+            m.user_id
+            for m in roster
+            if m.user_email == user_email or (not m.user_email and m.user_id in user_ids_with_email)
+        ),
+        None,
+    )
+
+
 @router.post(
     "/team/member_update",
     tags=["team management"],
@@ -4271,43 +4295,27 @@ async def team_member_update(
             },
         )
 
-    returned_team_info: Final[TeamInfoResponseObject] = await team_info(
-        http_request=http_request,
-        team_id=data.team_id,
-        key_limit=None,
-        user_api_key_dict=user_api_key_dict,
+    received_user_id: Final = (
+        data.user_id
+        if data.user_id is not None
+        else await _roster_user_id_for_email(prisma_client, existing_team_row.members_with_roles, data.user_email)
     )
-
-    team_table: Final = returned_team_info["team_info"]
-
-    ## get user id
-    received_user_id: str | None = None
-    if data.user_id is not None:
-        received_user_id = data.user_id
-    elif data.user_email is not None:
-        for member in returned_team_info["team_info"].members_with_roles:
-            if member.user_email is not None and member.user_email == data.user_email:
-                received_user_id = member.user_id
-                break
-
     if received_user_id is None:
         raise HTTPException(
             status_code=400,
             detail={"error": f"User id doesn't exist in team table. Data={data}"},
         )
-    ## find the relevant team membership
-    identified_budget_id: str | None = None
-    for tm in returned_team_info["team_memberships"]:
-        if tm.user_id == received_user_id:
-            identified_budget_id = tm.budget_id
-            break
+    existing_membership: Final = await _team_membership_db(prisma_client).find_unique(
+        where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}}
+    )
+    identified_budget_id: Final = existing_membership.budget_id if existing_membership is not None else None
 
     # If this membership still points at the team's shared default member
     # budget, _upsert_budget_and_membership will clone-on-write so that the
     # update only touches this user (not every member sharing the default).
     team_default_budget_id: str | None = None
-    if team_table.metadata is not None:
-        raw_default_budget_id: Final = team_table.metadata.get("team_member_budget_id")
+    if existing_team_row.metadata is not None:
+        raw_default_budget_id: Final = existing_team_row.metadata.get("team_member_budget_id")
         if isinstance(raw_default_budget_id, str):
             team_default_budget_id = raw_default_budget_id
 
@@ -4344,10 +4352,9 @@ async def team_member_update(
 
     if role_change is not None:
         members_before_role_update, team_members = role_change
-        team_table.members_with_roles = list(team_members)
         _schedule_team_membership_audit_log(
             team_id=data.team_id,
-            team_alias=team_table.team_alias,
+            team_alias=existing_team_row.team_alias,
             before_members=members_before_role_update,
             after_members=team_members,
             user_api_key_dict=user_api_key_dict,
@@ -4516,7 +4523,7 @@ def _team_default_budget_id(team: LiteLLM_TeamTable) -> str | None:
     return raw if isinstance(raw, str) else None
 
 
-async def _existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> str | None:
+async def existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> str | None:
     budget_id: Final = _team_default_budget_id(team)
     if budget_id is None:
         return None
@@ -4526,7 +4533,7 @@ async def _existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_clien
     return budget_id if row is not None else None
 
 
-def _member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
+def member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
     if budget_id is not None and budget_id != team_default_budget_id:
         return "custom"
     return "team_default" if team_default_budget_id is not None else "none"
@@ -4571,7 +4578,7 @@ async def reset_team_member_budget_fn(
     if membership_row is None:
         _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
 
-    team_default_budget_id: Final = await _existing_team_default_budget_id(team_obj, prisma_client)
+    team_default_budget_id: Final = await existing_team_default_budget_id(team_obj, prisma_client)
     budget_link: Final = (
         {"connect": {"budget_id": team_default_budget_id}}
         if team_default_budget_id is not None
@@ -4592,7 +4599,7 @@ async def reset_team_member_budget_fn(
         user_id=user_id,
         budget_id=team_default_budget_id,
         previous_budget_id=membership_row.budget_id,
-        budget_source=_member_budget_source(team_default_budget_id, team_default_budget_id),
+        budget_source=member_budget_source(team_default_budget_id, team_default_budget_id),
     )
 
 
@@ -5492,6 +5499,10 @@ async def team_info(
     http_request: Request,
     team_id: str = fastapi.Query(default=None, description="Team ID in the request parameters"),
     key_limit: int | None = fastapi.Query(default=None, description="Limit the number of keys returned", gt=0),
+    include_members: bool = fastapi.Query(
+        default=True,
+        description="Set to false to skip loading the roster: `team_info.members_with_roles` and `team_memberships` come back empty. Page through members with `GET /management/v1/teams/{team_id}/members`",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -5499,6 +5510,7 @@ async def team_info(
 
     Parameters:
     - team_id: str - Required. The unique identifier of the team to get info on.
+    - include_members: bool - Optional, default true. Pass false to get the team's settings without its roster.
 
     ```
     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
@@ -5574,7 +5586,9 @@ async def team_info(
             key.pop("token", None)
 
         ## GET ALL MEMBERSHIPS ##
-        returned_tm: Final = await get_all_team_memberships(prisma_client, [team_id], user_id=None)
+        returned_tm: Final = (
+            await get_all_team_memberships(prisma_client, [team_id], user_id=None) if include_members else ()
+        )
 
         if isinstance(team_info, dict):
             _team_info = TeamInfoResponseObjectTeamTable.model_validate(team_info)
@@ -5598,9 +5612,13 @@ async def team_info(
         # Resolve resources inherited from access groups
         resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
 
-        hydrated_members: Final = await _hydrate_member_user_details(
-            prisma_client=prisma_client,
-            members=resolved_team_info.members_with_roles,
+        hydrated_members: Final = (
+            await _hydrate_member_user_details(
+                prisma_client=prisma_client,
+                members=resolved_team_info.members_with_roles,
+            )
+            if include_members
+            else ()
         )
         hydrated_team_info: Final = resolved_team_info.model_copy(
             update={
@@ -5625,7 +5643,7 @@ async def team_info(
                     MappingProxyType(
                         {
                             **tm.model_dump(),
-                            "budget_source": _member_budget_source(tm.budget_id, active_default_budget_id),
+                            "budget_source": member_budget_source(tm.budget_id, active_default_budget_id),
                         }
                     )
                 )

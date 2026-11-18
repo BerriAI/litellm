@@ -17,7 +17,7 @@ import os
 import re
 import ssl
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,6 +44,7 @@ from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
 from litellm.router_api import ApplyResult, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.utils import CredentialItem
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -4770,6 +4771,120 @@ async def test_ProxyConfig_get_credentials_carries_the_stored_display_name_and_m
         "db",
         {"api_key": "sk-labeled"},
     )
+
+
+class _ComparisonCounter:
+    def __init__(self) -> None:
+        self.count = 0
+
+
+class _CountedName(str):
+    counter: _ComparisonCounter
+
+    def __new__(cls, value: str, counter: _ComparisonCounter) -> _CountedName:
+        name: Final = super().__new__(cls, value)
+        name.counter = counter
+        return name
+
+    def __eq__(self, other: object) -> bool:
+        self.counter.count += 1
+        return str.__eq__(self, other)
+
+    __hash__ = str.__hash__
+
+
+def _loaded_credential(name: str, api_key: str) -> CredentialItem:
+    return CredentialItem.model_construct(
+        credential_name=name, credential_values={"api_key": api_key}, credential_info={}
+    )
+
+
+def _prisma_returning_credential_rows(rows: Sequence[Mapping[str, object]]) -> MagicMock:
+    fake_prisma: Final = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(return_value=rows)
+    return fake_prisma
+
+
+def _proxy_config_reading_credential_names_from_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, config_credential_names: tuple[str, ...]
+) -> ProxyConfig:
+    from litellm.proxy import proxy_server
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        json.dumps(
+            {
+                "credential_list": [
+                    {"credential_name": name, "credential_values": {"api_key": f"{name}-yaml"}, "credential_info": {}}
+                    for name in config_credential_names
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_file))
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    return ProxyConfig()
+
+
+@pytest.mark.parametrize(
+    ("loaded", "db_rows", "config_names", "expected"),
+    [
+        pytest.param(
+            (("a", "a-1"), ("stale", "s-1"), ("b", "b-1"), ("a", "a-2"), ("from-config", "cfg-old")),
+            (("a", "a-new"), ("c", "c-1"), ("b", "b-new"), ("c", "c-2"), ("a", "a-newer")),
+            ("from-config",),
+            (("a", "a-newer"), ("b", "b-new"), ("a", "a-2"), ("from-config", "cfg-old"), ("c", "c-1"), ("c", "c-2")),
+            id="first-duplicate-replaced-unloaded-names-appended-stale-dropped-config-kept",
+        ),
+        pytest.param((("a", "a-1"), ("b", "b-1")), (), (), (), id="empty-db-and-config-clear-the-list"),
+        pytest.param((), (("a", "a-1"), ("a", "a-2")), (), (("a", "a-1"), ("a", "a-2")), id="empty-list-appends-all"),
+    ],
+)
+async def test_ProxyConfig_get_credentials_syncs_the_loaded_list_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    loaded: tuple[tuple[str, str], ...],
+    db_rows: tuple[tuple[str, str], ...],
+    config_names: tuple[str, ...],
+    expected: tuple[tuple[str, str], ...],
+) -> None:
+    credential_list: Final = [_loaded_credential(name, api_key) for name, api_key in loaded]
+    monkeypatch.setattr(litellm, "credential_list", credential_list)
+    pc: Final = _proxy_config_reading_credential_names_from_file(monkeypatch, tmp_path, config_names)
+
+    await pc.get_credentials(
+        prisma_client=_prisma_returning_credential_rows(
+            [_encrypted_credential_row(name, api_key) for name, api_key in db_rows]
+        )
+    )
+
+    assert litellm.credential_list is credential_list
+    assert tuple((cred.credential_name, cred.credential_values["api_key"]) for cred in credential_list) == expected
+
+
+async def test_ProxyConfig_get_credentials_compares_names_linearly_in_credential_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    count: Final = 2_000
+    counter: Final = _ComparisonCounter()
+    credential_list: Final = [_loaded_credential(_CountedName(f"cred-{i}", counter), f"old-{i}") for i in range(count)]
+    monkeypatch.setattr(litellm, "credential_list", credential_list)
+    pc: Final = _proxy_config_reading_credential_names_from_file(monkeypatch, tmp_path, ())
+    db_names: Final = (*(f"cred-{i}" for i in range(1, count)), "cred-new")
+
+    await pc.get_credentials(
+        prisma_client=_prisma_returning_credential_rows(
+            [{"credential_name": name, "credential_values": {}, "credential_info": {}} for name in db_names]
+        )
+    )
+    comparisons: Final = counter.count
+
+    assert [cred.credential_name for cred in credential_list] == list(db_names)
+    assert comparisons <= 3 * count, f"{comparisons} name comparisons to sync {count} credentials"
 
 
 # ---------------------------------------------------------------------------
