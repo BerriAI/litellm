@@ -5851,7 +5851,6 @@ class _Driver:
             if isinstance(primary, litellm_exceptions.ContentPolicyViolationError)
             else None
         )
-        # Only an error-specific chain the group matched takes precedence.
         error_specific_group: Final = group_of(error_specific_list)[0] if error_specific_list is not None else None
         if error_specific_group is not None:
             return outcome(error_specific_group)
