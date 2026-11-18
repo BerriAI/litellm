@@ -157,6 +157,26 @@ class RouteChecks:
         """
         Raises Exception if Virtual Key is not allowed to call the route
         """
+        if (
+            route in LiteLLMRoutes.own_spend_log_routes.value
+            and valid_token.metadata.get("password_reset_required") is not True
+        ):
+            return True
+        return RouteChecks._assert_key_allowed_routes_grant(route=route, valid_token=valid_token, request=request)
+
+    @staticmethod
+    def key_allowed_routes_grant(route: str, valid_token: UserAPIKeyAuth) -> bool:
+        try:
+            return RouteChecks._assert_key_allowed_routes_grant(route=route, valid_token=valid_token)
+        except HTTPException:
+            return False
+
+    @staticmethod
+    def _assert_key_allowed_routes_grant(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None = None,
+    ) -> bool:
 
         # Only check if valid_token.allowed_routes is set and is a list with at least one item
         if valid_token.allowed_routes is None:

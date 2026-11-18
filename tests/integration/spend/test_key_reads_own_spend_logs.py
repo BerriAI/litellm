@@ -9,13 +9,13 @@ import pytest
 from integration._support.client import Gateway
 
 
-def _seed_spend_row(request_id: str, key: str) -> None:
+def _seed_spend_row(request_id: str, key: str, user: str = "") -> None:
     started: Final = datetime.now(timezone.utc) - timedelta(minutes=5)
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
         connection.execute(
-            'INSERT INTO "LiteLLM_SpendLogs" (request_id, call_type, api_key, "startTime", "endTime", status) '
-            "VALUES (%s, 'acompletion', %s, %s, %s, 'success')",
-            (request_id, sha256(key.encode()).hexdigest(), started, started),
+            'INSERT INTO "LiteLLM_SpendLogs" (request_id, call_type, api_key, "user", "startTime", "endTime", status) '
+            "VALUES (%s, 'acompletion', %s, %s, %s, %s, 'success')",
+            (request_id, sha256(key.encode()).hexdigest(), user, started, started),
         )
 
 
@@ -69,8 +69,59 @@ def test_key_without_user_reads_only_its_own_spend_logs(gateway: Gateway, route:
 
 
 @pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
-def test_key_restricted_to_other_routes_cannot_read_spend_logs(gateway: Gateway, route: str) -> None:
+def test_key_restricted_to_other_routes_still_reads_only_its_own_spend_logs(gateway: Gateway, route: str) -> None:
+    own_request: Final = f"own-{uuid.uuid4().hex}"
+    other_request: Final = f"other-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
         restricted_key: Final = scenario.key(allowed_routes=["llm_api_routes"])
-        response: Final = gateway.request("GET", route, params=_window(), key=restricted_key)
-        assert response.status_code in (401, 403), f"{response.status_code} {response.text[:300]}"
+        other_key: Final = scenario.key()
+        scenario.cleanups.callback(_delete_spend_rows, (own_request, other_request))
+        _seed_spend_row(own_request, restricted_key)
+        _seed_spend_row(other_request, other_key)
+
+        own: Final = gateway.request("GET", route, params={"summarize": "false", **_window()}, key=restricted_key)
+        assert own.status_code == 200, own.text
+        assert _request_ids(own.json()) == (own_request,), own.text[:500]
+
+        foreign: Final = gateway.request(
+            "GET",
+            route,
+            params={**_window(), "api_key": sha256(other_key.encode()).hexdigest()},
+            key=restricted_key,
+        )
+        assert foreign.status_code == 403, f"{foreign.status_code} {foreign.text[:300]}"
+
+        unrelated: Final = gateway.request("GET", "/key/list", key=restricted_key)
+        assert unrelated.status_code in (401, 403), f"{unrelated.status_code} {unrelated.text[:300]}"
+
+
+@pytest.mark.parametrize("role", ["internal_user", "internal_user_viewer"])
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
+def test_internal_user_is_refused_filters_outside_their_own_spend_logs(gateway: Gateway, route: str, role: str) -> None:
+    own_request: Final = f"own-{uuid.uuid4().hex}"
+    other_request: Final = f"other-{uuid.uuid4().hex}"
+    params: Final = {"summarize": "false", **_window()}
+    with gateway.scenario() as scenario:
+        own_user: Final = scenario.user(user_role=role)
+        other_user: Final = scenario.user(user_role="internal_user")
+        own_key: Final = scenario.key(user_id=own_user)
+        other_key: Final = scenario.key(user_id=other_user)
+        scenario.cleanups.callback(_delete_spend_rows, (own_request, other_request))
+        _seed_spend_row(own_request, own_key, own_user)
+        _seed_spend_row(other_request, other_key, other_user)
+
+        for readable_filter in (
+            {},
+            {"user_id": own_user},
+            {"api_key": sha256(own_key.encode()).hexdigest()},
+        ):
+            readable = gateway.request("GET", route, params={**params, **readable_filter}, key=own_key)
+            assert readable.status_code == 200, f"{readable_filter}: {readable.text[:300]}"
+            assert _request_ids(readable.json()) == (own_request,), f"{readable_filter}: {readable.text[:500]}"
+
+        for foreign_filter in (
+            {"user_id": other_user},
+            {"api_key": sha256(other_key.encode()).hexdigest()},
+        ):
+            foreign = gateway.request("GET", route, params={**params, **foreign_filter}, key=own_key)
+            assert foreign.status_code == 403, f"{foreign_filter}: {foreign.status_code} {foreign.text[:300]}"

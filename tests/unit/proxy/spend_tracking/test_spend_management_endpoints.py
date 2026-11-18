@@ -25,6 +25,7 @@ from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_reset
+from litellm.proxy.utils import hash_token_if_needed
 from tests.unit.proxy.db.fake_prisma_engine import (
     ReadTargetOf,
     statement_timeout_error,
@@ -1917,7 +1918,7 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, m
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(client, monkeypatch):
+async def test_ui_view_spend_logs_refuses_an_internal_user_filtering_by_another_user(client, monkeypatch):
     caller_log = {
         "id": "log1",
         "request_id": "req1",
@@ -1955,11 +1956,8 @@ async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(c
             headers={"Authorization": "Bearer sk-test"},
         )
 
-        assert response.status_code == 200
-        assert response.json()["data"] == []
-        page_sql, page_params = next((sql, params) for sql, params in observed_queries if "SELECT\n" in sql)
-        assert page_sql.count('"user" = $') == 2
-        assert page_params[2:4] == ("someone-else@example.com", "caller@example.com")
+        assert response.status_code == 403, response.text
+        assert observed_queries == []
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -6022,19 +6020,19 @@ async def test_view_spend_logs_internal_user_combines_user_with_api_key(client, 
 
     start_date = "2024-01-01"
     end_date = "2024-12-31"
+    own_key_hash = hash_token_if_needed("sk-some-raw-token")
+    other_key_hash = hash_token_if_needed("sk-another-users-token")
+    ps.user_api_key_cache.set_cache(key=own_key_hash, value=UserAPIKeyAuth(user_id="internal-user-1"))
+    ps.user_api_key_cache.set_cache(key=other_key_hash, value=UserAPIKeyAuth(user_id="internal-user-2"))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
         user_id="internal-user-1",
     )
+    params = {"start_date": start_date, "end_date": end_date, "summarize": "false"}
     try:
         response = client.get(
             "/spend/logs",
-            params={
-                "start_date": start_date,
-                "end_date": end_date,
-                "summarize": "false",
-                "api_key": "sk-some-raw-token",
-            },
+            params={**params, "api_key": "sk-some-raw-token"},
             headers={"Authorization": "Bearer sk-test"},
         )
         assert response.status_code == 200
@@ -6043,8 +6041,17 @@ async def test_view_spend_logs_internal_user_combines_user_with_api_key(client, 
         assert where["user"] == "internal-user-1"
         assert where["api_key"] == "hashed::sk-some-raw-token"
         assert "startTime" in where
+
+        foreign = client.get(
+            "/spend/logs",
+            params={**params, "api_key": "sk-another-users-token"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert foreign.status_code == 403, foreign.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ps.user_api_key_cache.delete_cache(own_key_hash)
+        ps.user_api_key_cache.delete_cache(other_key_hash)
 
 
 @pytest.mark.asyncio
