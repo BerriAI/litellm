@@ -183,6 +183,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     pre_call_served_model,
     request_served_model,
 )
+from litellm.proxy.request_auth_context import REQUEST_AUTH
 from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_committed_budget_spend,
     carry_team_and_user_budget_state,
@@ -3513,6 +3514,8 @@ async def user_api_key_auth(
         model=request_data.get("model") if isinstance(request_data, dict) else None,
     )
     user_api_key_auth_obj.request_route = normalize_request_route(route)
+    # Bound once for the request task, like the identity above, so V2 callbacks' hooks can read it.
+    REQUEST_AUTH.set(user_api_key_auth_obj)
 
     if body_parse_exception is not None:
         await _record_unparsable_body_failure(

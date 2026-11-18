@@ -107,6 +107,7 @@ impl KeyDenial {
             Self::MissingKey
             | Self::MalformedKey
             | Self::MasterKeyOnlyRoute { .. }
+            | Self::NoDbConfigured
             | Self::Blocked
             | Self::UserDeactivated { .. } => auth(self),
             Self::UserAuthDisabled => http(403, self),
@@ -263,6 +264,24 @@ mod tests {
             message: "Authentication Error, Invalid API key provided.".to_owned(),
             error_type: ErrorType::TokenNotFoundInDb,
             param: Some("key".to_owned()),
+        }
+    )]
+    #[case::no_db_configured(
+        KeyDenial::NoDbConfigured.into(),
+        PublicDenial::Proxy {
+            status: 401,
+            message: KeyDenial::NoDbConfigured.to_string(),
+            error_type: ErrorType::Auth,
+            param: None,
+        }
+    )]
+    #[case::db_not_connected(
+        KeyDenial::NoDb.into(),
+        PublicDenial::Proxy {
+            status: 400,
+            message: "No connected db.".to_owned(),
+            error_type: ErrorType::NoDbConnection,
+            param: None,
         }
     )]
     #[case::budget(

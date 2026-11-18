@@ -484,7 +484,7 @@ fn pass_through_auth_stays_on_unless_pydantic_reads_false(
 #[case::number("1", false)]
 fn auth_flags_are_on_only_for_boolean_true(#[case] value: &str, #[case] expected: bool) {
     let config = Config::from_yaml(&format!(
-        "general_settings: {{enable_jwt_auth: {value}, enable_oauth2_auth: {value}, enable_oauth2_proxy_auth: {value}}}"
+        "general_settings: {{enable_jwt_auth: {value}, enable_oauth2_auth: {value}, enable_oauth2_proxy_auth: {value}, allow_client_side_credentials: {value}}}"
     ))
     .unwrap();
     let general = config.general_settings;
@@ -492,9 +492,10 @@ fn auth_flags_are_on_only_for_boolean_true(#[case] value: &str, #[case] expected
         [
             general.enable_jwt_auth,
             general.enable_oauth2_auth,
-            general.enable_oauth2_proxy_auth
+            general.enable_oauth2_proxy_auth,
+            general.allow_client_side_credentials
         ],
-        [expected; 3]
+        [expected; 4]
     );
 }
 

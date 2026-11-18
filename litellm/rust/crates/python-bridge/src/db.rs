@@ -1,8 +1,12 @@
 use std::{sync::Arc, time::UNIX_EPOCH};
 
-use litellm_db::{Call, Endpoint, Observer, Outcome, Pools, QueryEvent};
+use litellm_db::{Call, ClientIdentity, Endpoint, Observer, Outcome, Pools, QueryEvent};
+use litellm_db_resolve::{Limits, Overlay, REPLICA_URL, Rule, WRITER_URL};
 use litellm_secret_value::SecretValue;
 use pyo3::{exceptions::PyValueError, prelude::*};
+
+/// Prisma's own default, which the pool takes when the url pins no `pool_timeout`.
+const PRISMA_POOL_TIMEOUT_SECONDS: f64 = 10.0;
 
 const HEALTH_CHECK: Call = Call {
     call_type: "health_check",
@@ -42,6 +46,52 @@ impl Observer for PythonEvents {
     }
 }
 
+/// The native pool's endpoint for the url Prisma connects with.
+#[pyclass(frozen, name = "DatabaseEndpoint")]
+pub(crate) struct DatabaseEndpoint(Endpoint);
+
+#[pymethods]
+impl DatabaseEndpoint {
+    /// `max_connections` is the Rust share of the connection budget, whatever the url's `connection_limit`.
+    #[staticmethod]
+    #[pyo3(signature = (url, max_connections, *, replica=false, client_identity=None))]
+    fn resolve(
+        py: Python<'_>,
+        url: String,
+        max_connections: u32,
+        replica: bool,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] client_identity: Option<
+            ClientIdentity,
+        >,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        let source = if replica { REPLICA_URL } else { WRITER_URL };
+        let overlay = Overlay {
+            limits: Limits {
+                max_connections: Rule::OverUrl(max_connections),
+                acquire_timeout: Rule::UnderUrl(Some(PRISMA_POOL_TIMEOUT_SECONDS)),
+                idle_timeout: Rule::UnderUrl(None),
+                socket_timeout: Rule::UnderUrl(None),
+            },
+            unnamed_statements: false,
+            session_timeouts: Vec::new(),
+            client_identity,
+        };
+        crate::execution::run_async_value(py, async move {
+            let (endpoint, ignored) = litellm_db_resolve::interpret(source, &url, &overlay)
+                .await
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
+            for ignored in &ignored {
+                litellm_tracing::warn!(
+                    "Database setting {} is ignored by the native pool: {}",
+                    ignored.setting,
+                    ignored.consequence
+                );
+            }
+            Ok(DatabaseEndpoint(endpoint))
+        })
+    }
+}
+
 #[pyclass(frozen)]
 pub(crate) struct NativeDatabase {
     writer_endpoint: Endpoint,
@@ -76,12 +126,14 @@ fn map_error(error: litellm_db::Error) -> PyErr {
 impl NativeDatabase {
     #[staticmethod]
     #[pyo3(signature = (events, writer, reader=None))]
-    fn connect(
-        py: Python<'_>,
+    fn connect<'py>(
+        py: Python<'py>,
         events: Py<PyAny>,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] writer: Endpoint,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] reader: Option<Endpoint>,
-    ) -> PyResult<Bound<'_, PyAny>> {
+        writer: PyRef<'_, DatabaseEndpoint>,
+        reader: Option<PyRef<'_, DatabaseEndpoint>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let writer = writer.0.clone();
+        let reader = reader.map(|reader| reader.0.clone());
         crate::execution::run_async_value(py, async move {
             let pools = Pools::new(&writer, reader.as_ref()).map_err(map_error)?;
             Ok(NativeDatabase {
