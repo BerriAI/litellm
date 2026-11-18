@@ -13511,6 +13511,28 @@ def test_get_standard_logging_metadata_invalid_keys():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_get_standard_logging_metadata_preserves_prompt_selection():
+    """A prompt resolved by label/version keeps that selection in standard logging metadata, so the Langfuse logger re-fetches the version that actually ran instead of the production default."""
+    metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        metadata={},
+        litellm_params={
+            "prompt_id": "support-agent",
+            "prompt_label": "production",
+            "prompt_version": 3,
+        },
+        prompt_integration="langfuse",
+    )
+
+    assert metadata["prompt_management_metadata"] == {
+        "prompt_id": "support-agent",
+        "prompt_variables": None,
+        "prompt_integration": "langfuse",
+        "prompt_label": "production",
+        "prompt_version": 3,
+    }
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_cleanup_timestamps():
     """Test cleanup_timestamps with different input types"""
     # Test with datetime objects
