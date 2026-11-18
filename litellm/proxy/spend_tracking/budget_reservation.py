@@ -8,12 +8,13 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from itertools import chain
+from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
+from typing import Final, Literal, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
 from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -28,7 +29,7 @@ from litellm.litellm_core_utils.duration_parser import (
 from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
 )
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.get_model_cost_map import model_cost_inputs
 from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
@@ -87,12 +88,13 @@ from litellm.redis.stores.spend_counters import (
 )
 from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.router import Router
+from litellm.rust_bridge._native import BOUND_DEFAULT_MAX_OUTPUT_TOKENS
 from litellm.types.proxy.auth.customer_hierarchy import (
     AppDurationLimit,
     CustomerScopeKey,
 )
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, ModelGroupInfo
 from litellm.types.utils import CallTypes
 
 
@@ -1107,22 +1109,7 @@ def estimate_request_max_cost(
     input_token_counts: Mapping[str, int] | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> float | None:
-    estimates = [
-        _estimate_request_max_cost_for_model(
-            request_body=request_body,
-            route=route,
-            model=model_name,
-            llm_router=llm_router,
-            input_tokens=(input_token_counts or {}).get(model_name),
-        )
-        for model_name in _get_request_models(
-            request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
-        )
-    ]
-    estimates = [estimate for estimate in estimates if estimate is not None]
-    if not estimates:
-        return None
-    return max(cast(list[float], estimates))
+    return _bound(request_body, route, llm_router, input_token_counts, path_params)[0]
 
 
 def estimate_request_input_cost(
@@ -1139,210 +1126,101 @@ def estimate_request_input_cost(
     cancelled in-flight request has already incurred. A cancelled reservation is
     reconciled to this instead of being refunded to zero.
     """
-    estimates = [
-        _estimate_request_input_cost_for_model(
-            request_body=request_body,
-            route=route,
-            model=model_name,
-            llm_router=llm_router,
-            input_tokens=(input_token_counts or {}).get(model_name),
-        )
-        for model_name in _get_request_models(
-            request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
-        )
-    ]
-    estimates = [estimate for estimate in estimates if estimate is not None]
-    if not estimates:
-        return None
-    return max(cast("list[float]", estimates))
+    return _bound(request_body, route, llm_router, input_token_counts, path_params)[1]
 
 
-def _estimate_request_input_cost_for_model(
+_GroupRates = TypedDict(
+    "_GroupRates",
+    {
+        "from": ReadOnly[Literal["group"]],
+        "input": ReadOnly[float | None],
+        "output": ReadOnly[float | None],
+        "max_input_tokens": ReadOnly[int | None],
+        "max_output_tokens": ReadOnly[int | None],
+    },
+)
+_InfoRow = TypedDict("_InfoRow", {"from": ReadOnly[Literal["row"]], "row": ReadOnly[int]})
+
+
+class _CostShape(TypedDict):
+    flat: ReadOnly[_GroupRates | _InfoRow]
+    tiers: ReadOnly[int | None]
+
+
+class _BoundModel(TypedDict):
+    counted_input: ReadOnly[int | None]
+    shapes: ReadOnly[Sequence[_CostShape]]
+
+
+class _RequestCaps(TypedDict):
+    requested_output: ReadOnly[int | None]
+    n: ReadOnly[int | None]
+    best_of: ReadOnly[int | None]
+    input_only: ReadOnly[bool]
+
+
+class _BoundDocument(TypedDict):
+    models: ReadOnly[Sequence[_BoundModel]]
+    request: ReadOnly[_RequestCaps]
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelShapes:
+    """One requested model's cost shapes, the model info rows they read listed in ``rows`` by index."""
+
+    shapes: tuple[_CostShape, ...]
+    rows: tuple[Mapping[str, object], ...]
+
+
+_NO_SHAPES: Final = _ModelShapes(shapes=(), rows=())
+
+
+def _bound(
     request_body: dict,
     route: str,
-    model: str,
     llm_router: Router | None,
-    input_tokens: int | None = None,
-) -> float | None:
-    estimates: Final = [
-        _input_cost_for_cost_info(
-            request_body=request_body,
-            route=route,
-            model=model,
-            model_info=model_info,
-            input_tokens=input_tokens,
-        )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
-    ]
-    valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
-    return max(valid_estimates) if valid_estimates else None
-
-
-def _input_cost_for_cost_info(
-    request_body: dict,
-    route: str,
-    model: str,
-    model_info: Mapping[str, object],
-    input_tokens: int | None = None,
-) -> float | None:
-    estimated_input_tokens: Final = _estimate_input_tokens(
-        request_body=request_body,
-        route=route,
-        model=model,
-        model_info=model_info,
-        input_tokens=input_tokens,
+    input_token_counts: Mapping[str, int] | None,
+    path_params: Mapping[str, object] | None,
+) -> tuple[float | None, float | None]:
+    """The legacy budget hold and the input cost floor, priced by the Rust pricing core's ``bound``."""
+    models: Final = _get_request_models(
+        request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
     )
-    if estimated_input_tokens is None:
-        return None
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
-        if tier is not None:
-            return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    if input_cost_per_token is None:
-        return None
-    return estimated_input_tokens * input_cost_per_token
-
-
-def _estimate_request_max_cost_for_model(
-    request_body: dict,
-    route: str,
-    model: str,
-    llm_router: Router | None,
-    input_tokens: int | None = None,
-) -> float | None:
-    estimates: Final = [
-        _max_cost_for_cost_info(
-            request_body=request_body,
-            route=route,
-            model=model,
-            model_info=model_info,
-            input_tokens=input_tokens,
-        )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
-    ]
-    valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
-    return max(valid_estimates) if valid_estimates else None
-
-
-def _max_cost_for_cost_info(
-    request_body: dict,
-    route: str,
-    model: str,
-    model_info: Mapping[str, object],
-    input_tokens: int | None = None,
-) -> float | None:
-    image_cost: Final = _estimate_image_generation_cost(
-        request_body=request_body,
-        model_info=model_info,
-    )
-    if image_cost is not None:
-        return image_cost
-
-    estimated_input_tokens: Final = _estimate_input_tokens(
-        request_body=request_body,
-        route=route,
-        model=model,
-        model_info=model_info,
-        input_tokens=input_tokens,
-    )
-    output_tokens: Final = _estimate_output_tokens(
-        request_body=request_body,
-        route=route,
-        model_info=model_info,
-    )
-    if estimated_input_tokens is None or output_tokens is None:
-        return None
-
-    output_multiplier: Final = _get_output_multiplier(request_body=request_body)
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
-        if tier is not None:
-            output_rate = max(
-                tier_rate(tier, "output_cost_per_token"),
-                tier_rate(tier, "output_cost_per_reasoning_token"),
+    per_model: Final = tuple(_model_shapes(model, llm_router) for model in models)
+    offsets: Final = tuple(accumulate((len(shapes.rows) for shapes in per_model), initial=0))
+    document: Final = _BoundDocument(
+        models=tuple(
+            _BoundModel(
+                counted_input=_counted_input_tokens(request_body, model, input_token_counts),
+                shapes=tuple(_offset_shape(shape, offset) for shape in shapes.shapes),
             )
-            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * output_rate
-            )
-
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
-    output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
-    cost = 0.0
-    if input_cost_per_token is not None:
-        cost += estimated_input_tokens * input_cost_per_token
-    elif estimated_input_tokens > 0:
-        return None
-
-    # The reasoning-token share is unknown before the request runs, so reserve every
-    # output token at the higher of the standard and reasoning rates to avoid
-    # under-reserving reasoning-heavy requests.
-    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
-    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
-        cost += output_tokens * output_multiplier * output_rate
-    elif output_tokens > 0:
-        return None
-
-    return cost
+            for model, shapes, offset in zip(models, per_model, offsets)
+        ),
+        request=_RequestCaps(
+            requested_output=_requested_output_tokens(request_body),
+            n=_to_int(request_body.get("n")),
+            best_of=_to_int(request_body.get("best_of")),
+            input_only=_is_input_only_route(route=route),
+        ),
+    )
+    return model_cost_inputs.bound(document, tuple(chain.from_iterable(shapes.rows for shapes in per_model)))
 
 
-def _estimate_image_generation_cost(
-    request_body: dict,
-    model_info: Mapping[str, object],
-) -> float | None:
-    """
-    Reserve `n × per-image cost` for image-generation requests so concurrent
-    requests against a depleted budget cannot all slip past the admission gate
-    onto the provider. Token-based pricing (e.g. gpt-image-1) is handled by
-    the chat-route token path; per-pixel and size/quality-tiered pricing
-    (DALL-E 2 size variants, premium tiers) are not handled here and fall
-    through to read-time enforcement.
-
-    The "output" vs "input" cost-per-image naming is inconsistent across
-    providers — OpenAI's dall-e-3 entry uses ``input_cost_per_image`` while
-    aiml/dall-e-3 uses ``output_cost_per_image`` — so both are summed.
-    """
-    # Gate strictly on `mode`. Several chat and embedding models carry
-    # ``input_cost_per_image`` / ``output_cost_per_image`` to price multimodal
-    # *vision input* (e.g. ``gemini-3.1-pro-preview``, ``azure/gpt-realtime-*``,
-    # ``amazon.titan-embed-image-v1``). Falling back to "treat as image-gen if
-    # an image cost field is present" would short-circuit the token-priced
-    # path for those models and reserve a fraction of a cent instead of the
-    # true per-token cost. All real image-generation entries in
-    # ``model_prices_and_context_window.json`` carry ``mode: image_generation``
-    # or ``mode: image_edit``, so the field-presence fallback is unnecessary.
-    if model_info.get("mode") not in ("image_generation", "image_edit"):
-        return None
-
-    output_cost_per_image: Final = _to_float(model_info.get("output_cost_per_image"))
-    input_cost_per_image: Final = _to_float(model_info.get("input_cost_per_image"))
-    cost_per_image: Final = (output_cost_per_image or 0.0) + (input_cost_per_image or 0.0)
-    if cost_per_image <= 0:
-        return None
-
-    n: Final = _to_int(request_body.get("n")) or 1
-    return cost_per_image * max(n, 1)
+def _offset_shape(shape: _CostShape, offset: int) -> _CostShape:
+    flat: Final = shape["flat"]
+    return _CostShape(
+        flat=_InfoRow({"from": "row", "row": flat["row"] + offset}) if flat["from"] == "row" else flat,
+        tiers=None if shape["tiers"] is None else shape["tiers"] + offset,
+    )
 
 
-def _get_model_cost_info(
-    model: str,
-    llm_router: Router | None,
-) -> Mapping[str, object] | None:
-    if llm_router is not None:
-        model_group_info: Final = llm_router.registry().group(model, field="cached_info")
-        if model_group_info is not None:
-            return model_group_info.model_dump()
-    return dict(litellm.get_model_info(model=model))
+def _counted_input_tokens(request_body: dict, model: str, input_token_counts: Mapping[str, int] | None) -> int | None:
+    counted: Final = (input_token_counts or {}).get(model)
+    return counted if counted is not None else count_input_tokens_for_model(request_body=request_body, model=model)
 
 
-def _get_model_cost_infos(
-    model: str,
-    llm_router: Router | None,
-) -> Sequence[Mapping[str, object]]:
-    """Cost-info candidates to estimate a request against for one model group.
+def _model_shapes(model: str, llm_router: Router | None) -> _ModelShapes:
+    """Cost shapes to estimate a request against for one model group.
 
     Reservation runs before routing, so the deployment that will serve the request
     is unknown. Rather than guess, we estimate the cost against every eligible
@@ -1353,17 +1231,46 @@ def _get_model_cost_infos(
     try:
         base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
         if base is None:
-            return []
+            return _NO_SHAPES
         tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
     except Exception:
         verbose_proxy_logger.debug(
             "Unable to load model cost info for budget reservation",
             exc_info=True,
         )
-        return []
-    if not tiered_tables:
-        return [base]
-    return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
+        return _NO_SHAPES
+    flat: Final = (
+        _GroupRates(
+            {
+                "from": "group",
+                "input": base.input_cost_per_token,
+                "output": base.output_cost_per_token,
+                "max_input_tokens": _to_int(base.max_input_tokens),
+                "max_output_tokens": _to_int(base.max_output_tokens),
+            }
+        )
+        if isinstance(base, ModelGroupInfo)
+        else _InfoRow({"from": "row", "row": 0})
+    )
+    base_rows: Final = () if isinstance(base, ModelGroupInfo) else (base,)
+    return _ModelShapes(
+        shapes=(
+            _CostShape(flat=flat, tiers=None),
+            *(_CostShape(flat=flat, tiers=len(base_rows) + index) for index in range(len(tiered_tables))),
+        ),
+        rows=(*base_rows, *({"tiered_pricing": table} for table in tiered_tables)),
+    )
+
+
+def _get_model_cost_info(
+    model: str,
+    llm_router: Router | None,
+) -> ModelGroupInfo | Mapping[str, object] | None:
+    if llm_router is not None:
+        model_group_info: Final = llm_router.registry().group(model, field="cached_info")
+        if model_group_info is not None:
+            return model_group_info
+    return dict(litellm.get_model_info(model=model))
 
 
 def _deployment_tiered_pricing_table(
@@ -1454,51 +1361,7 @@ def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_fil
     )
 
 
-def _estimate_input_tokens(
-    request_body: dict,
-    route: str,
-    model: str,
-    model_info: Mapping[str, object],
-    input_tokens: int | None = None,
-) -> int | None:
-    counted: Final = (
-        input_tokens
-        if input_tokens is not None
-        else count_input_tokens_for_model(request_body=request_body, model=model)
-    )
-    if counted is not None:
-        return counted
-
-    max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
-    if max_input_tokens is not None:
-        return max_input_tokens
-
-    return None
-
-
-DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
-
-
-def _estimate_output_tokens(
-    request_body: dict,
-    route: str,
-    model_info: Mapping[str, object],
-) -> int | None:
-    if _is_input_only_route(route=route):
-        return 0
-
-    requested: Final = _requested_output_tokens(request_body)
-
-    # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
-    # (1) Without an explicit cap we still need a finite reservation so the
-    #     atomic admission counter actually bounds concurrent in-flight cost
-    #     (mirrors parallel_request_limiter_v3's DEFAULT_MAX_TOKENS_ESTIMATE).
-    # (2) An adversarial caller cannot send max_tokens=999999999 to inflate
-    #     the reservation up to remaining team headroom and pin the counter
-    #     at the cap — the model can only physically emit max_output_tokens
-    #     anyway, so reserving more is both wasteful and a DoS surface.
-    model_ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
-    return min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK if requested is None else requested, model_ceiling)
+DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = BOUND_DEFAULT_MAX_OUTPUT_TOKENS
 
 
 _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
@@ -1511,15 +1374,6 @@ def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
         inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
-
-
-def _get_output_multiplier(request_body: dict) -> int:
-    output_multiplier = 1
-    for key in ("n", "best_of"):
-        value = _to_int(request_body.get(key))
-        if value is not None:
-            output_multiplier = max(output_multiplier, value)
-    return output_multiplier
 
 
 def _is_input_only_route(route: str) -> bool:
