@@ -7544,6 +7544,8 @@ class ProxyConfig:
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                         "access_group_rules",
+                        "customer_org_alias_header",
+                        "customer_member_id_header",
                     )
                     if name in typed_general_settings
                 }
