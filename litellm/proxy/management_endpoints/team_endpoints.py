@@ -5293,8 +5293,9 @@ def _transform_teams_to_deleted_records(
             "model_max_budget",
             "router_settings",
         ]:
-            if json_field in record and record[json_field] is not None:
-                record[json_field] = json.dumps(record[json_field])
+            json_value = record.pop(json_field, None)
+            if json_value is not None:
+                record[json_field] = json.dumps(json_value)
 
         for rel_key in (
             "litellm_model_table",
