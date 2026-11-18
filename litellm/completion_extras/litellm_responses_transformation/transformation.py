@@ -1133,7 +1133,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "store", optional_params.get("store")
         )
         preserve_system_instructions: Final = upstream_store is not False or any(
-            params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
+            params.get("previous_response_id") or params.get("truncation") == "auto"
             for params in (
                 request_params,
                 as_str_mapping(request_params.get("extra_body")) or {},
