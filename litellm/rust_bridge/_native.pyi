@@ -121,47 +121,6 @@ class NativeProvenance:
     def etag(self) -> str | None: ...
 
 @final
-class NativePrices:
-    def __new__(cls, row: Mapping[str, object], provider: str | None) -> NativePrices: ...
-    def quote(self, prompt_tokens: int, call: NativeCallContext) -> NativeQuote: ...
-
-@final
-class NativeCallContext:
-    def __new__(
-        cls,
-        *,
-        service_tier: str | None,
-        data_residency: str | None,
-        vertex_location: str | None,
-        at: datetime,
-    ) -> NativeCallContext: ...
-
-@final
-class NativeQuote:
-    @property
-    def input(self) -> float: ...
-    @property
-    def output(self) -> float: ...
-    @property
-    def reasoning(self) -> float: ...
-    @property
-    def cache_read(self) -> float: ...
-    @property
-    def explicit_cache_read(self) -> float: ...
-    @property
-    def cache_read_audio(self) -> float | None: ...
-    @property
-    def cache_read_image(self) -> float | None: ...
-    @property
-    def cache_write(self) -> float: ...
-    @property
-    def cache_write_1h(self) -> float: ...
-    @property
-    def cache_write_12h(self) -> float: ...
-    @property
-    def uplift(self) -> float: ...
-
-@final
 class NativeBilledRates:
     @property
     def input(self) -> float: ...
@@ -2358,7 +2317,6 @@ __all__ = [
     "NativeAuthCache",
     "NativeBilledRates",
     "NativeBudgets",
-    "NativeCallContext",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
@@ -2377,9 +2335,7 @@ __all__ = [
     "NativeParallelRequestLimiter",
     "NativeParallelRequestLimiterState",
     "NativePending",
-    "NativePrices",
     "NativeProvenance",
-    "NativeQuote",
     "NativeRateCard",
     "NativeRateLimits",
     "NativeReceipt",
