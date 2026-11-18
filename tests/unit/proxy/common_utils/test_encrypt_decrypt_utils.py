@@ -392,6 +392,12 @@ def test_fips_mode_refuses_to_encrypt_under_a_salt_key_under_112_bits(monkeypatc
         encrypt_value_helper("sk-secret-value")
 
 
+@pytest.mark.parametrize("key_bytes", [0, 16, 24, 31, 33])
+def test_fips_aes_gcm_refuses_a_key_that_is_not_32_bytes(key_bytes: int) -> None:
+    with pytest.raises(ValueError, match=f"AES-256-GCM needs a 32-byte key, got {key_bytes} bytes"):
+        encrypt_decrypt_utils._fips_seal_aes_gcm(b"k" * key_bytes, b"sk-secret-value")
+
+
 def _store_callback_var(secret: str) -> object:
     from litellm.proxy.common_utils.callback_utils import _encrypt_if_plaintext
 

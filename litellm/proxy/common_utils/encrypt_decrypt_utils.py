@@ -114,6 +114,7 @@ def derive_key_from_salt_key(label: bytes, context: bytes) -> str:
 _FIPS_AT_REST_KEY_LABEL: Final = b"litellm-at-rest:aes-256-gcm:"
 _GCM_NONCE_BYTES: Final = 12
 _GCM_TAG_BYTES: Final = 16
+_AES_256_KEY_BYTES: Final = 32
 
 
 def _fips_at_rest_key(signing_key: str) -> bytes:
@@ -129,7 +130,9 @@ def _fips_at_rest_key(signing_key: str) -> bytes:
 def _fips_seal_aes_gcm(key: bytes, plaintext: bytes) -> bytes | None:
     """nonce(12) || ciphertext || tag(16) from the FIPS provider's AES-256-GCM, or None when OpenSSL cannot run it. No
     nonce is passed in, so the provider draws it from its own DRBG, which FIPS 140-3 IG C.H requires and cryptography's
-    AESGCM cannot ask for."""
+    AESGCM cannot ask for. Raises ValueError when the key is not 32 bytes."""
+    if len(key) != _AES_256_KEY_BYTES:
+        raise ValueError(f"AES-256-GCM needs a {_AES_256_KEY_BYTES}-byte key, got {len(key)} bytes")
     import _hashlib
 
     libcrypto: Final = ctypes.CDLL(_hashlib.__file__)
