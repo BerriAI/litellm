@@ -1832,7 +1832,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
     async def stream_with_fallbacks() -> AsyncGenerator[object, None]:
         held: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
         response_id_exposed = False  # rebind-ok: set once, before an early-released event is yielded
-        output_started = False  # rebind-ok: set at the first non-lifecycle event
+        output_started = False  # rebind-ok: set at the first event that is not held
         try:
             async for item in _areported(
                 attempt,
@@ -1847,7 +1847,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 for held_event in held:
                     yield held_event
                 held = ()
-                output_started = output_started or not _responses_stream_holds_event(item, 0)
+                output_started = True
                 yield item
             for held_event in held:
                 yield held_event

@@ -205,14 +205,18 @@ async def test_when_the_fallback_fails_the_held_events_are_replayed_before_the_p
     assert host.deployments_called() == ["a", "b"]
 
 
-async def test_more_than_two_hundred_lifecycle_events_are_forwarded_before_a_fallback(
-    make_core: MakeCore, host: ScriptedHost
+@pytest.mark.parametrize("fallback", (False, True))
+async def test_overflowed_lifecycle_events_prevent_retry_or_fresh_fallback(
+    make_core: MakeCore, host: ScriptedHost, fallback: bool
 ) -> None:
-    host.answer("openai/a", responses_stream(*(Event(IN_PROGRESS) for _ in range(201)), error=cut()))
+    host.answer("openai/a", responses_stream(*(Event(IN_PROGRESS) for _ in range(201)), error=cut()), fallback_ok())
     host.answer("openai/b", fallback_ok())
-    core = build(make_core)
-    types = await collect_event_types(await open_stream(core))
-    assert types == [*([IN_PROGRESS] * 201), CREATED, TEXT_DELTA, COMPLETED]
+    core: Final = build(make_core, num_retries=0 if fallback else 2, fallbacks=[{"a": ["b"]}] if fallback else [])
+    seen: Final[list[object]] = []
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await drain_into(await open_stream(core), seen)
+    assert tuple(getattr(event, "type", None) for event in seen) == (IN_PROGRESS,) * 201
+    assert host.deployments_called() == ["a"]
 
 
 async def test_a_context_window_error_before_output_uses_the_context_window_chain(
