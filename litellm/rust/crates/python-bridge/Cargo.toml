@@ -23,6 +23,7 @@ litellm-env.workspace = true
 rustls.workspace = true
 litellm-secret-value.workspace = true
 litellm-db.workspace = true
+litellm-db-resolve.workspace = true
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-spend-clickhouse.workspace = true

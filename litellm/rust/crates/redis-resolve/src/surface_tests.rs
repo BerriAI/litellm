@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
 use litellm_config::{CacheSettings, Config, Value};
-use litellm_redis_resolve::Expected;
 use litellm_redis_types::{
     Auth, AwsIamAuth, AzureAdAuth, Node, ProviderHandle, Resolution, StaticAuth, Target, TlsOptions,
 };
@@ -9,8 +8,7 @@ use litellm_secret_value::SecretValue;
 use rstest::rstest;
 use serde_json::json;
 
-use super::{configured::ConfiguredRedis, secrets::SecretSnapshot};
-use crate::Error;
+use crate::{Error, Expected, configured::ConfiguredRedis, secrets::SecretSnapshot};
 
 fn resolution(
     configured: &ConfiguredRedis,
@@ -18,7 +16,7 @@ fn resolution(
 ) -> Result<Resolution, Error> {
     let lookup = |name: &str| environment.get(name).cloned();
     configured.resolve(
-        &SecretSnapshot::read(configured.secret_names(), &lookup),
+        &SecretSnapshot::from_environment(configured.secret_names(), &lookup),
         &lookup,
     )
 }
@@ -73,7 +71,7 @@ fn resolve_cache_in(yaml: &str, environment: &[(&str, &str)]) -> Result<Resoluti
         CacheSettings::Other(_) => panic!("expected a Redis cache"),
     };
     configured.resolve(
-        &SecretSnapshot::read(configured.secret_names(), &lookup),
+        &SecretSnapshot::from_environment(configured.secret_names(), &lookup),
         &lookup,
     )
 }
@@ -200,7 +198,7 @@ fn an_ocsp_check_fails_instead_of_connecting_without_it(
     let error = coordination_resolution(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, Error::Redis(litellm_redis_resolve::Error::Unenforceable { setting: named, .. }) if named == setting),
+        matches!(&error, Error::Unenforceable { setting: named, .. } if named == setting),
         "{error:?}"
     );
 }
@@ -315,13 +313,7 @@ fn a_credential_provider_without_a_host_handle_fails(
 ) {
     let error = resolve(yaml, environment).unwrap_err();
 
-    assert!(
-        matches!(
-            error,
-            Error::Redis(litellm_redis_resolve::Error::ProviderWithoutHandle)
-        ),
-        "{error}"
-    );
+    assert!(matches!(error, Error::ProviderWithoutHandle), "{error}");
 }
 
 #[rstest]
@@ -387,7 +379,7 @@ fn an_unknown_cert_requirement_fails() {
 
     assert!(matches!(
         error,
-        Error::Redis(litellm_redis_resolve::Error::Invalid { setting, expected: Expected::CertRequirement }) if setting == "ssl_cert_reqs"
+        Error::Invalid { setting, expected: Expected::CertRequirement } if setting == "ssl_cert_reqs"
     ));
 }
 
@@ -461,13 +453,7 @@ fn sentinels_without_a_service_name_fail() {
     )
     .unwrap_err();
 
-    assert!(
-        matches!(
-            error,
-            Error::Redis(litellm_redis_resolve::Error::NoSentinelService)
-        ),
-        "{error:?}"
-    );
+    assert!(matches!(error, Error::NoSentinelService), "{error:?}");
 }
 
 #[rstest]
@@ -489,7 +475,7 @@ fn a_host_or_port_cannot_reach_sentinel(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, Error::Redis(litellm_redis_resolve::Error::SentinelWithHost { setting }) if setting == source),
+        matches!(&error, Error::SentinelWithHost { setting } if setting == source),
         "{error:?}"
     );
 }
@@ -513,7 +499,7 @@ fn invalid_sentinel_nodes_name_their_source(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, Error::Redis(litellm_redis_resolve::Error::Invalid { setting, expected: Expected::SentinelNodes }) if setting == source),
+        matches!(&error, Error::Invalid { setting, expected: Expected::SentinelNodes } if setting == source),
         "{error:?}"
     );
 }
@@ -530,7 +516,7 @@ fn invalid_values_name_their_source(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, Error::Redis(litellm_redis_resolve::Error::Invalid { setting, .. }) if setting == source),
+        matches!(&error, Error::Invalid { setting, .. } if setting == source),
         "{error:?}"
     );
 }
@@ -572,10 +558,7 @@ fn connect_timeout_is_resolved_separately(
 fn a_block_without_a_usable_target_fails(#[case] yaml: &str, #[case] environment: &[(&str, &str)]) {
     let error = resolve(yaml, environment).unwrap_err();
 
-    assert!(
-        matches!(error, Error::Redis(litellm_redis_resolve::Error::NoTarget)),
-        "{error:?}"
-    );
+    assert!(matches!(error, Error::NoTarget), "{error:?}");
 }
 
 #[rstest]
@@ -645,7 +628,7 @@ fn rejects_bad_socket_timeout(#[case] timeout: &str) {
 
     assert!(matches!(
         error,
-        Error::Redis(litellm_redis_resolve::Error::Invalid { setting, expected: Expected::Seconds }) if setting == "socket_timeout"
+        Error::Invalid { setting, expected: Expected::Seconds } if setting == "socket_timeout"
     ));
 }
 
@@ -706,7 +689,7 @@ fn ignored_settings_are_named_by_their_source(
 
 fn snapshot(values: &[(&str, &str)]) -> SecretSnapshot {
     let values: HashMap<&str, &str> = values.iter().copied().collect();
-    SecretSnapshot::read(
+    SecretSnapshot::from_environment(
         ConfiguredRedis::environment_only().secret_names(),
         &|name: &str| values.get(name).map(|value| (*value).to_owned()),
     )
@@ -715,11 +698,12 @@ fn snapshot(values: &[(&str, &str)]) -> SecretSnapshot {
 #[rstest]
 fn secret_manager_values_reach_the_resolver_through_the_snapshot() {
     let settings = redis_cache_kwargs(json!({"host": "os.environ/COORD_HOST"}));
-    let secrets = SecretSnapshot::read(settings.secret_names(), &|name: &str| match name {
-        "COORD_HOST" => Some("from-the-manager".to_owned()),
-        "REDIS_PASSWORD" => Some("manager-secret".to_owned()),
-        _ => None,
-    });
+    let secrets =
+        SecretSnapshot::from_environment(settings.secret_names(), &|name: &str| match name {
+            "COORD_HOST" => Some("from-the-manager".to_owned()),
+            "REDIS_PASSWORD" => Some("manager-secret".to_owned()),
+            _ => None,
+        });
 
     let resolved = settings.resolve(&secrets, &|_: &str| None).unwrap();
 
@@ -947,7 +931,10 @@ fn merges_like_python_redis(
     };
 
     let kwargs = configured
-        .merged(&SecretSnapshot::read(configured.secret_names(), &lookup))
+        .merged(&SecretSnapshot::from_environment(
+            configured.secret_names(),
+            &lookup,
+        ))
         .unwrap();
 
     let values: serde_json::Map<String, serde_json::Value> = kwargs
@@ -961,4 +948,60 @@ fn merges_like_python_redis(
         .collect();
     assert_eq!(serde_json::Value::Object(values), merged);
     assert_eq!(renamed, sources);
+}
+
+fn secret_resolver(environment: &[(&str, &str)]) -> litellm_secrets::SecretResolver {
+    let environment: HashMap<String, String> = environment
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    litellm_secrets::SecretResolver::new_python_compatible(
+        std::sync::Arc::new(litellm_secrets::SecretManagerState::default()),
+        std::sync::Arc::new(move |name: &str| environment.get(name).cloned()),
+        litellm_secrets::OidcResolver::new(litellm_http::Client::for_test()),
+    )
+}
+
+#[rstest]
+#[case::no_name_says_where_redis_is(&[("REDIS_SSL", "true")], None)]
+#[case::a_host_with_a_flag_spelled_as_text(
+    &[("REDIS_HOST", "environment"), ("REDIS_SSL", "true")],
+    Some(("environment", true))
+)]
+#[case::a_host_alone(&[("REDIS_HOST", "environment")], Some(("environment", false)))]
+#[tokio::test]
+async fn the_environment_surface_reads_its_names_through_the_secret_resolver(
+    #[case] environment: &[(&str, &str)],
+    #[case] expected: Option<(&str, bool)>,
+) {
+    let resolved = crate::resolve(crate::Surface::Environment, &secret_resolver(environment))
+        .await
+        .unwrap();
+
+    let target = resolved.map(|resolved| match resolved.target {
+        Target::Standalone(standalone) => (standalone.host, standalone.tls.is_some()),
+        target => panic!("expected a standalone target, got {target:?}"),
+    });
+    assert_eq!(target, expected.map(|(host, tls)| (host.to_owned(), tls)));
+}
+
+#[tokio::test]
+async fn a_configured_surface_reads_its_references_through_the_secret_resolver() {
+    let config = Config::from_yaml(
+        "general_settings:\n  coordination_redis:\n    host: os.environ/COORD_HOST\n    ssl: os.environ/COORD_SSL",
+    )
+    .unwrap();
+    let settings = config.general_settings.coordination_redis.unwrap();
+    let secrets = secret_resolver(&[("COORD_HOST", "referenced"), ("COORD_SSL", "true")]);
+
+    let resolved = crate::resolve(crate::Surface::Coordination(&settings), &secrets)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        matches!(&resolved.target, Target::Standalone(standalone) if standalone.host == "referenced" && standalone.tls.is_some()),
+        "{:?}",
+        resolved.target
+    );
 }

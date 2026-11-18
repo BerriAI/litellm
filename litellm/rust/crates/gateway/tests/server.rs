@@ -5,6 +5,8 @@ use std::{
 
 use axum::{body::Body, http::Request};
 use litellm_config::Config;
+use litellm_db::{Endpoint, PoolLimits, Pools, SslMode};
+use litellm_gateway::{AppState, RedisClients, Resources};
 use litellm_gateway_inference::{Error, Gateway};
 use litellm_http::ClientVariant;
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
@@ -32,9 +34,21 @@ impl Sink for LogSink {
     }
 }
 
+fn inference_for(config: &Config) -> Arc<Gateway> {
+    litellm_gateway::build_inference(config, &Resources::build(config).unwrap()).unwrap()
+}
+
 #[fixture]
 fn inference() -> Arc<Gateway> {
-    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
+    inference_for(&Config::from_yaml("model_list: []").unwrap())
+}
+
+fn without_stores(inference: Arc<Gateway>) -> AppState {
+    AppState {
+        inference,
+        redis: RedisClients::default(),
+        database: None,
+    }
 }
 
 #[rstest]
@@ -80,11 +94,14 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let address = listener.local_addr().unwrap();
     let (shutdown, stopped) = oneshot::channel();
     let server = tokio::spawn(async move {
-        axum::serve(listener, litellm_gateway::router(inference, &config))
-            .with_graceful_shutdown(async move {
-                let _ = stopped.await;
-            })
-            .await
+        axum::serve(
+            listener,
+            litellm_gateway::router(without_stores(inference), &config),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = stopped.await;
+        })
+        .await
     });
 
     let request = client
@@ -140,7 +157,7 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
     let logger = Logger::new(LogSink(sender));
 
     let response = logger
-        .instrument(litellm_gateway::router(inference, &config).oneshot(request))
+        .instrument(litellm_gateway::router(without_stores(inference), &config).oneshot(request))
         .await
         .unwrap();
 
@@ -166,7 +183,7 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
-    let app = litellm_gateway::router(inference, &config);
+    let app = litellm_gateway::router(without_stores(inference), &config);
 
     let response = app
         .oneshot(
@@ -184,6 +201,57 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     assert_eq!(
         serde_json::from_slice::<Value>(&body).unwrap(),
         json!({"status": "healthy", "db": "Not connected"})
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn readiness_reports_a_configured_database_it_cannot_reach(inference: Arc<Gateway>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let closed_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let unreachable = Endpoint {
+        host: "127.0.0.1".to_owned(),
+        port: closed_port,
+        socket: None,
+        username: "app".to_owned(),
+        password: None,
+        database: "proxy".to_owned(),
+        ssl_mode: SslMode::Disable,
+        ssl_root_cert: None,
+        ssl_client: None,
+        application_name: None,
+        options: Vec::new(),
+        statement_cache_capacity: 0,
+        pool: PoolLimits {
+            max_connections: 1,
+            acquire_timeout_seconds: Some(0.2),
+            idle_timeout_seconds: None,
+            socket_timeout_seconds: None,
+        },
+    };
+    let state = AppState {
+        database: Some(Pools::new(&unreachable, None).unwrap()),
+        ..without_stores(inference)
+    };
+    let config = Config::from_yaml("model_list: []").unwrap();
+
+    let response = litellm_gateway::router(state, &config)
+        .oneshot(
+            Request::get("/health/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status().as_u16(), 200);
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"status": "healthy", "db": "disconnected"})
     );
 }
 
@@ -220,11 +288,10 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response =
-        litellm_gateway::router(litellm_gateway::build_inference(&config).unwrap(), &config)
-            .oneshot(request)
-            .await
-            .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap()
@@ -313,11 +380,10 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
         .body(Body::from(Value::Object(body).to_string()))
         .unwrap();
 
-    let response =
-        litellm_gateway::router(litellm_gateway::build_inference(&config).unwrap(), &config)
-            .oneshot(request)
-            .await
-            .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     let forwarded: Value =
@@ -388,11 +454,10 @@ async fn chat_sends_a_caller_supplied_bedrock_endpoint_only_under_client_side_cr
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response =
-        litellm_gateway::router(litellm_gateway::build_inference(&config).unwrap(), &config)
-            .oneshot(request)
-            .await
-            .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), status);
 }
@@ -443,11 +508,10 @@ async fn chat_drops_sampling_params_the_catalog_says_the_model_rejects(
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response =
-        litellm_gateway::router(litellm_gateway::build_inference(&config).unwrap(), &config)
-            .oneshot(request)
-            .await
-            .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     let forwarded: Value =

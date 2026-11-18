@@ -64,6 +64,7 @@ litellm-core-utils = { path = "crates/core-utils" }
 litellm-env = { path = "crates/env" }
 litellm-yaml = { path = "crates/yaml" }
 litellm-db = { path = "crates/db" }
+litellm-db-resolve = { path = "crates/db-resolve" }
 litellm-db-testing = { path = "crates/db-testing" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
