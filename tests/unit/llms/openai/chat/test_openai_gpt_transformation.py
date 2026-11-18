@@ -2394,3 +2394,77 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+class TestCacheControlStrippingDoesNotMutateCallerInput:
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _messages():
+        return [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "a long cached system prompt",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Hello",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+
+    @staticmethod
+    def _tools():
+        return [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {"type": "object"}},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    def _transform(self, messages, tools):
+        return self.config.transform_request(
+            model="gpt-4o",
+            messages=messages,
+            optional_params={"tools": tools},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+
+    def test_caller_messages_and_tools_keep_cache_control(self):
+        messages, tools = self._messages(), self._tools()
+        messages_before, tools_before = copy.deepcopy(messages), copy.deepcopy(tools)
+
+        request = self._transform(messages, tools)
+
+        assert "cache_control" not in json.dumps(request)
+        assert messages == messages_before
+        assert tools == tools_before
+
+    def test_a_later_anthropic_call_still_sees_cache_control(self):
+        messages = self._messages()
+
+        self._transform(messages, self._tools())
+
+        anthropic_body = litellm.AnthropicConfig().transform_request(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert "cache_control" in json.dumps(anthropic_body)
