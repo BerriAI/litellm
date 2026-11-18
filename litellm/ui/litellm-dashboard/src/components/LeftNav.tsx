@@ -31,7 +31,6 @@ import {
 } from "@/components/shared/sidebarStyles";
 import {
   Activity,
-  Aperture,
   BarChart3,
   Bell,
   Blocks,
@@ -73,7 +72,7 @@ import { usePluginMode } from "@/contexts/PluginModeContext";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { type MouseEvent, useMemo, useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
@@ -89,7 +88,6 @@ import {
   rolesWithWriteAccess,
   proxyAdminTierRoles,
 } from "../utils/roles";
-import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
@@ -346,16 +344,6 @@ const menuGroups: MenuGroup[] = [
         label: "shell.nav.items.costOptimization",
       },
       { key: "logs", page: "logs", label: "shell.nav.items.logs", icon: <Activity {...ICON} /> },
-      {
-        key: "lens",
-        page: "lens",
-        label: (
-          <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.lens" /> <BetaBadge />
-          </span>
-        ),
-        icon: <Aperture {...ICON} />,
-      },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
