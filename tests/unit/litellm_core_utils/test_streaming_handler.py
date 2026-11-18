@@ -4575,22 +4575,29 @@ def test_usage_only_chunk_not_dropped_when_finish_reason_already_set(
     assert result.usage is not None
 
 
-@pytest.mark.parametrize("custom_llm_provider", [None, "my-custom-llm"])
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "as_chunk"),
+    [
+        pytest.param(None, dict, id="no-provider-dict"),
+        pytest.param("my-custom-llm", dict, id="custom-provider-dict"),
+        pytest.param("my-custom-llm", MappingProxyType, id="custom-provider-mapping"),
+    ],
+)
 def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunks(
     monkeypatch: pytest.MonkeyPatch,
     custom_llm_provider: str | None,
+    as_chunk: Callable[[dict[str, object]], object],
 ):
     monkeypatch.setattr(litellm, "_custom_providers", [] if custom_llm_provider is None else [custom_llm_provider])
+    chunks: Final = (
+        {"text": "Hel"},
+        {"is_finished": False},
+        {"text": "lo", "is_finished": False},
+        {"is_finished": True, "finish_reason": "length"},
+        {"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+    )
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=iter(
-            [
-                {"text": "Hel"},
-                {"is_finished": False},
-                {"text": "lo", "is_finished": False},
-                {"is_finished": True, "finish_reason": "length"},
-                {"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
-            ]
-        ),
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
         model="custom-model",
         logging_obj=MagicMock(),
         custom_llm_provider=custom_llm_provider,
