@@ -88,6 +88,9 @@
     },
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
     "supported_endpoints": ["/v1/chat/completions"]
   },
   "assemblyai": {

@@ -23,6 +23,23 @@ SARVAM_MODELS: Final = (
 )
 
 
+def _chat_response() -> dict[str, object]:
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "sarvam-105b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
 def _sarvam_response(model: str, cached_tokens: int) -> ModelResponse:
     return ModelResponse(
         model=model,
@@ -123,6 +140,20 @@ def test_sarvam_chat_completion_request(model: str, url: str) -> None:
         "max_tokens": 200,
     }
     assert response.choices[0].message.content == "Hello"
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_sarvam_forwards_reasoning_effort_without_allowed_openai_params() -> None:
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(200, json=_chat_response())
+        litellm.completion(
+            model="sarvam/gemma4",
+            messages=[{"role": "user", "content": "Is 221 a prime number?"}],
+            api_key="sarvam-test-key",
+            reasoning_effort="low",
+        )
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "low"
 
 
 def test_sarvam_responses_request_is_bridged_to_chat_completions() -> None:
