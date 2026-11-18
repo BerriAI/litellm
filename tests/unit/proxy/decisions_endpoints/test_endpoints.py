@@ -1232,6 +1232,15 @@ _MALFORMED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], str, M
         "prompt_cache_options",
         {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
     ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "explicit", "ttl": 30},
+        },
+        "prompt_cache_options",
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "explicit"}},
+    ),
 )
 _MALFORMED_PROMPT_CACHE_IDS: Final = (
     "breakpoint_mode",
@@ -1239,6 +1248,44 @@ _MALFORMED_PROMPT_CACHE_IDS: Final = (
     "non_string_key",
     "string_options",
     "options_mode",
+    "options_ttl",
+)
+_UNACCEPTED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], Mapping[str, object]], ...]] = (
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": "k" * 65},
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": _PROMPT_CACHE_FIELDS["prompt_cache_options"]},
+    ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "explicit", "ttl": "7d"},
+        },
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "explicit"}},
+    ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "explicit", "ttl": "12h", "retention": "long"},
+        },
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE]},
+    ),
+    (
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": "7d"}), _IMAGE_TEXT_MESSAGE]},
+        {"input": [_policy_message_marked({"mode": "explicit"}), _IMAGE_TEXT_MESSAGE]},
+    ),
+    (
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": "12h", "scope": "org"}), _IMAGE_TEXT_MESSAGE]},
+        {"input": [_policy_message_marked({"mode": "explicit", "ttl": "12h"}), _IMAGE_TEXT_MESSAGE]},
+    ),
+)
+_UNACCEPTED_PROMPT_CACHE_IDS: Final = (
+    "key_over_64_characters",
+    "options_ttl_7d",
+    "options_unknown_key",
+    "breakpoint_ttl_7d",
+    "breakpoint_unknown_key",
 )
 _OPENAI_DECISION_RESPONSE: Final[Mapping[str, object]] = {
     "model": "gpt-6-luna",
@@ -1287,6 +1334,39 @@ def test_malformed_prompt_cache_values_are_refused_unless_the_openai_deployment_
         "model": "gpt-6-luna",
         "questions": [_PREDICATE],
         **wire_fields,
+    }
+
+
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+@pytest.mark.parametrize(
+    ("request_fields", "drop_params_wire_fields"), _UNACCEPTED_PROMPT_CACHE_REQUESTS, ids=_UNACCEPTED_PROMPT_CACHE_IDS
+)
+def test_prompt_cache_values_openai_rejects_reach_it_as_written_unless_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    deployment_drops_params: bool,
+    request_fields: Mapping[str, object],
+    drop_params_wire_fields: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    _route_decider_to(
+        monkeypatch, {"model": "openai/gpt-6-luna", "api_key": "k", "drop_params": deployment_drops_params}
+    )
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_DECISION_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions", json={"model": "decider", "questions": [_PREDICATE], **request_fields}
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "questions": [_PREDICATE],
+        **(drop_params_wire_fields if deployment_drops_params else request_fields),
     }
 
 

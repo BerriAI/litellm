@@ -13,7 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import prompt_cache_breakpoint_within
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import prompt_cache_breakpoint_for_wire
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -55,7 +55,7 @@ from litellm.types.decisions import (
     OpenAIDecisionInputImage,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
-    OpenAIDecisionPromptCacheBreakpointFields,
+    OpenAIDecisionPromptCacheBreakpoint,
     ScoreAnswer,
     ScoreQuestion,
     UnsupportedDecisionsRequest,
@@ -250,9 +250,6 @@ def without_prompt_cache_breakpoints(
 
 _RAW_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _RAW_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_PROMPT_CACHE_BREAKPOINT_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheBreakpointFields]] = TypeAdapter(
-    OpenAIDecisionPromptCacheBreakpointFields
-)
 
 
 def _raw_entries(value: object) -> tuple[object, ...] | None:
@@ -276,12 +273,18 @@ def _raw_part_without_breakpoint(part: object) -> object:
     return {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
 
 
+def _breakpoint_fields(marker: object) -> object:
+    if isinstance(marker, OpenAIDecisionPromptCacheBreakpoint):
+        return marker.model_dump(exclude_none=True)
+    return marker
+
+
 def _raw_part_with_readable_breakpoint(part: object) -> object:
     fields: Final = _raw_fields(part)
     marker: Final = None if fields is None else fields.get("prompt_cache_breakpoint")
     if fields is None or marker is None:
         return part
-    readable: Final = prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT_ADAPTER, marker)
+    readable: Final = prompt_cache_breakpoint_for_wire(_breakpoint_fields(marker), drop_params=True)
     without_breakpoint: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
     return without_breakpoint if readable is None else {**without_breakpoint, "prompt_cache_breakpoint": readable}
 

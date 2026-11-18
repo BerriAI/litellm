@@ -65,6 +65,7 @@ from litellm.types.decisions import (
     OpenAIDecisionInput,
     OpenAIDecisionInputMessage,
     OpenAIDecisionPromptCacheOptions,
+    OpenAIDecisionPromptCacheOptionsFields,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
@@ -88,10 +89,13 @@ _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAda
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
-_PROMPT_CACHE_KEY_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
-_PROMPT_CACHE_OPTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheOptions | None]] = TypeAdapter(
-    OpenAIDecisionPromptCacheOptions | None
+_OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH: Final = 64
+_OpenAIPromptCacheKey: TypeAlias = Annotated[str, Field(max_length=_OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)]
+_PROMPT_CACHE_KEY_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(_OpenAIPromptCacheKey | None)
+_PROMPT_CACHE_OPTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheOptionsFields]] = TypeAdapter(
+    OpenAIDecisionPromptCacheOptionsFields
 )
+_PROMPT_CACHE_OPTION_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
@@ -143,11 +147,29 @@ def _valid_prompt_cache_key(prompt_cache_key: object) -> str | None:
         return None
 
 
-def _valid_prompt_cache_options(prompt_cache_options: object) -> OpenAIDecisionPromptCacheOptions | None:
+def _prompt_cache_option_entries(prompt_cache_options: object) -> Mapping[str, object]:
+    if isinstance(prompt_cache_options, OpenAIDecisionPromptCacheOptions):
+        return prompt_cache_options.model_dump(exclude_none=True)
     try:
-        return _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python(prompt_cache_options)
+        return _PROMPT_CACHE_OPTION_ENTRIES_ADAPTER.validate_python(prompt_cache_options)
     except ValidationError:
-        return None
+        return {}
+
+
+def _is_valid_prompt_cache_option(name: str, value: object) -> bool:
+    try:
+        return name in _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python({name: value})
+    except ValidationError:
+        return False
+
+
+def _valid_prompt_cache_options(prompt_cache_options: object) -> OpenAIDecisionPromptCacheOptionsFields | None:
+    valid: Final = {
+        name: value
+        for name, value in _prompt_cache_option_entries(prompt_cache_options).items()
+        if _is_valid_prompt_cache_option(name, value)
+    }
+    return _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python(valid) if valid else None
 
 
 def _image_entries(images: object) -> tuple[object, ...]:

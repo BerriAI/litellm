@@ -37,6 +37,8 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsUsage,
     NoulAnswer,
+    OpenAIDecisionPromptCacheBreakpoint,
+    OpenAIDecisionPromptCacheOptions,
     OpenAIDecisionResponse,
     ScoreAnswer,
 )
@@ -604,7 +606,9 @@ def test_12h_decisions_cache_writes_bill_at_the_12h_cache_write_rate(monkeypatch
         }
     )
 
-    cost: Final = litellm.completion_cost(completion_response=response, model="gpt-6-luna", custom_llm_provider="openai")
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model="gpt-6-luna", custom_llm_provider="openai"
+    )
 
     assert cost == pytest.approx(
         (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * 1.0
@@ -2561,6 +2565,46 @@ async def test_prompt_cache_controls_reach_openai_on_the_wire(
         "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
         "prompt_cache_key": "defect-review",
         "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+    }
+
+
+def _policy_message_with_breakpoint(marker: object) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": _REVIEW_POLICY, "prompt_cache_breakpoint": marker}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
+async def test_typed_prompt_cache_values_reach_openai_on_the_wire(
+    drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input=[
+            _policy_message_with_breakpoint(OpenAIDecisionPromptCacheBreakpoint(mode="explicit", ttl="12h")),
+            _REVIEW_MESSAGE,
+        ],
+        questions=_PREDICATE_QUESTIONS,
+        prompt_cache_key="defect-review",
+        prompt_cache_options=OpenAIDecisionPromptCacheOptions(mode="explicit", ttl="12h"),
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": [_policy_message_with_breakpoint({"mode": "explicit", "ttl": "12h"}), _REVIEW_MESSAGE],
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "prompt_cache_key": "defect-review",
+        "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
     }
 
 
@@ -5711,7 +5755,9 @@ async def test_vercel_ai_gateway_decisions_never_send_caller_provider_options(re
         model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
         input="The package arrived broken.",
         questions=_PREDICATE_QUESTIONS,
-        providerOptions={"gateway": {"models": ["openai/gpt-6"], "byok": {"openai": [{"apiKey": "caller-openai-key"}]}}},
+        providerOptions={
+            "gateway": {"models": ["openai/gpt-6"], "byok": {"openai": [{"apiKey": "caller-openai-key"}]}}
+        },
     )
 
     assert "providerOptions" not in json.loads(route.calls.last.request.content)
@@ -5769,9 +5815,19 @@ def _upstream_usage(input_tokens: int, details: Mapping[str, int] | None) -> Map
     ("top_level_split", "served_by", "upstream", "expected_split"),
     (
         (None, "openai", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), _UPSTREAM_SPLIT),
-        (None, "openai", _upstream_usage(_INPUT_TOKENS + 1, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+        (
+            None,
+            "openai",
+            _upstream_usage(_INPUT_TOKENS + 1, _UPSTREAM_SPLIT),
+            {"cached_tokens": 0, "cache_write_tokens": 0},
+        ),
         (_TOP_LEVEL_SPLIT, "openai", _upstream_usage(_INPUT_TOKENS, None), _TOP_LEVEL_SPLIT),
-        (None, "anthropic", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+        (
+            None,
+            "anthropic",
+            _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT),
+            {"cached_tokens": 0, "cache_write_tokens": 0},
+        ),
     ),
     ids=(
         "serving_provider_reports_this_call",
