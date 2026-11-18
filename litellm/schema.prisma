@@ -1412,6 +1412,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   api_key String?
   request_tags Json? @default("[]")
   end_user_id String?
+  creator_billing_context Json?
   updated_at DateTime @updatedAt
   updated_by String?
 

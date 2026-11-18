@@ -10,8 +10,7 @@ import pytest
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.app_auth import app_scope, resolve_app_hierarchy
-from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_budget
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.auth.customer_hierarchy_auth import CustomerBudgetExceededError, check_customer_hierarchy_budget
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
@@ -62,7 +61,6 @@ async def test_resolved_app_adds_only_scopes_with_resolved_customer_parents(
         {} if with_customer else {"x-litellm-app": "Chat"},
         {},
         connection,
-        UserApiKeyCache(),
         None,
         "request-model",
         "/v1/chat/completions",
@@ -91,7 +89,6 @@ async def test_assertion_header_cannot_select_another_authenticated_team() -> No
             {"x-litellm-app": "Search"},
             {},
             connection,
-            UserApiKeyCache(),
             None,
             None,
             "/v1/chat/completions",
@@ -103,7 +100,6 @@ async def test_assertion_header_cannot_select_another_authenticated_team() -> No
         {"x-litellm-app": "Chat"},
         {},
         connection,
-        UserApiKeyCache(),
         None,
         None,
         "/v1/chat/completions",
@@ -122,7 +118,6 @@ async def test_unset_definition_preserves_global_behavior_even_with_app_headers(
         {"x-litellm-app": "arbitrary"},
         {"app_alias": "spoof"},
         connection,
-        UserApiKeyCache(),
         None,
         None,
         "/v1/chat/completions",
@@ -130,6 +125,116 @@ async def test_unset_definition_preserves_global_behavior_even_with_app_headers(
     )
     assert result is hierarchy
     assert not database.litellm_apptable.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource_type", tuple(AppResourceType))
+@pytest.mark.parametrize("assertion", (None, "Chat"))
+async def test_an_app_assertion_requires_a_resource_on_the_authenticated_identity(
+    resource_type: AppResourceType, assertion: str | None
+) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    await store.put_definition(AppDefinition(resource_type=resource_type))
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=())
+    connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
+
+    async def resolve() -> CustomerHierarchyAuth | None:
+        return await resolve_app_hierarchy(
+            hierarchy,
+            {"X-LiteLLM-App": assertion} if assertion is not None else {},
+            {},
+            connection,
+            None,
+            None,
+            "/v1/chat/completions",
+            UserAPIKeyAuth(),
+        )
+
+    if assertion is None:
+        assert await resolve() is hierarchy
+    else:
+        with pytest.raises(ProxyException) as rejected:
+            await resolve()
+        assert int(rejected.value.code) == 403
+        assert rejected.value.param == "x-litellm-app"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resource_id", "assertion", "admitted"),
+    (
+        ("chat", None, True),
+        ("chat", "chat", True),
+        ("chat", "  Chat  ", True),
+        ("chat", "Search", False),
+        ("missing-team", "Chat", False),
+    ),
+)
+async def test_unconfigured_apps_validate_assertions_against_the_authenticated_resource(
+    resource_id: str, assertion: str | None, admitted: bool
+) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    hierarchy: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=())
+    connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
+
+    async def resolve() -> CustomerHierarchyAuth | None:
+        return await resolve_app_hierarchy(
+            hierarchy,
+            {"x-litellm-app": assertion} if assertion is not None else {},
+            {},
+            connection,
+            None,
+            None,
+            "/v1/chat/completions",
+            UserAPIKeyAuth(team_id=resource_id),
+        )
+
+    if admitted:
+        assert await resolve() is hierarchy
+    else:
+        with pytest.raises(ProxyException) as rejected:
+            await resolve()
+        assert int(rejected.value.code) == 403
+    assert not database.litellm_apptable.rows
+
+
+@pytest.mark.asyncio
+async def test_an_app_budget_rejection_retains_trusted_attribution() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    app: Final = await store.create(AppCreate(resource_id="chat", budget=Budget(max_budget=0)), "admin")
+    assert isinstance(app, App)
+    connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="org",
+        scopes=(CustomerScopeAuth(key="customer_org", entity_id="org", spend=0, max_budget=100),),
+    )
+    with pytest.raises(CustomerBudgetExceededError) as rejected:
+        await resolve_app_hierarchy(
+            hierarchy,
+            {},
+            {"app_id": "spoof"},
+            connection,
+            None,
+            None,
+            "/v1/chat/completions",
+            UserAPIKeyAuth(team_id="chat"),
+        )
+    assert rejected.value.entity_type == "app"
+    assert rejected.value.entity_id == app.app_id
+    assert rejected.value.customer_hierarchy.app_id == app.app_id
+    assert rejected.value.customer_hierarchy.customer_org_id == "org"
+    assert tuple(scope.key for scope in rejected.value.customer_hierarchy.scopes) == (
+        "customer_org",
+        "app",
+        "app_customer_org",
+    )
 
 
 @pytest.mark.asyncio
@@ -146,7 +251,6 @@ async def test_project_and_virtual_key_resolution_use_authenticated_resource_ids
         {"x-litellm-app": "Project"},
         {},
         connection,
-        UserApiKeyCache(),
         None,
         None,
         "/v1/chat/completions",
@@ -202,7 +306,6 @@ async def test_no_app_returns_the_same_hierarchy_without_a_database() -> None:
         {},
         {},
         None,
-        UserApiKeyCache(),
         None,
         None,
         "/v1/chat/completions",
@@ -261,7 +364,6 @@ async def test_virtual_key_app_identity_survives_rotation_and_ignores_app_alias_
         {},
         {"app_alias": "spoof"},
         connection,
-        UserApiKeyCache(),
         None,
         None,
         "/v1/chat/completions",
@@ -273,7 +375,6 @@ async def test_virtual_key_app_identity_survives_rotation_and_ignores_app_alias_
         {},
         {},
         connection,
-        UserApiKeyCache(),
         None,
         None,
         "/v1/chat/completions",

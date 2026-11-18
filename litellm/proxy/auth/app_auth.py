@@ -5,9 +5,9 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
     check_customer_hierarchy_access,
+    customer_scope,
 )
 from litellm.proxy.auth.customer_spend import current_customer_spend
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
@@ -37,12 +37,8 @@ def app_scope(
     budget: Budget | None,
 ) -> CustomerScopeAuth:
     has_duration: Final = budget is not None and budget.budget_duration is not None and budget.max_budget is not None
-    return CustomerScopeAuth.model_validate(
-        {
-            "key": key,
-            "entity_id": entity_id,
-            "spend": spend,
-            **(budget.model_dump(exclude={"soft_budget", "budget_duration"}) if budget is not None else {}),
+    return customer_scope(key, entity_id, spend, budget).model_copy(
+        update={
             "budget_limits": app_budget_limits(budget),
             **({"max_budget": None} if has_duration else {}),
         }
@@ -75,7 +71,6 @@ async def resolve_app_hierarchy(
     headers: Mapping[str, object],
     metadata: Mapping[str, object],
     prisma_client: "PrismaClient | None",
-    cache: UserApiKeyCache,
     llm_router: "RegistryReader | None",
     request_model: str | Sequence[str] | None,
     route: str,
@@ -87,7 +82,7 @@ async def resolve_app_hierarchy(
     assertion: Final = selected_app_assertion(headers)
     if prisma_client is None:
         return hierarchy
-    store: Final = AppStore(prisma_client.db, cache=cache)
+    store: Final = AppStore(prisma_client.db)
     definition: Final = await store.definition()
     if definition.resource_type is None:
         return hierarchy
@@ -151,17 +146,17 @@ async def resolve_app_hierarchy(
             else ()
         ),
     )
+    app_hierarchy: Final = await current_customer_spend(CustomerHierarchyAuth(scopes=app_scopes), get_current_spend)
     base: Final = hierarchy or CustomerHierarchyAuth(scopes=())
     combined: Final = base.model_copy(
         update={
             "app_id": app.app_id,
             "app_alias": app.alias,
-            "scopes": (*base.scopes, *app_scopes),
+            "scopes": (*base.scopes, *app_hierarchy.scopes),
         }
     )
-    current: Final = await current_customer_spend(combined, get_current_spend)
     try:
-        await check_customer_hierarchy_access(current, llm_router, request_model, route, metadata)
+        await check_customer_hierarchy_access(app_hierarchy, llm_router, request_model, route, metadata)
     except litellm.BudgetExceededError as error:
-        raise CustomerBudgetExceededError(current, error) from error
-    return current
+        raise CustomerBudgetExceededError(combined, error) from error
+    return combined
