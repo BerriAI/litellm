@@ -43,5 +43,4 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 
 - Main's stored breakdown raises on an unreadable speed or geo value, which fails the candidate when a logging object is attached. Rust leaves those uplifts out of the breakdown rates instead
 - A call whose web search price main would read off the served model's row answers `NotPorted`
-- On a Rust-priced stream with cost injection, a `message_delta` whose own usage no row prices passes through without `usage.cost`. Main retried such an event under the requested model name (`_completion_cost_or_none`), which resolves the same candidates
 - The breakdown bills unattributed writes and 5m/30m writes as one `CacheTtl::Default` count. Main multiplies each count by the rate separately, so the two can differ in the last bit when a call reports both

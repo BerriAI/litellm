@@ -585,6 +585,62 @@ mod tests {
         assert_eq!(billable_tier(requested, served).as_deref(), billed);
     }
 
+    struct Declining;
+
+    impl Pricing for Declining {
+        fn price(&self, _call: &PricedCall) -> Option<Receipt> {
+            None
+        }
+    }
+
+    /// The proxy's Python injector prices every usage event that reaches it without `usage.cost`, so an event the
+    /// route cannot price must reach it untouched
+    #[rstest]
+    #[case::web_search("anthropic_stream", Arc::new(Recording::default()) as Arc<dyn Pricing>, true)]
+    #[case::declined_bedrock_row("bedrock_invoke_stream_metrics_folded", Arc::new(Declining) as Arc<dyn Pricing>, false)]
+    #[tokio::test]
+    async fn a_usage_event_the_route_cannot_price_passes_through_for_python_to_price(
+        #[case] name: &str,
+        #[case] pricing: Arc<dyn Pricing>,
+        #[case] web_search: bool,
+    ) {
+        let case = case(name);
+        let sse = case.sse.unwrap();
+        let sse = match web_search {
+            true => sse.replace(
+                "\"usage\": {\"output_tokens\": 120}",
+                "\"usage\": {\"output_tokens\": 120, \"server_tool_use\": {\"web_search_requests\": 2}}",
+            ),
+            false => sse,
+        };
+        assert!(sse.contains("web_search_requests\": 2") == web_search);
+        let call = Arc::new(CallPricing::new(
+            pricing,
+            PricingIdentity::default(),
+            case.provider.clone(),
+            "requested-model".into(),
+            RequestedPricing {
+                inject_stream_cost: true,
+                ..RequestedPricing::default()
+            },
+        ));
+        let frames: Vec<Result<Bytes, Error>> = sse
+            .split_inclusive("\n\n")
+            .map(|frame| Ok(Bytes::from(frame.to_owned())))
+            .collect();
+
+        let delivered: Vec<Bytes> = call
+            .metered_stream(
+                StreamMeter::default(),
+                futures_util::stream::iter(frames).boxed(),
+            )
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(delivered.concat(), sse.as_bytes());
+    }
+
     #[rstest]
     #[tokio::test]
     async fn an_injected_usage_event_carries_the_cost_of_its_own_usage_in_python_json(

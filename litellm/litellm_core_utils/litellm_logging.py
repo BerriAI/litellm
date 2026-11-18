@@ -2494,7 +2494,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["response_cost"] = cost
 
     def record_route_metering(self) -> None:
-        """The Rust route prices this stream once its usage is final, and injects each usage event's cost itself."""
+        """The Rust route prices this stream once its usage is final and injects the cost of each event it prices."""
         self._route_prices = True
 
     @property

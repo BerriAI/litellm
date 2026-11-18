@@ -13396,6 +13396,53 @@ class TestProcessChunkWithCostInjection:
         assert kept is routed
         assert unrouted != routed, "without the route the proxy prices the event itself"
 
+    @pytest.mark.parametrize(
+        ("model", "provider", "wire_usage"),
+        [
+            (
+                "claude-opus-5-5",
+                "anthropic",
+                {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+            ),
+            (
+                "bedrock/us.anthropic.claude-opus-5-5",
+                "bedrock",
+                {"output_tokens": 77, "input_tokens": 812, "cache_read_input_tokens": 1024},
+            ),
+        ],
+    )
+    def test_a_usage_event_the_rust_route_left_unpriced_gets_the_price_the_logged_response_bills(
+        self, local_model_cost_map: None, model: str, provider: str, wire_usage: dict[str, object]
+    ) -> None:
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=None,
+            litellm_call_id="route-left-unpriced",
+            function_id="route-left-unpriced",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        logging_obj.model_call_details["custom_llm_provider"] = provider
+        logging_obj.record_route_metering()
+        event: Final = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": wire_usage}
+        chunk: Final = f"event: message_delta\ndata: {json.dumps(event)}\n\n".encode()
+
+        result: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+            chunk, model, logging_obj, request_headers={"X-LiteLLM-Include-Cost-In-Streaming-Usage": "True"}
+        )
+
+        assert isinstance(result, bytes)
+        payload: Final = json.loads(result.decode().split("data:", 1)[1].strip())
+        logged_cost: Final = logging_obj.response_cost_calculator(
+            result=litellm.ModelResponse(
+                model=model, usage=AnthropicConfig().calculate_usage(usage_object=wire_usage, reasoning_content=None)
+            )
+        )
+        assert logged_cost is not None and logged_cost > 0
+        assert payload["usage"]["cost"] == pytest.approx(logged_cost)
+
     def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         chunk = (
