@@ -4067,12 +4067,14 @@ class TestOverrideOpenAIResponseModel:
         response: Final = await getattr(router, call)(
             model="broken-primary", mock_testing_fallbacks=True, mock_response="ok", **request_body
         )
+        served_model: Final = response.model
 
         stamped: Final = _override_openai_response_model(
             response_obj=response, requested_model="broken-primary", log_context="test_context"
         )
 
-        assert stamped.model == "gpt-mini"
+        assert served_model != "gpt-mini"
+        assert (stamped.model, response.model) == ("gpt-mini", served_model)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("return_raw_model_name", [False, True])
@@ -4145,6 +4147,22 @@ class TestOverrideOpenAIResponseModel:
         )
 
         assert response_obj.model == "gpt-mini"
+
+    def test_non_streamed_messages_fallback_reports_the_fallback_group_on_a_copy(self):
+        served_message: Final = {
+            "id": "msg_1",
+            "type": "message",
+            "model": "claude-haiku-5-5",
+            "_hidden_params": {
+                "additional_headers": {"x-litellm-attempted-fallbacks": 1, "x-litellm-model-group": "claude-fallback"}
+            },
+        }
+
+        stamped: Final = _override_openai_response_model(
+            response_obj=served_message, requested_model="broken-claude", log_context="test_context"
+        )
+
+        assert (stamped["model"], served_message["model"]) == ("claude-fallback", "claude-haiku-5-5")
 
     @pytest.mark.parametrize("model_group", [None, ""])
     def test_override_model_preserves_fallback_model_without_model_group_header(self, model_group):

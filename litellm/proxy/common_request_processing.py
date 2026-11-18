@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import itertools
 import json
 import logging
@@ -2033,26 +2034,30 @@ def _fallback_group_reports_served_model(
     )
 
 
+def _additional_headers(hidden_params: Mapping[str, object]) -> Mapping[str, object]:
+    return as_str_mapping(hidden_params.get("additional_headers")) or _NO_HEADERS
+
+
+def _fell_back(hidden_params: Mapping[str, object]) -> bool:
+    attempted_fallbacks: Final = _additional_headers(hidden_params).get("x-litellm-attempted-fallbacks")
+    return isinstance(attempted_fallbacks, (int, float)) and attempted_fallbacks > 0
+
+
 def _client_facing_response_model(
     requested_model: str,
     hidden_params: Mapping[str, object],
     log_context: str,
     raw_name_groups: frozenset[str],
 ) -> str | None:
-    additional_headers: Final = as_str_mapping(hidden_params.get("additional_headers")) or _NO_HEADERS
-    model_group: Final = _non_empty_str(additional_headers.get("x-litellm-model-group"))
-    attempted_fallbacks: Final = additional_headers.get("x-litellm-attempted-fallbacks")
-    if isinstance(attempted_fallbacks, (int, float)) and attempted_fallbacks > 0:
+    model_group: Final = _non_empty_str(_additional_headers(hidden_params).get("x-litellm-model-group"))
+    if _fell_back(hidden_params):
         if _fallback_group_reports_served_model(model_group, hidden_params, raw_name_groups):
             verbose_proxy_logger.debug(
                 "%s: fallback to model group=%r, preserving the model it served.", log_context, model_group
             )
             return None
         verbose_proxy_logger.debug(
-            "%s: fallback detected (attempted_fallbacks=%s), reporting fallback model group=%r.",
-            log_context,
-            attempted_fallbacks,
-            model_group,
+            "%s: fallback detected, reporting fallback model group=%r.", log_context, model_group
         )
         return model_group
     candidate_model: Final = model_group if hidden_params.get("fastest_response_batch_completion") else requested_model
@@ -2096,10 +2101,11 @@ def _override_openai_response_model(
     Exceptions:
     1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
        we report the fallback model group from the x-litellm-model-group header, the
-       same name streamed responses report. The response keeps the model it served when
-       that header is missing, or when the group is an Azure Model Router or a complexity
-       router in ``raw_name_groups``, as a direct request to that group would. Exception 3
-       does not apply to a fallback.
+       same name streamed responses report, on a copy so logging callbacks keep the
+       model that answered. The response keeps the model it served when that header is
+       missing, or when the group is an Azure Model Router or a complexity router in
+       ``raw_name_groups``, as a direct request to that group would. Exception 3 does
+       not apply to a fallback.
     2. If the request was to an Azure Model Router, we preserve the actual model
        that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     3. If this was a fastest_response batch completion, use the winning model's
@@ -2108,16 +2114,15 @@ def _override_openai_response_model(
     if return_raw_model_name or not requested_model:
         return response_obj
 
-    target_model: Final = _client_facing_response_model(
-        requested_model, get_hidden_params_dict(response_obj), log_context, raw_name_groups
-    )
+    hidden_params: Final = get_hidden_params_dict(response_obj)
+    target_model: Final = _client_facing_response_model(requested_model, hidden_params, log_context, raw_name_groups)
     if target_model is None:
         return response_obj
+    renames_a_copy: Final = _fell_back(hidden_params)
 
-    unchanged_response: Final = response_obj
     if isinstance(response_obj, dict):
         if "model" not in response_obj:
-            return unchanged_response
+            return response_obj
         downstream_model = response_obj.get("model")
         if downstream_model != target_model:
             verbose_proxy_logger.debug(
@@ -2126,8 +2131,9 @@ def _override_openai_response_model(
                 target_model,
                 downstream_model,
             )
-        response_obj["model"] = target_model
-        return unchanged_response
+        renamed_response: Final = copy.copy(response_obj) if renames_a_copy else response_obj
+        renamed_response["model"] = target_model
+        return renamed_response
 
     if not hasattr(response_obj, "model"):
         return response_obj
@@ -2141,7 +2147,7 @@ def _override_openai_response_model(
             downstream_model,
         )
 
-    if isinstance(response_obj, ExtractionResponse):
+    if isinstance(response_obj, ExtractionResponse) or (renames_a_copy and isinstance(response_obj, BaseModel)):
         return response_obj.model_copy(update={"model": target_model})
 
     try:

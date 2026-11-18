@@ -1274,6 +1274,13 @@ def _complexity_router_over(
             "team-gpt",
         ),
         (
+            "model_name_team-1_def",
+            {"team_id": "team-1", "team_public_model_name": "openai/*"},
+            (),
+            False,
+            "gpt-5.4-mini-2026-03-17",
+        ),
+        (
             "oai-alias",
             {},
             (_complexity_router_over("oai-alias", return_raw_model_name=True),),

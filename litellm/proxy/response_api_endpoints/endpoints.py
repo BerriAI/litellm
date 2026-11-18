@@ -991,11 +991,10 @@ def _deployment_model_name(response_id: str, llm_router: Router | None) -> str |
         return None
     model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(decrypted_response_id(response_id))
     deployment: Final = None if model_id is None else llm_router.registry().deployment(model_id)
-    if deployment is None or "*" in deployment.model_name:
+    if deployment is None or deployment.model_name in _model_groups_routed_with_raw_names(llm_router):
         return None
-    if deployment.model_name in _model_groups_routed_with_raw_names(llm_router):
-        return None
-    return deployment.model_info.team_public_model_name or deployment.model_name
+    public_name: Final = deployment.model_info.team_public_model_name or deployment.model_name
+    return None if "*" in public_name else public_name
 
 
 def _model_groups_routed_with_raw_names(llm_router: Router) -> frozenset[str]:
