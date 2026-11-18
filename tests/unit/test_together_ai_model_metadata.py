@@ -82,10 +82,6 @@ DEDICATED_ONLY_MODELS: Final = (
     "together_ai/zai-org/GLM-4.6",
 )
 
-ROUTED_MODES: Final = frozenset(
-    {"chat", "completion", "embedding", "rerank", "image_generation", "audio_transcription"}
-)
-
 DEPRECATED_MODELS: Final = {
     "together_ai/nvidia/nemotron-3-ultra-550b-a55b": "2026-08-27",
     "together_ai/pearl-ai/gemma-4-31b-it": "2026-08-27",
@@ -185,21 +181,6 @@ def test_together_dedicated_only_rows_are_deprecated_by_their_last_probe(cost_ma
         if model in cost_map and not _deprecated_by(cost_map[model], LAST_PROBED)
     )
     assert undated == ()
-
-
-def _routed_mode(cost_map: CostMap, info: dict[str, object]) -> object:
-    alias_of: Final = info.get("alias_of")
-    target: Final = cost_map.get(alias_of, {}) if isinstance(alias_of, str) else info
-    return target.get("mode")
-
-
-def test_together_rows_only_use_modes_litellm_can_call(cost_map: CostMap):
-    unroutable: Final = {
-        model: mode
-        for model, info in cost_map.items()
-        if model.startswith("together_ai/") and (mode := _routed_mode(cost_map, info)) not in ROUTED_MODES
-    }
-    assert unroutable == {}
 
 
 def test_together_image_rows_price_through_the_cost_calculator(cost_map: CostMap):

@@ -51127,7 +51127,8 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/BAAI/bge-base-en-v1.5": {
-        "deprecation_date": "2026-10-30",
+        "deprecation_date": "2026-02-25",
+        "deprecation_source": "https://docs.together.ai/docs/changelog",
         "input_cost_per_token": 8e-09,
         "litellm_provider": "together_ai",
         "max_input_tokens": 512,
@@ -51224,7 +51225,8 @@
         "supports_tool_choice": true
     },
     "together_ai/zai-org/GLM-4.6": {
-        "deprecation_date": "2026-10-30",
+        "deprecation_date": "2026-01-29",
+        "deprecation_source": "https://docs.together.ai/docs/changelog",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 202752,
@@ -71381,7 +71383,8 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/mistralai/Ministral-3-14B-Instruct-2512": {
-        "deprecation_date": "2026-10-30",
+        "deprecation_date": "2026-02-25",
+        "deprecation_source": "https://docs.together.ai/docs/changelog",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "together_ai",
@@ -71400,7 +71403,8 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/mistralai/Mistral-7B-Instruct-v0.3": {
-        "deprecation_date": "2026-10-30",
+        "deprecation_date": "2026-01-29",
+        "deprecation_source": "https://docs.together.ai/docs/changelog",
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "together_ai",
