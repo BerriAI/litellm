@@ -6,7 +6,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { CustomerHierarchyFields, CustomerHierarchyEntity, Organization } from "./customerHierarchyForms";
+import {
+  BUDGET_FIELDS,
+  customerHierarchyFields,
+  type CustomerHierarchyFields,
+  type CustomerHierarchyEntity,
+  type Organization,
+} from "./customerHierarchyForms";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
 import CustomerBudgetInput from "./CustomerBudgetInput";
 
@@ -34,18 +40,30 @@ export default function CustomerHierarchyBudgetFields({
     {},
     { enabled: kind === "organization" },
   );
+  const isGroup = (id: string | null | undefined) =>
+    groups.data?.default_budgets.some((group) => group.budget_id === id);
+  const originalGroup = organization.budget_is_shared ?? isGroup(organization.budget_id);
   const usingGroup =
-    kind === "organization" && groups.data?.default_budgets.some((group) => group.budget_id === fields.templateId);
-  const budgetReady = kind !== "organization" || Boolean(groups.data);
-  const monthly = organization.budget?.budget_limits?.some((window) => window.budget_duration === "1mo");
-  const newScalarBudget = organization.budget?.max_budget == null && !monthly;
+    kind === "organization" &&
+    (fields.templateId === organization.budget_id ? originalGroup : isGroup(fields.templateId));
+  const knownCustom = !organization.budget_id || originalGroup === false;
+  const budgetReady = kind !== "organization" || knownCustom || Boolean(groups.data);
+  const showCustomBudget = budgetReady && !usingGroup;
   const updateBudget = (budgetId: string, amount: string) => {
-    if (groups.data?.default_budgets.some((group) => group.budget_id === budgetId))
+    if (isGroup(budgetId)) {
+      const initial = customerHierarchyFields({ kind: "organization", record: organization });
+      for (const key of [...BUDGET_FIELDS, "allowedModels"] as const) update(key, initial[key]);
       return update("templateId", budgetId);
-    update("templateId", budgetId);
+    }
+    const monthly = organization.budget?.budget_limits?.some((window) => window.budget_duration === "1mo");
+    const newScalarBudget = organization.budget?.max_budget == null && !monthly;
+    const leavingSavedGroup = usingGroup && originalGroup;
+    const keepCustom = !usingGroup && fields.budgetEnabled;
+    const customId = originalGroup ? "" : organization.budget_id ?? "";
+    update("templateId", customId);
     update("maxBudget", amount);
-    if (usingGroup || newScalarBudget) update("budgetDuration", "1mo");
-    update("budgetEnabled", Boolean(budgetId || amount.trim()));
+    if (leavingSavedGroup || (!fields.budgetEnabled && newScalarBudget)) update("budgetDuration", "1mo");
+    update("budgetEnabled", Boolean(customId || amount.trim() || keepCustom));
   };
   const templateLabel = (templateId: string): string => {
     if (!templateId) return t("customerPortal.hierarchy.noTemplate");
@@ -75,7 +93,8 @@ export default function CustomerHierarchyBudgetFields({
         <CustomerBudgetInput
           id={`${idPrefix}-budget`}
           budgetId={fields.templateId}
-          amount={fields.maxBudget}
+          amount={fields.budgetEnabled ? fields.maxBudget : ""}
+          disabled={!budgetReady}
           onChange={updateBudget}
         />
       )}
@@ -102,7 +121,7 @@ export default function CustomerHierarchyBudgetFields({
           </Select>
         </div>
       )}
-      <div hidden={kind === "organization"} className="space-y-1.5">
+      <div hidden={!showCustomBudget} className="space-y-1.5">
         <div className="flex items-center gap-2">
           <Checkbox
             id={`${idPrefix}-budget-enabled`}
@@ -116,7 +135,7 @@ export default function CustomerHierarchyBudgetFields({
           </Label>
         </div>
       </div>
-      {budgetReady && !usingGroup && fields.budgetEnabled && (
+      {showCustomBudget && fields.budgetEnabled && (
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             {numericFields.map(([name, label, step]) => (

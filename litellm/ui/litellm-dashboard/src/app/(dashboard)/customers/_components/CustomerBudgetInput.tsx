@@ -8,11 +8,13 @@ export default function CustomerBudgetInput({
   id,
   budgetId,
   amount,
+  disabled = false,
   onChange,
 }: {
   id: string;
   budgetId: string;
   amount: string;
+  disabled?: boolean;
   onChange: (budgetId: string, amount: string) => void;
 }) {
   const { t } = useTranslation();
@@ -32,7 +34,7 @@ export default function CustomerBudgetInput({
         options={options}
         value={selectedGroup ? budgetId : selectedAmount}
         placeholder={t("customerPortal.organizationGroups.placeholder")}
-        disabled={!groups.data}
+        disabled={disabled}
         inputValue={selectedGroup?.label ?? amount}
         onInputChange={customAmount}
         customValue={{

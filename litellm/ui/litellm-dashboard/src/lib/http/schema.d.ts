@@ -43459,6 +43459,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -43676,6 +43681,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**

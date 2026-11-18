@@ -51,14 +51,20 @@ class AppDurationLimit(BaseModel):
 def app_budget_limits(
     budget: Budget | None,
 ) -> tuple[BudgetLimit | AppDurationLimit, ...]:
+    """Charge each duration once while applying both caps and the explicit window's clock."""
     if budget is None:
         return ()
-    duration: Final = (
-        (AppDurationLimit(budget_duration=budget.budget_duration, max_budget=budget.max_budget),)
-        if budget.budget_duration is not None and budget.max_budget is not None
-        else ()
-    )
-    return (*(budget.budget_limits or ()), *duration)
+    windows: Final = budget.budget_limits or ()
+    if budget.budget_duration is None or budget.max_budget is None:
+        return windows
+    if any(window.budget_duration == budget.budget_duration for window in windows):
+        return tuple(
+            window.model_copy(update={"max_budget": min(window.max_budget, budget.max_budget)})
+            if window.budget_duration == budget.budget_duration
+            else window
+            for window in windows
+        )
+    return (*windows, AppDurationLimit(budget_duration=budget.budget_duration, max_budget=budget.max_budget))
 
 
 class CustomerScopeAuth(BaseModel):

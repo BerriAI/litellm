@@ -3566,7 +3566,6 @@ async def user_api_key_auth(
         model=request_data.get("model") if isinstance(request_data, dict) else None,
     )
     user_api_key_auth_obj.request_route = normalize_request_route(route)
-    # Bound once for the request task, like the identity above, so V2 callbacks' hooks can read it.
     REQUEST_AUTH.set(user_api_key_auth_obj)
 
     if body_parse_exception is not None:

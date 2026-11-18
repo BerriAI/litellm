@@ -350,9 +350,7 @@ _ORGANIZATION_GROUP_IDS: Final = "customer_organization_budget_group_ids"
 _BUDGET_IDS: Final = TypeAdapter(tuple[str, ...])
 
 
-async def organization_budget_group_ids(
-    config: TableActions[PrismaRecord],
-) -> tuple[str, ...]:
+async def organization_budget_group_ids(config: TableActions[PrismaRecord]) -> tuple[str, ...]:
     row: Final = await config.find_unique(where={"param_name": _ORGANIZATION_GROUP_IDS})
     if row is None:
         return ()
@@ -629,10 +627,12 @@ class CustomerHierarchyStore:
         )
 
     async def organization_responses(self, rows: Sequence[PrismaRecord]) -> tuple[Organization, ...]:
+        group_ids: Final = await organization_budget_group_ids(self.config)
         records: Final = tuple(
             OrganizationRecord.model_validate(
                 {
                     **row.model_dump(),
+                    "budget_is_shared": row.model_dump().get("budget_id") in group_ids,
                     "budget": related_budget(row.model_dump().get("budget"), self.now),
                     "budget_reset_at": window_reset_at(row.model_dump().get("budget")),
                 }
@@ -819,10 +819,7 @@ class CustomerHierarchyStore:
         return await self.get_organization(organization_id)
 
     async def overall_budget_patch(
-        self,
-        current_id: str | None,
-        payload: OrganizationFields | TeamPatch,
-        actor: str,
+        self, current_id: str | None, payload: OrganizationFields | TeamPatch, actor: str
     ) -> str | None:
         if "budget" not in payload.model_fields_set:
             return current_id
@@ -991,10 +988,7 @@ class CustomerHierarchyStore:
             await self.config.upsert(
                 where={"param_name": _ORGANIZATION_GROUP_IDS},
                 data={
-                    "create": {
-                        "param_name": _ORGANIZATION_GROUP_IDS,
-                        "param_value": Json(list(ids)),
-                    },
+                    "create": {"param_name": _ORGANIZATION_GROUP_IDS, "param_value": Json(list(ids))},
                     "update": {"param_value": Json(list(ids))},
                 },
             )
@@ -1018,9 +1012,7 @@ class CustomerHierarchyStore:
             for row in await find_many_in(self.organizations, "budget_id", ids)
         )
         members: Final = await find_many_in(
-            self.members,
-            "parent_org_id",
-            (org.customer_org_id for org in organizations),
+            self.members, "parent_org_id", (org.customer_org_id for org in organizations)
         )
         return _member_ids(members), tuple(org.alias for org in organizations)
 

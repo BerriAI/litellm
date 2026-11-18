@@ -8,6 +8,7 @@ import CreateCustomerDialog from "./CreateCustomerDialog";
 const creations: unknown[] = [];
 let rejectCreation = false;
 let freeTierReached = false;
+let catalogStatus = 200;
 const onCreated = vi.fn();
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -26,6 +27,7 @@ beforeEach(() => {
   creations.length = 0;
   rejectCreation = false;
   freeTierReached = false;
+  catalogStatus = 200;
   vi.mocked(toast.error).mockClear();
   onCreated.mockClear();
   testQueryClient.clear();
@@ -37,12 +39,15 @@ beforeEach(() => {
         return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
       }
       if (url.pathname === "/management/v1/customer_organization_budget_groups")
-        return Response.json({
-          default_budgets: [
-            { budget_id: "saved-group", name: "100" },
-            { budget_id: "named-group", name: "Growth" },
-          ],
-        });
+        return Response.json(
+          {
+            default_budgets: [
+              { budget_id: "saved-group", name: "100" },
+              { budget_id: "named-group", name: "Growth" },
+            ],
+          },
+          { status: catalogStatus },
+        );
       if (url.pathname === "/management/v1/customer_organizations" && request.method === "POST") {
         creations.push(await request.json());
         if (freeTierReached)
@@ -65,31 +70,35 @@ afterEach(() => {
 });
 
 describe("CreateCustomerDialog", () => {
-  it.each(["group", "named group", "100", "$100"])(
-    "creates an organization using %s in the budget field",
-    async (choice) => {
-      const user = userEvent.setup();
-      renderWithProviders(<Harness />);
-      fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
-      const submit = screen.getByRole("button", { name: "Create customer" });
-      const budget = screen.getByRole("combobox", { name: "Customer monthly budget (USD)" });
-      await waitFor(() => expect(budget).toBeEnabled());
-      const isGroup = choice.endsWith("group");
-      if (isGroup) {
-        await user.click(budget);
-        if (choice === "named group") await user.type(budget, "Growth");
-        await user.click(await screen.findByRole("option", { name: choice === "group" ? "100" : "Growth" }));
-      } else await user.type(budget, choice);
-      await user.click(submit);
-      await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
-      expect(creations[0]).toMatchObject(
-        isGroup
-          ? { budget_id: choice === "group" ? "saved-group" : "named-group" }
-          : { budget: { max_budget: 100, budget_duration: "1mo" } },
-      );
-      expect(creations[0]).not.toHaveProperty(isGroup ? "budget" : "budget_id");
-    },
-  );
+  it.each([
+    ["group", 200],
+    ["named group", 200],
+    ["100", 200],
+    ["$100", 200],
+    ["$40", 503],
+  ] as const)("creates an organization using %s with catalog status %s", async (choice, status) => {
+    catalogStatus = status;
+    const user = userEvent.setup();
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    const submit = screen.getByRole("button", { name: "Create customer" });
+    const budget = screen.getByRole("combobox", { name: "Customer budget (USD)" });
+    await waitFor(() => expect(budget).toBeEnabled());
+    const isGroup = choice.endsWith("group");
+    if (isGroup) {
+      await user.click(budget);
+      if (choice === "named group") await user.type(budget, "Growth");
+      await user.click(await screen.findByRole("option", { name: choice === "group" ? "100" : "Growth" }));
+    } else await user.type(budget, choice);
+    await user.click(submit);
+    await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
+    expect(creations[0]).toMatchObject(
+      isGroup
+        ? { budget_id: choice === "group" ? "saved-group" : "named-group" }
+        : { budget: { max_budget: Number(choice.replace("$", "")), budget_duration: "1mo" } },
+    );
+    expect(creations[0]).not.toHaveProperty(isGroup ? "budget" : "budget_id");
+  });
 
   it("adds budget groups without a secure browser context", async () => {
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });

@@ -83597,7 +83597,7 @@
         "mode": "responses",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -83613,6 +83613,7 @@
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": false,
+        "supports_prompt_cache_breakpoint": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -83624,17 +83625,25 @@
     "bedrock_mantle/openai.gpt-6.2-astra": {
         "cache_creation_input_token_cost": 1.1e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 2.2e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 6.6e-05,
+        "cache_creation_input_token_cost_ultrafast": 3.3e-05,
         "cache_read_input_token_cost": 4.4e-07,
         "cache_read_input_token_cost_above_272k_tokens": 8.8e-07,
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast": 2.64e-06,
+        "cache_read_input_token_cost_ultrafast": 1.32e-06,
         "input_cost_per_token": 8.8e-06,
         "input_cost_per_token_above_272k_tokens": 1.76e-05,
+        "input_cost_per_token_above_272k_tokens_ultrafast": 5.28e-05,
+        "input_cost_per_token_ultrafast": 2.64e-05,
         "litellm_provider": "bedrock_mantle",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 4.4e-05,
         "output_cost_per_token_above_272k_tokens": 6.6e-05,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "output_cost_per_token_above_272k_tokens_ultrafast": 0.000198,
+        "output_cost_per_token_ultrafast": 0.000132,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -83650,6 +83659,7 @@
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_none_reasoning_effort": false,
+        "supports_prompt_cache_breakpoint": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -105942,7 +105952,7 @@
         "output_cost_per_token_above_272k_tokens": 6e-05,
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.00018,
         "output_cost_per_token_ultrafast": 0.00012,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -105980,7 +105990,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -106026,7 +106036,7 @@
         "output_cost_per_token_above_272k_tokens": 6.6e-05,
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.000198,
         "output_cost_per_token_ultrafast": 0.000132,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -106064,7 +106074,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -106110,7 +106120,7 @@
         "output_cost_per_token_above_272k_tokens": 6e-05,
         "output_cost_per_token_above_272k_tokens_ultrafast": 0.00018,
         "output_cost_per_token_ultrafast": 0.00012,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html",
         "supported_modalities": [
             "text",
             "image"
@@ -106143,7 +106153,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html",
         "supported_modalities": [
             "text",
             "image"
@@ -106411,6 +106421,22 @@
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "together_ai/Qwen/Qwen4-Max": {
+        "cache_read_input_token_cost": 7.125e-08,
+        "input_cost_per_token": 1.425e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 4.275e-06,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     }
 }
