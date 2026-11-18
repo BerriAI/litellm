@@ -232,6 +232,7 @@ if MCP_AVAILABLE:
         mcp_oauth_token_identity,
         merge_user_env_vars,
         oauth_credentials_for_upstream_edit,
+        oauth_grant_state,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         set_mcp_server_pinned_tools,
@@ -2841,7 +2842,7 @@ if MCP_AVAILABLE:
     async def get_mcp_oauth_user_credential_status(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ):
+    ) -> MCPOAuthUserCredentialStatus:
         """Return credential status (has_credential, expiry) without exposing the token."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         user_id: Final = user_api_key_dict.user_id or ""
@@ -2853,19 +2854,11 @@ if MCP_AVAILABLE:
         cred: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
         if cred is None:
             return MCPOAuthUserCredentialStatus(server_id=server_id, has_credential=False, is_expired=False)
-        expires_at: Final[str | None] = cred.get("expires_at")
-        is_expired = False
-        if expires_at:
-            try:
-                exp: Final = datetime.fromisoformat(expires_at)
-                is_expired = exp < datetime.now(timezone.utc)
-            except Exception:
-                pass
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=True,
-            expires_at=expires_at,
-            is_expired=is_expired,
+            expires_at=cred.get("expires_at"),
+            is_expired=oauth_grant_state(cred) == "absent",
             connected_at=cred.get("connected_at"),
         )
 

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import types
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, List, Literal, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +23,7 @@ from respx import MockRouter
 import litellm
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
-from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS, UI_SESSION_TOKEN_TEAM_ID
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.models.organization import LiteLLM_OrganizationTable
@@ -11880,3 +11881,76 @@ async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
             assert posted["application_type"] == application_type
     finally:
         mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
+
+
+_STATUS_NOW: Final = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+
+class _StatusClock(datetime):
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:
+        return _STATUS_NOW
+
+
+def _stored_oauth_cred(expires_in_seconds: float | None, refresh_token: str | None) -> dict[str, str]:
+    expiry: Final = (
+        {}
+        if expires_in_seconds is None
+        else {"expires_at": (_STATUS_NOW + timedelta(seconds=expires_in_seconds)).isoformat()}
+    )
+    refresh: Final = {} if refresh_token is None else {"refresh_token": refresh_token}
+    return {
+        "type": "oauth2",
+        "access_token": "status-access-token",
+        "connected_at": "2026-01-01T00:00:00+00:00",
+        **expiry,
+        **refresh,
+    }
+
+
+def _stored_oauth_credential_row(cred: Mapping[str, str]) -> SimpleNamespace:
+    return SimpleNamespace(credential_b64=base64.urlsafe_b64encode(json.dumps(cred).encode()).decode())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cred", "expected_is_expired"),
+    [
+        pytest.param(_stored_oauth_cred(3600, None), False, id="live_token"),
+        pytest.param(_stored_oauth_cred(-3600, "status-refresh-token"), False, id="expired_with_refresh_token"),
+        pytest.param(_stored_oauth_cred(-3600, None), True, id="expired_without_refresh_token"),
+        pytest.param(_stored_oauth_cred(None, None), False, id="no_expiry"),
+        pytest.param(
+            _stored_oauth_cred(MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS / 2, None), True, id="inside_refresh_buffer"
+        ),
+        pytest.param(
+            _stored_oauth_cred(MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS / 2, "status-refresh-token"),
+            False,
+            id="inside_refresh_buffer_with_refresh_token",
+        ),
+        pytest.param(
+            {**_stored_oauth_cred(None, None), "expires_at": "not-a-date"}, False, id="unparseable_expiry"
+        ),
+    ],
+)
+async def test_oauth_credential_status_is_expired_only_when_gateway_cannot_use_it(
+    cred: dict[str, str], expected_is_expired: bool
+) -> None:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=_stored_oauth_credential_row(cred))
+    with (
+        patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+        patch("litellm.proxy.mcp_server.db.datetime", _StatusClock),
+    ):
+        result: Final = await mgmt_endpoints.get_mcp_oauth_user_credential_status(
+            server_id="status-server",
+            user_api_key_dict=UserAPIKeyAuth(user_id="status-user"),
+        )
+
+    assert result.model_dump() == {
+        "server_id": "status-server",
+        "has_credential": True,
+        "expires_at": cred.get("expires_at"),
+        "is_expired": expected_is_expired,
+        "connected_at": "2026-01-01T00:00:00+00:00",
+    }
