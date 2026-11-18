@@ -27,6 +27,26 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
 
 
+def test_count_tokens_carries_placement_settings_into_the_deployment() -> None:
+    from litellm.proxy.anthropic_endpoints.endpoints import _count_tokens_body_options
+    from litellm.proxy.proxy_server import _deployment_with_request_count_settings
+
+    settings: Final = {
+        "store": False,
+        "truncation": "auto",
+        "previous_response_id": "resp_prior",
+        "conversation": "conv_prior",
+        "extra_body": {"store": True},
+        "additional_drop_params": ["store"],
+        "drop_params": False,
+    }
+    options: Final = _count_tokens_body_options(settings, False)
+    deployment: Final = _deployment_with_request_count_settings(
+        {"litellm_params": {"api_key": "sk-test", "store": True}}, options["request_litellm_params"]
+    )
+    assert deployment == {"litellm_params": {"api_key": "sk-test", **settings}}
+
+
 class TestAnthropicEndpoints(unittest.TestCase):
     @patch("litellm.litellm_core_utils.safe_json_dumps.safe_dumps")
     @pytest.mark.asyncio
@@ -128,7 +148,9 @@ async def _blocked_messages_reply(
         patch.object(
             proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
         ),  # test-quality-ok: module global imported at call time; no injection seam
-        patch.object(litellm, "callbacks", new=[blocker, *rails]),  # test-quality-ok: guardrails register through this global
+        patch.object(
+            litellm, "callbacks", new=[blocker, *rails]
+        ),  # test-quality-ok: guardrails register through this global
     ):
         response = await ep.anthropic_response(
             fastapi_response=fastapi_response,
@@ -588,7 +610,6 @@ class TestErrorLogCarriesCallId:
         assert call_id in record.getMessage()
 
 
-
 class TestCountTokensCompactedHistory:
     """A history carrying Anthropic's signed compaction block used to fail /v1/messages/count_tokens once the count
     ran on the local tokenizer, which rejected the block type."""
@@ -606,7 +627,9 @@ class TestCountTokensCompactedHistory:
             "messages": [
                 {
                     "role": "assistant",
-                    "content": [{"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}],
+                    "content": [
+                        {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+                    ],
                 },
                 follow_up,
             ],
@@ -620,8 +643,12 @@ class TestCountTokensCompactedHistory:
 
         async def count(body):
             with (
-                patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-                patch.object(proxy_server, "llm_router", None),  # test-quality-ok: module global; with no router the count runs on the local tokenizer, the path that raised
+                patch.object(
+                    ep, "read_request_body", new=AsyncMock(return_value=body)
+                ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                patch.object(
+                    proxy_server, "llm_router", None
+                ),  # test-quality-ok: module global; with no router the count runs on the local tokenizer, the path that raised
             ):
                 return await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
@@ -629,6 +656,7 @@ class TestCountTokensCompactedHistory:
 
         assert counted["input_tokens"] > 0
         assert counted == await count(as_text)
+
 
 def _claude_router() -> Router:
     return Router(
@@ -670,9 +698,15 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(mod
     body: Final = {"model": model, "messages": [{"role": "user", "content": "hi"}], "tools": tools}
 
     with (
-        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
-        patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value=body)
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            proxy_server, "count_request_tokens", new=counter
+        ),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
+        patch.object(
+            proxy_server, "llm_router", new=_claude_router()
+        ),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
         response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
@@ -690,12 +724,22 @@ async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router
     request: Final = MagicMock()
     request.headers = {}
     counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
-    body: Final = {"model": "team-public-name", "messages": [{"role": "user", "content": "hi"}], "tools": _MALFORMED_TOOL_ENTRY}
+    body: Final = {
+        "model": "team-public-name",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": _MALFORMED_TOOL_ENTRY,
+    }
 
     with (
-        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
-        patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value=body)
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            proxy_server, "count_request_tokens", new=counter
+        ),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(
+            proxy_server, "llm_router", new=_claude_router()
+        ),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
         response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
@@ -727,8 +771,12 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
     body: Final = {"model": "claude-sonnet", "messages": messages, "tools": 5, **dropping}
 
     with (
-        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value=body)
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            proxy_server, "count_request_tokens", new=counter
+        ),  # test-quality-ok: module global imported at call time; the test asserts what it receives
     ):
         response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
@@ -752,10 +800,18 @@ async def test_count_tokens_keeps_claude_code_malformed_tools_when_operator_sets
     body: Final = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
 
     with (
-        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
-        patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
-        patch.object(proxy_server, "proxy_config", new=operator_config),  # test-quality-ok: module global imported at call time; no injection seam on this route
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value=body)
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            proxy_server, "count_request_tokens", new=counter
+        ),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
+        patch.object(
+            proxy_server, "llm_router", new=_claude_router()
+        ),  # test-quality-ok: module global imported at call time; no injection seam on this route
+        patch.object(
+            proxy_server, "proxy_config", new=operator_config
+        ),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
         response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
@@ -791,9 +847,15 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
     body: Final = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
 
     with (
-        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
-        patch.object(proxy_server, "llm_router", new=router),  # test-quality-ok: module global imported at call time; no injection seam on this route
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value=body)
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            proxy_server, "count_request_tokens", new=counter
+        ),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(
+            proxy_server, "llm_router", new=router
+        ),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
         response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
@@ -877,9 +939,7 @@ def test_count_tokens_returns_the_context_management_the_provider_applied(monkey
     applied: Final = {"original_input_tokens": 640}
     response: Final = _count_on_claude(
         monkeypatch,
-        lambda request: httpx.Response(
-            200, json={"input_tokens": 576, "context_management": applied}, request=request
-        ),
+        lambda request: httpx.Response(200, json={"input_tokens": 576, "context_management": applied}, request=request),
         {},
         {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
     )

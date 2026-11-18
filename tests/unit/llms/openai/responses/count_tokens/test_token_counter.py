@@ -13,11 +13,63 @@ from pydantic import JsonValue, ValidationError
 import litellm
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
+from litellm.llms.anthropic.messages.responses_adapters.handler import _build_responses_kwargs
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "preserve"),
+    [
+        ({}, True),
+        ({"store": True}, True),
+        ({"store": False}, False),
+        ({"store": False, "truncation": "auto"}, True),
+        ({"store": False, "previous_response_id": "resp_prior"}, True),
+        ({"store": False, "conversation": "conv_prior"}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": True, "extra_body": {"store": False}}, False),
+        ({"store": False, "extra_body": {"truncation": "auto"}}, True),
+    ],
+)
+async def test_anthropic_count_system_placement_matches_generation(
+    monkeypatch: pytest.MonkeyPatch, params: dict[str, object], preserve: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    messages: Final = [{"role": "user", "content": "hi"}]
+    generated: Final = _build_responses_kwargs(
+        max_tokens=64,
+        messages=messages,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **params},
+    )
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 10}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-6.2-sol",
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test", **params}},
+            request_model="openai/gpt-6.2-sol",
+            system="Be brief.",
+            messages_format="anthropic",
+        )
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert result is not None and result.total_tokens == 10
+    assert sent == {
+        "model": "gpt-6.2-sol",
+        "input": generated["input"],
+        **({"instructions": "Be brief."} if preserve else {}),
+    }
+    assert (sent.get("instructions") == "Be brief.") is preserve
+    assert (generated.get("instructions") == "Be brief.") is preserve
 
 
 async def _count(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> TokenCountResponse | None:
@@ -464,9 +516,7 @@ async def test_anthropic_format_malformed_tool_result_text_answers_400_without_c
 async def test_anthropic_format_drop_params_counts_the_tool_result_without_the_malformed_text(
     monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
 ) -> None:
-    result, route = await _count_tool_result_turns(
-        monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True}
-    )
+    result, route = await _count_tool_result_turns(monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True})
 
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 9)
@@ -583,7 +633,9 @@ async def test_anthropic_format_input_tokens_trigger_counts_the_system_prompt_li
 async def test_anthropic_format_malformed_clear_edit_answers_400_without_calling_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result, route = await _count_with_edit(monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=False)
+    result, route = await _count_with_edit(
+        monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=False
+    )
 
     assert route.called is False
     assert result is not None

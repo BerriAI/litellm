@@ -17,7 +17,10 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
-from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
+from litellm.llms.anthropic.messages.responses_adapters.handler import (
+    count_view_messages,
+    preserves_system_instructions,
+)
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -146,11 +149,17 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
+        request_params: Mapping[str, object] = MappingProxyType({}),
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                    model=model_to_use,
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    output_format=output_format,
+                    preserve_system_instructions=preserves_system_instructions(request_params),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
@@ -229,6 +238,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            request_params=as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {},
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting

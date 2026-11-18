@@ -14917,15 +14917,28 @@ async def _with_resolved_credentials(deployment: Mapping[str, object] | None) ->
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
-def _deployment_with_request_drop_params(
+def _deployment_with_request_count_settings(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    drop_params: object,
+    request_params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    if drop_params is None:
+    overrides: Final = {
+        name: request_params[name]
+        for name in (
+            "drop_params",
+            "additional_drop_params",
+            "store",
+            "extra_body",
+            "truncation",
+            "previous_response_id",
+            "conversation",
+        )
+        if request_params.get(name) is not None
+    }
+    if not overrides:
         return deployment
     resolved_deployment: Final = deployment or {}
     litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
-    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+    return {**resolved_deployment, "litellm_params": {**litellm_params, **overrides}}
 
 
 def _counted_request_messages(
@@ -15571,7 +15584,7 @@ async def _count_request_tokens(
             model_to_use = _model
 
     sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
-    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
+    count_deployment: Final = _deployment_with_request_count_settings(deployment, sent_params)
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(
