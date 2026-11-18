@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
-from litellm.llms.openai.chat.gpt_reasoning_transformation import sends_system_prompt_as_developer_message
+from litellm.llms.openai.responses.instruction_items import system_prompt_moves_to_developer_item
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
@@ -242,8 +242,12 @@ def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[s
 
 def _system_goes_in_developer_message(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    return not forwarded_kwargs.get("previous_response_id") and sends_system_prompt_as_developer_message(
-        model, provider if isinstance(provider, str) else None, declared_base_model_names(forwarded_kwargs)
+    extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    return system_prompt_moves_to_developer_item(
+        model,
+        provider if isinstance(provider, str) else None,
+        declared_base_model_names(forwarded_kwargs),
+        {**forwarded_kwargs, **extra_body},
     )
 
 

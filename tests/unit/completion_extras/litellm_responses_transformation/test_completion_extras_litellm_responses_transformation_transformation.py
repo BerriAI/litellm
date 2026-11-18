@@ -6,7 +6,7 @@ import json
 import os
 import queue
 import unittest
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
@@ -24,6 +24,7 @@ from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
     Summary,
 )
+from opentelemetry.sdk.trace import TracerProvider
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -1940,7 +1941,7 @@ def _transformed_system_prompt_request(
     ("model", "litellm_params"),
     [
         pytest.param("gpt-6.2", {"custom_llm_provider": "openai"}, id="openai"),
-        pytest.param("gpt-7", {"custom_llm_provider": "chatgpt"}, id="chatgpt-future-version"),
+        pytest.param("gpt-7", {"custom_llm_provider": "openai"}, id="future-version"),
         pytest.param("alias", {"custom_llm_provider": "openai", "base_model": "gpt-6.2"}, id="base-model"),
         pytest.param(
             "alias",
@@ -1961,51 +1962,67 @@ def test_transform_request_sends_the_system_prompt_as_the_first_developer_item(
 
 
 @pytest.mark.parametrize(
-    ("model", "provider"),
+    ("model", "litellm_params", "optional_params"),
     [
-        pytest.param("gpt-6.1", "openai", id="older-model"),
-        pytest.param("gpt-6.2", "azure", id="unverified-provider"),
+        pytest.param("gpt-6.1", {"custom_llm_provider": "openai"}, {}, id="older-model"),
+        pytest.param("gpt-6.2", {"custom_llm_provider": "azure"}, {}, id="unverified-provider"),
+        pytest.param("gpt-6.2", {"custom_llm_provider": "chatgpt"}, {}, id="chatgpt"),
+        pytest.param(
+            "gpt-6.2", {"custom_llm_provider": "openai", "base_model": "gpt-6.1"}, {}, id="older-declared-base"
+        ),
+        pytest.param(
+            "gpt-6.2", {"custom_llm_provider": "openai"}, {"previous_response_id": "resp_123"}, id="stored-conversation"
+        ),
+        pytest.param("gpt-6.2", {"custom_llm_provider": "openai"}, {"truncation": "auto"}, id="auto-truncation"),
+        pytest.param(
+            "gpt-6.2",
+            {"custom_llm_provider": "openai"},
+            {"extra_body": {"truncation": "auto"}},
+            id="auto-truncation-in-extra-body",
+        ),
     ],
 )
-def test_transform_request_keeps_instructions_outside_the_gate(model: str, provider: str) -> None:
+def test_transform_request_keeps_instructions_unless_the_prompt_moves(
+    model: str, litellm_params: Mapping[str, object], optional_params: Mapping[str, object]
+) -> None:
     result: Final = _transformed_system_prompt_request(
-        [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], model=model, litellm_params={"custom_llm_provider": provider}
+        [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], model=model, litellm_params=litellm_params, optional_params=optional_params
     )
 
     assert result["input"] == [_HELLO_ITEM]
     assert result["instructions"] == _JOINED_SYSTEM_TEXT
-
-
-def test_transform_request_keeps_instructions_on_a_stored_conversation() -> None:
-    result: Final = _transformed_system_prompt_request(
-        [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], optional_params={"previous_response_id": "resp_123"}
-    )
-
-    assert result["input"] == [_HELLO_ITEM]
-    assert result["instructions"] == _JOINED_SYSTEM_TEXT
-    assert result["previous_response_id"] == "resp_123"
 
 
 @pytest.mark.parametrize(
-    ("messages", "optional_params", "expected_input"),
+    ("messages", "optional_params"),
     [
-        pytest.param(_SYSTEM_MESSAGES, {}, [_developer_item(_JOINED_SYSTEM_TEXT)], id="empty-input"),
+        pytest.param(_SYSTEM_MESSAGES, {}, id="empty-input"),
         pytest.param(
             [*_SYSTEM_MESSAGES, _HELLO_MESSAGE],
-            {"response_format": {"type": "json_object"}, "previous_response_id": "resp_123"},
-            [_developer_item(_JOINED_SYSTEM_TEXT), _HELLO_ITEM],
-            id="json-object-on-a-stored-conversation",
+            {"response_format": {"type": "json_object"}},
+            id="json-object",
         ),
     ],
 )
 def test_transform_request_system_text_the_api_needs_in_input_uses_the_developer_role(
-    messages: Sequence[Mapping[str, object]],
-    optional_params: Mapping[str, object],
-    expected_input: list[dict[str, object]],
+    messages: Sequence[Mapping[str, object]], optional_params: Mapping[str, object]
 ) -> None:
     result: Final = _transformed_system_prompt_request(messages, optional_params=optional_params)
 
-    assert result["input"] == expected_input
+    assert result["input"][0] == _developer_item(_JOINED_SYSTEM_TEXT)
+    assert "instructions" not in result
+
+
+def test_transform_request_json_object_on_a_stored_conversation_keeps_the_system_role() -> None:
+    result: Final = _transformed_system_prompt_request(
+        [*_SYSTEM_MESSAGES, _HELLO_MESSAGE],
+        optional_params={"response_format": {"type": "json_object"}, "previous_response_id": "resp_123"},
+    )
+
+    assert result["input"] == [
+        {"type": "message", "role": "system", "content": [{"type": "input_text", "text": _JOINED_SYSTEM_TEXT}]},
+        _HELLO_ITEM,
+    ]
     assert "instructions" not in result
 
 
@@ -2035,7 +2052,8 @@ def test_transform_request_system_items_left_in_input_keep_their_role_after_the_
 class _TracedSpanAttributes(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.seen: Final = queue.SimpleQueue[Mapping[object, object]]()
+        self.otel: Final = OpenTelemetry(tracer_provider=TracerProvider())
+        self.seen: Final = queue.SimpleQueue[Mapping[str, object]]()
 
     async def async_log_success_event(
         self,
@@ -2045,33 +2063,80 @@ class _TracedSpanAttributes(CustomLogger):
         end_time: datetime.datetime,
     ) -> None:
         span: Final = MagicMock()
-        OpenTelemetry().set_attributes(span, kwargs, response_obj)
+        self.otel.set_attributes(span, kwargs, response_obj)
         self.seen.put({call.args[0]: call.args[1] for call in span.set_attribute.call_args_list})
 
 
-@pytest.mark.asyncio
-async def test_system_prompt_moved_to_a_developer_item_stays_on_the_trace_and_off_the_wire(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def _traced_call(
+    monkeypatch: pytest.MonkeyPatch, model: str, call: Callable[[], Awaitable[object]]
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     tracer: Final = _TracedSpanAttributes()
     monkeypatch.setattr(litellm, "callbacks", [tracer])
-
     with respx.mock(assert_all_called=True) as router:
         route: Final = router.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=_searched_responses_body("gpt-6.2"))
+            return_value=httpx.Response(200, json={**_searched_responses_body(model), "output": [_PONG_MESSAGE]})
         )
-        await litellm.acompletion(
-            model="openai/responses/gpt-6.2",
-            messages=[*_SYSTEM_MESSAGES, _HELLO_MESSAGE],
-            api_key="test-key",
-        )
+        await call()
         attributes: Final = await asyncio.to_thread(tracer.seen.get, timeout=10)
+    return attributes, json.loads(route.calls.last.request.content)
 
-    sent: Final = json.loads(route.calls.last.request.content)
+
+@pytest.mark.asyncio
+async def test_chat_system_prompt_moved_to_a_developer_item_stays_on_the_trace_and_off_the_wire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attributes, sent = await _traced_call(
+        monkeypatch,
+        "gpt-6.2",
+        lambda: litellm.acompletion(
+            model="openai/responses/gpt-6.2", messages=[*_SYSTEM_MESSAGES, _HELLO_MESSAGE], api_key="test-key"
+        ),
+    )
+
     assert attributes["gen_ai.system_instructions"] == _JOINED_SYSTEM_TEXT
     assert sent["input"][0] == _developer_item(_JOINED_SYSTEM_TEXT)
     assert not {"instructions", "system_instructions"} & sent.keys()
+
+
+@pytest.mark.asyncio
+async def test_messages_system_prompt_moved_to_a_developer_item_stays_on_the_trace_and_off_the_wire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attributes, sent = await _traced_call(
+        monkeypatch,
+        "gpt-6.2",
+        lambda: litellm.anthropic.messages.acreate(
+            model="openai/gpt-6.2",
+            max_tokens=64,
+            system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}],
+            messages=[_HELLO_MESSAGE],
+            api_key="test-key",
+        ),
+    )
+
+    assert attributes["gen_ai.system_instructions"] == "Be concise.\nBe helpful."
+    assert sent["input"][0]["role"] == "developer"
+    assert not {"instructions", "system_instructions"} & sent.keys()
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_already_in_input_on_an_older_model_is_not_added_to_the_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attributes, sent = await _traced_call(
+        monkeypatch,
+        "gpt-6.1",
+        lambda: litellm.acompletion(
+            model="openai/responses/gpt-6.1",
+            messages=[*_SYSTEM_MESSAGES, _HELLO_MESSAGE],
+            response_format={"type": "json_object"},
+            api_key="test-key",
+        ),
+    )
+
+    assert "gen_ai.system_instructions" not in attributes
+    assert sent["input"][0]["role"] == "system"
 
 
 def test_transform_request_single_char_keys_not_matched():

@@ -6169,8 +6169,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
     def record_bridged_instructions(self, instructions: str) -> None:
-        """Logs a system prompt the bridge sent in ``input`` as the request's instructions, so traces
-        and message redaction treat it as they do one sent in ``instructions``."""
+        """Keeps a system prompt sent in ``input`` on traces and under message redaction."""
         self.model_call_details["instructions"] = instructions
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:

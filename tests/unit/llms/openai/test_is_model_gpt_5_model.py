@@ -30,16 +30,15 @@ The fix uses a substring check for ``gpt-5-chat`` on the normalised model
 name (not a prefix check), which correctly distinguishes the two families.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
-from litellm.llms.openai.chat.gpt_reasoning_transformation import (
-    OpenAIGPT5Config,
-    sends_system_prompt_as_developer_message,
-)
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.openai.responses.instruction_items import system_prompt_moves_to_developer_item
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
 # ---------------------------------------------------------------------------
@@ -275,24 +274,36 @@ class TestOpenAIGPT5ConfigSeriesBoundaries:
 
 
 @pytest.mark.parametrize(
-    ("model", "provider", "declared_base_models", "expected"),
+    ("model", "provider", "declared_base_models", "request_params", "expected"),
     [
-        pytest.param("gpt-6.2", "openai", (), True, id="openai-boundary"),
-        pytest.param("gpt-7", "chatgpt", (), True, id="chatgpt-future-major"),
-        pytest.param("my-deployment", "openai", ("gpt-6.2-sol",), True, id="alias-with-declared-base"),
-        pytest.param("gpt-6.1", "openai", ("my-base", "gpt-6.3"), True, id="second-declared-base"),
-        pytest.param("gpt-6.1", "openai", ("gpt-6.1-sol",), False, id="older-model-and-base"),
-        pytest.param("my-deployment", "openai", (), False, id="alias-without-base"),
-        pytest.param("gpt-6.2", "azure", (), False, id="azure"),
-        pytest.param("gpt-6.2", "bedrock_mantle", (), False, id="bedrock-mantle"),
-        pytest.param("gpt-6.2", "github_copilot", ("gpt-6.2",), False, id="github-copilot"),
-        pytest.param("gpt-6.2", None, (), False, id="unknown-provider"),
+        pytest.param("gpt-6.2", "openai", (), {}, True, id="boundary"),
+        pytest.param("gpt-7", "openai", (), {}, True, id="future-major"),
+        pytest.param("gpt-6.2", "openai", (), {"truncation": "disabled"}, True, id="truncation-disabled"),
+        pytest.param("gpt-6.2", "openai", (), {"previous_response_id": None}, True, id="no-stored-conversation"),
+        pytest.param("house-model", "openai", ("gpt-6.2-sol",), {}, True, id="alias-with-newer-base"),
+        pytest.param("gpt-6.1", "openai", ("gpt-6.3",), {}, True, id="newer-base-decides"),
+        pytest.param("gpt-6.2", "openai", ("gpt-6.1",), {}, False, id="older-base-decides"),
+        pytest.param("house-model", "openai", ("house-base", "gpt-6.3"), {}, True, id="first-gpt-base-decides"),
+        pytest.param("gpt-6.2", "openai", ("house-base",), {}, True, id="non-gpt-base-defers-to-model"),
+        pytest.param("gpt-6.1", "openai", (), {}, False, id="older-model"),
+        pytest.param("house-model", "openai", (), {}, False, id="alias-without-base"),
+        pytest.param("gpt-6.2", "openai", (), {"previous_response_id": "resp_1"}, False, id="stored-conversation"),
+        pytest.param("gpt-6.2", "openai", (), {"truncation": "auto"}, False, id="auto-truncation"),
+        pytest.param("gpt-6.2", "chatgpt", (), {}, False, id="chatgpt"),
+        pytest.param("gpt-6.2", "azure", (), {}, False, id="azure"),
+        pytest.param("gpt-6.2", "bedrock_mantle", (), {}, False, id="bedrock-mantle"),
+        pytest.param("gpt-6.2", "github_copilot", ("gpt-6.2",), {}, False, id="github-copilot"),
+        pytest.param("gpt-6.2", None, (), {}, False, id="unknown-provider"),
     ],
 )
-def test_system_prompt_moves_to_a_developer_message_only_for_verified_providers_and_versions(
-    model: str, provider: str | None, declared_base_models: tuple[str, ...], expected: bool
+def test_system_prompt_moves_only_when_nothing_can_lose_or_repeat_it(
+    model: str,
+    provider: str | None,
+    declared_base_models: tuple[str, ...],
+    request_params: Mapping[str, object],
+    expected: bool,
 ) -> None:
-    assert sends_system_prompt_as_developer_message(model, provider, declared_base_models) is expected
+    assert system_prompt_moves_to_developer_item(model, provider, declared_base_models, request_params) is expected
 
 
 # ---------------------------------------------------------------------------

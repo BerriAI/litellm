@@ -67,7 +67,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
-from litellm.llms.openai.chat.gpt_reasoning_transformation import sends_system_prompt_as_developer_message
+from litellm.llms.openai.responses.instruction_items import system_prompt_moves_to_developer_item
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
@@ -1421,17 +1421,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         # Keep the system text in input instead of instructions when the Responses API needs it there.
         # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
-        # A model that bills instructions uncached caches it there too, except on a stored conversation,
-        # where every turn would add another copy.
         typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
-        previous_response_id: Final = optional_params.get("previous_response_id")
-        system_as_developer: Final = sends_system_prompt_as_developer_message(
-            model, provider, declared_base_model_names(litellm_params)
+        system_as_developer: Final = system_prompt_moves_to_developer_item(
+            model, provider, declared_base_model_names(litellm_params), typed_optional_params
         )
         system_goes_in_input: Final = converted_instructions is not None and (
             not converted_input_items
             or _payload_type(typed_optional_params.get("response_format")) == "json_object"
-            or (system_as_developer and bool(converted_instructions) and not previous_response_id)
+            or (system_as_developer and bool(converted_instructions))
         )
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)
@@ -1451,7 +1448,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else target_input_items
         )
         instructions: Final = None if system_goes_in_input else converted_instructions
-        if system_as_developer and system_goes_in_input and converted_instructions:
+        if system_as_developer and converted_instructions:
             litellm_logging_obj.record_bridged_instructions(converted_instructions)
 
         # Build responses API request using the reverse transformation logic
@@ -1477,6 +1474,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             responses_api_request["stream"] = True
 
         # Handle session management if previous_response_id is provided
+        previous_response_id: Final = optional_params.get("previous_response_id")
         if previous_response_id:
             # Use the existing session handler for responses API
             verbose_logger.debug("Chat provider: Warning ignoring previous response ID: %s", previous_response_id)

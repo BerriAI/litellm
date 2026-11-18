@@ -1,15 +1,37 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from openai.types.responses import EasyInputMessageParam, ResponseInputContentParam, ResponseInputItemParam
 
 from litellm.llms.base_llm.base_utils import hoisted_instruction_indices
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.utils import LlmProviders
 
 UnfoldedDeveloperRole: TypeAlias = Literal["system", "user"]
 
 _INSTRUCTION_ROLES: Final = frozenset({"system", "developer"})
+
+
+def system_prompt_moves_to_developer_item(
+    model: str,
+    custom_llm_provider: str | None,
+    declared_base_models: Sequence[str],
+    request_params: Mapping[str, object],
+) -> bool:
+    """From GPT-6.2 on OpenAI bills ``instructions`` uncached. A stored conversation would pile up the item and
+    auto truncation could drop it, so those keep ``instructions``."""
+    if (
+        custom_llm_provider != LlmProviders.OPENAI.value
+        or request_params.get("previous_response_id")
+        or request_params.get("truncation") == "auto"
+    ):
+        return False
+    deciding_model: Final = next(
+        (name for name in (*declared_base_models, model) if OpenAIGPT5Config.is_gpt_series_model(name)), None
+    )
+    return deciding_model is not None and OpenAIGPT5Config.is_model_gpt_6_2_plus_model(deciding_model)
 
 
 def _role(item: ResponseInputItemParam) -> str | None:
