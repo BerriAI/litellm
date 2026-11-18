@@ -262,7 +262,7 @@ export function ModelsPane({
     },
     {
       accessorKey: "input_cost_per_token",
-      meta: { className: "tabular-nums" },
+      meta: { className: `${styles.priceCell} tabular-nums` },
       size: 130,
       sortDescFirst: false,
       header: ({ column }) => (
@@ -280,7 +280,7 @@ export function ModelsPane({
     },
     {
       accessorKey: "output_cost_per_token",
-      meta: { className: "tabular-nums" },
+      meta: { className: `${styles.priceCell} tabular-nums` },
       size: 130,
       sortDescFirst: false,
       header: ({ column }) => (
@@ -310,6 +310,7 @@ export function ModelsPane({
             value={models.searchValue}
             onChange={models.onSearchChange}
             placeholder={t("publicModelHub.catalog.searchModels", { defaultValue: "Search models" })}
+            showShortcut
           />
         </div>
         <ModeFilters hub={hub} />

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 import { useIsNarrow } from "./useIsNarrow";
+import styles from "./catalog.module.css";
 
 export function CatalogFilters({
   children,
@@ -24,9 +25,9 @@ export function CatalogFilters({
   return (
     <aside data-slot="catalog-filters">
       <Collapsible open={!narrow || expanded} onOpenChange={setExpanded}>
-        <div className="mb-5 flex items-center justify-between gap-2">
-          <h2 className="hidden text-sm font-semibold lg:block">{t("publicModelHub.catalog.filters")}</h2>
-          <CollapsibleTrigger render={<Button variant="outline" className="lg:hidden" />}>
+        <div className={styles.filterHeading}>
+          <h2 className={styles.filterTitle}>{t("publicModelHub.catalog.filters")}</h2>
+          <CollapsibleTrigger render={<button type="button" className={styles.filterTrigger} />}>
             {t("publicModelHub.catalog.filters")}
             {count > 0 && <span className="tabular-nums">({count})</span>}
             <ChevronDown />
@@ -37,7 +38,7 @@ export function CatalogFilters({
             </Button>
           )}
         </div>
-        <CollapsibleContent className="flex flex-col gap-5">{children}</CollapsibleContent>
+        <CollapsibleContent className={styles.filterContent}>{children}</CollapsibleContent>
       </Collapsible>
     </aside>
   );

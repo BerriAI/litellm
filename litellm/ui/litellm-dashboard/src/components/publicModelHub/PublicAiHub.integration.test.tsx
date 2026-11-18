@@ -34,8 +34,11 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/font/local", () => ({ default: () => ({ variable: "catalog-display-font" }) }));
 
 vi.mock("@/components/navbar", () => ({
-  default: ({ publicNavigation }: { publicNavigation?: ReactNode }) => (
-    <nav aria-label="Top bar">{publicNavigation}</nav>
+  default: ({ publicNavigation, publicActions }: { publicNavigation?: ReactNode; publicActions?: ReactNode }) => (
+    <nav aria-label="Top bar">
+      {publicNavigation}
+      {publicActions}
+    </nav>
   ),
 }));
 
@@ -270,6 +273,50 @@ describe("PublicAiHub", () => {
     expect(await screen.findByRole("link", { name: /gpt-5/ })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Search models" })).toHaveValue("");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("searches models from the header while viewing skills and keeps both search fields in sync", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    await user.click(await screen.findByRole("tab", { name: "Skills Hub" }));
+    expect(await screen.findByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
+
+    const search = screen.getByRole("searchbox", { name: "Search models" });
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(search).toHaveFocus();
+    fireEvent.change(search, { target: { value: "claude" } });
+
+    expect(await screen.findByText("1 model")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /claude-sonnet/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /gpt-5/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Model Hub" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("textbox", { name: "Search models" })).toHaveValue("claude");
+
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(await screen.findByRole("link", { name: /gpt-5/ })).toBeInTheDocument();
+    expect(search).toHaveValue("");
+  });
+
+  it("keeps documentation, blog, and community destinations available in the overflow menu", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    await user.click(screen.getByRole("button", { name: "More navigation" }));
+
+    expect(await screen.findByRole("menuitem", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/",
+    );
+    expect(screen.getByRole("menuitem", { name: "Blog" })).toHaveAttribute("href", "https://docs.litellm.ai/blog");
+    expect(screen.getByRole("menuitem", { name: "LiteLLM on GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/BerriAI/litellm",
+    );
+    expect(screen.getByRole("menuitem", { name: "Join Slack" })).toHaveAttribute(
+      "href",
+      "https://www.litellm.ai/support",
+    );
   });
 
   it("lists the admin's links and the gateway version", async () => {
@@ -699,7 +746,14 @@ it("filters skills by tag and scan status, searches people, and scopes filters t
   fireEvent.change(screen.getByRole("textbox", { name: /Search skills/ }), {
     target: { value: "reviewer@example.test" },
   });
-  expect(await screen.findByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        queryString: expect.stringContaining("skills_search=reviewer@example.test"),
+      }),
+    ),
+  );
+  expect(screen.getByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
   await waitFor(() =>
     expect(onUrlUpdate).toHaveBeenLastCalledWith(
       expect.objectContaining({

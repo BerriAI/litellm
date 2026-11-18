@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, ExternalLink } from "lucide-react";
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,7 @@ function BaseUrlField() {
 
 export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; status: HubStatus; tab: HubTab }) {
   const { t } = useTranslation();
+  const gridId = useId();
   return (
     <header className={styles.header}>
       <div>
@@ -109,18 +111,18 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
           </details>
         )}
       </div>
-      <svg className={styles.blueprint} viewBox="0 0 390 208" fill="none" aria-hidden="true">
-        <path
-          opacity=".09"
-          stroke="currentColor"
-          strokeWidth=".7"
-          d="M40 8v192M72 8v192M104 8v192M136 8v192M168 8v192M200 8v192M232 8v192M264 8v192M296 8v192M328 8v192M16 26h352M16 58h352M16 90h352M16 122h352M16 154h352M16 186h352"
-        />
+      <svg className={styles.blueprint} viewBox="0 0 360 220" fill="none" aria-hidden="true">
+        <defs>
+          <pattern id={gridId} width="32" height="32" patternUnits="userSpaceOnUse">
+            <path d="M32 0H0V32" stroke="currentColor" strokeWidth=".7" opacity=".09" />
+          </pattern>
+        </defs>
+        <rect x="20" y="14" width="320" height="192" fill={`url(#${gridId})`} />
         <g stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="62" y="28" width="242" height="158" rx="8" className={styles.blueprintSurface} />
-          <path opacity=".3" d="M62 65h242M62 105h242M62 145h242M212 65v121" />
-          <path d="M85 46h76M85 85h98M235 85h42M85 125h70M235 125h42M85 165h85M235 165h42" />
-          <circle cx="276" cy="46" r="3" fill="currentColor" stroke="none" />
+          <rect x="66" y="35" width="228" height="150" rx="8" className={styles.blueprintSurface} />
+          <path opacity=".3" d="M66 70h228M66 108h228M66 146h228M208 70v115" />
+          <path d="M88 52h72M88 89h92M88 127h66M88 165h80M230 89h40M230 127h40M230 165h40" />
+          <circle cx="268" cy="52" r="3" fill="currentColor" stroke="none" />
         </g>
       </svg>
     </header>

@@ -152,10 +152,12 @@ export function SearchInput({
   value,
   onChange,
   placeholder,
+  showShortcut,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  showShortcut?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -178,6 +180,11 @@ export function SearchInput({
           >
             <X />
           </InputGroupButton>
+        </InputGroupAddon>
+      )}
+      {!value && showShortcut && (
+        <InputGroupAddon align="inline-end">
+          <kbd aria-hidden="true">⌘K</kbd>
         </InputGroupAddon>
       )}
     </InputGroup>

@@ -9,6 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 
 import { HubHeader, type HubStatus } from "./HubHeader";
+import { CatalogNavActions } from "./CatalogNavActions";
 import { HubNotEnabled } from "./HubEmpty";
 import { ModelsPane } from "./ModelsPane";
 import { SkillsPane } from "./ResourcePanes";
@@ -45,6 +46,15 @@ function PublicAiHubContent({ accessToken }: { accessToken: string | null }) {
       <Navbar
         accessToken={accessToken}
         isPublicPage
+        publicActions={
+          <CatalogNavActions
+            search={hub.models.searchValue}
+            onSearchChange={(value) => {
+              if (tab !== "models") setTab("models");
+              hub.models.onSearchChange(value);
+            }}
+          />
+        }
         publicNavigation={
           <>
             <span className={styles.brandLabel}>{hub.info.data?.docs_title || t("publicModelHub.header.title")}</span>
