@@ -12,6 +12,10 @@ inputs:
     description: "'true' to save a freshly built bridge under its cache key"
     required: false
     default: "false"
+  stale-cost-map:
+    description: "'true' to reuse a bridge with the same Rust inputs and an older embedded cost map"
+    required: false
+    default: "false"
 
 outputs:
   artifact:
@@ -24,25 +28,27 @@ runs:
     - name: Restore editable Rust bridge
       id: cache
       uses: ./.github/actions/restore-rust-bridge
+      with:
+        stale-cost-map: ${{ inputs.stale-cost-map }}
 
     - name: Set up Python
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache.outputs.restored != 'true'
       uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: "3.12"
 
     - name: Set up uv
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache.outputs.restored != 'true'
       uses: ./.github/actions/setup-uv-with-retries
       with:
         version: "0.10.9"
 
     - name: Cache the Rust build
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache.outputs.restored != 'true'
       uses: ./.github/actions/cache-cargo-build
 
     - name: Build editable Rust bridge
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache.outputs.restored != 'true'
       shell: bash
       env:
         CARGO_INCREMENTAL: "0"
@@ -55,7 +61,7 @@ runs:
         cp litellm/rust_bridge/_native.abi3.so rust-bridge-dist/litellm/rust_bridge/_native.abi3.so
 
     - name: Build the gateway wheel
-      if: steps.cache.outputs.cache-hit != 'true' && inputs.gateway == 'true'
+      if: steps.cache.outputs.restored != 'true' && inputs.gateway == 'true'
       shell: bash
       working-directory: litellm/packaging/litellm-proxy
       env:
@@ -79,7 +85,7 @@ runs:
         retention-days: 1
 
     - name: Save editable Rust bridge
-      if: steps.cache.outputs.cache-hit != 'true' && inputs.save-cache == 'true' && inputs.gateway == 'true'
+      if: steps.cache.outputs.restored != 'true' && inputs.save-cache == 'true' && inputs.gateway == 'true'
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: rust-bridge-dist

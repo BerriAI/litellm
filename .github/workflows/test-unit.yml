@@ -58,6 +58,14 @@ jobs:
           fi
           echo "gateway=${gateway}" | tee -a "$GITHUB_OUTPUT"
 
+      - name: Detect a cost-map-only change
+        id: cost-map-only
+        if: steps.changes.outputs.decision != 'skip' && github.event_name == 'pull_request'
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+        with:
+          category: cost-map-only
+
       - name: Build or restore the Rust bridge
         id: bridge
         if: steps.changes.outputs.decision != 'skip'
@@ -66,6 +74,7 @@ jobs:
         with:
           gateway: ${{ steps.scope.outputs.gateway }}
           save-cache: ${{ github.ref == 'refs/heads/main' }}
+          stale-cost-map: ${{ steps.cost-map-only.outputs.decision == 'run' }}
   plan:
     name: plan
     permissions:

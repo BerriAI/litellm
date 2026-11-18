@@ -19,6 +19,9 @@ jobs:
     name: rust-bridge
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       artifact: ${{ steps.bridge.outputs.artifact }}
     steps:
@@ -27,9 +30,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Detect a cost-map-only change
+        id: cost-map-only
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/detect-changes
+        with:
+          category: cost-map-only
+
       - name: Build or restore the Rust bridge
         id: bridge
         uses: ./.github/actions/build-rust-bridge
+        with:
+          stale-cost-map: ${{ steps.cost-map-only.outputs.decision == 'run' }}
 
   dashboard-build:
     name: dashboard-build
