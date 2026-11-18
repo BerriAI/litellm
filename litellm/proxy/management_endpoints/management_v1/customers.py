@@ -29,6 +29,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetGroups,
     BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
@@ -81,7 +82,7 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ErrorCode.TEMPLATE_NOT_IN_ORG: (
             422,
             "Template not in organization",
-            "Budget template must belong to the member's organization.",
+            "Budget template must belong to the selected member or organization budget group catalog.",
         ),
         ErrorCode.HAS_CHILDREN: (409, "Has children", "Delete the customer's children before deleting the parent."),
         ErrorCode.INVALID_TEMPLATE_NAMES: (
@@ -214,6 +215,42 @@ def get_user_api_key_cache() -> UserApiKeyCache:
 
 
 AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
+
+
+@router.get(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable organization budget groups and their revision. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_customer_organization_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(await hierarchy.transaction(lambda store: store.get_budget_groups(None)))
+
+
+@router.patch(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete organization budget group list with its expected_revision. "
+    "default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_customer_organization_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> BudgetGroups:
+    groups: Final = resolve(await hierarchy.transaction(lambda store: store.configure_templates(None, data, actor)))
+    members, aliases = resolve(
+        await hierarchy.transaction(
+            lambda store: store.organization_group_consumers(tuple(group.budget_id for group in groups.default_budgets))
+        )
+    )
+    await forget_customer_hierarchies(members, cache)
+    await forget_customer_organization_aliases(aliases, cache)
+    return groups
 
 
 @router.get(

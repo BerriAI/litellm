@@ -1,5 +1,5 @@
 import type { components } from "@/lib/http/schema";
-import type { Organization } from "./customerHierarchyForms";
+export type BudgetGroups = components["schemas"]["BudgetGroups"];
 import {
   defaultCustomerCapPolicy,
   limit,
@@ -7,7 +7,7 @@ import {
   type CustomerBudgetGroupFields,
 } from "./customerOrganizationForm";
 
-export const customerBudgetGroupRows = (organization: Organization): CustomerBudgetGroupFields[] =>
+export const customerBudgetGroupRows = (organization: BudgetGroups): CustomerBudgetGroupFields[] =>
   organization.default_budgets.map((group) => ({
     id: group.budget_id,
     name: group.name,
@@ -17,14 +17,16 @@ export const customerBudgetGroupRows = (organization: Organization): CustomerBud
   }));
 
 export function planCustomerBudgetGroups(
-  organization: Organization,
+  organization: BudgetGroups,
   groups: CustomerBudgetGroupFields[],
   defaultGroupId: string,
+  memberGroups = true,
 ) {
   const originals = customerBudgetGroupRows(organization);
   const validation = validateCustomerBudgetGroups(
     { groups, defaultGroupId },
     originals.map((group) => group.id),
+    memberGroups,
   );
   if (!validation.ok) return validation;
   const default_budgets = groups.map((group) => {
@@ -36,7 +38,7 @@ export function planCustomerBudgetGroups(
     return {
       ...(original ? { budget_id: original.id } : {}),
       name: group.name.trim(),
-      ...(group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
+      ...(memberGroups && group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
       ...(JSON.stringify(limits) !== JSON.stringify(previous) ? { budget_limits: limits } : {}),
     };
   });

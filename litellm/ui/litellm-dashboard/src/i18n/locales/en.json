@@ -20804,6 +20804,12 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "organizationGroups": {
+      "title": "Organization budget groups",
+      "help": "Create reusable budgets, then assign them to customer organizations.",
+      "placeholder": "Select a group or enter a dollar amount",
+      "custom": "Use this custom budget"
+    },
     "budgetGroups": {
       "atCap": "At the cap",
       "atCapLabel": "Group {{index}} at the cap",
@@ -21010,7 +21016,7 @@
       "alias": "Alias",
       "aliasPlaceholder": "Optional display name",
       "customerIdHelp": "Leave blank to generate an ID.",
-      "maxBudget": "Customer monthly budget (USD)",
+      "maxBudget": "Customer budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "tpm": "TPM limit",
       "rpm": "RPM limit",

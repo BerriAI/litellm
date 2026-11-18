@@ -9873,6 +9873,30 @@ export interface paths {
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
     };
+    "/management/v1/customer_organization_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Organization Budget Groups
+         * @description List reusable organization budget groups and their revision. Proxy admins only.
+         */
+        get: operations["get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure Customer Organization Budget Groups
+         * @description Save the complete organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch"];
+        trace?: never;
+    };
     "/management/v1/customer_organizations": {
         parameters: {
             query?: never;
@@ -29909,6 +29933,18 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** BudgetGroups */
+        BudgetGroups: {
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
+        };
         /** BudgetGroupsUpdate */
         BudgetGroupsUpdate: {
             /**
@@ -43072,6 +43108,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -43162,6 +43203,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43207,6 +43253,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Default Budget Template Id */
             default_budget_template_id?: string | null;
         };
@@ -43255,6 +43306,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43274,6 +43330,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -70094,6 +70155,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
                 };
             };
             /** @description Validation Error */
