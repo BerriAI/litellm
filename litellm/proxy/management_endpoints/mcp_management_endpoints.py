@@ -2003,7 +2003,7 @@ if MCP_AVAILABLE:
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
-            verbose_proxy_logger.debug("Error performing health check on server %s: %s", mcp_server.server_id, e)
+            verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
             mcp_server.status = "unknown"
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)
