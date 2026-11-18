@@ -4088,6 +4088,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/nvidia_nim/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Nim Models
+         * @description List upstream NIM models using a saved credential or submitted connection settings.
+         *
+         *     Requires a proxy administrator. Returns model IDs only, without asserting inference access,
+         *     pricing or capabilities. Upstream failures return unavailable so the UI can use its catalog.
+         */
+        post: operations["discover_nim_models_credentials_nvidia_nim_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/user_connections": {
         parameters: {
             query?: never;
@@ -4208,6 +4231,29 @@ export interface paths {
          * @description Begin a GitHub device flow for the calling user's connection to a per-user credential.
          */
         post: operations["start_user_connection_credentials__credential_name__user_connection_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/{provider}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Ollama Models
+         * @description List model IDs on the selected Ollama server for the Add Model picker.
+         *
+         *     Requires a proxy administrator. Uses a saved credential or explicitly submitted connection settings.
+         *     Returns unavailable when the server cannot list models so the UI can use its catalog.
+         */
+        post: operations["discover_ollama_models_credentials__provider__models_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -53703,6 +53749,32 @@ export interface components {
              */
             version: string | null;
         };
+        /** UpstreamModelDiscoveryConnection */
+        UpstreamModelDiscoveryConnection: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** UpstreamModelDiscoveryRequest */
+        UpstreamModelDiscoveryRequest: {
+            /** Credential Name */
+            credential_name?: string | null;
+            credential_values?: components["schemas"]["UpstreamModelDiscoveryConnection"] | null;
+        };
+        /** UpstreamModelDiscoveryResponse */
+        UpstreamModelDiscoveryResponse: {
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "unavailable";
+        };
         /** UsageChartPoint */
         UsageChartPoint: {
             /** Blocked */
@@ -62173,6 +62245,39 @@ export interface operations {
             };
         };
     };
+    discover_nim_models_credentials_nvidia_nim_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpstreamModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamModelDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_user_connections_credentials_user_connections_get: {
         parameters: {
             query?: never;
@@ -62380,6 +62485,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserConnectionStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_ollama_models_credentials__provider__models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: "ollama" | "ollama_chat";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpstreamModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamModelDiscoveryResponse"];
                 };
             };
             /** @description Validation Error */
