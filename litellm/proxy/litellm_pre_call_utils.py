@@ -5048,10 +5048,13 @@ def add_provider_specific_headers_to_request(
         value.startswith("Bearer ") for value in anthropic_oauth_credential_headers.values()
     )
     chatgpt_oauth_credential_headers: Final = dict(select_chatgpt_client_credential_headers(headers))
-    caller_oauth_providers: Final = (
-        ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_bearer_oauth else frozenset[str]()
+    request_fields: Final = _REQUEST_FIELDS.validate_python(data)
+    caller_api_key: Final = request_fields.get("api_key")
+    sends_anthropic_oauth: Final = sends_anthropic_bearer_oauth or (
+        isinstance(caller_api_key, str) and is_anthropic_oauth_key(caller_api_key)
     )
-    caller_api_key_providers: Final = _providers_on_caller_credentials(_REQUEST_FIELDS.validate_python(data))
+    caller_oauth_providers: Final = ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_oauth else frozenset[str]()
+    caller_api_key_providers: Final = _providers_on_caller_credentials(request_fields)
     caller_credential_providers: Final = caller_oauth_providers | caller_api_key_providers
     caller_profile: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER, caller_user_profile_id)
 
