@@ -1057,22 +1057,17 @@ def _copilot_rejects_the_model(request: httpx.Request) -> httpx.Response:
 
 
 def test_e2e_completion_model_not_supported_names_the_connected_github_account(per_user_credential):
-    from litellm.llms.openai.common_utils import OpenAIError
+    from openai import OpenAI
 
-    copilot_request: Final = httpx.Request("POST", "https://api.githubcopilot.com/chat/completions")
+    copilot_client: Final = OpenAI(
+        api_key="unused",
+        base_url="https://api.githubcopilot.com",
+        http_client=httpx.Client(transport=httpx.MockTransport(_copilot_rejects_the_model)),
+        max_retries=0,
+    )
     with (
         github_http(_user_responder()),
         _no_authenticator(),
-        patch(
-            "litellm.main.openai_chat_completions.completion",
-            side_effect=OpenAIError(
-                status_code=400,
-                message=str(_MODEL_NOT_SUPPORTED),
-                request=copilot_request,
-                response=httpx.Response(400, request=copilot_request),
-                body=_MODEL_NOT_SUPPORTED["error"],
-            ),
-        ),
         pytest.raises(BadRequestError) as caught,
     ):
         litellm.completion(
@@ -1080,6 +1075,7 @@ def test_e2e_completion_model_not_supported_names_the_connected_github_account(p
             messages=[{"role": "user", "content": "hi"}],
             litellm_credential_name="copilot-cred",
             secret_fields=_alice_secret_fields(),
+            client=copilot_client,
         )
     assert _ALICE_ACCOUNT in caught.value.message, caught.value.message
 
