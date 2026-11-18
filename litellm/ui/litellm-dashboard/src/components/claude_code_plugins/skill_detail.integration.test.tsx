@@ -81,6 +81,65 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("exports fresh history across all pages without loading them into the table", async () => {
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  URL.createObjectURL = vi.fn(() => "blob:csv");
+  URL.revokeObjectURL = vi.fn();
+  renderHub();
+  skillRequestMock.mockResolvedValueOnce(Response.json(page([event])));
+  fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
+  await screen.findByRole("cell", { name: event.user_email });
+  const pending = Promise.withResolvers<Response>();
+  skillRequestMock.mockReturnValueOnce(pending.promise);
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  expect(await screen.findByRole("button", { name: "Exporting..." })).toBeDisabled();
+  skillRequestMock.mockResolvedValueOnce(
+    Response.json(page([{ ...event, id: "2", user_email: "second@example.test" }])),
+  );
+  pending.resolve(Response.json(page([event], 2, event.id)));
+  await waitFor(() => expect(click).toHaveBeenCalledOnce());
+  expect(skillRequestMock).toHaveBeenNthCalledWith(
+    2,
+    downloadsUrl.replace("limit=25", "limit=100"),
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer dashboard-token" }),
+    }),
+  );
+  expect(skillRequestMock).toHaveBeenNthCalledWith(
+    3,
+    `${downloadsUrl.replace("limit=25", "limit=100")}&cursor=${event.id}`,
+    expect.anything(),
+  );
+  expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe("my-skill.csv");
+  const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+  const content = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsText(blob);
+  });
+  expect(content.split("\r\n")).toEqual([
+    "downloaded_at,downloader,key,team,version,authenticated,user_id,user_email,team_id,id,digest",
+    `2026-10-01T10:00:00.000Z,reader@example.test,development,Engineering,1.2.0,true,reader-id,reader@example.test,team-id,${event.id},${digest}`,
+    `2026-10-01T10:00:00.000Z,second@example.test,development,Engineering,1.2.0,true,reader-id,second@example.test,team-id,2,${digest}`,
+  ]);
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:csv");
+  expect(screen.queryByRole("cell", { name: "second@example.test" })).not.toBeInTheDocument();
+});
+
+it("does not produce a partial CSV when a later page fails and allows retry", async () => {
+  URL.createObjectURL = vi.fn(() => "blob:csv");
+  renderHub();
+  skillRequestMock.mockResolvedValueOnce(Response.json(page()));
+  fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
+  await screen.findByText("No authenticated download history yet.");
+  skillRequestMock.mockResolvedValueOnce(Response.json(page([event], 2, event.id)));
+  skillRequestMock.mockResolvedValueOnce(Response.json({ detail: "Unavailable" }, { status: 500 }));
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not export download history. Try again.");
+  expect(URL.createObjectURL).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Download CSV" })).toBeEnabled();
+});
+
 it.each(["legacy", "portable"])(
   "retries a private %s ZIP download through the configured auth header and local route",
   async (kind) => {

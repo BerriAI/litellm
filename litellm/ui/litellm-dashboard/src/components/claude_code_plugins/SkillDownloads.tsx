@@ -1,10 +1,12 @@
-import { useInfiniteQuery, type QueryFunctionContext } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, type QueryFunctionContext } from "@tanstack/react-query";
+import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Plugin, PluginDownloadsResponse } from "./types";
+import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse } from "./types";
+import { buildSkillDownloadsCsv } from "./skillDownloadsCsv";
 
 export const skillDownloadsQueryKey = (skill: Pick<Plugin, "id" | "name">, accessToken?: string | null) =>
   ["skill-downloads", skill.id, skill.name, accessToken] as const;
@@ -16,6 +18,21 @@ interface SkillDownloadsProps {
 
 export function SkillDownloads({ skill, accessToken }: SkillDownloadsProps) {
   const { t, i18n } = useTranslation();
+  const exportCsv = useMutation({
+    mutationFn: async () => {
+      const events: PluginDownloadEvent[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: PluginDownloadsResponse = await apiClient.get<PluginDownloadsResponse>(
+          `/skill-hub/skills/${encodeURIComponent(skill.name)}/downloads`,
+          { accessToken, query: { limit: 100, cursor } },
+        );
+        events.push(...page.downloads);
+        cursor = page.next_cursor;
+      } while (cursor !== null);
+      downloadBlob(new Blob([buildSkillDownloadsCsv(events)], { type: "text/csv;charset=utf-8" }), `${skill.name}.csv`);
+    },
+  });
   const queryOptions = {
     queryKey: skillDownloadsQueryKey(skill, accessToken),
     queryFn: ({ pageParam, signal }: QueryFunctionContext<ReturnType<typeof skillDownloadsQueryKey>, string | null>) =>
@@ -48,11 +65,25 @@ export function SkillDownloads({ skill, accessToken }: SkillDownloadsProps) {
             {t("claudeCodePlugins.skillDetail.downloads.attributionNote")}
           </p>
         </div>
-        <Button variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>
-          <RefreshCw className="size-4" />
-          {t("claudeCodePlugins.skillDetail.downloads.refresh")}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" disabled={exportCsv.isPending} onClick={() => exportCsv.mutate()}>
+            {t(
+              exportCsv.isPending
+                ? "claudeCodePlugins.skillDetail.downloads.exporting"
+                : "claudeCodePlugins.skillDetail.downloads.downloadCsv",
+            )}
+          </Button>
+          <Button variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>
+            <RefreshCw className="size-4" />
+            {t("claudeCodePlugins.skillDetail.downloads.refresh")}
+          </Button>
+        </div>
       </div>
+      {exportCsv.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {t("claudeCodePlugins.skillDetail.downloads.exportFailed")}
+        </p>
+      )}
       {data && (
         <dl className="flex flex-wrap gap-x-8 gap-y-4">
           <div>
