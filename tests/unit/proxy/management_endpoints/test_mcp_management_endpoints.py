@@ -47,7 +47,8 @@ from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServ
 from litellm.proxy.utils import ProxyLogging
 from litellm.rust_bridge._native import RustOrganizationRepository, RustTeamRepository, RustUserRepository
 from litellm.types.mcp import MCPAuth, MCPCredentials
-from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPServer, PinnedMCPTool
+from tests.unit.proxy.mcp_prisma_fake import FakeMcpPrisma
 from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
 
 
@@ -5537,11 +5538,13 @@ class TestMCPApprovalWorkflow:
         mock_manager = MagicMock()
         mock_manager.invalidate_byom_submitted_servers_cache = AsyncMock()
         mock_manager.reload_servers_from_database = AsyncMock()
+        prisma: Final = MagicMock()
+        prisma.writer_db.litellm_mcpauthprofiletable.find_many = AsyncMock(return_value=[])
 
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-                return_value=MagicMock(),
+                return_value=prisma,
             ),
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
@@ -11873,3 +11876,323 @@ async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
             assert posted["application_type"] == application_type
     finally:
         mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
+
+
+@dataclass(frozen=True)
+class _ProfileApi:
+    prisma: FakeMcpPrisma
+    app: FastAPI
+
+    def as_role(self, role: LitellmUserRoles, team_id: str | None = None) -> TestClient:
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        self.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_role=role, user_id="caller", api_key="k", team_id=team_id
+        )
+        return TestClient(self.app)
+
+
+@pytest.fixture
+def profile_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ProfileApi]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.catalog import CatalogSnapshots
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager as manager
+
+    prisma: Final = FakeMcpPrisma()
+    monkeypatch.setenv("LITELLM_SALT_KEY", "profile-api-test-salt")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(manager, "catalog", CatalogSnapshots(manager))
+    monkeypatch.setattr(manager, "registry", {})
+    monkeypatch.setattr(manager, "config_mcp_servers", {})
+    monkeypatch.setattr(manager, "tool_name_to_mcp_server_name_mapping", {})
+    app: Final = FastAPI()
+    app.include_router(mgmt_endpoints.router)
+    yield _ProfileApi(prisma, app)
+
+
+def _api_profile(profile_id: object, **overrides: object) -> dict[str, object]:
+    return {
+        "id": profile_id,
+        "auth_type": "oauth2",
+        "oauth2_flow": "client_credentials",
+        "client_id": "bot-app",
+        "client_secret": "bot-secret-value",
+        "token_url": "https://auth.example/token",
+        **overrides,
+    }
+
+
+def _server_body(server_id: str, *profiles: dict[str, object]) -> dict[str, object]:
+    body: Final[dict[str, object]] = {
+        "server_id": server_id,
+        "server_name": server_id,
+        "url": f"https://mcp.example/{server_id}",
+        "transport": "http",
+    }
+    return {**body, "additional_auth": list(profiles)} if profiles else body
+
+
+def test_profile_writes_answer_409_for_a_collision_and_400_for_a_bad_profile(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    assert admin.post("/v1/mcp/server", json=_server_body("analytics", _api_profile("ana-bots"))).status_code == 201
+
+    collision: Final = admin.post("/v1/mcp/server", json=_server_body("github", _api_profile("ANA-Bots")))
+
+    assert (collision.status_code, collision.json()) == (
+        409,
+        {
+            "detail": {
+                "error": "Profile id 'ANA-Bots' of MCP server 'github' collides with profile id 'ana-bots' of MCP "
+                "server 'analytics'. Profile ids are unique across all servers, ignoring case."
+            }
+        },
+    )
+    assert [row["server_id"] for row in profile_api.prisma.servers] == ["analytics"]
+
+
+_CLIENT_CREDENTIALS: Final[dict[str, object]] = {
+    "auth_type": "oauth2",
+    "oauth2_flow": "client_credentials",
+    "client_id": "bot-app",
+    "client_secret": "bot-secret",
+    "token_url": "https://auth.example/token",
+}
+
+
+@pytest.mark.parametrize(
+    ("role", "path"),
+    [
+        pytest.param(LitellmUserRoles.PROXY_ADMIN, "/v1/mcp/server", id="create"),
+        pytest.param(LitellmUserRoles.INTERNAL_USER, "/v1/mcp/server/register", id="register"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("credential", "missing"),
+    [
+        ({"auth_type": "bearer_token"}, "authentication_token"),
+        ({"auth_type": "bearer_token", "authentication_token": ""}, "authentication_token"),
+        ({**_CLIENT_CREDENTIALS, "client_id": None}, "client_id"),
+        ({**_CLIENT_CREDENTIALS, "client_secret": ""}, "client_secret"),
+        ({**_CLIENT_CREDENTIALS, "token_url": None}, "token_url"),
+    ],
+    ids=["static-omitted", "static-empty", "no-client-id", "empty-client-secret", "no-token-url"],
+)
+def test_a_profile_without_its_credential_is_refused_with_400_and_stores_nothing(
+    profile_api: _ProfileApi, role: LitellmUserRoles, path: str, credential: dict[str, object], missing: str
+) -> None:
+    caller: Final = profile_api.as_role(role, team_id="t1")
+
+    response: Final = caller.post(path, json=_server_body("tickets", {"id": "tickets-bots", **credential}))
+
+    assert (response.status_code, response.json()) == (
+        400,
+        {
+            "detail": {
+                "error": f"additional_auth[0] of MCP server 'tickets' is invalid. profile 'tickets-bots' needs {missing}"
+            }
+        },
+    )
+    assert (profile_api.prisma.servers, profile_api.prisma.profiles) == ([], [])
+
+
+@pytest.mark.parametrize(
+    "bad_profile",
+    [
+        pytest.param(_api_profile(""), id="empty-id"),
+        pytest.param(_api_profile("x" * 65), id="65-chars"),
+        pytest.param(_api_profile("a b"), id="space"),
+        pytest.param(_api_profile("bötS"), id="non-ascii"),
+        pytest.param(_api_profile("İ-bot"), id="turkish-dotted-i"),
+        pytest.param(_api_profile("DEFAULT"), id="reserved-upper"),
+        pytest.param(_api_profile("default"), id="reserved"),
+        pytest.param(_api_profile(1), id="integer-id"),
+        pytest.param(_api_profile("p1", oauth2_flow="authorization_code"), id="authorization-code"),
+        pytest.param(
+            {k: v for k, v in _api_profile("p1").items() if k != "oauth2_flow"}, id="flow-omitted-machine-shape"
+        ),
+        pytest.param(
+            {
+                "id": "p1",
+                "auth_type": "oauth2",
+                "client_id": "x",
+                "authorization_url": "https://auth.example/authorize",
+            },
+            id="flow-omitted-interactive-shape",
+        ),
+        pytest.param({"id": "p1", "auth_type": "oauth_delegate"}, id="delegate"),
+        pytest.param({"id": "p1", "auth_type": "oauth2_token_exchange"}, id="token-exchange"),
+    ],
+)
+@pytest.mark.parametrize("verb", ["post"])
+def test_a_profile_that_needs_a_person_or_has_a_bad_id_is_refused_with_400_before_any_write(
+    profile_api: _ProfileApi, bad_profile: dict[str, object], verb: str
+) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    admin.post("/v1/mcp/server", json=_server_body("existing"))
+    before: Final = (list(profile_api.prisma.servers), list(profile_api.prisma.profiles))
+
+    response: Final = (
+        admin.post("/v1/mcp/server", json=_server_body("analytics", _api_profile("good"), bad_profile))
+        if verb == "post"
+        else admin.put(
+            "/v1/mcp/server", json={"server_id": "existing", "additional_auth": [_api_profile("good"), bad_profile]}
+        )
+    )
+
+    assert response.status_code == 400, response.text
+    assert (profile_api.prisma.servers, profile_api.prisma.profiles) == before
+
+
+def test_a_server_without_profiles_keeps_its_main_statuses_and_body_shape(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+
+    created: Final = admin.post("/v1/mcp/server", json=_server_body("plain"))
+    duplicate: Final = admin.post("/v1/mcp/server", json=_server_body("plain"))
+    edited: Final = admin.put("/v1/mcp/server", json={"server_id": "plain", "description": "docs"})
+    listed: Final = admin.get("/v1/mcp/server")
+    single: Final = admin.get("/v1/mcp/server/plain")
+
+    assert (created.status_code, duplicate.status_code, edited.status_code) == (201, 400, 202)
+    assert duplicate.json() == {"detail": {"error": "MCP Server with id plain already exists. Cannot create another."}}
+    for body in (created.json(), edited.json(), listed.json()[0], single.json()):
+        assert "additional_auth" not in body
+
+
+def test_non_admin_views_never_carry_profiles(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    admin.post("/v1/mcp/server", json={**_server_body("analytics", _api_profile("ana-bots")), "allow_all_keys": True})
+    member: Final = profile_api.as_role(LitellmUserRoles.INTERNAL_USER, team_id="t1")
+
+    listed: Final = member.get("/v1/mcp/server")
+
+    assert listed.status_code == 200, listed.text
+    assert [("additional_auth" in server) for server in listed.json()] == [False]
+
+
+@pytest.mark.parametrize("yaml_name", ["yaml", "proposal"], ids=["other-name", "named-like-the-pending-server"])
+def test_submission_and_approval_refuse_a_colliding_profile_and_keep_the_row_pending(
+    profile_api: _ProfileApi, yaml_name: str
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    admin.post("/v1/mcp/server", json=_server_body("analytics", _api_profile("ana-bots")))
+    member: Final = profile_api.as_role(LitellmUserRoles.INTERNAL_USER, team_id="t1")
+
+    colliding: Final = member.post("/v1/mcp/server/register", json=_server_body("proposal", _api_profile("ANA-BOTS")))
+    submitted: Final = member.post("/v1/mcp/server/register", json=_server_body("proposal", _api_profile("team-bots")))
+    global_mcp_server_manager.config_mcp_servers["yaml"] = MCPServer(
+        server_id="yaml",
+        name=yaml_name,
+        server_name=yaml_name,
+        transport=MCPTransport.http,
+        additional_auth=(MCPAuthProfile(id="Team-Bots", auth_type="api_key", authentication_token="k"),),
+    )
+    approval: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN).put("/v1/mcp/server/proposal/approve")
+
+    assert (colliding.status_code, submitted.status_code, approval.status_code) == (409, 201, 409)
+    assert [row["approval_status"] for row in profile_api.prisma.servers if row["server_id"] == "proposal"] == [
+        "pending_review"
+    ]
+
+
+def test_approval_rechecks_the_written_profiles_when_the_reader_lags(profile_api: _ProfileApi) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    member: Final = profile_api.as_role(LitellmUserRoles.INTERNAL_USER, team_id="t1")
+    registered: Final = member.post("/v1/mcp/server/register", json=_server_body("proposal", _api_profile("team-bots")))
+    assert registered.status_code == 201, registered.text
+    global_mcp_server_manager.config_mcp_servers["yaml"] = MCPServer(
+        server_id="yaml",
+        name="yaml",
+        transport=MCPTransport.http,
+        additional_auth=(
+            MCPAuthProfile.model_validate({"id": "Team-Bots", "auth_type": "api_key", "authentication_token": "k"}),
+        ),
+    )
+    profile_api.prisma.lag_profile_reads()
+
+    approval: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN).put("/v1/mcp/server/proposal/approve")
+
+    assert approval.status_code == 409, approval.text
+    assert [row["approval_status"] for row in profile_api.prisma.servers] == ["pending_review"]
+
+
+def test_approval_is_refused_while_the_profile_table_cannot_be_read(profile_api: _ProfileApi) -> None:
+    member: Final = profile_api.as_role(LitellmUserRoles.INTERNAL_USER, team_id="t1")
+    assert member.post("/v1/mcp/server/register", json=_server_body("proposal")).status_code == 201
+
+    async def unreadable(**_: object) -> list[object]:
+        raise ConnectionError("database is restarting")
+
+    profile_api.prisma.writer_db.litellm_mcpauthprofiletable.find_many = unreadable
+
+    with pytest.raises(ConnectionError):
+        profile_api.as_role(LitellmUserRoles.PROXY_ADMIN).put("/v1/mcp/server/proposal/approve")
+    assert [row["approval_status"] for row in profile_api.prisma.servers] == ["pending_review"]
+
+
+def test_a_submitter_is_not_told_which_server_owns_a_colliding_profile_id(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+    assert admin.post("/v1/mcp/server", json=_server_body("analytics", _api_profile("ana-bots"))).status_code == 201
+    member: Final = profile_api.as_role(LitellmUserRoles.INTERNAL_USER, team_id="t1")
+
+    colliding: Final = member.post("/v1/mcp/server/register", json=_server_body("proposal", _api_profile("ANA-BOTS")))
+
+    assert (colliding.status_code, colliding.json()) == (
+        409,
+        {"detail": {"error": "Profile id 'ANA-BOTS' is already in use. Profile ids are unique, ignoring case."}},
+    )
+
+
+def test_submission_review_responses_carry_the_stored_profiles_without_secrets(profile_api: _ProfileApi) -> None:
+    from litellm.proxy._types import MCPSubmissionsSummary
+
+    member: Final = profile_api.as_role(LitellmUserRoles.INTERNAL_USER, team_id="t1")
+    registered: Final = member.post("/v1/mcp/server/register", json=_server_body("proposal", _api_profile("team-bots")))
+    assert registered.status_code == 201, registered.text
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+
+    listed: Final = admin.get("/v1/mcp/server/submissions")
+    rejected: Final = admin.put("/v1/mcp/server/proposal/reject", json={"review_notes": "no"})
+    approved: Final = admin.put("/v1/mcp/server/proposal/approve")
+    viewed_read_only: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY).get(
+        "/v1/mcp/server/submissions"
+    )
+
+    expected: Final = (
+        MCPAuthProfile.model_validate(
+            {
+                "id": "team-bots",
+                "auth_type": "oauth2",
+                "oauth2_flow": "client_credentials",
+                "token_url": "https://auth.example/token",
+            }
+        ),
+    )
+    assert [response.status_code for response in (listed, rejected, approved)] == [200, 200, 200]
+    assert [
+        MCPSubmissionsSummary.model_validate_json(listed.content).items[0].additional_auth,
+        LiteLLM_MCPServerTable.model_validate_json(rejected.content).additional_auth,
+        LiteLLM_MCPServerTable.model_validate_json(approved.content).additional_auth,
+    ] == [expected] * 3
+    secrets: Final = ("bot-secret-value", "bot-app")
+    assert [r.status_code for r in (listed, rejected, approved) if any(s in r.text for s in secrets)] == []
+    assert MCPSubmissionsSummary.model_validate_json(viewed_read_only.content).items[0].additional_auth is None
+
+
+def test_the_import_route_still_imports_a_connector_through_the_one_write_path(profile_api: _ProfileApi) -> None:
+    admin: Final = profile_api.as_role(LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = admin.post(
+        "/v1/mcp/server/import", json={"mcpServers": {"docs": {"type": "http", "url": "https://docs.example/mcp"}}}
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["name"] for item in response.json()["imported"]] == ["docs"]
+
+
+def test_the_server_response_schema_stays_an_object_with_its_properties() -> None:
+    schema: Final = LiteLLM_MCPServerTable.model_json_schema(mode="serialization")
+
+    assert {"server_id", "additional_auth"} <= set(schema["properties"])

@@ -177,6 +177,7 @@ if MCP_AVAILABLE:
         MCPUserEnvVarsRequest,
         MCPUserEnvVarsStatus,
         NewMCPServerRequest,
+        NewMCPServerWithProfilesRequest,
         RejectMCPServerRequest,
         SpecialMCPServerName,
         UpdateMCPServerRequest,
@@ -209,6 +210,17 @@ if MCP_AVAILABLE:
         convert_connector_entries,
     )
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+    from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles, written_profiles
+    from litellm.proxy.mcp_server.auth_profiles import (
+        AuthProfileRefusal,
+        ValidatedProfiles,
+        describe_refusal,
+        describe_to_submitter,
+        profile_host_refusal,
+        refusal_http_status,
+        stored_profile_ids,
+        validate_auth_profiles,
+    )
     from litellm.proxy.mcp_server.contracts import TargetCatalog
     from litellm.proxy.mcp_server.db import (
         McpIdentifierConflict,
@@ -337,6 +349,16 @@ if MCP_AVAILABLE:
             f"(server_id={conflict.server_id}). "
             "MCP server names and aliases must be unique, case-insensitive."
         )
+
+    def _submitted_profiles(payload: NewMCPServerRequest) -> SubmittedProfiles | None:
+        if not isinstance(payload, NewMCPServerWithProfilesRequest):
+            return None
+        if "additional_auth" not in payload.model_fields_set:
+            return None
+        return SubmittedProfiles(payload.additional_auth)
+
+    def raise_auth_profile_refusal(refusal: AuthProfileRefusal) -> NoReturn:
+        raise HTTPException(status_code=refusal_http_status(refusal), detail={"error": describe_refusal(refusal)})
 
     def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
         raise HTTPException(
@@ -697,11 +719,13 @@ if MCP_AVAILABLE:
         is_public: Final = global_mcp_server_manager.is_mcp_server_public(redacted_server.server_id)
         return redacted_server.model_copy(
             update={
+                "additional_auth": tuple(profile.without_secrets() for profile in redacted_server.additional_auth or ())
+                or None,
                 "mcp_info": {
                     **(redacted_server.mcp_info or {}),
                     "is_public": is_public,
                     "is_public_explicit": is_public and redacted_server.server_id in (litellm.public_mcp_servers or ()),
-                }
+                },
             }
         )
 
@@ -810,6 +834,7 @@ if MCP_AVAILABLE:
         """
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.additional_auth = None
         sanitized.pinned_tools = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
@@ -855,6 +880,7 @@ if MCP_AVAILABLE:
 
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.additional_auth = None
         sanitized.pinned_tools = None
 
         # Remove potentially sensitive config + identity fields.
@@ -1596,7 +1622,7 @@ if MCP_AVAILABLE:
     )
     @management_endpoint_wrapper
     async def register_mcp_server(
-        payload: NewMCPServerRequest,
+        payload: NewMCPServerWithProfilesRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
@@ -1651,6 +1677,7 @@ if MCP_AVAILABLE:
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or user_api_key_dict.team_id,
+                submitted_profiles=_submitted_profiles(payload),
             )
         except Exception as e:
             verbose_proxy_logger.exception("Error registering mcp server: %s", e)
@@ -1660,6 +1687,8 @@ if MCP_AVAILABLE:
             )
         if isinstance(new_mcp_server, McpIdentifierConflict):
             raise_mcp_identifier_conflict(new_mcp_server)
+        if isinstance(new_mcp_server, AuthProfileRefusal):
+            raise HTTPException(refusal_http_status(new_mcp_server), {"error": describe_to_submitter(new_mcp_server)})
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -1870,6 +1899,21 @@ if MCP_AVAILABLE:
                 detail={"error": "MCP server is already active."},
             )
 
+        submitted_profiles: Final = await written_profiles(prisma_client, server_id)
+        pending_profiles: Final = (
+            profile_host_refusal(
+                server_id, transport=existing.transport, is_byok=existing.is_byok, spec_path=existing.spec_path
+            )
+            if submitted_profiles
+            else None
+        ) or validate_auth_profiles(
+            {server_id: [profile.model_dump(mode="json") for profile in submitted_profiles]},
+            (),
+            config_claims=stored_profile_ids(global_mcp_server_manager.config_mcp_servers.values()),
+        )
+        if not isinstance(pending_profiles, ValidatedProfiles):
+            raise_auth_profile_refusal(pending_profiles)
+
         approved: Final = await approve_mcp_server(
             prisma_client,
             server_id,
@@ -2026,7 +2070,7 @@ if MCP_AVAILABLE:
     )
     @management_endpoint_wrapper
     async def add_mcp_server(
-        payload: NewMCPServerRequest,
+        payload: NewMCPServerWithProfilesRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         litellm_changed_by: str | None = Header(
             None,
@@ -2089,6 +2133,7 @@ if MCP_AVAILABLE:
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                submitted_profiles=_submitted_profiles(payload),
             )
         except Exception as e:
             verbose_proxy_logger.exception("Error creating mcp server: %s", e)
@@ -2098,6 +2143,8 @@ if MCP_AVAILABLE:
             )
         if isinstance(new_mcp_server, McpIdentifierConflict):
             raise_mcp_identifier_conflict(new_mcp_server)
+        if isinstance(new_mcp_server, AuthProfileRefusal):
+            raise_auth_profile_refusal(new_mcp_server)
 
         warn_if_id_jag_server_outruns_sso(new_mcp_server.server_id, new_mcp_server.auth_type)
 

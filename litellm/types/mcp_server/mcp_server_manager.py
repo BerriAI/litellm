@@ -143,8 +143,45 @@ class MCPAuthProfile(LiteLLMBaseModel):
             raise ValueError("oauth2_flow is only valid for an oauth2 profile")
         return self
 
+    @model_serializer(mode="wrap")
+    def _omit_absent_secrets(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202  # a return annotation collapses the OpenAPI response schema
+        return {
+            key: value
+            for key, value in _FIELD_DUMP.validate_python(handler(self)).items()
+            if value is not None or key not in _OMITTED_WHEN_ABSENT
+        }
+
+    def without_secrets(self) -> "MCPAuthProfile":
+        return self.model_copy(update={"client_id": None, "client_secret": None, "authentication_token": None})
+
+
+def _stored_credentials(value: object) -> Mapping[str, object]:
+    decoded: Final = json.loads(value) if isinstance(value, str) else value
+    return _STORED_CREDENTIALS.validate_python(decoded or {})
+
+
+def auth_profile_from_row(row: Mapping[str, object]) -> MCPAuthProfile:
+    credentials: Final = _stored_credentials(row.get("credentials"))
+    scopes: Final = row.get("scopes")
+    return MCPAuthProfile.model_validate(
+        {
+            "id": row["profile_id"],
+            "auth_type": row["auth_type"],
+            "oauth2_flow": row.get("oauth2_flow"),
+            "token_url": row.get("token_url"),
+            "scopes": _SCOPES.validate_python(scopes) if scopes else None,
+            "client_id": credentials.get("client_id"),
+            "client_secret": credentials.get("client_secret"),
+            "authentication_token": credentials.get("auth_value"),
+            "token_endpoint_auth_method": credentials.get("token_endpoint_auth_method"),
+        }
+    )
+
 
 _FIELD_DUMP: Final = TypeAdapter(Mapping[str, object])
+_OMITTED_WHEN_ABSENT: Final = frozenset({"client_secret", "authentication_token"})
+_STORED_CREDENTIALS: Final = TypeAdapter(Mapping[str, object])
+_SCOPES: Final = TypeAdapter(tuple[str, ...])
 
 
 def omit_empty_additional_auth(

@@ -1662,6 +1662,15 @@ from litellm.models.mcp_server import (  # noqa: E402
 )
 
 
+class NewMCPServerWithProfilesRequest(NewMCPServerRequest):  # frozen-ok: endpoints stamp fields on it
+    additional_auth: Sequence[Mapping[str, object]] | None = Field(
+        default=None,
+        exclude=True,
+        description="Extra upstream auth profiles. Each has an id and its own auth_type, oauth2_flow "
+        "(client_credentials) and credentials.",
+    )
+
+
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
     mcp_server_ids: list[str]
 

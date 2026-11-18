@@ -1011,7 +1011,7 @@ class TestRotateCredentials:
     """Test rotate_mcp_server_credentials_master_key decrypts before re-encrypting."""
 
     @pytest.mark.asyncio
-    async def test_rotation_decrypts_then_reencrypts(self):
+    async def test_rotation_decrypts_then_reencrypts(self) -> None:
         """Key rotation should decrypt with old key then encrypt with new key."""
         from litellm.proxy.mcp_server.db import (
             rotate_mcp_server_credentials_master_key,
@@ -1031,6 +1031,7 @@ class TestRotateCredentials:
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
         mock_prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(return_value=[])
+        mock_prisma.writer_db.litellm_mcpauthprofiletable.find_many = AsyncMock(return_value=[])
 
         with (
             patch(
@@ -1060,7 +1061,7 @@ class TestRotateCredentials:
         assert stored_creds["aws_region_name"] == "us-east-1"
 
     @pytest.mark.asyncio
-    async def test_rotation_reencrypts_global_env_vars(self):
+    async def test_rotation_reencrypts_global_env_vars(self) -> None:
         """Global env var values are re-encrypted under the new key; user-scope
         placeholders are left untouched."""
         from litellm.proxy.mcp_server.db import (
@@ -1080,6 +1081,7 @@ class TestRotateCredentials:
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
         mock_prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(return_value=[])
+        mock_prisma.writer_db.litellm_mcpauthprofiletable.find_many = AsyncMock(return_value=[])
 
         with (
             patch(
