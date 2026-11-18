@@ -524,6 +524,20 @@ async def test_adapter_path_rejects_an_invalid_config_before_calling_upstream(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("field", ["temperature", "max_output_tokens"])
+async def test_adapter_path_refuses_a_long_malformed_number_string_without_stalling(
+    _httpx_transport: None, field: str
+) -> None:
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{_CHAT_UPSTREAM}/chat/completions").mock(side_effect=_chat_reply)
+        with pytest.raises(litellm.BadRequestError):
+            await _call_entrypoint("agenerate_content", {"generation_config": {field: "1" * 50_000 + "x"}})
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("output_cap", _OUTPUT_CAP_SPELLINGS)
 async def test_native_gemini_request_carries_the_output_cap_in_every_spelling(
     _httpx_transport: None, output_cap: Mapping[str, object]

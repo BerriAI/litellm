@@ -172,7 +172,7 @@ def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object 
 
 
 _INTEGER_STRING: Final = re.compile(r"[+-]?\d+")
-_NUMBER_STRING: Final = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
+_NUMBER_STRING: Final = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 
 
 def _google_int(value: object) -> object:
