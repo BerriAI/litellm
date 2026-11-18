@@ -1,4 +1,6 @@
+import asyncio
 import json
+import queue
 from types import NoneType
 from typing import Final
 
@@ -7,6 +9,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
@@ -18,6 +21,7 @@ from litellm.utils import ProviderConfigManager
 FOUNDRY_PROJECT_BASE = "https://res.services.ai.azure.com/api/projects/proj"
 FOUNDRY_RESPONSES_URL = f"{FOUNDRY_PROJECT_BASE}/openai/v1/responses"
 SERVERLESS_BASE = "https://endpoint.eastus.models.ai.azure.com"
+RESOURCE_V1_BASE = "https://res.services.ai.azure.com/openai/v1"
 WEATHER_TOOL = {
     "type": "function",
     "name": "get_weather",
@@ -118,15 +122,15 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
     [
         (FOUNDRY_PROJECT_BASE, AzureAIResponsesAPIConfig),
         (f"{FOUNDRY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
-        ("https://res.services.ai.azure.com/openai/v1", NoneType),
-        ("https://res.openai.azure.com/openai/v1", NoneType),
+        (RESOURCE_V1_BASE, AzureAIResponsesAPIConfig),
+        ("https://res.openai.azure.com/openai/v1", AzureAIResponsesAPIConfig),
         ("https://res.cognitiveservices.azure.com/openai/v1", NoneType),
         ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", NoneType),
         (SERVERLESS_BASE, NoneType),
     ],
 )
 @pytest.mark.parametrize("model", ["model_router/model-router", "model-router"])
-def test_model_router_calls_responses_natively_only_on_a_foundry_project(model, api_base, expected_config):
+def test_model_router_calls_responses_natively_on_a_foundry_project_or_resource(model, api_base, expected_config):
     config: Final = ProviderConfigManager.get_provider_responses_api_config(
         provider="azure_ai", model=model, api_base=api_base
     )
@@ -318,7 +322,14 @@ async def test_router_aresponses_sends_bare_deployment_name(model, api_base, exp
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_aresponses_sends_a_model_router_to_the_project_responses_api_by_deployment_name():
+@pytest.mark.parametrize(
+    "api_base,expected_url",
+    [
+        (f"{FOUNDRY_PROJECT_BASE}/openai/v1", FOUNDRY_RESPONSES_URL),
+        (RESOURCE_V1_BASE, f"{RESOURCE_V1_BASE}/responses"),
+    ],
+)
+async def test_aresponses_sends_a_model_router_to_the_foundry_responses_api_by_deployment_name(api_base, expected_url):
     route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
     )
@@ -326,12 +337,12 @@ async def test_aresponses_sends_a_model_router_to_the_project_responses_api_by_d
     response: Final = await litellm.aresponses(
         model="azure_ai/model_router/model-router",
         input="What is the weather in SF?",
-        api_base=f"{FOUNDRY_PROJECT_BASE}/openai/v1",
+        api_base=api_base,
         api_key="fake-key",
     )
 
     request: Final = route.calls.last.request
-    assert str(request.url) == FOUNDRY_RESPONSES_URL
+    assert str(request.url) == expected_url
     assert request.headers["api-key"] == "fake-key"
     assert json.loads(request.content) == {"model": "model-router", "input": "What is the weather in SF?"}
     assert response.model == "FW-GLM-5.3-Flash"
@@ -409,6 +420,149 @@ async def test_a_model_router_drops_only_a_tool_choice_naming_a_custom_tool(tool
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_a_model_router_drops_tool_choice_with_its_last_custom_tool():
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="Fix the typo in README.md",
+        tools=[CUSTOM_TOOL],
+        tool_choice="required",
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert "tools" not in sent
+    assert "tool_choice" not in sent
+
+
+NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "editor",
+    "description": "Edit files",
+    "tools": [WEATHER_TOOL, CUSTOM_TOOL],
+}
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "tools,sent_tools",
+    [
+        ([NAMESPACE_TOOL], [{**NAMESPACE_TOOL, "tools": [WEATHER_TOOL]}]),
+        ([WEATHER_TOOL, {**NAMESPACE_TOOL, "tools": [CUSTOM_TOOL]}], [WEATHER_TOOL]),
+    ],
+)
+async def test_a_model_router_drops_custom_tools_inside_a_namespace(tools, sent_tools):
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="What is the weather in SF?",
+        tools=tools,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content)["tools"] == sent_tools
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "allowed,sent_tool_choice",
+    [
+        (
+            [{"type": "custom", "name": "apply_patch"}, {"type": "function", "name": "get_weather"}],
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
+        ([{"type": "custom", "name": "apply_patch"}], None),
+    ],
+)
+async def test_a_model_router_drops_custom_tools_from_an_allowed_tools_choice(allowed, sent_tool_choice):
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="What is the weather in SF?",
+        tools=[WEATHER_TOOL, CUSTOM_TOOL],
+        tool_choice={"type": "allowed_tools", "mode": "required", "tools": allowed},
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content).get("tool_choice") == sent_tool_choice
+
+
+CUSTOM_TOOL_HISTORY: Final = [
+    {"type": "message", "role": "user", "content": "Fix the typo in README.md"},
+    {
+        "type": "custom_tool_call",
+        "id": "ctc_1",
+        "call_id": "call_1",
+        "name": "apply_patch",
+        "input": "*** Begin Patch\n*** End Patch",
+        "status": "completed",
+    },
+    {"type": "custom_tool_call_output", "call_id": "call_1", "output": "Done"},
+]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("url_regex,call", RESPONSES_CALLS)
+async def test_a_model_router_sends_custom_tool_history_as_function_calls(url_regex, call):
+    route: Final = respx.post(url__regex=url_regex).mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await call(
+        model="azure_ai/model_router/model-router",
+        input=CUSTOM_TOOL_HISTORY,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    sent_call, sent_output = json.loads(route.calls.last.request.content)["input"][1:]
+    assert sent_call == {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "apply_patch",
+        "arguments": json.dumps({"content": "*** Begin Patch\n*** End Patch"}),
+    }
+    assert sent_output == {"type": "function_call_output", "call_id": "call_1", "output": "Done"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_default_foundry_model_keeps_custom_tool_history():
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-4.1",
+        input=CUSTOM_TOOL_HISTORY,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    sent_types: Final = [item["type"] for item in json.loads(route.calls.last.request.content)["input"]]
+    assert sent_types == ["message", "custom_tool_call", "custom_tool_call_output"]
+
+
+@pytest.mark.asyncio
+@respx.mock
 @pytest.mark.parametrize("url_regex,call", RESPONSES_CALLS)
 async def test_a_model_router_rejects_custom_tools_without_drop_params(url_regex, call):
     route: Final = respx.post(url__regex=url_regex)
@@ -481,6 +635,44 @@ async def test_aresponses_streams_a_model_router_on_a_project_as_it_answers():
         "response.completed",
     ]
     assert [events[1].delta, events[2].delta] == ["1", "2"]
+
+
+class _LoggedModels(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.models: queue.Queue[object] = queue.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.models.put(kwargs["standard_logging_object"]["model"])
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_streamed_model_router_answer_logs_the_routed_model(monkeypatch):
+    logged: Final = _LoggedModels()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    completed: Final = _responses_payload("FW-GLM-5.3-Flash")
+    stream_body: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in (
+            {"type": "response.created", "response": {**completed, "status": "in_progress"}},
+            {"type": "response.completed", "response": completed},
+        )
+    )
+    respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="Count to 2",
+        stream=True,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+    _ = [event async for event in stream]
+
+    assert await asyncio.to_thread(logged.models.get, timeout=10) == "azure_ai/FW-GLM-5.3-Flash"
 
 
 @pytest.mark.asyncio
