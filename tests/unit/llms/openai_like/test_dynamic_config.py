@@ -224,6 +224,10 @@ class TestModelSpecialHandling:
                 {"convert_content_list_to_string": True}, {"list-model": {"convert_content_list_to_string": False}},
                 "other-model", "Say hi", id="provider_flag_applies_to_unlisted_models",
             ),
+            pytest.param(
+                {}, {"legacy-model": {"convert_text_content_list_to_string": True}}, "legacy-model", "Say \nhi",
+                id="text_only_flag_joins_parts_by_line",
+            ),
         ],
     )
     def test_content_list_flattening_follows_the_model_flags(

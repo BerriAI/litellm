@@ -66,6 +66,9 @@ That's it! The provider will be automatically loaded and available.
     },
     
     // Optional: Special handling flags
+    // convert_content_list_to_string keeps only the text of every content list
+    // convert_text_content_list_to_string joins a list of only text parts with
+    // newlines and sends a list with any other part as it is
     "special_handling": {
       "convert_content_list_to_string": true
     },

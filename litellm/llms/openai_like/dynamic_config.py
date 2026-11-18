@@ -2,7 +2,8 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, overload
 
 from pydantic import TypeAdapter, ValidationError
@@ -10,7 +11,10 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
+    handle_messages_with_text_only_content_lists_as_str,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -43,6 +47,29 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
     return calls if calls > 0 else None
 
 
+def _flattened_messages(
+    messages: Sequence[AllMessageValues], handling: Mapping[str, bool]
+) -> Sequence[AllMessageValues]:
+    if handling.get("convert_content_list_to_string"):
+        return handle_messages_with_content_list_to_str_conversion(list(messages))
+    if handling.get("convert_text_content_list_to_string"):
+        return handle_messages_with_text_only_content_lists_as_str(messages)
+    return messages
+
+
+def _with_declared_reasoning_effort(
+    params: Mapping[str, object], *, model: str, provider_slug: str, drop_params: bool
+) -> Mapping[str, object]:
+    requested: Final = params.get("reasoning_effort")
+    declared: Final = declared_reasoning_efforts_for_model(model, provider_slug)
+    if declared is None or not isinstance(requested, str):
+        return params
+    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    if drop_params and accepted not in declared:
+        return MappingProxyType({key: value for key, value in params.items() if key != "reasoning_effort"})
+    return MappingProxyType({**params, "reasoning_effort": accepted})
+
+
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
@@ -73,15 +100,11 @@ def create_config_class(provider: SimpleProviderConfig):
             self, messages: list[AllMessageValues], model: str, is_async: bool = False
         ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
             """Transform messages based on special_handling config"""
-
-            # Handle content list to string conversion if configured
-            if provider.special_handling_for(model).get("convert_content_list_to_string"):
-                messages = handle_messages_with_content_list_to_str_conversion(messages)
-
+            flattened: Final = _flattened_messages(messages, provider.special_handling_for(model))
             if is_async:
-                return super()._transform_messages(messages=messages, model=model, is_async=True)
+                return super()._transform_messages(messages=list(flattened), model=model, is_async=True)
             else:
-                return super()._transform_messages(messages=messages, model=model, is_async=False)
+                return super()._transform_messages(messages=list(flattened), model=model, is_async=False)
 
         def _should_preserve_cache_control_for_endpoint(
             self,
@@ -169,9 +192,15 @@ def create_config_class(provider: SimpleProviderConfig):
             """Apply parameter mappings and constraints"""
 
             supported_params: Final = self.get_supported_openai_params(model)
+            requested_params: Final = _with_declared_reasoning_effort(
+                _PAYLOAD_ADAPTER.validate_python(non_default_params),
+                model=model,
+                provider_slug=provider.slug,
+                drop_params=drop_params,
+            )
 
             # Apply supported params
-            for param, value in non_default_params.items():
+            for param, value in requested_params.items():
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value
