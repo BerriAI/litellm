@@ -1166,6 +1166,7 @@ jobs:
             --timeout="${TEST_TIMEOUT_SECONDS}" \
             --rerun-except "from pytest-timeout" \
             --durations=20 \
+            --junitxml=junit.xml \
             --cov=./litellm --cov=./litellm/enterprise/litellm_enterprise \
             --cov-report=xml:coverage.xml \
             --cov-config=pyproject.toml
@@ -1187,6 +1188,15 @@ jobs:
           name: coverage-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage.xml
           retention-days: 1
+
+      - name: Save test durations
+        if: always() && steps.changes.outputs.decision != 'skip'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: junit-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
   unit-core:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, plan]
