@@ -119,6 +119,33 @@ async def test_dd_tags_team_stays_off_a_span_whose_request_has_a_team(logger: Da
     assert "cost_center:engineering" in span_tags
 
 
+def test_request_cost_dimensions_replace_dd_tags_values(logger: DataDogLLMObsLogger) -> None:
+    dd_tags: Final = "user:shared,key_alias:global-key,model_group:default,cost_center:engineering"
+    with patch.dict(os.environ, {"DD_TAGS": dd_tags}):
+        payload: Final = build(
+            logger,
+            metadata={"user_api_key_user_id": "alice", "user_api_key_alias": "alice-key"},
+            model_group="gpt",
+        )
+
+    dimension_tags: Final = [
+        tag for tag in payload["tags"] if tag.partition(":")[0] in {"user", "key_alias", "model_group"}
+    ]
+    assert sorted(dimension_tags) == ["key_alias:alice-key", "model_group:gpt", "user:alice"]
+    assert "cost_center:engineering" in payload["tags"]
+
+
+def test_dd_tags_cost_dimension_stays_when_the_request_has_none(logger: DataDogLLMObsLogger) -> None:
+    with patch.dict(os.environ, {"DD_TAGS": "user:shared,model_group:default"}):
+        payload: Final = build(logger, model_group="gpt")
+
+    assert [tag for tag in payload["tags"] if tag.startswith(("user:", "model_group:"))] == [
+        "user:shared",
+        "model_group:gpt",
+    ]
+    assert payload["meta"]["metadata"]["_dd"]["cost_tags"] == ["user", "model_group"]
+
+
 def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMObsLogger) -> None:
     """Datadog reads name/arguments/tool_id off the tool call; OpenAI nests them under `function`."""
     payload = build(

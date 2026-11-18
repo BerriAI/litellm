@@ -87,18 +87,21 @@ def get_datadog_base_tags() -> tuple[str, ...]:
 
 def get_datadog_tags(
     standard_logging_object: StandardLoggingPayload | None = None,
+    caller_tag_keys: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Build Datadog tags as a list of individual tag strings.
 
     Returns a list of "key:value" strings suitable for Datadog LLM Observability
     (which expects tags as an array). For Datadog Logs API (ddtags), join with
     comma: ",".join(get_datadog_tags(...)).
+
+    `DD_TAGS` tags whose key is in `caller_tag_keys` are left out, for keys the caller tags itself.
     """
 
     base_tags: Final = _get_datadog_base_tag_values()
 
     team_tag: Final = _get_request_team(standard_logging_object)
-    litellm_tag_keys: Final = frozenset((*base_tags, "team") if team_tag else base_tags)
+    litellm_tag_keys: Final = frozenset((*base_tags, *caller_tag_keys, *(("team",) if team_tag else ())))
     tags: Final[list[str]] = [
         *(f"{k}:{v}" for k, v in base_tags.items()),
         *get_datadog_global_tags(skip_keys=litellm_tag_keys),

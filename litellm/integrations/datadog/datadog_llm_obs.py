@@ -659,9 +659,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         )
         span_kind: Final = self._get_datadog_span_kind(standard_logging_payload.get("call_type"), metadata_parent_id)
         router_fields: Final = _router_span_fields(standard_logging_payload, redact_prompt_text=redact_payload)
+        request_cost_tags: Final = _cost_dimension_tags(standard_logging_payload, router_fields)
         span_tags: Final = [
-            *get_datadog_tags(standard_logging_object=standard_logging_payload),
-            *_cost_dimension_tags(standard_logging_payload, router_fields),
+            *get_datadog_tags(
+                standard_logging_object=standard_logging_payload,
+                caller_tag_keys=frozenset(tag.partition(":")[0] for tag in request_cost_tags),
+            ),
+            *request_cost_tags,
         ]
         payload_metadata: Final = self._get_dd_llm_obs_payload_metadata(
             standard_logging_payload,
