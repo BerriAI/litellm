@@ -132,18 +132,27 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
     return urlunparse(parsed._replace(query=urlencode(merged)))
 
 
+MCP_WILDCARD_SCOPE: Final = "mcp_all"
+
+
+def asks_for_wildcard(scope: str | None) -> bool:
+    return MCP_WILDCARD_SCOPE in (scope or "").split()
+
+
 def grant_covers_scopes(
     granted: tuple[str, ...], requested: tuple[str, ...], server_scopes: Callable[[], frozenset[str]]
 ) -> bool:
-    """Whether a stored grant holds every requested scope. A grant stored as one comma-joined token, the form
-    Slack and GitHub reply with, counts as its parts only when every part is a requested or server scope."""
-    if all(scope in granted for scope in requested):
+    """Whether a stored grant holds every requested scope. A non-empty grant holds the wildcard scope, which a
+    provider grants as granular scopes in its place. A grant stored as one comma-joined token, the form Slack and
+    GitHub reply with, counts as its parts only when every part is a requested or server scope."""
+    held: Final = frozenset((*granted, MCP_WILDCARD_SCOPE)) if granted else frozenset[str]()
+    if all(scope in held for scope in requested):
         return True
     if len(granted) != 1 or "," not in granted[0]:
         return False
     parts: Final = frozenset(granted[0].split(","))
     known: Final = frozenset(requested) | server_scopes()
-    return parts <= known and all(scope in granted or scope in parts for scope in requested)
+    return parts <= known and all(scope in held or scope in parts for scope in requested)
 
 
 _PUBLISHED_SCOPES: Final = TypeAdapter[tuple[str, ...] | None](tuple[str, ...] | None)

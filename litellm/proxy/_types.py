@@ -2736,6 +2736,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300",
     )
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = Field(
+        None,
+        description="S3 bucket names that keys other than proxy admins may name in `s3://` image and file URLs. Any other bucket is rejected unless client-side credentials are allowed",
+    )
     reject_clientside_metadata_tags: bool | None = Field(
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
