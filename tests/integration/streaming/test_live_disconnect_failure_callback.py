@@ -60,6 +60,8 @@ _FORWARD_ERROR: Final = threading.Event()
 
 
 def _upstream(request: Request) -> Reply:
+    if request.target == "/__observations" and request.method == "DELETE":
+        return Reply()
     assert request.target.startswith("/model/"), request.target
     url: Final = "https://bedrock-runtime.us-east-1.amazonaws.com" + request.target
     credentials: Final = boto3.Session(profile_name="litellm-dev").get_credentials().get_frozen_credentials()
@@ -115,8 +117,13 @@ def running_qa(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gatew
             callbacks=["qa_callback.capture"], anthropic_sse_ping_interval_seconds=0.2
         )
         config.write_text(yaml.safe_dump(stock))
-        with gateway_from_environment() as shared, owned_proxy(shared, root, {}, config=config, workers=2) as gateway:
-            yield gateway, root
+        with pytest.MonkeyPatch.context() as environment:
+            environment.setenv("INTEGRATION_UPSTREAM_URL", wire.url)
+            with (
+                gateway_from_environment() as shared,
+                owned_proxy(shared, root, {}, config=config, workers=2) as gateway,
+            ):
+                yield gateway, root
 
 
 def test_callback_after_disconnect(running_qa: tuple[Gateway, Path]) -> None:
