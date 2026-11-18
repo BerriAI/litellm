@@ -109,7 +109,15 @@ def counted_tool_choice(
     try:
         return _ANTHROPIC_TOOL_CHOICE.validate_python(tool_choice)
     except ValidationError as e:
-        return None if drops_params else ChatCountTranslationError(message=str(e))
+        return (
+            None
+            if drops_params
+            else ChatCountTranslationError(
+                message="; ".join(
+                    f"{'.'.join(('tool_choice', *map(str, error['loc'])))}: {error['msg']}" for error in e.errors()
+                )
+            )
+        )
 
 
 class AnthropicCountTokensConfig:

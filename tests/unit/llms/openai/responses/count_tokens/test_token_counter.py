@@ -494,6 +494,7 @@ async def test_anthropic_format_unknown_tool_choice_answers_400_without_calling_
     assert route.called is False
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert str(result.error_message).startswith("tool_choice.type: ")
 
 
 @pytest.mark.asyncio

@@ -354,6 +354,7 @@ async def test_claude_count_rejects_an_invalid_tool_choice_without_calling_bedro
 
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert str(result.error_message).startswith("tool_choice.type: ")
     assert bedrock.posted_hosts() == ()
 
 
