@@ -132,7 +132,7 @@ GIL handling to `litellm-host-python`.
 
 ## Pricing
 
-- `src/cost/` is the whole pricing bridge. `NativePrices` lowers one row with `billed_prices` when it is built and holds no Python object after that
+- `src/cost/` is the whole pricing bridge. A row Python passes is lowered once into the call's `PricingRows` (`with_per_call`) and no Python object is held after that
 - `src/cost/query.rs` answers `NativeModelCostMap.price`, `bound`, `rates` and `adjust` over the cost snapshot. Python hands it the raw facts of a call as a document, and the bridge reads them the way main's Python did (which names to try through `Snapshot::candidates`, the service tier and residency spellings, the discount and margin config values) before it builds the core's typed query
   - A call the core does not price answers `None`, and Python prices it the old way. That covers `NotPorted`, a deferred candidate list and a call no row prices, so main's own error is still the one raised
 - `src/cost/kinds.rs` answers `NativeModelCostMap.price_units` for the per-unit kinds. Python looks up the row the kind's calculator read with its own `get_model_info` and passes it as `catalog`, beside the deployment's own price tables, so a model only a capability rule knows, or a lookup a caller patched, prices exactly as on main. The answer is a `NativeReceipt` or a `NativeUnpriced` with the reason, and Python maps the reason to each calculator's legacy return
