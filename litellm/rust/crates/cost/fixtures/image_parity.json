@@ -1,0 +1,109 @@
+{
+ "source": "Captured once from main's Python (d78408bffd, image calculators as on main, LITELLM_LOCAL_MODEL_COST_MAP=True). `row` holds the cost fields the calculator read, `expected` what main returned or the exception it raised",
+ "cases": [
+  {
+   "name": "azure_hd_tall",
+   "model": "azure/dall-e-3",
+   "provider": "azure",
+   "calculator": "default",
+   "images": 2,
+   "pixels": 3670016,
+   "row": {
+    "input_cost_per_pixel": 7.19343e-08,
+    "output_cost_per_token": 0.0
+   },
+   "expected": 0.2640000319488
+  },
+  {
+   "name": "azure_standard_bare_model",
+   "model": "dall-e-3",
+   "provider": "azure",
+   "calculator": "default",
+   "images": 1,
+   "pixels": 1048576,
+   "row": {
+    "input_cost_per_pixel": 4.19617e-08,
+    "output_cost_per_token": 0.0
+   },
+   "expected": 0.0440000315392
+  },
+  {
+   "name": "aiml_by_name",
+   "model": "aiml/dall-e-3",
+   "provider": "aiml",
+   "calculator": "default",
+   "images": 2,
+   "pixels": 2097152,
+   "row": {
+    "output_cost_per_image": 0.052
+   },
+   "expected": 0.104
+  },
+  {
+   "name": "recraft_by_name",
+   "model": "recraft/recraftv3",
+   "provider": "recraft",
+   "calculator": "default",
+   "images": 1,
+   "pixels": 1048576,
+   "row": {
+    "output_cost_per_image": 0.04
+   },
+   "expected": 0.04
+  },
+  {
+   "name": "recraft",
+   "model": "recraftv3",
+   "provider": "recraft",
+   "calculator": "per_image",
+   "images": 3,
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "output_cost_per_image": 0.04
+   },
+   "expected": 0.12
+  },
+  {
+   "name": "aiml",
+   "model": "flux-pro/v1.1",
+   "provider": "aiml",
+   "calculator": "per_image",
+   "images": 3,
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "output_cost_per_image": 0.052
+   },
+   "expected": 0.156
+  },
+  {
+   "name": "runwayml",
+   "model": "gen4_image",
+   "provider": "runwayml",
+   "calculator": "per_image",
+   "images": 3,
+   "row": {
+    "input_cost_per_token": 0,
+    "input_cost_per_image": 0.05,
+    "output_cost_per_token": 0,
+    "output_cost_per_image": 0.05
+   },
+   "expected": 0.15000000000000002
+  },
+  {
+   "name": "dashscope_input_images",
+   "model": "qwen-image-2.0",
+   "provider": "dashscope",
+   "calculator": "per_image_and_input",
+   "images": 2,
+   "input_images": 3,
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "output_cost_per_image": 0.035
+   },
+   "expected": 0.07
+  }
+ ]
+}
