@@ -354,4 +354,8 @@ def _connection_from_ciphertext(ciphertext: str) -> Mapping[str, str] | None:
     payload: Final = decode_user_provider_credential(ciphertext)
     if payload is None:
         return None
-    return {"access_token": payload.access_token, "github_host": payload.github_host}
+    return {
+        "access_token": payload.access_token,
+        "github_host": payload.github_host,
+        "github_login": payload.github_login,
+    }

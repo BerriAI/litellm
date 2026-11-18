@@ -10764,7 +10764,7 @@ class TestResolveUserProviderCredentials:
         )
 
         assert data["secret_fields"]["user_provider_credentials"] == {
-            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com", "github_login": "octo"}
         }
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
         # the shared fallback credential is never looked up
@@ -11244,7 +11244,7 @@ class TestResolveUserProviderCredentials:
             llm_router=router,
         )
         assert data["secret_fields"]["user_provider_credentials"] == {
-            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com", "github_login": "octo"}
         }
         call_where: Final = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
