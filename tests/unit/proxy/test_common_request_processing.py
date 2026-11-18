@@ -6948,7 +6948,9 @@ class TestCancelOnDisconnect:
         with pytest.raises(asyncio.CancelledError):
             await await_llm_call_cancelling_on_disconnect(request, llm_call)
 
-    async def _drive_base_process_llm_request(self, monkeypatch, general_settings: dict, llm_call, request: Request):
+    async def _drive_base_process_llm_request(
+        self, monkeypatch, general_settings: dict, llm_call, request: Request, *, process_in_python: bool = False
+    ):
         from litellm.proxy._types import UserAPIKeyAuth
 
         logging_obj = MagicMock()
@@ -6977,7 +6979,8 @@ class TestCancelOnDisconnect:
             fake_route_request,
         )
 
-        return await processor.base_process_llm_request(
+        process: Final = processor._process_llm_request if process_in_python else processor.base_process_llm_request
+        return await process(
             request=request,
             fastapi_response=Response(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
@@ -7031,6 +7034,34 @@ class TestCancelOnDisconnect:
 
         assert exc_info.value.status_code == 499
         assert upstream_cancelled.is_set()
+
+    @pytest.mark.parametrize("cancel_on_disconnect", (False, True))
+    async def test_cancelled_python_request_cancels_its_upstream_task(self, monkeypatch, cancel_on_disconnect: bool):
+        started: Final = asyncio.Event()
+        cancelled: Final = asyncio.Event()
+
+        async def llm_call():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        processing: Final = asyncio.create_task(
+            self._drive_base_process_llm_request(
+                monkeypatch,
+                general_settings={"cancel_on_disconnect": cancel_on_disconnect},
+                llm_call=llm_call,
+                request=self._request([]),
+                process_in_python=True,
+            )
+        )
+        await started.wait()
+        processing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await processing
+
+        assert cancelled.is_set()
 
     async def test_499_still_fires_post_call_failure_hook(self):
         """Regression guard: the 499 path must NOT bypass post_call_failure_hook,
