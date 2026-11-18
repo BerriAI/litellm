@@ -1,5 +1,6 @@
 import json
 from typing import Final
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -115,3 +116,75 @@ async def test_async_resolve_file_references_fetches_the_file_metadata_for_both_
         async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_files_api_metadata)),
     )
     assert resolved == {reference: {"mime_type": "video/mp4", "uri": FILES_URI}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected_exc"),
+    [
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_vertex_embed_content_maps_http_error_status(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    status_code: int,
+    expected_exc: type[Exception],
+    sync_mode: bool,
+) -> None:
+    monkeypatch.setattr(
+        GoogleBatchEmbeddings,
+        "_ensure_access_token",
+        lambda self, *args, **kwargs: ("vertex-test-token", "proj-123"),
+    )
+    monkeypatch.setattr(
+        GoogleBatchEmbeddings,
+        "_ensure_access_token_async",
+        AsyncMock(return_value=("vertex-test-token", "proj-123")),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "vertex_ai/gemini-embedding-001": {
+                "litellm_provider": "vertex_ai",
+                "mode": "embedding",
+                "uses_embed_content": True,
+            }
+        },
+    )
+
+    def _raise_http_error(*args, **kwargs):
+        url = kwargs.get("url") or args[1]
+        response = httpx.Response(
+            status_code,
+            request=httpx.Request("POST", url),
+            json={"error": {"code": status_code, "message": "upstream error"}},
+        )
+        response.raise_for_status()
+
+    async def _async_raise_http_error(*args, **kwargs):
+        return _raise_http_error(*args, **kwargs)
+
+    monkeypatch.setattr(HTTPHandler, "post", _raise_http_error)
+    monkeypatch.setattr(AsyncHTTPHandler, "post", _async_raise_http_error)
+
+    with pytest.raises(expected_exc) as exc_info:
+        if sync_mode:
+            litellm.embedding(
+                model="vertex_ai/gemini-embedding-001",
+                input=["hello"],
+                vertex_project="proj-123",
+                vertex_location="us-central1",
+            )
+        else:
+            await litellm.aembedding(
+                model="vertex_ai/gemini-embedding-001",
+                input=["hello"],
+                vertex_project="proj-123",
+                vertex_location="us-central1",
+            )
+
+    assert getattr(exc_info.value, "status_code", None) == status_code

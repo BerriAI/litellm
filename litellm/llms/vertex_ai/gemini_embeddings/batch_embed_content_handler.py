@@ -21,6 +21,7 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import EmbeddingResponse
 
+from ..common_utils import VertexAIError
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
     file_reference_name,
@@ -262,14 +263,27 @@ class GoogleBatchEmbeddings(VertexLLM):
             },
         )
 
-        response: Final = sync_handler.post(
-            url=url,
-            headers=headers,
-            data=json.dumps(request_data),
-        )
+        try:
+            response: Final = sync_handler.post(
+                url=url,
+                headers=headers,
+                data=json.dumps(request_data),
+            )
+        except httpx.HTTPStatusError as err:
+            raise VertexAIError(
+                status_code=err.response.status_code,
+                message=err.response.text,
+                headers=err.response.headers,
+            ) from err
+        except httpx.TimeoutException as err:
+            raise VertexAIError(status_code=408, message="Timeout error occurred.") from err
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code,
+                message=response.text,
+                headers=response.headers,
+            )
 
         _json_response: Final = response.json()
 
@@ -369,14 +383,27 @@ class GoogleBatchEmbeddings(VertexLLM):
                 },
             )
 
-        response: Final = await async_handler.post(
-            url=url,
-            headers=headers,
-            data=json.dumps(data),
-        )
+        try:
+            response: Final = await async_handler.post(
+                url=url,
+                headers=headers,
+                data=json.dumps(data),
+            )
+        except httpx.HTTPStatusError as err:
+            raise VertexAIError(
+                status_code=err.response.status_code,
+                message=err.response.text,
+                headers=err.response.headers,
+            ) from err
+        except httpx.TimeoutException as err:
+            raise VertexAIError(status_code=408, message="Timeout error occurred.") from err
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code,
+                message=response.text,
+                headers=response.headers,
+            )
 
         _json_response: Final = response.json()
 
