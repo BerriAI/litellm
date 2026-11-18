@@ -4537,7 +4537,7 @@ async def test_create_file_names_the_batch_line_whose_developer_message_has_no_c
 
     with pytest.raises(BedrockError) as exc_info:
         await litellm.acreate_file(
-            file=("batch.jsonl", f"{_VALID_BATCH_LINE}\n{developer_without_content}\n".encode(), "application/jsonl"),
+            file=("batch.jsonl", f"{_VALID_BATCH_LINE}\n\n{developer_without_content}\n".encode(), "application/jsonl"),
             purpose="batch",
             custom_llm_provider="bedrock",
             s3_bucket_name="litellm-batch-bucket",
@@ -4548,7 +4548,7 @@ async def test_create_file_names_the_batch_line_whose_developer_message_has_no_c
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.message == (
-        "Batch input file line 2 could not be converted to a Bedrock batch record: "
+        "Batch input file line 3 could not be converted to a Bedrock batch record: "
         "litellm.BadRequestError: Missing required parameter: 'messages[1].content'."
     )
     assert not put_route.called

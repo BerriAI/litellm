@@ -9764,7 +9764,7 @@ def test_the_400_counts_the_messages_a_prompt_template_puts_ahead_of_the_callers
     ],
     ids=["fallbacks", "model_list"],
 )
-def test_sdk_fallbacks_and_model_list_send_the_callers_request_unchanged(
+def test_sdk_fallbacks_and_model_list_send_the_callers_messages_without_client_messages(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, routing: Mapping[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

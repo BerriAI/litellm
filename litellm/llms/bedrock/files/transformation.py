@@ -345,6 +345,10 @@ def _batch_line_error(line_number: int, problem: str) -> BedrockError:
     return _rejected_request(f"Batch input file line {line_number} {problem}")
 
 
+def _numbered_batch_lines(file_content: str) -> tuple[tuple[int, str], ...]:
+    return tuple((number, line) for number, line in enumerate(file_content.splitlines(), start=1) if line.strip())
+
+
 class _S3MediaInBatchRecord(ValueError):
     def __init__(self, s3_uris: tuple[str, ...]) -> None:
         super().__init__(
@@ -1086,7 +1090,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return target_model, target_provider
 
     def _transform_openai_jsonl_content_to_bedrock_jsonl_content(
-        self, openai_jsonl_content: Sequence[_OpenAIBatchRecord], target_model: str = ""
+        self,
+        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
+        target_model: str = "",
+        file_line_numbers: Sequence[int] = (),
     ) -> list[_BedrockBatchRecord]:
         """
         Transforms OpenAI JSONL content to Bedrock batch format
@@ -1111,7 +1118,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         import litellm
 
         bedrock_jsonl_content: Final = []
-        for idx, _openai_jsonl_content in enumerate(openai_jsonl_content):
+        line_numbers: Final = file_line_numbers or range(1, len(openai_jsonl_content) + 1)
+        for idx, (line_number, _openai_jsonl_content) in enumerate(zip(line_numbers, openai_jsonl_content)):
             # Extract the request body from OpenAI format
             openai_body = _openai_jsonl_content.get("body", {})
             record_model = openai_body.get("model", "")
@@ -1138,9 +1146,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                         provider=provider,
                     )
                 except _S3MediaInBatchRecord as e:
-                    raise _batch_line_error(idx + 1, str(e)) from e
+                    raise _batch_line_error(line_number, str(e)) from e
                 except MalformedRequestFieldError as e:
-                    raise _batch_line_error(idx + 1, f"could not be converted to a Bedrock batch record: {e}") from e
+                    raise _batch_line_error(
+                        line_number, f"could not be converted to a Bedrock batch record: {e}"
+                    ) from e
 
             # Create Bedrock batch record
             record_id = _openai_jsonl_content.get("custom_id", f"CALL{str(idx).zfill(7)}")
@@ -1183,11 +1193,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         ):
             ## Transform JSONL content to Bedrock format
             original_file_content: Final = self._get_content_from_openai_file(extracted_file_data_content)
-            openai_jsonl_content = [json.loads(line) for line in original_file_content.splitlines() if line.strip()]
+            numbered_lines: Final = _numbered_batch_lines(original_file_content)
+            openai_jsonl_content: Final = [json.loads(line) for _, line in numbered_lines]
             litellm_params_model: Final = litellm_params.get("model")
             target_model: Final = model or (litellm_params_model if isinstance(litellm_params_model, str) else "")
             bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                openai_jsonl_content, target_model=target_model
+                openai_jsonl_content,
+                target_model=target_model,
+                file_line_numbers=tuple(number for number, _ in numbered_lines),
             )
             file_content = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
