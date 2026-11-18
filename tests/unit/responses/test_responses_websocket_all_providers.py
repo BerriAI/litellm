@@ -2862,9 +2862,11 @@ class TestNativeWebSocketDeploymentDefaults:
         )
 
         forwarded = json.loads(
-            await handler._mask_response_create(
-                json.dumps({"type": "response.create", "model": "gpt-5-pro", "input": "hi"})
-            )
+            (
+                await handler._mask_response_create(
+                    json.dumps({"type": "response.create", "model": "gpt-5-pro", "input": "hi"})
+                )
+            ).forwarded
         )
 
         assert forwarded == {
@@ -2879,17 +2881,19 @@ class TestNativeWebSocketDeploymentDefaults:
         handler = _make_streaming(authorized_model="gpt-5-pro", request_defaults=_deployment_defaults())
 
         forwarded = json.loads(
-            await handler._mask_response_create(
-                json.dumps(
-                    {
-                        "type": "response.create",
-                        "model": "gpt-5-pro",
-                        "input": "Say hello",
-                        "service_tier": "default",
-                        "provider_default": "client",
-                    }
+            (
+                await handler._mask_response_create(
+                    json.dumps(
+                        {
+                            "type": "response.create",
+                            "model": "gpt-5-pro",
+                            "input": "Say hello",
+                            "service_tier": "default",
+                            "provider_default": "client",
+                        }
+                    )
                 )
-            )
+            ).forwarded
         )
 
         assert forwarded == {
@@ -2906,9 +2910,11 @@ class TestNativeWebSocketDeploymentDefaults:
         handler = _make_streaming(authorized_model="gpt-5-pro", request_defaults=_deployment_defaults())
 
         forwarded = json.loads(
-            await handler._mask_response_create(
-                json.dumps({"type": "response.create", "response": {"model": "gpt-5-pro", "input": "hi"}})
-            )
+            (
+                await handler._mask_response_create(
+                    json.dumps({"type": "response.create", "response": {"model": "gpt-5-pro", "input": "hi"}})
+                )
+            ).forwarded
         )
 
         assert forwarded == {
@@ -2937,8 +2943,8 @@ class TestNativeWebSocketDeploymentDefaults:
             }
         )
 
-        assert await handler._mask_response_create(cancel_frame) is cancel_frame
-        assert await handler._mask_response_create(complete_frame) is complete_frame
+        assert (await handler._mask_response_create(cancel_frame)).forwarded is cancel_frame
+        assert (await handler._mask_response_create(complete_frame)).forwarded is complete_frame
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", (False, True), ids=("flat", "nested"))
@@ -2951,7 +2957,7 @@ class TestNativeWebSocketDeploymentDefaults:
             {"type": "response.create", "response": request} if nested else {"type": "response.create", **request}
         )
 
-        forwarded: Final = json.loads(await handler._mask_response_create(json.dumps(frame)))
+        forwarded: Final = json.loads((await handler._mask_response_create(json.dumps(frame))).forwarded)
 
         assert (forwarded["response"] if nested else forwarded)["input"] == [compaction, user_turn]
 
@@ -2965,7 +2971,7 @@ class TestNativeWebSocketDeploymentDefaults:
             "input": [{**reasoning, "status": None, "content": None, "encrypted_content": None}],
         }
 
-        forwarded: Final = json.loads(await handler._mask_response_create(json.dumps(frame)))
+        forwarded: Final = json.loads((await handler._mask_response_create(json.dumps(frame))).forwarded)
 
         assert forwarded["input"] == [reasoning]
 
@@ -2980,7 +2986,7 @@ class TestNativeWebSocketDeploymentDefaults:
             }
         )
 
-        assert await handler._mask_response_create(frame) is frame
+        assert (await handler._mask_response_create(frame)).forwarded is frame
 
     @pytest.mark.asyncio
     async def test_handler_applies_defaults_to_the_first_frame_sent_upstream(self):
@@ -3129,9 +3135,9 @@ class TestNativeWebSocketGuardrails:
             json.dumps({"type": "response.create", "response": {"input": "hi"}})
         )
 
-        assert json.loads(flat_message)["model"] == "authorized-deployment"
+        assert json.loads(flat_message.forwarded)["model"] == "authorized-deployment"
         assert (
-            json.loads(nested_message)["response"]["model"] == "authorized-deployment"
+            json.loads(nested_message.forwarded)["response"]["model"] == "authorized-deployment"
         )
 
     @pytest.mark.asyncio
@@ -3456,6 +3462,65 @@ class TestNativeWebSocketGuardrailMasking:
         assert turn.request_body == stored
 
     @pytest.mark.asyncio
+    async def test_a_masked_turn_stores_the_client_s_wrapped_ids_and_forwards_the_decoded_ones(self):
+        import time
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+        from litellm.types.utils import CallTypes
+
+        reasoning: Final = _wrapped_reasoning_item()
+        assistant_turn: Final = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "I wrote to alice@example.com"}],
+        }
+        wrapped_message_id: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-1", "msg_orig")
+        user_turn: Final = {"type": "message", "role": "user", "content": "thanks"}
+        connection_logging: Final = Logging(
+            model="gpt-5.4",
+            messages=[],
+            stream=False,
+            call_type=CallTypes.aresponses_websocket.value,
+            start_time=time.time(),
+            litellm_call_id="connection-call",
+            function_id="connection-call",
+        )
+        connection_logging.litellm_params = {
+            "proxy_server_request": {"url": "ws://proxy/v1/responses", "body": {"first_message": "warmup"}}
+        }
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        handler: Final = _make_streaming(
+            backend_ws=backend_ws,
+            logging_obj=connection_logging,
+            request_data={},
+            guardrail_callbacks=[_FakeWSGuardrail()],
+            authorized_model="gpt-5.4",
+        )
+
+        await handler._forward_guarded_frame(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "input": [reasoning, {**assistant_turn, "id": wrapped_message_id}, user_turn],
+                }
+            )
+        )
+
+        masked_turn: Final = {**assistant_turn, "content": [{"type": "output_text", "text": "I wrote to <EMAIL_ADDRESS_1>"}]}
+        (turn,) = handler._open_turns
+        assert turn.logging_obj.litellm_params["proxy_server_request"]["body"] == {
+            "input": [reasoning, {**masked_turn, "id": wrapped_message_id}, user_turn]
+        }
+        assert json.loads(backend_ws.send.await_args.args[0])["input"] == [
+            {**reasoning, "id": "rs_orig", "encrypted_content": "gAAAA-blob"},
+            {**masked_turn, "id": "msg_orig"},
+            user_turn,
+        ]
+
+    @pytest.mark.asyncio
     async def test_mask_response_create_flat_string_input(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
@@ -3469,7 +3534,7 @@ class TestNativeWebSocketGuardrailMasking:
                 {"type": "response.create", "input": "email alice@example.com now"}
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
 
         assert obj["model"] == "auth-model"
         assert obj["input"] == "email <EMAIL_ADDRESS_1> now"
@@ -3496,7 +3561,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
 
         assert obj["input"][0]["content"] == "ping <EMAIL_ADDRESS_1>"
 
@@ -3522,7 +3587,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
         blocks = obj["input"][0]["content"]
 
         assert blocks[0]["text"] == "<EMAIL_ADDRESS_1>"
@@ -3547,7 +3612,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
 
         assert obj["input"][0]["output"] == "tool returned <EMAIL_ADDRESS_1>"
         assert handler.request_data["metadata"]["pii_tokens"] == {
@@ -3576,7 +3641,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
         blocks = obj["input"][0]["output"]
 
         assert blocks[0]["text"] == "<EMAIL_ADDRESS_1>"
@@ -3599,7 +3664,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
 
         assert obj["response"]["model"] == "auth-model"
         assert obj["response"]["input"] == "<EMAIL_ADDRESS_1>"
@@ -3618,7 +3683,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
 
         assert obj["instructions"] == "reply to <EMAIL_ADDRESS_1>"
         assert handler.request_data["metadata"]["pii_tokens"] == {
@@ -3641,7 +3706,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
 
         assert obj["response"]["instructions"] == "email <EMAIL_ADDRESS_1>"
         assert handler.request_data["metadata"]["pii_tokens"] == {
@@ -3658,14 +3723,14 @@ class TestNativeWebSocketGuardrailMasking:
         )
 
         message = json.dumps({"type": "response.cancel", "input": "alice@example.com"})
-        assert await handler._mask_response_create(message) == message
+        assert (await handler._mask_response_create(message)).forwarded == message
 
     @pytest.mark.asyncio
     async def test_mask_response_create_invalid_json_unchanged(self):
         handler = _make_streaming(
             request_data={}, guardrail_callbacks=[_FakeWSGuardrail()]
         )
-        assert await handler._mask_response_create("not json {{{") == "not json {{{"
+        assert (await handler._mask_response_create("not json {{{")).forwarded == "not json {{{"
 
     @pytest.mark.asyncio
     async def test_mask_response_create_model_only_without_guardrails(self):
@@ -3674,7 +3739,7 @@ class TestNativeWebSocketGuardrailMasking:
         masked = await handler._mask_response_create(
             json.dumps({"type": "response.create", "input": "alice@example.com"})
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
 
         assert obj["model"] == "auth-model"
         assert obj["input"] == "alice@example.com"
@@ -3683,7 +3748,7 @@ class TestNativeWebSocketGuardrailMasking:
     async def test_mask_response_create_no_op_without_model_or_guardrails(self):
         handler = _make_streaming(request_data={})
         message = json.dumps({"type": "response.create", "input": "alice@example.com"})
-        assert await handler._mask_response_create(message) == message
+        assert (await handler._mask_response_create(message)).forwarded == message
 
     @pytest.mark.asyncio
     async def test_mask_response_create_list_with_non_dict_item(self):
@@ -3705,7 +3770,7 @@ class TestNativeWebSocketGuardrailMasking:
                 }
             )
         )
-        obj = json.loads(masked)
+        obj = json.loads(masked.forwarded)
         assert obj["input"][0] == "not-a-dict"
         assert obj["input"][1]["content"] == "<EMAIL_ADDRESS_1>"
 

@@ -2452,22 +2452,36 @@ _UNSTORED_FRAME_KEYS: Final = frozenset({"type", "response", "user"})
 _MASKED_FRAME_FIELDS: Final = ("input", "instructions")
 
 
-def _responses_ws_turn_request_body(client_frame: str | None) -> Mapping[str, object]:
+def responses_ws_turn_request_body(client_frame: str | None) -> Mapping[str, object]:
     """The turn's ``response.create`` as the body of the equivalent HTTP ``/v1/responses`` request, without the
     ``user`` that a socket never checks as an end user, so logging callbacks do not attribute the turn to it."""
     frame: Final = _json_object_or_none(client_frame)
-    if frame is None:
-        return _NO_REQUEST_BODY
+    return _NO_REQUEST_BODY if frame is None else _turn_request_body(frame)
+
+
+def _turn_request_body(frame: Mapping[str, object]) -> Mapping[str, object]:
     nested: Final = frame.get("response")
     body: Final = {**frame, **nested} if _is_json_object(nested) else frame
     return {key: value for key, value in body.items() if key not in _UNSTORED_FRAME_KEYS}
 
 
-def _masked_turn_request_body(client_frame: str, forwarded_frame: str) -> Mapping[str, object]:
-    """The client's request with the PII-masked text the provider is sent in place of its own."""
-    client: Final = _responses_ws_turn_request_body(client_frame)
-    forwarded: Final = _responses_ws_turn_request_body(forwarded_frame)
-    return {**client, **{key: forwarded[key] for key in _MASKED_FRAME_FIELDS if key in client and key in forwarded}}
+def _stored_turn_request_body(client_frame: str, masked_frame: Mapping[str, object] | None) -> Mapping[str, object]:
+    """The client's request, with the PII-masked text the provider is sent in place of its own when Presidio masked
+    the frame. The masked frame still carries the client's own item ids, since they are restored after masking."""
+    client: Final = responses_ws_turn_request_body(client_frame)
+    if masked_frame is None:
+        return client
+    masked: Final = _turn_request_body(masked_frame)
+    return {**client, **{key: masked[key] for key in _MASKED_FRAME_FIELDS if key in client and key in masked}}
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedResponseCreate:
+    """A client frame ready to forward upstream, and the frame Presidio masked before wrapped ids were restored in
+    it, or None when nothing masked it."""
+
+    forwarded: str
+    masked: Mapping[str, object] | None = None
 
 
 def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
@@ -2541,6 +2555,13 @@ def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> di
         {"response": {**nested, **nested_fields}} if _is_json_object(nested) and nested_fields else EMPTY_MAPPING
     )
     return {**msg_obj, **top_fields, **restored_nested}
+
+
+def _forwarded_response_create(message: str, frame: Mapping[str, object], modified: bool) -> str:
+    restored: Final = _restore_wrapped_ids_in_response_create(frame)
+    if restored is not None:
+        return json.dumps(restored)
+    return json.dumps(frame) if modified else message
 
 
 class ResponsesWebSocketStreaming:
@@ -2672,20 +2693,15 @@ class ResponsesWebSocketStreaming:
             return
         if guarded.pii_tokens:
             self._remember_pii_tokens(guarded.pii_tokens)
-        masked: Final = await self._mask_response_create(guarded.frame)
+        prepared: Final = await self._mask_response_create(guarded.frame)
         self._record_client_frame(
-            masked,
-            self._stored_turn_request_body(guarded.frame, masked),
+            prepared.forwarded,
+            _stored_turn_request_body(guarded.frame, prepared.masked),
             guarded.guardrail_information,
             guarded.record_failed_turn,
             admitted.reservation,
         )
-        await self.backend_ws.send(masked)
-
-    def _stored_turn_request_body(self, client_frame: str, forwarded_frame: str) -> Mapping[str, object]:
-        if self.guardrail_callbacks:
-            return _masked_turn_request_body(client_frame, forwarded_frame)
-        return _responses_ws_turn_request_body(client_frame)
+        await self.backend_ws.send(prepared.forwarded)
 
     def _remember_pii_tokens(self, pii_tokens: Mapping[str, str]) -> None:
         metadata: Final = self.request_data.get("metadata")
@@ -2861,11 +2877,12 @@ class ResponsesWebSocketStreaming:
             return {**msg_obj, "response": self.request_defaults.merged_into(nested)}
         return {**self.request_defaults.merged_into(msg_obj), "type": msg_obj["type"]}
 
-    async def _mask_response_create(self, message: str) -> str:
+    async def _mask_response_create(self, message: str) -> _PreparedResponseCreate:
         """
-        Merge deployment defaults, enforce the authorized model, and apply
-        Presidio PII masking to a ``response.create`` message before it is
-        forwarded to the upstream provider.
+        Merge deployment defaults, enforce the authorized model, apply
+        Presidio PII masking, and restore wrapped item ids in a
+        ``response.create`` message before it is forwarded to the upstream
+        provider.
 
         - Fills the deployment's ``litellm_params`` request defaults into the
           frame the way the HTTP ``/v1/responses`` path does: client-set keys
@@ -2875,28 +2892,31 @@ class ResponsesWebSocketStreaming:
         - Walks the ``input`` and ``instructions`` fields, calls ``check_pii``
           on every text block, and stores the resulting ``pii_tokens`` map in
           ``self.request_data["metadata"]`` for later unmasking.
+        - Masks before restoring wrapped ids, which touches only item ids,
+          ``encrypted_content`` and keys masking never reads, so the masked
+          frame keeps the client's own ids for the turn's stored request.
 
-        Non-``response.create`` messages are returned unchanged.
+        Non-``response.create`` messages are forwarded unchanged.
         """
         try:
             parsed: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
-            return message
+            return _PreparedResponseCreate(forwarded=message)
 
         if parsed.get("type") != "response.create":
-            return message
+            return _PreparedResponseCreate(forwarded=message)
 
         authorized_obj: Final = self._with_request_defaults(parsed)
         defaults_applied: Final = authorized_obj != parsed
 
         # Always enforce the authorized model, even when PII masking is off.
         model_modified: Final = self._enforce_authorized_model(authorized_obj)
-        restored_obj: Final = _restore_wrapped_ids_in_response_create(authorized_obj)
-        msg_obj: Final = authorized_obj if restored_obj is None else restored_obj
-        frame_modified: Final = model_modified or restored_obj is not None or defaults_applied
+        frame_modified: Final = model_modified or defaults_applied
 
         if not self.guardrail_callbacks:
-            return json.dumps(msg_obj) if frame_modified else message
+            return _PreparedResponseCreate(
+                forwarded=_forwarded_response_create(message, authorized_obj, frame_modified)
+            )
 
         if "metadata" not in self.request_data:
             self.request_data["metadata"] = {}
@@ -2910,10 +2930,10 @@ class ResponsesWebSocketStreaming:
             #   nested: {"type": "response.create", "response": {"input": ..., "instructions": ...}}
             # Mask "input" and "instructions" in both shapes so PII is never
             # forwarded unmasked regardless of where the client places it.
-            nested_candidate = msg_obj.get("response")
+            nested_candidate = authorized_obj.get("response")
             nested_response = nested_candidate if _is_json_object(nested_candidate) else None
             text_containers: list[tuple[_MutableJsonObject, str]] = []
-            for container in (msg_obj, nested_response):
+            for container in (authorized_obj, nested_response):
                 if container is None:
                     continue
                 if "input" in container:
@@ -2963,7 +2983,9 @@ class ResponsesWebSocketStreaming:
                                         )
                                         modified = True
 
-        return json.dumps(msg_obj) if modified else message
+        return _PreparedResponseCreate(
+            forwarded=_forwarded_response_create(message, authorized_obj, modified), masked=authorized_obj
+        )
 
     # Delta event types whose ``delta`` field may contain PII tokens.
     _DELTA_EVENT_TYPES = _PII_DELTA_EVENT_TYPES

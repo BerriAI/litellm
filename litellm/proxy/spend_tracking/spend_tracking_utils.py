@@ -1374,6 +1374,7 @@ _LATEST_TURN_STORAGE: Final = "latest_turn"
 _STATEFUL_REQUEST_KEYS: Final = frozenset({"previous_response_id", "conversation"})
 _LATEST_TURN_KEPT_KEYS: Final = frozenset({"model"})
 _RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
+_STORED_CONVERSATION_CALL_TYPES: Final = frozenset({*_RESPONSES_CALL_TYPES, CallTypes.aresponses_websocket.value})
 _REQUEST_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TURNS_KEYS: Final = ("messages", "input")
 _TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
@@ -1439,8 +1440,9 @@ def _latest_user_message_text(turns: object) -> str | None:
 
 
 def _continues_stored_conversation(request_body: Mapping[str, object], call_type: object) -> bool:
-    """Only `/v1/responses` resumes a stored conversation, so the same keys on a chat body do not exempt it."""
-    return call_type in _RESPONSES_CALL_TYPES and any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
+    """Only `/v1/responses`, over HTTP or a WebSocket, resumes a stored conversation, so the same keys on a chat body
+    do not exempt it."""
+    return call_type in _STORED_CONVERSATION_CALL_TYPES and any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
 
 
 def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None) -> bool:
