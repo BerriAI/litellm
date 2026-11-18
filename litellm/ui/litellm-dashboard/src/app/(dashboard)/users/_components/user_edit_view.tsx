@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
-import { all_admin_roles } from "@/utils/roles";
+import { all_admin_roles, isProxyAdminRole } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
@@ -11,6 +11,7 @@ import { getModelDisplayName } from "@/components/key_team_helpers/fetch_availab
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import type { ObjectPermission } from "@/components/object_permission_types";
+import SkillSelector from "@/components/skills/SkillSelector";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -70,6 +71,7 @@ const userEditShape = (t: TFunction) => ({
   rpm_limit: rateLimitField(t),
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  skills: z.array(z.string()).optional(),
 });
 
 const userEditSchema = (unlimitedBudget: boolean, t: TFunction) =>
@@ -84,13 +86,14 @@ const userEditSchema = (unlimitedBudget: boolean, t: TFunction) =>
 type UserEditFormInput = z.input<ReturnType<typeof userEditSchema>>;
 type UserEditFormValues = z.output<ReturnType<typeof userEditSchema>>;
 
-const buildMcpFieldValues = (objectPermission: ObjectPermission | null | undefined) => ({
+const buildPermissionFieldValues = (objectPermission: ObjectPermission | null | undefined) => ({
   mcp_servers_and_groups: {
     servers: objectPermission?.mcp_servers ?? [],
     accessGroups: objectPermission?.mcp_access_groups ?? [],
     toolsets: objectPermission?.mcp_toolsets ?? [],
   },
   mcp_tool_permissions: objectPermission?.mcp_tool_permissions ?? {},
+  skills: objectPermission?.skills ?? [],
 });
 
 // antd only reported the fields that were actually mounted, so the identity and
@@ -100,7 +103,7 @@ const toFormValues = (
   userData: any,
   objectPermission: ObjectPermission | null | undefined,
   isBulkEdit: boolean,
-  canEditMcpPermissions: boolean,
+  canEditPermissions: boolean,
 ): UserEditFormInput => {
   const maxBudget = userData.user_info?.max_budget;
   const isUnlimited = maxBudget === null || maxBudget === undefined;
@@ -119,7 +122,7 @@ const toFormValues = (
     max_budget: isUnlimited ? "" : maxBudget,
     budget_duration: userData.user_info?.budget_duration,
     metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
-    ...(canEditMcpPermissions ? buildMcpFieldValues(objectPermission) : {}),
+    ...(canEditPermissions ? buildPermissionFieldValues(objectPermission) : {}),
   };
 };
 
@@ -165,7 +168,7 @@ export function UserEditView({
   premiumUser = false,
 }: UserEditViewProps) {
   const { t } = useTranslation();
-  const canEditMcpPermissions = !isBulkEdit && all_admin_roles.includes(userRole || "");
+  const canEditPermissions = !isBulkEdit && isProxyAdminRole(userRole || "");
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
   const [modelMaxBudget, setModelMaxBudget] = useSeededState<ModelMaxBudget>(
     userData.user_id,
@@ -173,14 +176,14 @@ export function UserEditView({
   );
   const schema = useMemo(() => userEditSchema(unlimitedBudget, t), [unlimitedBudget, t]);
   const form = useZodForm(schema, {
-    defaultValues: toFormValues(userData, objectPermission, isBulkEdit, canEditMcpPermissions),
+    defaultValues: toFormValues(userData, objectPermission, isBulkEdit, canEditPermissions),
   });
 
   React.useEffect(() => {
     const maxBudget = userData.user_info?.max_budget;
     setUnlimitedBudget(maxBudget === null || maxBudget === undefined);
-    form.reset(toFormValues(userData, objectPermission, isBulkEdit, canEditMcpPermissions));
-  }, [userData, objectPermission, canEditMcpPermissions, isBulkEdit, form]);
+    form.reset(toFormValues(userData, objectPermission, isBulkEdit, canEditPermissions));
+  }, [userData, objectPermission, canEditPermissions, isBulkEdit, form]);
 
   const handleUnlimitedBudgetChange = (checked: boolean) => {
     setUnlimitedBudget(checked);
@@ -400,8 +403,13 @@ export function UserEditView({
             )}
           </FormField>
 
-          {canEditMcpPermissions && (
+          {canEditPermissions && (
             <>
+              <FormField control={form.control} name="skills" label={t("objectPermissionsView.skills.title")}>
+                {({ value, onChange }) => (
+                  <SkillSelector value={value} onChange={onChange} accessToken={accessToken || ""} />
+                )}
+              </FormField>
               <FormField
                 control={form.control}
                 name="mcp_servers_and_groups"

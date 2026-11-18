@@ -62,11 +62,11 @@ FAKES = {
         custom_llm_provider=provider,
     ),
     'pre_call': lambda logger, input, api_key, additional_args: logger.pre_call(input, api_key, additional_args),
-    'messages_input': lambda body, kwargs: [{'role': 'user', 'content': json.dumps(body)}],
+    'messages_input_order': lambda body, kwargs: tuple(body),
     'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
         original_response, api_key, additional_args
     ),
-    'record_response': lambda logger, status, headers, body, sent: logger.model_call_details.update(
+    'record_response': lambda logger, status, headers, body, streamed, sent: logger.model_call_details.update(
         response_headers=dict(headers)
     ),
     'retried_request': lambda logger, logged_body, body, reasons: (
@@ -107,7 +107,7 @@ FAKES = {
     'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk, stream_teardown: logger.record(
         'stream_success', list(chunks)
     ),
-    'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
+    'stream_failure': lambda logger, endpoint_type, request_body, chunks, error, head: logger.record('stream_failure', error),
 }
 assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
 for name, fake in FAKES.items():

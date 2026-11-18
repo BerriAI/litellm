@@ -196,7 +196,8 @@ vi.mock("./key_edit_view", async () => {
       React.createElement(
         "button",
         {
-          onClick: () => props.onSubmit((globalThis as any).__TEST_FORM_VALUES ?? {}),
+          onClick: () =>
+            props.onSubmit((globalThis as any).__TEST_FORM_VALUES ?? {}, (globalThis as any).__TEST_DIRTY_FIELDS ?? []),
         },
         "Mock Submit",
       ),
@@ -231,7 +232,7 @@ const baseKeyData = {
   next_rotation_at: null as any,
 };
 
-const renderView = (premiumUser: boolean) => {
+const renderView = (premiumUser: boolean, keyData: Record<string, unknown> = baseKeyData) => {
   // Configure the mock for this test
   mockUseAuthorized.mockReturnValue({
     accessToken: "access_abc",
@@ -245,19 +246,14 @@ const renderView = (premiumUser: boolean) => {
   });
 
   return render(
-    <KeyInfoView
-      keyId="tok_123"
-      onClose={() => {}}
-      keyData={baseKeyData as any}
-      onKeyDataUpdate={() => {}}
-      teams={[]}
-    />,
+    <KeyInfoView keyId="tok_123" onClose={() => {}} keyData={keyData as any} onKeyDataUpdate={() => {}} teams={[]} />,
   );
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   (globalThis as any).__TEST_FORM_VALUES = undefined;
+  (globalThis as any).__TEST_DIRTY_FIELDS = undefined;
 });
 
 // ---- Tests ----
@@ -713,5 +709,173 @@ describe("KeyInfoView handleKeyUpdate organization", () => {
     });
     expect(keyUpdateCallMock.mock.calls[0][1]).not.toHaveProperty("organization_id");
     expect(shownOrganization()).toHaveTextContent("org-1");
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
+  const submit = async (
+    formValues: Record<string, unknown>,
+    dirtyFields: readonly string[] = ["max_budget_alert_emails"],
+    keyData: Record<string, unknown> = baseKeyData,
+  ) => {
+    renderView(true, keyData);
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    Object.assign(globalThis, {
+      __TEST_FORM_VALUES: { token: "tok_123", ...formValues },
+      __TEST_DIRTY_FIELDS: dirtyFields,
+    });
+    fireEvent.click(screen.getByText("Mock Submit"));
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+    return keyUpdateCallMock.mock.calls[0][1];
+  };
+
+  it("writes the alert rows into metadata next to the JSON box content and the dedicated metadata fields", async () => {
+    const formValues = {
+      metadata: JSON.stringify({ cost_center: "ops", nested: { owner: "platform" } }),
+      tags: ["prod"],
+      guardrails: ["gr-1"],
+      logging_settings: [{ callback_name: "langfuse" }],
+      disabled_callbacks: ["langsmith"],
+      max_budget_alert_emails: [
+        { threshold: 80, emails: "shared-mailbox@example.com, finance-dl@example.com" },
+        { threshold: 50, emails: "" },
+      ],
+    };
+    const expectedMetadata = {
+      cost_center: "ops",
+      nested: { owner: "platform" },
+      tags: ["prod"],
+      guardrails: ["gr-1"],
+      logging: [{ callback_name: "langfuse" }],
+      litellm_disabled_callbacks: ["langsmith"],
+      max_budget_alert_emails: { "80": ["shared-mailbox@example.com", "finance-dl@example.com"], "50": [] },
+    };
+
+    const sentPayload = await submit(formValues);
+
+    expect(sentPayload.metadata).toEqual(expectedMetadata);
+    expect(sentPayload).not.toHaveProperty("max_budget_alert_emails");
+  });
+
+  it("clears the stored recipients when every row is removed, even if the JSON box still names them", async () => {
+    const sentPayload = await submit({
+      metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "80": ["old@example.com"] } }),
+      max_budget_alert_emails: [],
+    });
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops" });
+  });
+
+  it("writes the alert rows when the metadata JSON box is left empty", async () => {
+    const sentPayload = await submit({
+      metadata: "",
+      max_budget_alert_emails: [{ threshold: 90, emails: "dl@example.com" }],
+    });
+
+    expect(sentPayload.metadata).toEqual({ max_budget_alert_emails: { "90": ["dl@example.com"] } });
+  });
+
+  it("sends the stored map verbatim on a save that does not edit the rows", async () => {
+    const storedAlertEmails = {
+      "50": ["a@example.com"],
+      "75": null,
+      "80": ["b@example.com", null],
+      "150": ["c@example.com"],
+    };
+    const sentPayload = await submit(
+      {
+        key_alias: "renamed",
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "150": ["c@example.com"] } }),
+        max_budget_alert_emails: [{ threshold: 50, emails: "a@example.com" }],
+      },
+      ["key_alias"],
+      { ...baseKeyData, metadata: { cost_center: "ops", max_budget_alert_emails: storedAlertEmails } },
+    );
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: storedAlertEmails });
+  });
+  const KEY_WITH_HIDDEN_ALERT = {
+    ...baseKeyData,
+    metadata: {
+      cost_center: "ops",
+      max_budget_alert_emails: {
+        "50": ["old@example.com"],
+        "80": ["removed@example.com"],
+        "150": ["c@example.com"],
+      },
+    },
+  };
+
+  it("keeps the entry the rows cannot show that the JSON box still holds when the rows were edited", async () => {
+    const sentPayload = await submit(
+      {
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "150": ["c@example.com"] } }),
+        max_budget_alert_emails: [{ threshold: 50, emails: "new@example.com" }],
+      },
+      ["max_budget_alert_emails"],
+      KEY_WITH_HIDDEN_ALERT,
+    );
+
+    expect(sentPayload.metadata).toEqual({
+      cost_center: "ops",
+      max_budget_alert_emails: { "50": ["new@example.com"], "150": ["c@example.com"] },
+    });
+  });
+
+  it("keeps only the box's hidden entry when every row is removed", async () => {
+    const sentPayload = await submit(
+      {
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "150": ["c@example.com"] } }),
+        max_budget_alert_emails: [],
+      },
+      ["max_budget_alert_emails"],
+      KEY_WITH_HIDDEN_ALERT,
+    );
+
+    expect(sentPayload.metadata).toEqual({
+      cost_center: "ops",
+      max_budget_alert_emails: { "150": ["c@example.com"] },
+    });
+  });
+
+  it("clears the map when every row is removed and the hidden entry is deleted from the JSON box", async () => {
+    const sentPayload = await submit(
+      { metadata: JSON.stringify({ cost_center: "ops" }), max_budget_alert_emails: [] },
+      ["max_budget_alert_emails"],
+      KEY_WITH_HIDDEN_ALERT,
+    );
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops" });
+  });
+
+  it("saves an entry the rows cannot show typed into the JSON box on an untouched-rows edit", async () => {
+    const sentPayload = await submit(
+      {
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "0": ["zero@example.com"] } }),
+        max_budget_alert_emails: [],
+      },
+      ["metadata"],
+      { ...baseKeyData, metadata: { cost_center: "ops" } },
+    );
+
+    expect(sentPayload.metadata).toEqual({
+      cost_center: "ops",
+      max_budget_alert_emails: { "0": ["zero@example.com"] },
+    });
+  });
+
+  it("saves a stored max_budget_alert_emails string back unchanged on an unrelated edit", async () => {
+    const sentPayload = await submit(
+      {
+        key_alias: "renamed",
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" }),
+        max_budget_alert_emails: [],
+      },
+      ["key_alias"],
+      { ...baseKeyData, metadata: { cost_center: "ops", max_budget_alert_emails: "ops@qa.test" } },
+    );
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: "ops@qa.test" });
   });
 });

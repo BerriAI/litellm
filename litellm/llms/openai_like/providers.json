@@ -90,7 +90,7 @@
     "base_url": "https://api.sarvam.ai/v2",
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
-    "supported_endpoints": ["/v1/chat/completions"]
+    "user_agent": "litellm/{version} Python/{python}"
   },
   "assemblyai": {
     "base_url": "https://llm-gateway.assemblyai.com/v1",
@@ -309,5 +309,17 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "vispark": {
+    "base_url": "https://api.lab.vispark.in/v1",
+    "api_key_env": "VISPARK_LAB_API_KEY",
+    "api_base_env": "VISPARK_LAB_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/completions"
+    ]
   }
 }

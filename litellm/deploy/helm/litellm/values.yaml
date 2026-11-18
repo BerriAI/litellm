@@ -102,7 +102,7 @@ ingress:
   # The target component only answers paths its own route allowlist keeps, so
   # a path here still has to be one that component serves.
   extraPaths: []
-  # - path: /watsonx
+  # - path: /hosted_vllm
   #   pathType: Prefix
   #   service: gateway
 
@@ -134,16 +134,13 @@ serviceAccounts:
     annotations: {}
     name: ""
 
-# Pre-install / pre-upgrade Helm hook that runs `prisma migrate deploy`
-# against the writer database, creating the LiteLLM schema (tables that
-# gateway + backend assume exist at startup: LiteLLM_Config,
-# LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...). Disable if your
-# pipeline runs migrations out-of-band.
-#
-# Runs the shared image with `args: [migrations]`, which the entrypoint
-# dispatches to the prisma migration runner without importing the proxy.
 migrationJob:
   enabled: true
+  mode: data-plane
+  controlPlane:
+    databaseSecret:
+      name: ""
+      key: database-url
   # Which controller is responsible for running the Job.
   #
   # `helm.enabled` renders the Helm pre-install / pre-upgrade hook, so the Job
@@ -377,6 +374,12 @@ gateway:
   config:
     create: true
     proxy_config: {}
+    # Extra labels and annotations for the generated ConfigMap (only used when
+    # create is true). Useful for tooling that selects or configures objects by
+    # their metadata, e.g. secret-injection webhooks that resolve placeholders
+    # such as ${vault:...} inside proxy_config.
+    labels: {}
+    annotations: {}
   # Serve Prometheus /metrics from a `metrics` sidecar container (same image,
   # `python -m litellm.proxy.prometheus_metrics_server`) that aggregates the
   # workers' PROMETHEUS_MULTIPROC_DIR samples over a shared emptyDir, so a

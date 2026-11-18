@@ -25,6 +25,7 @@ describe("buildAccessGroupCreateBody", () => {
         mcpToolPermissions: { "srv-1": ["read_file"], "srv-2": [] },
         agentIds: ["agent-1"],
         skillNames: ["private-plugin"],
+        vectorStoreIds: ["store-a"],
       }),
     ).toStrictEqual({
       access_group_name: "g",
@@ -34,6 +35,7 @@ describe("buildAccessGroupCreateBody", () => {
       mcp_tool_permissions: { "srv-1": ["read_file"], "srv-2": [] },
       access_agent_ids: ["agent-1"],
       access_skill_names: ["private-plugin"],
+      access_vector_store_ids: ["store-a"],
     });
   });
 

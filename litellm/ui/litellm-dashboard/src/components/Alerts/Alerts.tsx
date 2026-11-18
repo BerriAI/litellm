@@ -18,7 +18,8 @@ import { ALERT_TYPES, AlertFilter, AlertItem, TYPE_LABEL_KEYS, presentAlert } fr
 import AlertActions from "./AlertActions";
 import AlertChart from "./AlertChart";
 import AlertDetail from "./AlertDetail";
-import PerformanceMonitoring from "./PerformanceMonitoring";
+import ManageAlerts from "./ManageAlerts";
+import BulkAlertActions from "./BulkAlertActions";
 
 const parsers = {
   alert: parseAsString,
@@ -104,27 +105,31 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   const scope = JSON.stringify([auth.userId, auth.userRole]);
   const showDeprecations = params.type === "all" || params.type === "model-deprecations";
   const showPerformance = params.type !== "model-deprecations";
+  const showPromptCache = params.type === "all";
   const list = useAlerts(scope, showPerformance, params.state, params.type);
+  const promptCache = useAlerts(scope, showPromptCache, params.state, "prompt_cache");
   const deprecations = useDeprecationAlerts(showDeprecations ? auth.accessToken : null);
   const retirementItems: AlertItem[] = (deprecations.data ?? [])
     .filter((alert) => effectiveAlertStatus(alert) === params.state)
     .map((alert) => ({ source: "deprecation", alert }));
-  const performanceItems: AlertItem[] = (list.data?.pages.flatMap((page) => page.data) ?? []).map((alert) => ({
-    source: "performance",
-    alert,
-  }));
-  const items = [...retirementItems, ...performanceItems];
-  const loading = list.isLoading || deprecations.isLoading;
-  const hasError = (showPerformance && list.isError) || (showDeprecations && deprecations.isError);
+  const savedItems = (query: typeof list, shown: boolean): AlertItem[] =>
+    shown
+      ? (query.data?.pages.flatMap((page) => page.data) ?? []).map((alert) => ({ source: "performance", alert }))
+      : [];
+  const items = [...retirementItems, ...savedItems(promptCache, showPromptCache), ...savedItems(list, showPerformance)];
+  const pagedLists = [...(showPromptCache ? [promptCache] : []), ...(showPerformance ? [list] : [])];
+  const loading = pagedLists.some((query) => query.isLoading) || deprecations.isLoading;
+  const hasError = pagedLists.some((query) => query.isError) || (showDeprecations && deprecations.isError);
+  const refreshing = pagedLists.some((query) => query.isFetching) || deprecations.isFetching;
+  const bulkUnavailable = hasError || items.length === 0;
   function refresh() {
     void client.invalidateQueries({ queryKey: ["alert-monitoring"] });
-    if (showPerformance) void list.refetch();
+    pagedLists.forEach((query) => void query.refetch());
     if (showDeprecations) void deprecations.refetch();
   }
   return (
     <>
-      <h1 className="text-2xl font-semibold">{t("alerts.unified.title")}</h1>
-      <PerformanceMonitoring scope={scope} readOnly={Boolean(auth.isViewOnly)} />
+      <ManageAlerts scope={scope} readOnly={Boolean(auth.isViewOnly)} />
       <PageTabs
         value={params.state}
         onValueChange={(value) => void setParams({ state: value as AlertStatus })}
@@ -138,7 +143,7 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
           ))}
         </PageTabsList>
       </PageTabs>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Select value={params.type} onValueChange={(value) => void setParams({ type: value as AlertFilter })}>
           <SelectTrigger className="w-52" aria-label={t("alerts.unified.typeFilter")}>
             <SelectValue>{t(TYPE_LABEL_KEYS[params.type])}</SelectValue>
@@ -151,13 +156,25 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
             ))}
           </SelectContent>
         </Select>
-        <Button variant="outline" size="sm" disabled={list.isFetching || deprecations.isFetching} onClick={refresh}>
-          <RefreshCw className="size-3.5" />
-          {t("alerts.unified.refresh")}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <BulkAlertActions
+            filter={params.type}
+            state={params.state}
+            readOnly={Boolean(auth.isViewOnly)}
+            deprecations={deprecations.data}
+            disabled={bulkUnavailable || refreshing}
+          />
+          <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>
+            <RefreshCw className="size-3.5" />
+            {t("alerts.unified.refresh")}
+          </Button>
+        </div>
       </div>
       {showDeprecations && deprecations.isError && (
         <LoadError retry={() => void deprecations.refetch()}>{t("alerts.unified.deprecationsError")}</LoadError>
+      )}
+      {showPromptCache && promptCache.isError && (
+        <LoadError retry={() => void promptCache.refetch()}>{t("alerts.unified.promptCacheError")}</LoadError>
       )}
       {showPerformance && list.isError && (
         <LoadError retry={() => void list.refetch()}>{t("alerts.unified.performanceError")}</LoadError>
@@ -195,17 +212,19 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
           );
         })}
       </ul>
-      {showPerformance && list.hasNextPage && (
+      {pagedLists.some((query) => query.hasNextPage) && (
         <Button
           variant="outline"
           className="self-center"
-          disabled={list.isFetchingNextPage}
-          onClick={() => void list.fetchNextPage()}
+          disabled={pagedLists.some((query) => query.isFetchingNextPage)}
+          onClick={() => pagedLists.filter((query) => query.hasNextPage).forEach((query) => void query.fetchNextPage())}
         >
-          {list.isFetchingNextPage ? t("alerts.unified.loadingMore") : t("alerts.unified.loadMore")}
+          {pagedLists.some((query) => query.isFetchingNextPage)
+            ? t("alerts.unified.loadingMore")
+            : t("alerts.unified.loadMore")}
         </Button>
       )}
-      {showDeprecations && <DeprecationEmailSetup />}
+      <DeprecationEmailSetup />
     </>
   );
 }

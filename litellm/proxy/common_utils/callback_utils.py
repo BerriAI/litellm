@@ -19,6 +19,7 @@ from litellm.constants import (
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -159,6 +160,18 @@ def initialize_callbacks_on_proxy(
     if isinstance(value, list):
         imported_list: Final[list[Any]] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            if callback == "customer_budget_webhook":
+                from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
+
+                imported_list.append(
+                    CustomerBudgetWebhook.from_config(
+                        string_keyed(_LOADED_CALLBACK.validate_python(callback_specific_params)).get(
+                            "customer_budget_webhook"
+                        )
+                    )
+                )
+                continue
+
             if isinstance(callback, str) and callback == "compression_interception":
                 from litellm.integrations.compression_interception.handler import (
                     CompressionInterceptionLogger,
@@ -552,6 +565,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
         BAGGAGE_MAPPED_TAGS_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,

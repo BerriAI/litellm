@@ -1489,6 +1489,46 @@ def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() ->
     assert openai_error_type(excinfo.value, 401) == "authentication_error"
 
 
+def _openai_sdk_403(message: str) -> Exception:
+    return _openai_sdk_error(openai.PermissionDeniedError, 403, {"message": message, "type": "permission_denied"})
+
+
+def _openai_like_403(message: str) -> Exception:
+    return OpenAIError(status_code=403, message=message, headers={})
+
+
+@pytest.mark.parametrize("make_error", [_openai_sdk_403, _openai_like_403], ids=["openai_sdk", "openai_like_httpx"])
+@pytest.mark.parametrize(
+    ("provider", "exception_provider"),
+    [("openai", "OpenAIException"), ("deepseek", "DeepseekException"), ("hostinger_router", "Hostinger_routerException")],
+)
+def test_an_openai_style_403_maps_to_permission_denied(
+    provider: str, exception_provider: str, make_error: Callable[[str], Exception], quiet_exception_mapping
+) -> None:
+    with pytest.raises(litellm.PermissionDeniedError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=make_error("Invalid API key"),
+            custom_llm_provider=provider,
+        )
+
+    assert (
+        type(raised.value),
+        raised.value.status_code,
+        raised.value.message,
+        raised.value.llm_provider,
+        raised.value.model,
+        raised.value.response.status_code,
+    ) == (
+        litellm.PermissionDeniedError,
+        403,
+        f"litellm.PermissionDeniedError: {exception_provider} - Invalid API key",
+        provider,
+        "test-model",
+        403,
+    )
+
+
 class _UpstreamHTTPError(Exception):
     def __init__(self, status_code: int, message: str = "upstream failure") -> None:
         super().__init__(message)
@@ -1500,11 +1540,13 @@ class _UpstreamHTTPError(Exception):
 
 UPSTREAM_STATUS_CODES = (400, 401, 402, 403, 404, 408, 422, 429, 500, 503)
 
+PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
+
 OPENAI_SHAPED = {
     400: (litellm.BadRequestError, 400),
     401: (litellm.AuthenticationError, 401),
     402: (litellm.PaymentRequiredError, 402),
-    403: (litellm.APIError, 403),
+    403: PERMISSION_DENIED,
     404: (litellm.NotFoundError, 404),
     408: (litellm.Timeout, 408),
     422: (litellm.BadRequestError, 422),
@@ -1513,37 +1555,27 @@ OPENAI_SHAPED = {
     503: (litellm.ServiceUnavailableError, 503),
 }
 
-PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
-
-STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
-
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "ai21": {402: (litellm.APIError, 402)},
-    "anthropic": {403: PERMISSION_DENIED},
-    "azure": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "azure": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
     "azure_ai": {402: (litellm.APIError, 402)},
     "bedrock": {
-        403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
     },
-    "cloudflare": {403: PERMISSION_DENIED},
-    "cohere": {403: PERMISSION_DENIED},
     "databricks": {
-        403: PERMISSION_DENIED,
         422: (litellm.BadRequestError, 400),
     },
     "deepseek": {402: (litellm.APIError, 402)},
     "fireworks_ai": {402: (litellm.APIError, 402)},
-    "gemini": {403: PERMISSION_DENIED},
     "groq": {402: (litellm.APIError, 402)},
     "huggingface": {
         402: (litellm.APIError, 402),
+        403: (litellm.APIError, 403),
         404: (litellm.APIError, 404),
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
     },
     "inferenceapis": {
-        403: PERMISSION_DENIED,
         422: (litellm.BadRequestError, 400),
     },
     "mistral": {402: (litellm.APIError, 402)},
@@ -1555,9 +1587,8 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         500: (litellm.APIError, 500),
         503: (litellm.APIError, 503),
     },
-    "ollama": {403: PERMISSION_DENIED},
     "openai": {402: (litellm.APIError, 402)},
-    "openrouter": {402: (litellm.APIError, 402), 500: (litellm.APIError, 500)},
+    "openrouter": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
     "perplexity": {402: (litellm.APIError, 402)},
     "replicate": {
         403: (litellm.APIError, 500),
@@ -1569,12 +1600,9 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     },
     "runwayml": {402: (litellm.APIError, 402)},
     "sagemaker": {
-        403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
     },
     "together_ai": {402: (litellm.APIError, 402)},
-    "vertex_ai": {403: PERMISSION_DENIED},
-    "vllm": {403: PERMISSION_DENIED},
     "xai": {402: (litellm.APIError, 402)},
 }
 
@@ -1738,7 +1766,7 @@ def test_an_anthropic_500_carries_its_own_status_as_the_provider_status(quiet_ex
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
 @pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
 def test_a_provider_without_a_handler_maps_by_the_upstream_status(provider, status_code, quiet_exception_mapping):
-    expected_class, expected_status = STATUS_KEYED[status_code]
+    expected_class, expected_status = OPENAI_SHAPED[status_code]
 
     with pytest.raises(openai.APIError) as raised:
         exception_type(
@@ -1862,6 +1890,34 @@ def test_an_unmapped_exception_with_no_model_or_provider_message_keeps_traceback
         )
 
     assert "Traceback (most recent call last)" in raised.value.message
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["azure", "azure_text"])
+def test_an_azure_stream_cut_maps_to_the_error_line_without_a_traceback(
+    custom_llm_provider: str, quiet_exception_mapping
+) -> None:
+    stream_cut: Final = httpx.ReadError(
+        "Response payload is not completed: <TransferEncodingError: 400, "
+        "message='Not enough data to satisfy transfer length header.'>"
+    )
+
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(model="gpt-5.4-mini", original_exception=stream_cut, custom_llm_provider=custom_llm_provider)
+
+    assert raised.value.message.endswith(f"APIConnectionError - {stream_cut}")
+    assert "test_exception_mapping_utils.py" not in str(raised.value)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["azure", "azure_text"])
+def test_an_azure_connection_reset_with_no_message_names_the_error_type(
+    custom_llm_provider: str, quiet_exception_mapping
+) -> None:
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(
+            model="gpt-5.4-mini", original_exception=httpx.ReadError(""), custom_llm_provider=custom_llm_provider
+        )
+
+    assert raised.value.message.endswith("APIConnectionError - ReadError")
 
 
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."

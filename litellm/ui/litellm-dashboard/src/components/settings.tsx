@@ -421,6 +421,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     outage_alerts: "loggingAndAlerts.alertTypes.labels.outageAlerts",
     region_outage_alerts: "loggingAndAlerts.alertTypes.labels.regionOutageAlerts",
     model_deprecation_warnings: "loggingAndAlerts.alertTypes.labels.modelDeprecationWarnings",
+    performance_alerts: "loggingAndAlerts.alertTypes.labels.performanceAlerts",
   };
 
   useEffect(() => {
