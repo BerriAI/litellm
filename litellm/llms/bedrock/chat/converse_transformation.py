@@ -127,9 +127,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     add_dummy_tool,
-    any_assistant_message_has_thinking_blocks,
     has_tool_call_blocks,
-    last_assistant_with_tool_calls_has_no_thinking_blocks,
+    should_drop_thinking_for_missing_tool_thinking_blocks,
     supports_reasoning,
     token_counter,
 )
@@ -2391,17 +2390,9 @@ class AmazonConverseConfig(BaseConfig):
         deployment_model: str | None = None,
         model_info: Mapping[str, object] | None = None,
     ) -> CommonRequestObject:
-        # Drop thinking param if thinking is enabled but thinking_blocks are missing
-        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
-        #
-        # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
-        # If any message has thinking_blocks, we must keep thinking enabled, otherwise
-        # Related issues: https://github.com/BerriAI/litellm/issues/14194
-        if (
-            optional_params.get("thinking") is not None
-            and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-            and not any_assistant_message_has_thinking_blocks(messages)
+        if messages is not None and should_drop_thinking_for_missing_tool_thinking_blocks(
+            optional_params.get("thinking"),  # pyright: ignore[reportUnknownArgumentType]  # optional_params is a bare dict
+            messages,
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)

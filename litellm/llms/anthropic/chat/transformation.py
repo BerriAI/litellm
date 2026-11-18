@@ -135,10 +135,9 @@ from litellm.utils import (
     ModelResponse,
     Usage,
     add_dummy_tool,
-    any_assistant_message_has_thinking_blocks,
     get_max_tokens,
     has_tool_call_blocks,
-    last_assistant_with_tool_calls_has_no_thinking_blocks,
+    should_drop_thinking_for_missing_tool_thinking_blocks,
     supports_mid_conversation_system,
     supports_reasoning,
     token_counter,
@@ -2573,17 +2572,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if "tools" not in optional_params and has_tool_call_blocks(capped_messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
-        # Drop thinking param if thinking is enabled but thinking_blocks are missing
-        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
-        #
-        # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
-        # If any message has thinking_blocks, we must keep thinking enabled, otherwise
-        # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
-        # Related issue: https://github.com/BerriAI/litellm/issues/18926
-        if (
-            optional_params.get("thinking") is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
-            and not any_assistant_message_has_thinking_blocks(capped_messages)
+        if should_drop_thinking_for_missing_tool_thinking_blocks(
+            optional_params.get("thinking"),  # pyright: ignore[reportUnknownArgumentType]  # optional_params is a bare dict
+            capped_messages,
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)

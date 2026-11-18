@@ -9702,7 +9702,7 @@ def has_tool_call_blocks(messages: list[AllMessageValues]) -> bool:
 
 
 def any_assistant_message_has_thinking_blocks(
-    messages: list[AllMessageValues],
+    messages: Sequence[AllMessageValues],
 ) -> bool:
     """
     Returns true if ANY assistant message has thinking_blocks.
@@ -9723,7 +9723,7 @@ def any_assistant_message_has_thinking_blocks(
 
 
 def last_assistant_with_tool_calls_has_no_thinking_blocks(
-    messages: list[AllMessageValues],
+    messages: Sequence[AllMessageValues],
 ) -> bool:
     """
     Returns true if the last assistant message with tool_calls has no thinking_blocks.
@@ -9752,6 +9752,20 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
     # Check if it has thinking_blocks
     thinking_blocks: Final = last_assistant_with_tools.get("thinking_blocks")
     return thinking_blocks is None or (hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0)
+
+
+def should_drop_thinking_for_missing_tool_thinking_blocks(
+    thinking: object,
+    messages: Sequence[AllMessageValues],
+) -> bool:
+    """Adaptive thinking is exempt: Anthropic allows its assistant turns to start without a thinking block."""
+    match thinking:
+        case None | {"type": "adaptive"}:
+            return False
+        case _:
+            return last_assistant_with_tool_calls_has_no_thinking_blocks(
+                messages
+            ) and not any_assistant_message_has_thinking_blocks(messages)
 
 
 def add_dummy_tool(custom_llm_provider: str) -> list[ChatCompletionToolParam]:
