@@ -3750,6 +3750,7 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "litellm-cost",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
@@ -4190,6 +4191,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "litellm-coroutine",
+ "litellm-cost",
  "litellm-secret-value",
  "rstest",
  "serde",
@@ -4347,6 +4349,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-cost",
  "litellm-env",
  "litellm-error",
  "litellm-framer",
@@ -4368,6 +4371,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "wiremock",
 ]
