@@ -2310,6 +2310,7 @@ class Logging(LiteLLMLoggingBaseClass):
             callable(getattr(self, "logger_fn", None))
             or self.litellm_request_debug
             or is_debugging_on()
+            or litellm.set_verbose is True
             or any(
                 _callback_may_read_original_response(callback)
                 for callback in itertools.chain(

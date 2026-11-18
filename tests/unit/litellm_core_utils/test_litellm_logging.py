@@ -962,6 +962,7 @@ def no_response_readers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in _GLOBAL_CALLBACK_LISTS:
         monkeypatch.setattr(litellm, name, [])
     monkeypatch.setattr(litellm_logger_settings, "set_verbose", False)
+    monkeypatch.setattr(litellm, "set_verbose", False)
     previous_level: Final = verbose_logger.level
     verbose_logger.setLevel(logging.WARNING)
     yield
@@ -995,6 +996,13 @@ def test_post_call_keeps_a_non_dict_response_without_formatting_it_for_a_silent_
 
     assert peak < _LARGE_IMAGE_BYTES / 10
     assert logging_obj.model_call_details["original_response"] is response
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_keeps_the_json_for_verbose_kwargs_dumps(logging_obj, monkeypatch):
+    monkeypatch.setattr(litellm, "set_verbose", True)
+
+    assert _retained_response(logging_obj) == json.dumps(_SMALL_RESPONSE)
 
 
 @pytest.mark.usefixtures("no_response_readers")
