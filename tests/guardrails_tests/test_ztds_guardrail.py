@@ -13,6 +13,8 @@ import unittest
 from collections.abc import AsyncGenerator
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict
+
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
@@ -562,6 +564,154 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             1.0,
         )
         self.assertNotIn(sid_log, self.guardrail._session_maps)
+
+    async def test_jwt_and_secret_prefix_flood_does_not_stall_event_loop(self) -> None:
+        """Repeated JWT/API key prefixes must execute in linear O(N) time while matching real JWTs."""
+        flood_payloads: Final = (
+            "eyJ-" * 32000,
+            ("eyJ" + ("a" * 25) + "." + ("b" * 25) + "!") * 3000,
+            "sk-!" * 24000,
+        )
+        for flood in flood_payloads:
+            t0 = time.perf_counter()
+            modified = await self.guardrail.async_pre_call_hook(
+                user_api_key_dict={},
+                cache={},
+                data={"litellm_call_id": "call-flood", "messages": [{"role": "user", "content": flood}]},
+                call_type="chat_completion",
+            )
+            elapsed = time.perf_counter() - t0
+            self.assertLess(elapsed, 0.25, f"Overlapping prefix scan took {elapsed:.4f}s")
+            msgs = _expect_list(modified["messages"])
+            self.assertEqual(_expect_dict(msgs[0])["content"], flood)
+            self.guardrail.zeroize_session(str(modified["_ztds_session_id"]))
+
+        real_jwt: Final = ".".join(("eyJ" + ("a" * 22), "eyJ" + ("b" * 22), "sig" + ("c" * 22)))
+        jwt_req: Final[dict[str, object]] = {  # mutable-ok: request fixture mutated by pre_call hook
+            "litellm_call_id": "call-jwt-valid",
+            "messages": [{"role": "user", "content": f"Bearer {real_jwt}"}],
+        }
+        modified_jwt: Final = await self.guardrail.async_pre_call_hook({}, {}, jwt_req, "chat_completion")
+        sanitized_msg: Final = str(_expect_dict(_expect_list(modified_jwt["messages"])[0])["content"])
+        self.assertNotIn(real_jwt, sanitized_msg)
+        self.assertIn("[API_SECRET_TOKEN_1]", sanitized_msg)
+        restored: Final = await self.guardrail.async_post_call_success_hook(
+            data=modified_jwt,
+            user_api_key_dict={},
+            response=MockModelResponse("Validated [API_SECRET_TOKEN_1]"),
+        )
+        assert isinstance(restored, MockModelResponse)
+        self.assertEqual(restored.choices[0].message.content, f"Validated {real_jwt}")
+
+    async def test_extended_provider_shapes_anthropic_gemini_rerank_pydantic_and_escaped_json(self) -> None:
+        """All provider-visible shapes (Gemini, Rerank, Pydantic, Anthropic blocks, JSON-escaped) must be sanitized."""
+
+        class _PydanticMessage(BaseModel):
+            model_config = ConfigDict(frozen=True)
+            role: str
+            content: str
+
+        provider_api_key: Final = "sk-" + "providerkey12345678901234"
+        pydantic_email: Final = "pydantic-user@corp.com"
+        tooluse_email: Final = "tooluse@corp.com"
+        thinking_secret: Final = "sk-" + "thinkingsecret1234567890"
+        escaped_email: Final = "escaped@corp.com"
+        gemini_email: Final = "gemini-user@corp.com"
+        gemini_sys_secret: Final = "sk-" + "geminisys12345678901234"
+        rerank_query_email: Final = "rerank-query@corp.com"
+        rerank_instr_email: Final = "rerank-instr@corp.com"
+        enum_email: Final = "enum-ops@corp.internal"
+        extra_secret: Final = "sk-" + "extrabodysecret1234567890"
+        opt_email: Final = "opt-prompt@corp.com"
+
+        escaped_args: Final = '{"email": "escaped\\u0040corp.com"}'
+        request_data: Final[dict[str, object]] = {  # mutable-ok: multi-provider request fixture
+            "litellm_call_id": "call-multi-shape",
+            "api_key": provider_api_key,
+            "query": f"Find records for {rerank_query_email}",
+            "instruction": f"Route escalations to {rerank_instr_email}",
+            "systemInstruction": {"parts": [{"text": f"Gemini sys key {gemini_sys_secret}"}]},
+            "contents": [{"role": "user", "parts": [{"text": f"Gemini user {gemini_email}"}]}],
+            "messages": (
+                _PydanticMessage(role="user", content=f"Hello from {pydantic_email}"),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": f"Internal key {thinking_secret}"},
+                        {"type": "tool_use", "id": "tu_1", "name": "lookup", "input": {"email": tooluse_email}},
+                    ],
+                    "tool_calls": [
+                        {
+                            "id": "call_esc",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": escaped_args},
+                        }
+                    ],
+                },
+            ),
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"recipient": {"type": "string", "enum": [enum_email]}},
+                        },
+                    },
+                }
+            ],
+            "optional_params": {"suffix": f"Suffix for {opt_email}"},
+            "extra_body": {"custom_context": f"Extra {extra_secret}"},
+        }
+
+        modified: Final = await self.guardrail.async_pre_call_hook({}, {}, request_data, "acompletion")
+        self.assertEqual(modified["api_key"], provider_api_key)
+
+        body_without_control: Final = {k: v for k, v in modified.items() if k != "api_key"}
+        serialized: Final = json.dumps(body_without_control, default=str)
+        for sensitive in (
+            pydantic_email,
+            tooluse_email,
+            thinking_secret,
+            escaped_email,
+            gemini_email,
+            gemini_sys_secret,
+            rerank_query_email,
+            rerank_instr_email,
+            enum_email,
+            extra_secret,
+            opt_email,
+        ):
+            self.assertNotIn(sensitive, serialized)
+
+        instr_match: Final = re.search(r"\[EMAIL_TOKEN_\d+\]", str(modified["instruction"]))
+        assert instr_match is not None
+        instr_tok: Final = instr_match.group(0)
+
+        gemini_items: Final = _expect_list(modified["contents"])
+        gemini_part: Final = _expect_dict(_expect_list(_expect_dict(gemini_items[0])["parts"])[0])
+        gemini_tok_match: Final = re.search(r"\[EMAIL_TOKEN_\d+\]", str(gemini_part["text"]))
+        assert gemini_tok_match is not None
+        gemini_tok: Final = gemini_tok_match.group(0)
+
+        gemini_response: Final[dict[str, object]] = {  # mutable-ok: mock Gemini generateContent response
+            "candidates": [{"content": {"parts": [{"text": f"Caller {gemini_tok}, instr {instr_tok}"}]}}]
+        }
+        restored: Final = _expect_dict(
+            await self.guardrail.async_post_call_success_hook(
+                data=modified,
+                user_api_key_dict={},
+                response=gemini_response,
+            )
+        )
+        restored_part: Final = _expect_dict(
+            _expect_list(_expect_dict(_expect_dict(_expect_list(restored["candidates"])[0])["content"])["parts"])[0]
+        )
+        restored_text: Final = str(restored_part["text"])
+        self.assertIn(gemini_email, restored_text)
+        self.assertNotIn(rerank_instr_email, restored_text)
+        self.assertIn(instr_tok, restored_text)
 
 
 if __name__ == "__main__":
