@@ -1,19 +1,21 @@
-//! What each provider branch of main's `cost_per_token` adds on top of `generic_cost_per_token`: which uplifts the
-//! total carries and how the web search tool is billed. Anthropic multiplies speed then geo
-//! (`llms/anthropic/cost_calculation.py`), Bedrock multiplies geo when it looked the row up by name
-//! (`llms/bedrock/cost_calculation.py`), Vertex multiplies its regional endpoint uplift, Azure AI nothing
+//! Which provider branch of main's `cost_per_token` prices a row, and what it adds on top of `generic_cost_per_token`:
+//! the basis facts the generic path reads, the uplifts the total carries and how the web search tool is billed.
+//! Anthropic multiplies speed then geo (`llms/anthropic/cost_calculation.py`), Bedrock multiplies geo when it looked
+//! the row up by name (`llms/bedrock/cost_calculation.py`), Vertex multiplies its regional endpoint uplift, Azure AI
+//! nothing. OpenAI and the generic `else` branch read the service tier and the data residency, Azure, Gemini, Databricks
+//! and Azure AI the service tier, DeepSeek, Tencent, Fireworks AI and xAI neither. The rest bill by `branch.rs`
 
-use std::num::NonZeroU64;
+use std::str::FromStr;
 
 use crate::call::{CallContext, InferenceGeo};
 use crate::money::Usd;
-use crate::price::{
-    Band, Channel, InputUnit, Meter, OutputUnit, SearchContextSize, ServiceTier, Uplift, WallClock,
-};
+use crate::price::{Channel, Meter, SearchContextSize, ServiceTier};
 use crate::priced::Quantity;
-use crate::query::{Basis, Candidate, Kind, Provider, TokenUsage, TokensQuery};
+use crate::query::{Basis, Candidate, Kind, Provider, TokenRules, TokenUsage, TokensQuery};
 use crate::quote::Quote;
 use crate::row::{LoweredRow, Provenance, ProviderEntry, RowRef};
+
+use super::branch::{self, Formula};
 
 /// How the row was reached: by the candidate's name, or handed in by the caller
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,15 +27,85 @@ pub(super) enum Lookup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Rule {
     Anthropic,
-    /// `geo` is false when main priced a registered or caller-given row through `generic_cost_per_token`
+    /// `geo` is false when main priced a registered row through `generic_cost_per_token`. A row the caller passes
+    /// under the provider branch is the one the branch looked up by name, so it carries geo
     Bedrock {
         geo: bool,
     },
     Vertex,
     AzureAi,
+    /// `generic_cost_per_token` with the basis facts the branch hands it
+    Generic(Reads),
+    Formula(Formula),
 }
 
-/// `vertex_ai/cost_calculator.py` `cost_router`: the models Vertex prices by token instead of by character
+/// The basis facts a branch passes `generic_cost_per_token`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Reads {
+    tier: bool,
+    residency: bool,
+    location: bool,
+}
+
+impl Reads {
+    const ALL: Self = Self {
+        tier: true,
+        residency: true,
+        location: true,
+    };
+    const TIER_AND_RESIDENCY: Self = Self {
+        tier: true,
+        residency: true,
+        location: false,
+    };
+    const TIER: Self = Self {
+        tier: true,
+        residency: false,
+        location: false,
+    };
+    const NONE: Self = Self {
+        tier: false,
+        residency: false,
+        location: false,
+    };
+}
+
+/// The branches of `cost_per_token` named by a provider outside the `/v1/messages` Claude ones
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString)]
+enum Branch {
+    #[strum(serialize = "openai")]
+    OpenAi,
+    #[strum(serialize = "azure", serialize = "gemini", serialize = "databricks")]
+    TierOnly,
+    #[strum(
+        serialize = "deepseek",
+        serialize = "tencent",
+        serialize = "fireworks_ai",
+        serialize = "xai"
+    )]
+    Plain,
+    #[strum(serialize = "perplexity")]
+    Perplexity,
+    #[strum(serialize = "lemonade")]
+    Lemonade,
+    #[strum(
+        serialize = "dashscope",
+        serialize = "qwencloud",
+        serialize = "qwen_ai_platform"
+    )]
+    Dashscope,
+}
+
+/// How a branch bills a cost the provider stated on the usage
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stated {
+    /// Perplexity: the stated cost is the completion side, read before any row
+    AllToCompletion,
+    /// xAI: split in the ratio of the token math, all on the completion side when that prices nothing
+    Proportional,
+}
+
+/// `cost_router` in `vertex_ai/cost_calculator.py`: the models Vertex prices by token instead of by character
 const VERTEX_TOKEN_PRICED: [&str; 7] = [
     "claude",
     "llama",
@@ -44,7 +116,34 @@ const VERTEX_TOKEN_PRICED: [&str; 7] = [
     "gemini-2",
 ];
 
-const OVER_128K: Band = Band::OverPromptTokens(NonZeroU64::new(128_000).unwrap());
+/// Lemonade bills nothing for any model, without reading a row
+pub(super) fn free_without_row(query: &TokensQuery) -> bool {
+    query.rules == TokenRules::Branch
+        && query
+            .header
+            .candidates
+            .first()
+            .is_some_and(|first| branch(first) == Some(Branch::Lemonade))
+}
+
+/// How the branch pricing `query` bills a stated cost, `None` when it reads none
+pub(super) fn stated(query: &TokensQuery) -> Option<Stated> {
+    if query.rules != TokenRules::Branch {
+        return None;
+    }
+    match &query.header.candidates.first()?.provider {
+        Provider::Other(name) if name == "xai" => Some(Stated::Proportional),
+        Provider::Other(name) if name == "perplexity" => Some(Stated::AllToCompletion),
+        _ => None,
+    }
+}
+
+fn branch(candidate: &Candidate) -> Option<Branch> {
+    match &candidate.provider {
+        Provider::Other(name) => Branch::from_str(name).ok(),
+        _ => None,
+    }
+}
 
 impl Rule {
     /// `Err` names the kind the caller has to price the old way
@@ -55,24 +154,41 @@ impl Rule {
         lookup: Lookup,
         query: &TokensQuery,
     ) -> Result<Self, Kind> {
-        if bills_seconds(row) {
-            return Err(Kind::Tokens);
+        if branch::per_second_rate(row).is_some() {
+            match (query.rules, query.elapsed) {
+                (TokenRules::Generic, None) => {}
+                (_, Some(_)) => return Ok(Self::Formula(Formula::PerSecond)),
+                (_, None) => return Err(Kind::Tokens),
+            }
+        }
+        match (query.rules, &candidate.provider) {
+            (TokenRules::Generic, _) => return Ok(Self::Generic(Reads::ALL)),
+            (TokenRules::Override, Provider::Anthropic) => return Ok(Self::Anthropic),
+            (TokenRules::Override, _) => return Ok(Self::Generic(Reads::ALL)),
+            (TokenRules::Branch, _) => {}
         }
         let model = &*candidate.model;
         let web_search = query.usage.web_search.is_some();
         match &candidate.provider {
             Provider::Anthropic => Ok(Self::Anthropic),
             Provider::Bedrock => Ok(Self::Bedrock {
-                geo: lookup == Lookup::Catalog && at.provenance != Provenance::Registered,
+                geo: match lookup {
+                    Lookup::Catalog => at.provenance != Provenance::Registered,
+                    Lookup::Given { .. } => true,
+                },
             }),
-            Provider::VertexAi
-                if !VERTEX_TOKEN_PRICED.iter().any(|name| model.contains(name))
-                    || prices_above_128k(row)
-                    || (web_search && !model.to_lowercase().contains("claude")) =>
-            {
+            Provider::VertexAi if web_search && !model.to_lowercase().contains("claude") => {
                 Err(Kind::Tokens)
             }
-            Provider::VertexAi => Ok(Self::Vertex),
+            Provider::VertexAi => {
+                let by_token =
+                    query.embedding || VERTEX_TOKEN_PRICED.iter().any(|name| model.contains(name));
+                Ok(match (by_token, branch::prices_above_128k(row)) {
+                    (false, _) => Self::Formula(Formula::VertexCharacters),
+                    (true, true) => Self::Formula(Formula::VertexLegacy),
+                    (true, false) => Self::Vertex,
+                })
+            }
             Provider::AzureAi
                 if is_model_router(model)
                     || query
@@ -83,7 +199,17 @@ impl Rule {
                 Err(Kind::Tokens)
             }
             Provider::AzureAi => Ok(Self::AzureAi),
-            Provider::Other(_) => Err(Kind::Tokens),
+            Provider::Other(_) if web_search => Err(Kind::Tokens),
+            Provider::Other(_) => Ok(match branch(candidate) {
+                Some(Branch::OpenAi) => Self::Generic(Reads::TIER_AND_RESIDENCY),
+                Some(Branch::TierOnly) => Self::Generic(Reads::TIER),
+                Some(Branch::Plain) => Self::Generic(Reads::NONE),
+                Some(Branch::Perplexity) => Self::Formula(Formula::Perplexity),
+                Some(Branch::Lemonade) => Self::Formula(Formula::Free),
+                Some(Branch::Dashscope) => Self::Formula(Formula::Dashscope),
+                None if branch::prices_tokens(row) => Self::Generic(Reads::TIER_AND_RESIDENCY),
+                None => Self::Formula(Formula::Free),
+            }),
         }
     }
 
@@ -95,10 +221,11 @@ impl Rule {
         entry: &ProviderEntry,
     ) -> Option<CallContext> {
         let geo = billed_geo(usage);
-        let unreadable =
-            |uplift: Option<Uplift>| uplift.is_some_and(|uplift| entry.rejects(&uplift));
-        let geo_raises = unreadable(geo.clone().map(Uplift::InferenceGeo));
-        let speed_raises = unreadable(usage.speed.map(Uplift::Speed));
+        let unreadable = |uplift: Option<crate::price::Uplift>| {
+            uplift.is_some_and(|uplift| entry.rejects(&uplift))
+        };
+        let geo_raises = unreadable(geo.clone().map(crate::price::Uplift::InferenceGeo));
+        let speed_raises = unreadable(usage.speed.map(crate::price::Uplift::Speed));
         let base = CallContext {
             tier: basis.service_tier,
             channel: Channel::Online,
@@ -125,6 +252,22 @@ impl Rule {
             Self::Bedrock { geo: false } | Self::AzureAi => Some(base),
             Self::Vertex => Some(CallContext {
                 non_global_endpoint: basis.non_global_endpoint(),
+                ..base
+            }),
+            Self::Generic(reads) => Some(CallContext {
+                tier: if reads.tier {
+                    basis.service_tier
+                } else {
+                    ServiceTier::Standard
+                },
+                residency: basis.residency().filter(|_| reads.residency),
+                fedramp_endpoint: reads.residency && basis.fedramp(),
+                non_global_endpoint: reads.location && basis.non_global_endpoint(),
+                ..base
+            }),
+            Self::Formula(Formula::VertexCharacters | Formula::VertexLegacy) => Some(base),
+            Self::Formula(_) => Some(CallContext {
+                tier: ServiceTier::Standard,
                 ..base
             }),
         }
@@ -162,6 +305,7 @@ impl Rule {
                 Ok(rate(SearchContextSize::Medium)
                     .map_or(Usd::ZERO, |rate| rate * Quantity::Count(used.requests)))
             }
+            Self::Generic(_) | Self::Formula(_) => Err(Kind::Tokens),
         }
     }
 }
@@ -180,40 +324,6 @@ fn is_model_router(model: &str) -> bool {
     model.contains("model-router")
         || model.contains("model_router")
         || model == "azure-model-router"
-}
-
-/// `_per_second_pricing_cost`: a row without a positive token price or tiers, in a wall-clock mode, with a
-/// per-second price bills response time, not tokens
-fn bills_seconds(row: &impl LoweredRow) -> bool {
-    let prices = row.prices();
-    let flat = prices.flat();
-    let positive = |meter: Meter| {
-        flat.get(&crate::price::Price::online(meter, Default::default()))
-            .is_some_and(|rate| rate.get() > 0.0)
-    };
-    let per_second = [
-        Meter::WallClockSecond,
-        Meter::Input(InputUnit::Second),
-        Meter::Output(OutputUnit::Second(None)),
-    ];
-    !positive(Meter::TEXT_INPUT)
-        && !positive(Meter::TEXT_OUTPUT)
-        && prices.tiers().is_none()
-        && flat.billing().wall_clock != WallClock::Never
-        && per_second.into_iter().any(|meter| {
-            flat.get(&crate::price::Price::online(meter, Default::default()))
-                .is_some()
-        })
-}
-
-/// Vertex's `_handle_128k_pricing` path, for rows with `_above_128k_tokens` token prices
-fn prices_above_128k(row: &impl LoweredRow) -> bool {
-    row.prices().flat().iter().any(|(price, _)| {
-        (price.meter == Meter::TEXT_INPUT || price.meter == Meter::TEXT_OUTPUT)
-            && price.channel == Channel::Online
-            && price.when.tier == ServiceTier::Standard
-            && price.when.band == OVER_128K
-    })
 }
 
 #[cfg(test)]
@@ -345,7 +455,7 @@ mod tests {
             prices: prices(&[(Meter::TEXT_OUTPUT, ServiceTier::Standard, over(128_000), 1.0)]),
             ..text_row(1.0, 1.0)
         },
-        Err(Kind::Tokens)
+        Ok(Rule::Formula(Formula::VertexLegacy))
     )]
     #[case::vertex_other_band(
         Provider::VertexAi,

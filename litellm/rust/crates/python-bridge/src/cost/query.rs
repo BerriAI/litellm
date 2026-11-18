@@ -10,17 +10,19 @@ use litellm_cost::adjust::{AdjustmentKey, Discounts, MarginRule, Margins, adjust
 use litellm_cost::bound::{
     BoundModel, BoundPolicy, BoundQuery, CostShape, FlatSource, GroupRates, RequestCaps,
 };
+use litellm_cost::money::UnitPrice;
 use litellm_cost::price::{InputUnit, Meter, OutputUnit, TokenKind};
 use litellm_cost::query::{
-    AdjustmentPolicy, Basis, Candidate, DataResidency, Header, PriceQuery, PriceSource, Provider,
-    TokenUsage, TokensQuery,
+    AdjustmentPolicy, Basis, Candidate, CharacterCounts, DataResidency, Elapsed, FlatRates, Header,
+    PriceQuery, PriceSource, Provider, RawCounts, ReportedCost, TokenRules, TokenUsage,
+    TokensQuery,
 };
 use litellm_cost::rates::{Pricing, RatesQuery};
 use litellm_cost::receipt::{PriceOutcome, Receipt};
 use litellm_host_python::{from_py_argument, json_from_py};
 use litellm_inference_messages::PricedCall;
 use litellm_model_catalog::wire::Fields;
-use litellm_model_catalog::{CallIdentity, PricingRows, RowRef, Tried, priced_ref};
+use litellm_model_catalog::{CallIdentity, Deferral, PricingRows, RowRef, Tried, priced_ref};
 use litellm_python_compat::number::float_of;
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
@@ -44,6 +46,9 @@ enum Named {
         provider: String,
         #[serde(default)]
         region: Option<String>,
+        /// The provider the passed row is lowered under, when it is not `provider`
+        #[serde(default)]
+        row_provider: Option<String>,
     },
 }
 
@@ -79,6 +84,29 @@ struct PriceDocument {
     /// The discount and margin key, absent where main applies neither (`cost_per_token`)
     #[serde(default)]
     adjust: Option<AdjustFacts>,
+    #[serde(default)]
+    rules: TokenRules,
+    #[serde(default)]
+    elapsed: Option<Elapsed>,
+    #[serde(default)]
+    characters: Option<CharacterCounts>,
+    #[serde(default)]
+    embedding: bool,
+    #[serde(default)]
+    raw: Option<RawCounts>,
+    #[serde(default)]
+    reported: Option<ReportedCost>,
+    #[serde(default)]
+    custom: Option<CustomPricing>,
+}
+
+/// `custom_cost_per_token` or `custom_cost_per_second`, which price the call without a row
+#[derive(Deserialize)]
+struct CustomPricing {
+    #[serde(default)]
+    per_token: Option<FlatRates>,
+    #[serde(default)]
+    per_second: Option<UnitPrice>,
 }
 
 #[derive(Deserialize)]
@@ -184,6 +212,12 @@ pub(crate) fn price(
     row: Option<&Bound<'_, PyMapping>>,
 ) -> PyResult<Option<NativeReceipt>> {
     let document: PriceDocument = from_py_argument(document)?;
+    for length in [
+        document.usage.input_audio_seconds,
+        document.usage.input_video_seconds,
+    ] {
+        super::seconds(length)?;
+    }
     let row = row.map(row_fields).transpose()?;
     priced(snapshot, document, row)
         .map(|receipt| NativeReceipt::new(py, &receipt))
@@ -229,6 +263,13 @@ impl litellm_inference_messages::Pricing for RoutePricing {
                     model: None,
                     region: identity.region.as_deref().map(Into::into),
                 }),
+                rules: TokenRules::Branch,
+                elapsed: None,
+                characters: None,
+                embedding: false,
+                raw: None,
+                reported: None,
+                custom: None,
             },
             None,
         )
@@ -241,11 +282,44 @@ fn priced(
     document: PriceDocument,
     row: Option<Fields>,
 ) -> Option<Receipt> {
-    let (candidates, named) = candidates(snapshot, &document.named, row.is_some())?;
+    let (candidates, named) = match (&document.custom, &document.named) {
+        (
+            Some(_),
+            Named::Model {
+                model, provider, ..
+            },
+        ) => (
+            vec![Candidate {
+                model: model.as_str().into(),
+                provider: provider.parse().ok()?,
+            }],
+            Vec::new(),
+        ),
+        _ => candidates(snapshot, &document.named, row.is_some())?,
+    };
     let rows = snapshot.pricing_rows(named, []);
-    let (rows, source) = match (row, candidates.first()) {
-        (Some(row), Some(first)) => {
-            let provider = first.provider.to_string();
+    let row_provider = match &document.named {
+        Named::Model {
+            row_provider: Some(provider),
+            ..
+        } => Some(provider.clone()),
+        Named::Model { .. } | Named::Call(_) => None,
+    };
+    let custom = document.custom.as_ref().and_then(|custom| match custom {
+        CustomPricing {
+            per_token: Some(rates),
+            ..
+        } => Some(PriceSource::FlatPerToken(*rates)),
+        CustomPricing {
+            per_second: Some(rate),
+            ..
+        } => Some(PriceSource::PerSecond { rate: *rate }),
+        CustomPricing { .. } => None,
+    });
+    let (rows, source) = match (custom, row, candidates.first()) {
+        (Some(custom), _, _) => (rows, custom),
+        (None, Some(row), Some(first)) => {
+            let provider = row_provider.unwrap_or_else(|| first.provider.to_string());
             let (rows, at) = rows.with_per_call(PER_CALL_ROW, row, &provider);
             (
                 rows,
@@ -274,10 +348,15 @@ fn priced(
                     region: key.region,
                 }
             }),
-            reported: None,
+            reported: document.reported,
         },
         usage: document.usage,
         requested_model: document.requested_model,
+        rules: document.rules,
+        elapsed: document.elapsed,
+        characters: document.characters,
+        embedding: document.embedding,
+        raw: document.raw.unwrap_or_default(),
     }));
     match litellm_cost::price(&rows, &query) {
         PriceOutcome::Priced(receipt) => Some(*receipt),
@@ -333,9 +412,11 @@ fn candidates(
             model,
             provider,
             region,
+            ..
         } => {
             let row = match snapshot.priced_row(model, provider, region.as_deref()) {
                 Ok(row) => row,
+                Err(Deferral::Provider) => None,
                 Err(_) if per_call_row => None,
                 Err(_) => return None,
             };

@@ -1,19 +1,16 @@
 """
 Helper util for handling XAI-specific cost calculation
 - Prefers the cost xAI reports on the response over recomputing it locally
-- Uses the generic cost calculator which already handles tiered pricing correctly
 - Handles XAI-specific reasoning token billing (billed as part of completion tokens)
 """
 
 import math
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import PromptTokensDetailsWrapper, Usage
-
-if TYPE_CHECKING:
-    from litellm.types.utils import ModelInfo
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import BranchFacts, ReportedCost, branch_cost
+from litellm.types.utils import ModelInfo, PromptTokensDetailsWrapper, Usage
+from litellm.utils import get_model_info
 
 # https://docs.x.ai/developers/pricing#tools-pricing — default when unset in model map
 _DEFAULT_WEB_SEARCH_COST_PER_CALL: Final = 5.0 / 1000.0
@@ -38,7 +35,7 @@ def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping
     usage.prompt_tokens_details = prompt_tokens_details  # rebind-ok: write details onto caller usage
 
 
-def _cost_reported_by_xai(usage: "Usage") -> float | None:
+def stated_cost(usage: Usage) -> float | None:
     reported_cost: Final[object] = getattr(usage, "cost", None)
     if not isinstance(reported_cost, (int, float)) or isinstance(reported_cost, bool):
         return None
@@ -49,17 +46,36 @@ def _cost_reported_by_xai(usage: "Usage") -> float | None:
     return float(reported_cost)
 
 
-def _split_reported_cost(model: str, usage: Usage, reported_cost: float) -> tuple[float, float]:
-    """xAI reports one total, so attribute it to input and output in the ratio our own token math gives."""
+def pricing_row(model: str, stated: bool) -> ModelInfo | None:
+    """The row xAI's token math reads, ``None`` for an unmapped model whose reported cost bills it whole."""
     try:
-        priced_input, priced_output = _token_math_cost_per_token(model, usage)
-    except Exception:  # noqa: BLE001  # generic_cost_per_token raises bare Exception for unmapped models
-        return 0.0, reported_cost
-    priced_total: Final = priced_input + priced_output
-    if priced_total <= 0:
-        return 0.0, reported_cost
-    input_cost: Final = reported_cost * priced_input / priced_total
-    return input_cost, reported_cost - input_cost
+        return get_model_info(model=model, custom_llm_provider="xai")
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
+        if not stated:
+            raise
+        return None
+
+
+def billed_usage(usage: Usage) -> Usage:
+    """``usage`` with its reasoning tokens in the completion, as xAI bills them. The transformation layer may have
+    folded them already, which shows as a total that is prompt plus completion, and a caller that bypassed it (proxy
+    logs replayed into cost calc) reports them beside the completion."""
+    prompt_tokens: Final = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion_tokens: Final = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens: Final = int(getattr(usage, "total_tokens", 0) or 0)
+    reasoning_tokens: Final = (
+        int(getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0)
+        if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details
+        else 0
+    )
+    already_normalised: Final = total_tokens == prompt_tokens + completion_tokens
+    return Usage(
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=completion_tokens if already_normalised else completion_tokens + reasoning_tokens,
+        total_tokens=usage.total_tokens,
+        prompt_tokens_details=usage.prompt_tokens_details,
+        completion_tokens_details=None,
+    )
 
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
@@ -74,43 +90,19 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    reported_cost: Final = _cost_reported_by_xai(usage)
-    if reported_cost is not None:
-        return _split_reported_cost(model, usage, reported_cost)
-    return _token_math_cost_per_token(model, usage)
-
-
-def _token_math_cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
-    # XAI-specific completion cost: completion is billed as visible + reasoning
-    # tokens. Detect when the transformation layer already folded them so we
-    # don't double-count; fall back to raw xAI shape for callers that bypass
-    # the transformation (e.g. proxy logs replayed into cost calc).
-    prompt_tokens: Final = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion_tokens: Final = int(getattr(usage, "completion_tokens", 0) or 0)
-    total_tokens: Final = int(getattr(usage, "total_tokens", 0) or 0)
-    reasoning_tokens: Final = (
-        int(getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0)
-        if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details
-        else 0
+    reported_cost: Final = stated_cost(usage)
+    return branch_cost(
+        model,
+        "xai",
+        billed_usage(usage),
+        pricing_row(model, stated=reported_cost is not None),
+        branch=BranchFacts(
+            reported=None if reported_cost is None else ReportedCost(source="usage.cost", usd=reported_cost)
+        ),
     )
 
-    already_normalised: Final = total_tokens == prompt_tokens + completion_tokens
-    total_completion_tokens: Final = completion_tokens if already_normalised else completion_tokens + reasoning_tokens
 
-    modified_usage: Final = Usage(
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=total_completion_tokens,
-        total_tokens=usage.total_tokens,
-        prompt_tokens_details=usage.prompt_tokens_details,
-        completion_tokens_details=None,
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=modified_usage, custom_llm_provider="xai")
-
-    return prompt_cost, completion_cost
-
-
-def _web_search_cost_per_call_from_model_info(model_info: "ModelInfo") -> float:
+def _web_search_cost_per_call_from_model_info(model_info: ModelInfo) -> float:
     """
     Per-invocation web_search price from model_info when configured.
 
@@ -136,7 +128,7 @@ def _web_search_cost_per_call_from_model_info(model_info: "ModelInfo") -> float:
     return _DEFAULT_WEB_SEARCH_COST_PER_CALL
 
 
-def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> float:
+def cost_per_web_search_request(usage: Usage, model_info: ModelInfo) -> float:
     """
     Calculate the cost of web search requests for X.AI models.
 
@@ -144,7 +136,7 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     Per-call rate comes from model_info.search_context_cost_per_query when set,
     otherwise the default xAI tools rate ($5 / 1k calls).
     """
-    if _cost_reported_by_xai(usage) is not None:
+    if stated_cost(usage) is not None:
         return 0.0
 
     details: Final = getattr(usage, "server_side_tool_usage_details", None)

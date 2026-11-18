@@ -13,10 +13,10 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     TranscriptionDocument,
     VideoDocument,
+    branch_cost,
     price_units,
     prompt_and_completion,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.rust_bridge._native import NativeReceipt
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -48,10 +48,11 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    return generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="openai",
+    return branch_cost(
+        model,
+        "openai",
+        usage,
+        get_model_info(model=model, custom_llm_provider="openai"),
         service_tier=service_tier,
         data_residency=data_residency,
     )

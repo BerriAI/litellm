@@ -6,8 +6,9 @@ Helper util for handling databricks-specific cost calculation
 from types import MappingProxyType
 from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost
+from litellm.types.utils import ModelInfo, Usage
+from litellm.utils import get_model_info
 
 _LEGACY_ENDPOINT_NAMES: Final = MappingProxyType(
     {
@@ -30,6 +31,11 @@ def _registry_key(model: str) -> str:
     )
 
 
+def pricing_row(model: str) -> ModelInfo:
+    """The row a Databricks call prices with, legacy endpoint names under their ``databricks-`` key."""
+    return get_model_info(model=_registry_key(model), custom_llm_provider="databricks")
+
+
 def cost_per_token(model: str, usage: Usage, service_tier: str | None = None) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -41,9 +47,4 @@ def cost_per_token(model: str, usage: Usage, service_tier: str | None = None) ->
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    return generic_cost_per_token(
-        model=_registry_key(model),
-        usage=usage,
-        custom_llm_provider="databricks",
-        service_tier=service_tier,
-    )
+    return branch_cost(_registry_key(model), "databricks", usage, pricing_row(model), service_tier=service_tier)

@@ -7,54 +7,11 @@ cached, cache-creation, output, reasoning) is billed at that one tier's rate.
 See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 """
 
-from dataclasses import dataclass
 from datetime import datetime
-from types import MappingProxyType
-from typing import Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    billed_cache_read_rate,
-    calculate_cache_writing_cost,
-    call_context,
-    parse_completion_tokens_details,
-    parse_prompt_tokens_details,
-)
-from litellm.rust_bridge._native import NativePrices
-from litellm.types.utils import CacheCreationTokenDetails, Usage
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost
+from litellm.types.utils import Usage
 from litellm.utils import get_model_info
-
-
-@dataclass(frozen=True, slots=True)
-class TokenBreakdown:
-    text_tokens: int
-    cached_tokens: int
-    cache_creation_tokens: int
-    cache_creation_token_details: CacheCreationTokenDetails | None
-    completion_tokens: int
-    reasoning_tokens: int
-
-    @property
-    def total_input_tokens(self) -> int:
-        return self.text_tokens + self.cached_tokens + self.cache_creation_tokens
-
-
-def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
-    prompt_details: Final = parse_prompt_tokens_details(usage)
-    cached_tokens: Final = prompt_details["cache_hit_tokens"]
-    cache_creation_tokens: Final = prompt_details["cache_creation_tokens"]
-    text_tokens: Final = max(usage.prompt_tokens - cached_tokens - cache_creation_tokens, 0)
-
-    reasoning_tokens: Final = parse_completion_tokens_details(usage)["reasoning_tokens"]
-    completion_tokens: Final = max((usage.completion_tokens or 0) - reasoning_tokens, 0)
-
-    return TokenBreakdown(
-        text_tokens=text_tokens,
-        cached_tokens=cached_tokens,
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_token_details=prompt_details["cache_creation_token_details"],
-        completion_tokens=completion_tokens,
-        reasoning_tokens=reasoning_tokens,
-    )
 
 
 def cost_per_token(
@@ -78,22 +35,10 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    breakdown: Final = _extract_token_breakdown(usage)
-    quote: Final = NativePrices(model_info, custom_llm_provider).quote(
-        breakdown.total_input_tokens, call_context(None, None, None, current_time)
+    return branch_cost(
+        model,
+        custom_llm_provider,
+        usage,
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider),
+        current_time=current_time,
     )
-    prompt_cost: Final = (
-        (breakdown.text_tokens * quote.input)
-        + (breakdown.cached_tokens * billed_cache_read_rate(quote, usage))
-        + calculate_cache_writing_cost(
-            cache_creation_tokens=breakdown.cache_creation_tokens,
-            cache_creation_token_details=breakdown.cache_creation_token_details,
-            cache_creation_cost=quote.cache_write,
-            cache_creation_cost_by_ttl=MappingProxyType({"1hr": quote.cache_write_1h}),
-        )
-    )
-    completion_cost: Final = (breakdown.completion_tokens * quote.output) + (
-        breakdown.reasoning_tokens * quote.reasoning
-    )
-    return prompt_cost, completion_cost
