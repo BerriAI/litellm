@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.common_utils import without_unrendered_blocks
+from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, counted_tool_choice
 from litellm.llms.anthropic.pass_through.convertible_blocks import deployment_drops_params
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
@@ -81,10 +82,17 @@ def _invoke_model_message(message: Mapping[str, object]) -> Mapping[str, object]
 
 def _invoke_tool_choice(
     options: Mapping[str, JsonValue], tools: Sequence[Mapping[str, object]] | None, drops_params: bool
-) -> Mapping[str, JsonValue]:
+) -> Mapping[str, JsonValue] | ChatCountTranslationError:
     tool_choice: Final = options.get("tool_choice")
-    dropped: Final = tool_choice is None or (drops_params and not tools)
-    return MappingProxyType({} if dropped else {"tool_choice": tool_choice})
+    match counted_tool_choice(tool_choice, drops_params):
+        case ChatCountTranslationError() as error:
+            return error
+        case None:
+            return _NO_OPTIONS
+        case _ if drops_params and not tools:
+            return _NO_OPTIONS
+        case _:
+            return MappingProxyType({"tool_choice": tool_choice})
 
 
 class BedrockTokenCounter(BaseTokenCounter):
@@ -152,11 +160,14 @@ class BedrockTokenCounter(BaseTokenCounter):
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(model_to_use.removeprefix("bedrock_mantle/"))
+        primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         invoke_fields: Final = _invoke_tool_choice(
             count_options if is_mantle_claude_model(resolved_model) else _NO_OPTIONS,
             tools,
             deployment_drops_params(deployment),
         )
+        if isinstance(invoke_fields, ChatCountTranslationError):
+            return invoke_fields.response(request_model, model_to_use, primary_tokenizer)
         counted_messages: Final = tuple(without_unrendered_blocks(messages))
         request_data: Final[dict[str, object]] = {
             "model": model_to_use,
@@ -170,7 +181,7 @@ class BedrockTokenCounter(BaseTokenCounter):
 
         primary: Final = await self._count_with(
             self._mantle_handler if use_mantle else self._runtime_handler,
-            MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE,
+            primary_tokenizer,
             request_data,
             litellm_params,
             resolved_model,

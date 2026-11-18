@@ -334,6 +334,74 @@ async def test_claude_runtime_count_drops_a_forced_tool_choice_without_tools_und
     assert with_choice.requests[0].content == without_choice.requests[0].content
 
 
+_INVALID_TOOL_CHOICE: Final = {"type": "sometimes"}
+_WEATHER_INPUT_TOOL: Final = {"name": "get_weather", "input_schema": {"type": "object"}}
+
+
+@pytest.mark.asyncio
+async def test_claude_count_rejects_an_invalid_tool_choice_without_calling_bedrock() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-sonnet-4-6",
+        tools=[_WEATHER_INPUT_TOOL],
+        count_options={"tool_choice": _INVALID_TOOL_CHOICE},
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+async def test_claude_runtime_count_drops_an_invalid_tool_choice_under_drop_params() -> None:
+    with_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    without_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 583}), mantle=(200, {"input_tokens": 1}))
+    request: Final = {
+        "model_to_use": "anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "contents": None,
+        "deployment": {"litellm_params": {**DEPLOYMENT["litellm_params"], "drop_params": True}},
+        "request_model": "claude-sonnet-4-6",
+        "tools": [_WEATHER_INPUT_TOOL],
+    }
+
+    result: Final = await _counter(with_choice).count_tokens(
+        **request, count_options={"tool_choice": _INVALID_TOOL_CHOICE}
+    )
+    await _counter(without_choice).count_tokens(**request)
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 583)
+    assert with_choice.posted_hosts() == (RUNTIME_HOST,)
+    assert with_choice.requests[0].content == without_choice.requests[0].content
+
+
+@pytest.mark.asyncio
+async def test_mantle_retry_leaves_out_the_tool_choice_drop_params_left_out_of_the_runtime_count() -> None:
+    with_choice: Final = _Bedrock(runtime=(400, UNSUPPORTED), mantle=(200, {"input_tokens": 31}))
+    without_choice: Final = _Bedrock(runtime=(400, UNSUPPORTED), mantle=(200, {"input_tokens": 31}))
+    request: Final = {
+        "model_to_use": "us.anthropic.claude-opus-5-5",
+        "messages": MESSAGES,
+        "contents": None,
+        "deployment": {"litellm_params": {**DEPLOYMENT["litellm_params"], "drop_params": True}},
+        "request_model": "claude-opus-5-5",
+    }
+
+    result: Final = await _counter(with_choice).count_tokens(**request, count_options={"tool_choice": {"type": "any"}})
+    await _counter(without_choice).count_tokens(**request)
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 31)
+    assert with_choice.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+    assert with_choice.requests[-1].content == without_choice.requests[-1].content
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "host", "tokenizer", "expected_tokens"),

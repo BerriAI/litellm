@@ -497,6 +497,29 @@ async def test_anthropic_format_unknown_tool_choice_answers_400_without_calling_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [{"type": "sometimes"}, "required", 7],
+    ids=["unknown_type", "chat_shaped_string", "int"],
+)
+async def test_drop_params_counts_the_tools_without_an_invalid_anthropic_tool_choice(
+    monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue
+) -> None:
+    count: Final = {
+        "messages": _WEATHER_ASK,
+        "system": None,
+        "messages_format": "anthropic",
+        "tools": [_ANTHROPIC_WEATHER_TOOL],
+        "litellm_params": {"drop_params": True},
+    }
+
+    sent: Final = await _sent_count_body(monkeypatch, **count, count_options={"tool_choice": tool_choice})
+    sent_without_choice: Final = await _sent_count_body(monkeypatch, **count)
+
+    assert sent == sent_without_choice
+
+
+@pytest.mark.asyncio
 async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_decoder_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

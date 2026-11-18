@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
@@ -24,13 +24,16 @@ from litellm.llms.anthropic.common_utils import (
     verifies_claude_thinking_signatures,
 )
 from litellm.llms.anthropic.wif import resolve_anthropic_base
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesToolChoice
 from litellm.types.llms.openai import ChatCompletionImageObject
 from litellm.types.utils import TokenCountResponse
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
+_ANTHROPIC_TOOL_CHOICE: Final[TypeAdapter[AnthropicMessagesToolChoice | None]] = TypeAdapter(
+    AnthropicMessagesToolChoice | None
+)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 
 
@@ -98,6 +101,15 @@ class ChatCountTranslationError:
             status_code=400,
             rejected_before_provider_call=True,
         )
+
+
+def counted_tool_choice(
+    tool_choice: object, drops_params: bool
+) -> AnthropicMessagesToolChoice | ChatCountTranslationError | None:
+    try:
+        return _ANTHROPIC_TOOL_CHOICE.validate_python(tool_choice)
+    except ValidationError as e:
+        return None if drops_params else ChatCountTranslationError(message=str(e))
 
 
 class AnthropicCountTokensConfig:
