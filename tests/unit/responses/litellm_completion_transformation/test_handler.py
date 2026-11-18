@@ -14,7 +14,7 @@ kwargs lack the flag and these tests fail.
 
 import inspect
 import json
-import time
+import threading
 from collections.abc import Mapping
 from itertools import chain
 from typing import Final
@@ -366,19 +366,19 @@ class _StreamChunkToolNames(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.names: list[str] = []
+        self.saw_tool_call: Final = threading.Event()
+
+    def _record(self, chunk: object) -> None:
+        names: Final = _chunk_tool_names(chunk)
+        self.names.extend(names)
+        if names:
+            self.saw_tool_call.set()
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        self.names.extend(_chunk_tool_names(response_obj))
+        self._record(response_obj)
 
     async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        self.names.extend(_chunk_tool_names(response_obj))
-
-    def wait_for_names(self) -> list[str]:
-        for _ in range(200):
-            if self.names:
-                return self.names
-            time.sleep(0.01)
-        raise AssertionError("no stream chunk with a tool call reached the per-chunk hooks")
+        self._record(response_obj)
 
 
 def test_per_chunk_hooks_of_a_sync_bridged_stream_see_the_full_name_of_a_namespace_member(
@@ -411,4 +411,5 @@ def test_per_chunk_hooks_of_a_sync_bridged_stream_see_the_full_name_of_a_namespa
     events: Final = tuple(stream)
 
     assert events
-    assert set(recorder.wait_for_names()) == {qualified_member_name(_LONG_NAMESPACE, _LONG_MEMBER)}
+    assert recorder.saw_tool_call.wait(timeout=60), "no stream chunk with a tool call reached the per-chunk hooks"
+    assert set(recorder.names) == {qualified_member_name(_LONG_NAMESPACE, _LONG_MEMBER)}
