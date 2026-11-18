@@ -189,7 +189,7 @@ async def test_a_failing_deployment_never_cools_and_the_next_call_returns_to_it(
 
 
 @RELEASES
-async def test_a_retry_goes_back_to_the_failing_deployment(
+async def test_a_retry_leaves_the_failing_deployment_with_nothing_recorded_against_it(
     make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
 ) -> None:
     core: Final = make_core(
@@ -200,8 +200,8 @@ async def test_a_retry_goes_back_to_the_failing_deployment(
 
     answered: Final = await attempt(core)
 
-    assert isinstance(answered, litellm.RateLimitError)
-    assert host.deployments_called() == ["d1", "d1"]
+    assert not isinstance(answered, Exception)
+    assert host.deployments_called() == ["d1", "d2"]
     assert cooled_down(core, ["d1", "d2"]) == {}
 
 

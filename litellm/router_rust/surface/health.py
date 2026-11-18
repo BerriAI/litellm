@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
+    from litellm.exceptions import RateLimitError
     from litellm.router_rust.steps.callbacks import OptionalChecks
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_utils.cooldown_cache import CooldownCache
@@ -254,6 +255,16 @@ class RustHealthCallbacks:
         all ``set_cooldown_deployments`` reads when it is called without the request's kwargs."""
         deployment: Final = self._deployment_of(deployment_id)
         return deployment is not None and _authenticates_per_caller(deployment.litellm_params)
+
+    async def cool_down_refused(self, deployment_id: str, error: "RateLimitError") -> None:
+        """A routing pre-call check's rate limit cools ``deployment_id`` down. The refusal is not
+        counted as one of its requests."""
+        from litellm.router_rust.core import attempt_failure
+
+        failure: Final = {**attempt_failure(error), "caller_scoped": self.per_user_deployment(deployment_id)}
+        report: Final = self._handle.report_failure(deployment_id, failure, uncounted=True)
+        done: Final = await self._drive_cache_steps(report)
+        _ = self.cooled_down(done, deployment_id, error.status_code)
 
     def ran_as_request_deployment(self, logged_id: object, deployment_id: object) -> bool:
         """Whether a call against ``deployment_id`` ran under credentials the request supplied

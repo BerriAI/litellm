@@ -148,6 +148,15 @@ fn has_default_fallbacks(snapshot: &RouterStateSnapshot) -> bool {
     dynamic.fallbacks.has_star() || !dynamic.default_fallbacks.is_empty()
 }
 
+/// A stream's failure as a recovery is handed it. No attempt of the recovery's own call raised
+/// it, so a slot it keeps from the call it came from would name another attempt's error here.
+fn carried(failure: AttemptError) -> AttemptError {
+    AttemptError {
+        raised_at: None,
+        ..failure
+    }
+}
+
 impl Router {
     /// What may still take over a stream from `origin` that fails before content, and the retry
     /// budget for a failure of `kind`.
@@ -200,7 +209,7 @@ impl Router {
             &mut chain,
             Failed {
                 routed: origin.routed.clone(),
-                ..Failed::from(Error::Attempt(failure))
+                ..Failed::from(Error::Attempt(carried(failure)))
             },
         )
         .await
@@ -246,7 +255,7 @@ impl Router {
             failed_ids: origin.deployment_id.iter().cloned().collect(),
             ..SelectInputs::default()
         };
-        let mut last = failure;
+        let mut last = carried(failure);
         for attempt in origin.attempted_retries..budget {
             if last.ends_retries() {
                 break;

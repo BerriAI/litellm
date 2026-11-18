@@ -109,7 +109,8 @@ pub(crate) struct SelectInputs {
     pub target_order: Option<i64>,
     pub skipped_ids: Vec<String>,
     /// Every deployment an attempt of this request failed on, whatever the status: the callback
-    /// filters read it as `_retry_skipped_deployment_ids`, so an affinity pin can leave one.
+    /// filters read it as `_retry_skipped_deployment_ids`, so an affinity pin can leave one, and
+    /// a retry picks one of them only when no other deployment is left.
     pub failed_ids: Vec<String>,
     /// A weighted failover hop's `_excluded_deployment_ids`: never picked.
     pub excluded_ids: Arc<[String]>,
@@ -696,8 +697,11 @@ impl<H: RouterHost> Call<'_, H> {
             !request.excluded_ids.contains(&d.id) && !inputs.excluded_ids.contains(&d.id)
         });
 
-        if !inputs.skipped_ids.is_empty() || !request.retry_skipped_ids.is_empty() {
-            let kept: Vec<Arc<Deployment>> = healthy
+        if !inputs.failed_ids.is_empty()
+            || !inputs.skipped_ids.is_empty()
+            || !request.retry_skipped_ids.is_empty()
+        {
+            let unrefused: Vec<Arc<Deployment>> = healthy
                 .iter()
                 .filter(|d| {
                     !inputs.skipped_ids.contains(&d.id)
@@ -705,9 +709,15 @@ impl<H: RouterHost> Call<'_, H> {
                 })
                 .cloned()
                 .collect();
-            if !kept.is_empty() {
-                healthy = kept;
-            }
+            let untried: Vec<Arc<Deployment>> = unrefused
+                .iter()
+                .filter(|d| !inputs.failed_ids.contains(&d.id))
+                .cloned()
+                .collect();
+            healthy = [untried, unrefused]
+                .into_iter()
+                .find(|kept| !kept.is_empty())
+                .unwrap_or(healthy);
         }
 
         if request.pass_through == Some(PassThrough::Healthy)
