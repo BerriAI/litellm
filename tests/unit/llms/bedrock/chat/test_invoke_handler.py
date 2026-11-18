@@ -1189,6 +1189,106 @@ def test_mistral_invoke_stream_yields_text_and_finish_reason(
     assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
 
 
+def _pixtral_stream_chunk(
+    content: str, stop_reason: str | None = None, usage: Mapping[str, int] | None = None
+) -> Mapping[str, object]:
+    return {
+        "object": "chat.completion.chunk",
+        "model": "pixtral-large-2502",
+        "choices": [
+            {
+                "index": 0,
+                "logprobs": None,
+                "message": {"role": None, "tool_calls": None, "content": content},
+                "stop_reason": stop_reason,
+            }
+        ],
+        "usage": usage,
+        "p": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "events", "expected_text", "expected_finish_reason", "expected_usage"),
+    [
+        pytest.param(
+            "bedrock/invoke/mistral.mistral-large-2407-v1:0",
+            (
+                {
+                    "object": "chat.completion",
+                    "model": "mistral-large-2407",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi.", "tool_calls": None},
+                            "finish_reason": "stop",
+                            "logprobs": None,
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 17, "total_tokens": 19, "completion_tokens": 2},
+                    "amazon-bedrock-invocationMetrics": {"inputTokenCount": 17, "outputTokenCount": 2},
+                },
+            ),
+            "Hi.",
+            "stop",
+            (17, 2, 19),
+            id="large-2407-single-chat-completion-event",
+        ),
+        pytest.param(
+            "bedrock/invoke/us.mistral.pixtral-large-2502-v1:0",
+            (
+                _pixtral_stream_chunk("Bon"),
+                _pixtral_stream_chunk("jour"),
+                _pixtral_stream_chunk(
+                    " !", stop_reason="length", usage={"prompt_tokens": 17, "total_tokens": 81, "completion_tokens": 64}
+                ),
+            ),
+            "Bonjour !",
+            "length",
+            (17, 64, 81),
+            id="pixtral-large-chat-completion-chunks",
+        ),
+    ],
+)
+def test_mistral_chat_completion_invoke_stream_yields_text_finish_reason_and_usage(
+    _aws_test_credentials: None,
+    model: str,
+    events: tuple[Mapping[str, object], ...],
+    expected_text: str,
+    expected_finish_reason: str,
+    expected_usage: tuple[int, int, int],
+) -> None:
+    event_stream_body: Final = b"".join(_bedrock_event_stream_frame(event) for event in events)
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, content=event_stream_body, headers=_event_stream_headers())
+    )
+    stream: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "Say hi in one word."}],
+        stream=True,
+        stream_options={"include_usage": True},
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+    chunks: Final = tuple(stream)
+
+    assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == expected_text
+    assert [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason] == [
+        expected_finish_reason
+    ]
+    usages: Final = tuple(chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None)
+    assert [(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) for usage in usages] == [
+        expected_usage
+    ]
+
+
+def test_invoke_decoder_leaves_openai_delta_events_without_a_message_to_their_own_decoder() -> None:
+    decoder: Final = AWSEventStreamDecoder(model="moonshot.kimi-k2-thinking")
+
+    chunk: Final = decoder.chunk_parser(chunk_data=_openai_stream_chunk({"content": "hi"}, "stop"))
+
+    assert chunk == {"text": "", "is_finished": False, "finish_reason": "", "usage": None, "index": 0, "tool_use": None}
+
+
 def test_converse_streaming_tool_call_arguments_are_valid_json(
     _aws_test_credentials: None,
 ) -> None:
