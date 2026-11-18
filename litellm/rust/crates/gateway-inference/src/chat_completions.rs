@@ -19,6 +19,7 @@ use crate::{
     Ended, Error, Gateway, JsonObject,
     caching::CacheHeaders,
     headers::Routing,
+    model_restamp::ReportedModel,
     request::{self, Path},
     routing::{self, Host, RouteAttempt},
 };
@@ -78,10 +79,11 @@ async fn handle<H: Host>(
     )
     .await?;
     let routing = Routing::served(&routed);
+    let reported = ReportedModel::of(&model, &routed);
     let (response, cache) = routed.output.response;
     Ok((
         Extension(routing),
-        cache.apply(Json(response).into_response()),
+        cache.apply(Json(reported.complete(response)).into_response()),
     )
         .into_response())
 }
