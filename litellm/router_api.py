@@ -244,6 +244,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "client_ttl",
     "polling_interval",
     "default_priority",
+    "dynamic_queue",
     "num_retries",
     "max_fallbacks",
     "timeout",

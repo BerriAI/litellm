@@ -7,12 +7,13 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import prompt_cache_breakpoint_for_wire
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -222,6 +223,91 @@ def with_inlined_images(
             )
         case _:
             assert_never(decision_input)
+
+
+def _message_without_breakpoints(message: OpenAIDecisionInputMessage) -> OpenAIDecisionInputMessage:
+    if isinstance(message.content, str):
+        return message
+    return message.model_copy(
+        update={"content": tuple(part.model_copy(update={"prompt_cache_breakpoint": None}) for part in message.content)}
+    )
+
+
+def without_prompt_cache_breakpoints(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> DecisionsIRState | DecisionsIRMessages:
+    match decision_input:
+        case DecisionsIRState():
+            return decision_input
+        case DecisionsIRMessages():
+            return DecisionsIRMessages(
+                messages=tuple(_message_without_breakpoints(message) for message in decision_input.messages)
+            )
+        case _:
+            assert_never(decision_input)
+
+
+_RAW_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_RAW_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _raw_entries(value: object) -> tuple[object, ...] | None:
+    try:
+        return _RAW_ENTRIES_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _raw_fields(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, BaseModel):
+        return value.model_dump(exclude_none=True)
+    try:
+        return _RAW_FIELDS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _raw_part_without_breakpoint(part: object) -> object:
+    fields: Final = _raw_fields(part)
+    if fields is None:
+        return part
+    return {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _raw_part_with_readable_breakpoint(part: object) -> object:
+    fields: Final = _raw_fields(part)
+    marker: Final = None if fields is None else fields.get("prompt_cache_breakpoint")
+    if fields is None or marker is None:
+        return part
+    marker_fields: Final = _raw_fields(marker)
+    readable: Final = prompt_cache_breakpoint_for_wire(
+        marker if marker_fields is None else marker_fields, drop_params=True
+    )
+    without_breakpoint: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
+    return without_breakpoint if readable is None else {**without_breakpoint, "prompt_cache_breakpoint": readable}
+
+
+def _raw_message_with_parts(message: object, raw_part: Callable[[object], object]) -> object:
+    fields: Final = _raw_fields(message)
+    parts: Final = None if fields is None else _raw_entries(fields.get("content"))
+    if fields is None or parts is None:
+        return message
+    return {**fields, "content": tuple(map(raw_part, parts))}
+
+
+def _raw_input_with_parts(decision_input: object, raw_part: Callable[[object], object]) -> object:
+    messages: Final = _raw_entries(decision_input)
+    if messages is None:
+        return decision_input
+    return tuple(_raw_message_with_parts(message, raw_part) for message in messages)
+
+
+def without_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+    return _raw_input_with_parts(decision_input, _raw_part_without_breakpoint)
+
+
+def with_readable_raw_prompt_cache_breakpoints(decision_input: object) -> object:
+    return _raw_input_with_parts(decision_input, _raw_part_with_readable_breakpoint)
 
 
 def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
@@ -539,6 +625,8 @@ class BaseDecisionsConfig(ABC):
     api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
     supports_safety_identifier: bool = False
+    supports_prompt_cache: bool = False
+    supports_developer_and_system_messages: bool = False
     supports_images: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None

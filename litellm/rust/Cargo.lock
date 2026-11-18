@@ -3928,15 +3928,12 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "futures-util",
  "litellm-circuit-breaker",
  "litellm-error",
  "litellm-secret-value",
- "macro_rules_attribute",
  "rstest",
  "serde",
- "serde_json",
  "sqlx",
  "strum",
  "thiserror 2.0.21",
@@ -4610,6 +4607,7 @@ dependencies = [
  "litellm-redis-resolve",
  "litellm-redis-store",
  "litellm-redis-types",
+ "litellm-repositories",
  "litellm-router-core",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4775,6 +4773,24 @@ dependencies = [
  "litellm-secret-value",
  "rstest",
  "url",
+]
+
+[[package]]
+name = "litellm-repositories"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "litellm-db",
+ "litellm-error",
+ "litellm-python-compat",
+ "macro_rules_attribute",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "veil",
 ]
 
 [[package]]
