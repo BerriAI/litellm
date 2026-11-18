@@ -1654,6 +1654,18 @@ async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) 
     return database
 
 
+async def _install_rust_spend_log_writer(resources: AsyncExitStack, database: database_runtime.Database | None) -> None:
+    if database is None or database.native is None:
+        return
+    from litellm.proxy.db.rust_spend_log_writer import (
+        install_rust_spend_log_writer,
+        uninstall_rust_spend_log_writer,
+    )
+
+    if await install_rust_spend_log_writer(database.prisma, database.native, general_settings_view()) is not None:
+        resources.push_async_callback(uninstall_rust_spend_log_writer, database.prisma)
+
+
 def _forget_prisma_client() -> None:
     global prisma_client  # noqa: PLW0603  # routes still read this global until they move to DatabaseDep
     prisma_client = None  # rebind-ok: a closed client must not survive into the next lifespan entry
@@ -1829,6 +1841,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
 
     database: Final = existing_database or await _own_database(resources, prisma_client)
+    await _install_rust_spend_log_writer(resources, database)
 
     await migrate_if_requested(
         environ=os.environ,

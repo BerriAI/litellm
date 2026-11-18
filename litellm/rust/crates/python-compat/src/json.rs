@@ -457,6 +457,89 @@ fn write_value(out: &mut String, value: &Value, separators: Separators) -> Resul
     Ok(())
 }
 
+/// `len(json.dumps(value))` for a value Rust serializes with serde, counted without building
+/// the text: Python's `", "` and `": "` separators, `ensure_ascii` escapes and float repr. A
+/// non-finite float counts as serde's `null`.
+pub fn dumps_len<T: serde::Serialize + ?Sized>(value: &T) -> Result<usize, serde_json::Error> {
+    let mut count = ByteCount(0);
+    value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut count,
+        PythonFormatter,
+    ))?;
+    Ok(count.0)
+}
+
+struct ByteCount(usize);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// serde_json output in `json.dumps`'s default layout.
+struct PythonFormatter;
+
+impl serde_json::ser::Formatter for PythonFormatter {
+    fn begin_array_value<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(DEFAULT_SEPARATORS.item.as_bytes())
+        }
+    }
+
+    fn begin_object_key<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        self.begin_array_value(writer, first)
+    }
+
+    fn begin_object_value<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        writer.write_all(DEFAULT_SEPARATORS.key.as_bytes())
+    }
+
+    fn write_f64<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f64,
+    ) -> std::io::Result<()> {
+        writer.write_all(float_text(value).as_bytes())
+    }
+
+    fn write_f32<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f32,
+    ) -> std::io::Result<()> {
+        self.write_f64(writer, f64::from(value))
+    }
+
+    fn write_string_fragment<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        fragment: &str,
+    ) -> std::io::Result<()> {
+        let mut escaped = Vec::new();
+        write_string(&mut escaped, fragment);
+        writer.write_all(&escaped[1..escaped.len() - 1])
+    }
+}
+
 /// `json.encoder.JSONEncoder.iterencode`'s `floatstr` with `allow_nan=True`.
 pub fn float_text(value: f64) -> String {
     if value.is_nan() {
@@ -540,7 +623,7 @@ pub fn write_string(out: &mut impl Sink, text: &str) {
 mod tests {
     use rstest::rstest;
 
-    use super::{dumps, dumps_compact, loads, type_name};
+    use super::{dumps, dumps_compact, dumps_len, from_json, loads, type_name};
     use crate::{Error, Value, repr::repr};
 
     #[rstest]
@@ -556,6 +639,19 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(type_name(&value), expected);
+    }
+
+    #[rstest]
+    #[case::separators(r#"{"a": [1, 2], "b": {"c": null}}"#)]
+    #[case::ensure_ascii(r#"{"m": "caf\u00e9 \ud834\udd1e \u007f"}"#)]
+    #[case::escapes(r#"["quote \" backslash \\ newline \n tab \t \u0001"]"#)]
+    #[case::python_float_repr(r#"[3.5e-05, 1e+16, 0.1, 2.0]"#)]
+    fn counts_what_json_dumps_writes(#[case] text: &str) {
+        let value: serde_json::Value = serde_json::from_str(text).expect("parses");
+        assert_eq!(
+            dumps_len(&value).expect("counts"),
+            dumps(&from_json(value)).expect("dumps").len()
+        );
     }
 
     // Expected value is CPython json.dumps(value, separators=(",", ":"))

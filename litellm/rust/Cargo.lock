@@ -4699,6 +4699,7 @@ dependencies = [
  "litellm-secrets-aws",
  "litellm-secrets-types",
  "litellm-spend-clickhouse",
+ "litellm-spend-log-writer",
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
@@ -5151,6 +5152,27 @@ dependencies = [
  "tokio",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-spend-log-writer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "litellm-callbacks-spend-log",
+ "litellm-db",
+ "litellm-error",
+ "litellm-python-compat",
+ "litellm-repositories",
+ "litellm-secret-value",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

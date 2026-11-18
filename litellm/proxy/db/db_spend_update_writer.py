@@ -1080,7 +1080,7 @@ class DBSpendUpdateWriter:
         is owned by its delivery row, keyed by its cost row id, in every logging mode, and a
         $0 poll records no delivery so it cannot block the poll that carries the cost.
         """
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -1144,7 +1144,7 @@ class DBSpendUpdateWriter:
         made and the row still has to end up carrying it. The row stops matching the moment it carries a charge, so it is one poll that
         takes it over and charges, and every later one reads the charge and charges nothing.
         """
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
         if payload["spend"] <= 0:
