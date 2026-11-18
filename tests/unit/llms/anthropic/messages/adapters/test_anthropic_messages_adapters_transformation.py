@@ -23,6 +23,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
+from litellm.llms.anthropic.messages.adapters.handler import (
+    LiteLLMMessagesToCompletionTransformationHandler,
+)
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
@@ -759,7 +762,7 @@ def test_translate_openai_reasoning_items_are_not_duplicated_when_thinking_block
 
 def _replayed_reasoning_request(tools: list[dict[str, object]]) -> AnthropicMessagesRequest:
     return AnthropicMessagesRequest(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         max_tokens=64,
         messages=[
             AnthropicMessagesUserMessageParam(role="user", content="Which city is colder?"),
@@ -3233,7 +3236,7 @@ def test_translate_openai_content_to_anthropic_reasoning_content_without_thinkin
     assert result[0]["type"] == "thinking"
     assert "Considering Letter Frequency" in result[0]["thinking"]
     assert "Calculating the Count" in result[0]["thinking"]
-    assert result[0]["signature"] is None
+    assert result[0]["signature"] == ""
     # Second block should be text block with content
     assert result[1]["type"] == "text"
     assert result[1]["text"] == 'There are **3** "r"s in the word strawberry.'
@@ -3311,7 +3314,7 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     # First block should be thinking
     assert anthropic_content[0]["type"] == "thinking"
     assert "Considering Letter Frequency" in anthropic_content[0]["thinking"]
-    assert anthropic_content[0].get("signature") is None
+    assert anthropic_content[0].get("signature") == ""
 
     # Second block should be text
     assert anthropic_content[1]["type"] == "text"
@@ -5820,7 +5823,7 @@ _RETRY_REPLY: Final = {
     "object": "response",
     "created_at": 1700000000,
     "status": "completed",
-    "model": "gpt-5.4-nano",
+    "model": "gpt-5.6",
     "output": [
         {
             "type": "message",
@@ -5868,7 +5871,7 @@ async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_de
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         response: Final = await litellm.anthropic.messages.acreate(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -5890,7 +5893,7 @@ async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_de
     assert retry_warnings == (
         "Backend rejected replayed encrypted reasoning, retrying once without it. "
         "Enable the encrypted_content_affinity pre-call check to drop such blocks before the call. "
-        "provider=azure model=azure/gpt-5.4-nano status=400 code=invalid_encrypted_content",
+        "provider=azure model=azure/gpt-5.6 status=400 code=invalid_encrypted_content",
     )
     assert all(
         "gAAA_foreign" not in message and "litellm_encrypted_reasoning:" not in message for message in warnings
@@ -5906,7 +5909,7 @@ def test_sync_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
     )
 
     response: Final = litellm.anthropic.messages.create(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -5930,7 +5933,7 @@ async def test_async_messages_with_num_retries_send_the_rejected_reasoning_only_
     )
 
     await litellm.anthropic.messages.acreate(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -5953,7 +5956,7 @@ def test_sync_messages_with_global_num_retries_send_the_rejected_reasoning_once_
     )
 
     litellm.anthropic.messages.create(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -5981,7 +5984,7 @@ async def test_async_messages_retry_a_server_error_with_the_reasoning_and_drop_i
     )
 
     response: Final = await litellm.anthropic.messages.acreate(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -6004,7 +6007,7 @@ def test_sync_messages_retry_a_server_error_with_the_reasoning_and_drop_it_only_
     )
 
     response: Final = litellm.anthropic.messages.create(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -6063,7 +6066,7 @@ async def test_async_messages_log_only_the_outcome_of_the_turn_sent_again(
 
     with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
         await litellm.anthropic.messages.acreate(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -6089,7 +6092,7 @@ def test_sync_messages_log_only_the_outcome_of_the_turn_sent_again(
 
     with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
         litellm.anthropic.messages.create(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -6124,7 +6127,7 @@ async def test_messages_do_not_retry_other_rejections(
 
     with pytest.raises(litellm.BadRequestError):
         await litellm.anthropic.messages.acreate(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -6277,7 +6280,7 @@ async def test_streamed_reasoning_summaries_stay_with_their_own_encrypted_item(
     )
 
     stream: Final = await litellm.anthropic.messages.acreate(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -6293,3 +6296,71 @@ async def test_streamed_reasoning_summaries_stay_with_their_own_encrypted_item(
         ("thinking", "Check the forecast.", encrypted_reasoning_signature("gAAA_second")),
         ("text", "", None),
     ]
+
+
+_TOOL_LOOP_FROM_AN_OPEN_MODEL: Final = [
+    {"role": "user", "content": "Solve it."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "open model plan", "signature": ""},
+            {"type": "text", "text": "Draft."},
+        ],
+    },
+    {"role": "user", "content": "List the files."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "call ls", "signature": ""},
+            {"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {}},
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt"}]},
+]
+
+
+def _sent_assistant_turns(model: str, deployment: Mapping[str, object]) -> list[dict[str, object]]:
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=_TOOL_LOOP_FROM_AN_OPEN_MODEL,
+        model=model,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        extra_kwargs=deployment,
+    )
+    return [m for m in completion_kwargs["messages"] if m["role"] == "assistant"]
+
+
+@pytest.mark.parametrize(
+    "model, deployment",
+    [
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            {"custom_llm_provider": "bedrock"},
+            id="bedrock-converse",
+        ),
+        pytest.param(
+            "github_copilot/claude-sonnet-4.5",
+            {"custom_llm_provider": "github_copilot"},
+            id="github-copilot",
+        ),
+        pytest.param(
+            "bedrock/converse/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+            {"custom_llm_provider": "bedrock", "base_model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"},
+            id="application-inference-profile-with-base-model",
+        ),
+    ],
+)
+def test_unsigned_thinking_never_reaches_claude_through_the_chat_adapter(
+    model: str, deployment: Mapping[str, object]
+) -> None:
+    turns: Final = _sent_assistant_turns(model, deployment)
+
+    assert [turn.get("thinking_blocks") for turn in turns] == [None, None]
+    assert [turn.get("reasoning_content") for turn in turns] == [None, None]
+    assert turns[1]["tool_calls"][0]["id"] == "toolu_1"
+
+
+def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_adapter() -> None:
+    turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
+
+    assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]

@@ -42,6 +42,11 @@ That's it! The provider will be automatically loaded and available.
     // Optional: Override base_url via environment variable
     "api_base_env": "YOUR_PROVIDER_API_BASE",
     
+    // Optional: User-Agent sent on chat requests. {version} and {python}
+    // expand to the running litellm and Python versions. LITELLM_USER_AGENT
+    // replaces it, and a User-Agent the caller sets always wins
+    "user_agent": "litellm/{version} Python/{python}",
+
     // Optional: Which base class to use (default: "openai_gpt")
     "base_class": "openai_gpt",  // or "openai_like"
     

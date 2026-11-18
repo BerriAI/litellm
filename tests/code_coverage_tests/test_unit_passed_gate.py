@@ -11,7 +11,7 @@ _WORKFLOWS_DIR: Final = Path(__file__).resolve().parents[2] / ".github" / "workf
 _TIERS: Final = (
     ("test-linting.yml", "lint-passed", frozenset()),
     ("test-unit.yml", "unit-passed", frozenset({"coverage"})),
-    ("test-merge-smoke.yml", "smoke-passed", frozenset()),
+    ("test-merge-smoke.yml", "smoke-passed", frozenset({"windows-sdk", "proxy-build-from-pip"})),
 )
 _Tier = tuple[str, str, frozenset[str]]
 
