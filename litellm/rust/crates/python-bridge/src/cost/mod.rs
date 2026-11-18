@@ -1,11 +1,13 @@
 //! The pricing entry points Python calls over the live table: `query` for token calls, budget holds, rate cards and
 //! adjustments, `kinds`, `fees` and `session` for the other call kinds
 
+mod fal;
 mod fees;
 mod kinds;
 mod query;
 mod session;
 
+pub(crate) use fal::price_fal;
 pub(crate) use fees::price_fee;
 pub(crate) use kinds::{NativeUnpriced, price_many, price_units};
 pub(crate) use query::{

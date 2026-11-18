@@ -1121,6 +1121,7 @@ mod units_parity {
                 images,
                 pixels: 0,
                 input_images: 0,
+                size: None,
             }))
         });
         assert_eq!(Some(total(outcome)), case["expected"].as_f64());

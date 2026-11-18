@@ -1,6 +1,6 @@
 import os
 from collections.abc import Mapping
-from math import ceil, isfinite
+from math import isfinite
 from types import MappingProxyType
 from typing import Final
 
@@ -8,14 +8,21 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import get_provider_response_headers_from_hidden_params
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+    FalImageDocument,
+    FalImageFacts,
+    FalSubmitDocument,
+    price_fal,
+    total_or_zero,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_pricing, resolve_image_model_info
-from litellm.llms.openai.cost_calculation import video_clip_cost
+from litellm.llms.openai.cost_calculation import clip_seconds
+from litellm.rust_bridge._native import NativeReceipt
 from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
 _DEFAULT_KEYED_DIMENSIONS: Final[tuple[int, int]] = (1024, 768)
 FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = f"{_DEFAULT_KEYED_DIMENSIONS[0]}-x-{_DEFAULT_KEYED_DIMENSIONS[1]}"
-FAL_PIXELS_PER_MEGAPIXEL: Final[int] = 1_048_576
 FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "square_hd": "1024-x-1024",
@@ -85,53 +92,6 @@ def _parse_keyed_dimensions(size: str | None) -> tuple[int, int] | None:
     return (width, height) if width > 0 and height > 0 else None
 
 
-def _keyed_rows(model: str, quality: str) -> tuple[tuple[int, int, float], ...]:
-    prefix: Final = f"fal_ai/{quality}/"
-    suffix: Final = f"/{model}"
-    return tuple(
-        (width, height, float(raw_cost))
-        for key in (*litellm.model_cost,)
-        if isinstance(key, str) and key.startswith(prefix) and key.endswith(suffix)
-        for size in (key[len(prefix) : -len(suffix)],)
-        for dimensions in (_parse_keyed_dimensions(size),)
-        if dimensions is not None
-        for entry in (_entry(key),)
-        if entry is not None
-        for raw_cost in (entry.get("output_cost_per_image"),)
-        if isinstance(raw_cost, (int, float))
-        for width, height in (dimensions,)
-    )
-
-
-def _keyed_cost_per_image(
-    model: str,
-    image: object,
-    optional_params: Mapping[str, object],
-) -> float | None:
-    quality: Final = _keyed_quality(optional_params)
-    rows: Final = _keyed_rows(model, quality)
-    if not rows:
-        return None
-    target_dimensions: Final = (
-        _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or _DEFAULT_KEYED_DIMENSIONS
-    )
-    target_pixels: Final = target_dimensions[0] * target_dimensions[1]
-    return min(rows, key=lambda row: (abs(row[0] * row[1] - target_pixels), row[0] * row[1]))[2]
-
-
-def _flat_cost_per_image(
-    image: object,
-    output_cost_per_image: float,
-    output_cost_per_pixel: float | None,
-) -> float:
-    dimensions: Final = _image_dimensions(image)
-    if dimensions is None or output_cost_per_pixel is None:
-        return output_cost_per_image
-    width, height = dimensions
-    megapixels: Final = ceil(width * height / FAL_PIXELS_PER_MEGAPIXEL)
-    return output_cost_per_pixel * FAL_PIXELS_PER_MEGAPIXEL * megapixels
-
-
 def _entry(key: str) -> Mapping[str, object] | None:
     raw_entry: Final[object] = litellm.model_cost.get(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # global catalog is untyped
     if not isinstance(raw_entry, Mapping):
@@ -143,14 +103,6 @@ def _resolution_key(resolution: object) -> str | None:
     if isinstance(resolution, bool) or not isinstance(resolution, (int, str)):
         return None
     return str(resolution)
-
-
-def _resolution_cost_per_image(entry: Mapping[str, object] | None, resolution: object) -> float | None:
-    resolution_key: Final = _resolution_key(resolution)
-    if entry is None or resolution_key is None:
-        return None
-    cost: Final = entry.get(f"output_cost_per_image_{resolution_key}")
-    return float(cost) if isinstance(cost, (int, float)) else None
 
 
 def _billable_units(response: object) -> float | None:
@@ -165,41 +117,34 @@ def _billable_units(response: object) -> float | None:
     return units if isfinite(units) and units >= 0 else None
 
 
-def _billable_units_cost(prices: Mapping[str, object] | None, response: object) -> float | None:
-    unit_cost: Final = None if prices is None else prices.get("output_cost_per_billable_unit")
-    units: Final = _billable_units(response)
-    if isinstance(unit_cost, bool) or not isinstance(unit_cost, (int, float)) or units is None:
-        return None
-    return unit_cost * units
-
-
 def _requested_image_count(request_body: Mapping[str, object]) -> int:
     num_images: Final = request_body.get("num_images")
     return num_images if type(num_images) is int and num_images > 0 else 1
 
 
-def _passthrough_cost_per_image(entry: Mapping[str, object], request_body: Mapping[str, object]) -> float | None:
-    resolution_cost: Final = _resolution_cost_per_image(entry, request_body.get("resolution"))
-    if resolution_cost is not None:
-        return resolution_cost
-    cost: Final = entry.get("output_cost_per_image")
-    return float(cost) if isinstance(cost, (int, float)) else None
-
-
 def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
     entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
-    if entry is None or entry.get("output_cost_per_billable_unit") is not None:
+    if entry is None:
         return None
-    clip_cost: Final = video_clip_cost(entry, request_body.get("duration"), request_body.get("resolution"))
-    if clip_cost is not None:
-        return clip_cost
-    cost_per_video: Final = entry.get("output_cost_per_video")
-    if isinstance(cost_per_video, (int, float)):
-        return float(cost_per_video)
-    cost_per_image: Final = _passthrough_cost_per_image(entry, request_body)
-    if cost_per_image is None:
-        return None
-    return cost_per_image * _requested_image_count(request_body)
+    resolution: Final = request_body.get("resolution")
+    outcome: Final = price_fal(
+        FalSubmitDocument(
+            kind="fal_submit",
+            model=model,
+            seconds=clip_seconds(request_body.get("duration")),
+            clip_resolution=resolution if isinstance(resolution, str) else None,
+            image_resolution=_resolution_key(resolution),
+            images=_requested_image_count(request_body),
+        ),
+        catalog=entry,
+    )
+    return outcome.total if isinstance(outcome, NativeReceipt) else None
+
+
+def _image_facts(image: object, optional_params: Mapping[str, object]) -> FalImageFacts:
+    dimensions: Final = _image_dimensions(image)
+    target: Final = dimensions or _parse_keyed_dimensions(_keyed_size(optional_params)) or _DEFAULT_KEYED_DIMENSIONS
+    return FalImageFacts(target=target, pixels=dimensions[0] * dimensions[1] if dimensions else None)
 
 
 def cost_calculator(
@@ -214,54 +159,29 @@ def cost_calculator(
     if not isinstance(image_response, ImageResponse):
         raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
     normalized_model: Final = model.removeprefix(f"{litellm.LlmProviders.FAL_AI.value}/")
-    images: Final = tuple(image_response.data or ())
-    deployment_prices: Final = deployment_pricing(model_info)
-    deployment_billable_units_cost: Final = _billable_units_cost(deployment_prices, image_response)
-    if deployment_billable_units_cost is not None:
-        return deployment_billable_units_cost
-    deployment_cost_per_image: Final = (
-        None if deployment_prices is None else deployment_prices.get("output_cost_per_image")
-    )
-    if deployment_cost_per_image is not None:
-        return deployment_cost_per_image * len(images)
-    entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{normalized_model}")
-    billable_units_cost: Final = _billable_units_cost(entry, image_response)
-    if billable_units_cost is not None:
-        return billable_units_cost
     params: Final[Mapping[str, object]] = optional_params or MappingProxyType({})
-    resolution_cost_per_image: Final = _resolution_cost_per_image(entry, params.get("resolution"))
-    if resolution_cost_per_image is not None:
-        return resolution_cost_per_image * len(images)
-    keyed_costs: Final = tuple(
-        _keyed_cost_per_image(
+    deployment_prices: Final = deployment_pricing(model_info)
+    tables: Final = (deployment_prices,) if deployment_prices is not None else ()
+    entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{normalized_model}")
+
+    def document(fallback: bool) -> FalImageDocument:
+        return FalImageDocument(
+            kind="fal_image",
             model=normalized_model,
-            image=image,
-            optional_params=params,
+            quality=_keyed_quality(params),
+            images=tuple(_image_facts(image, params) for image in image_response.data or ()),
+            billable_units=_billable_units(image_response),
+            resolution=_resolution_key(params.get("resolution")),
+            deployment=deployment_prices is not None,
+            fallback=fallback,
         )
-        for image in images
-    )
-    if not any(cost is None for cost in keyed_costs):
-        return sum(cost for cost in keyed_costs if cost is not None)
+
+    outcome: Final = price_fal(document(fallback=False), tables, entry)
+    if isinstance(outcome, NativeReceipt):
+        return outcome.total
     resolved_model_info: Final = resolve_image_model_info(
         model=normalized_model,
         custom_llm_provider=litellm.LlmProviders.FAL_AI.value,
         model_info=deployment_prices,
     )
-    raw_output_cost_per_image: Final = resolved_model_info.get("output_cost_per_image")
-    output_cost_per_image: Final = (
-        float(raw_output_cost_per_image) if isinstance(raw_output_cost_per_image, (int, float)) else 0.0
-    )
-    raw_output_cost_per_pixel: Final = resolved_model_info.get("output_cost_per_pixel")
-    output_cost_per_pixel: Final = (
-        float(raw_output_cost_per_pixel) if isinstance(raw_output_cost_per_pixel, (int, float)) else None
-    )
-    return sum(
-        keyed_cost
-        if keyed_cost is not None
-        else _flat_cost_per_image(
-            image=image,
-            output_cost_per_image=output_cost_per_image,
-            output_cost_per_pixel=output_cost_per_pixel,
-        )
-        for image, keyed_cost in zip(images, keyed_costs)
-    )
+    return total_or_zero(price_fal(document(fallback=True), (*tables, resolved_model_info), entry))
