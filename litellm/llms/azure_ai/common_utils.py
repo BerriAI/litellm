@@ -264,9 +264,16 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
 
 
+def _is_foundry_v1_base(api_base: str) -> bool:
+    base_url: Final = httpx.URL(api_base)
+    if foundry_project_root(base_url):
+        return True
+    return is_azure_openai_v1_host(api_base) and foundry_v1_root(base_url) is not None
+
+
 def is_foundry_v1_model_router(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
-    if model is None or resolved_base is None or not _serves_openai_v1(resolved_base):
+    if model is None or resolved_base is None or not _is_foundry_v1_base(resolved_base):
         return False
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router"
 

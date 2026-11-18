@@ -91,7 +91,8 @@ def _without_custom_members(tool: object) -> object | None:
 def _without_custom_tools(mapped: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, object]:
     tools: Final = _REQUEST_TOOLS.validate_python(mapped.get("tools") or ())
     stripped: Final = tuple(_without_custom_members(tool) for tool in tools)
-    if all(kept is tool for kept, tool in zip(stripped, tools)):
+    tool_choice: Final = _without_custom_members(mapped.get("tool_choice"))
+    if tool_choice is mapped.get("tool_choice") and all(kept is tool for kept, tool in zip(stripped, tools)):
         return mapped
     if not drop_params:
         raise UnsupportedParamsError(
@@ -103,7 +104,6 @@ def _without_custom_tools(mapped: Mapping[str, object], model: str, drop_params:
             model=model,
         )
     kept_tools: Final = [tool for tool in stripped if tool is not None]
-    tool_choice: Final = _without_custom_members(mapped.get("tool_choice"))
     rest: Final = {key: value for key, value in mapped.items() if key not in _TOOL_PARAMS}
     if not kept_tools:
         return rest
