@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.rust_bridge._native import NativeReceipt
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
     TranscriptionUsageObjectTransformation,
@@ -1842,6 +1843,18 @@ def _rust_priced_cost(
     )
     if receipt is None:
         return None
+    store_receipt_breakdown(litellm_logging_obj, receipt, service_tier, data_residency, vertex_location)
+    return receipt.total
+
+
+def store_receipt_breakdown(
+    litellm_logging_obj: LitellmLoggingObject | None,
+    receipt: NativeReceipt,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> None:
+    """The cost breakdown of a call Rust priced, stored on its logging object as ``completion_cost`` stores it."""
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
         prompt_tokens_cost_usd_dollar=receipt.prompt_cost,
@@ -1862,7 +1875,6 @@ def _rust_priced_cost(
         vertex_location=vertex_location,
         billed_token_rates=billed_token_rates(receipt),
     )
-    return receipt.total
 
 
 def completion_cost(

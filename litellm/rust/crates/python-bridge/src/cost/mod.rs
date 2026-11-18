@@ -4,8 +4,7 @@
 mod query;
 
 pub(crate) use query::{
-    NativeBilledRates, NativeRateCard, NativeReceipt, adjust, adjustment_config, bound, price,
-    rates,
+    NativeRateCard, RoutePricing, adjust, adjustment_config, bound, price, rates,
 };
 
 use std::time::Duration;

@@ -22,9 +22,12 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - With `requested_model_info_override` the stored breakdown and the web search fee read the catalog row the candidate names, not the override that priced the total (`cost_calculator.py` `completion_cost`, `tool_call_cost_tracking.py` `_resolve_model_info`)
 - Prompt-caching savings leave out the geo and speed uplifts the total carries (`llm_cost_calc/utils.py` `calculate_prompt_caching_savings`)
 - The legacy budget hold reads flat rates only, so bands, cache-write rates, uplifts, discount and margin never reach it, and a router group's reasoning and image rates are dropped before it (`proxy/spend_tracking/budget_reservation.py` `_max_cost_for_cost_info`)
+- A streamed `/v1/messages` call never bills the service tier its usage reports, because the assembled stream response drops `usage.service_tier`, so only the requested tier prices it (`inference-messages/src/pricing.rs` copies this from `stream_chunk_builder`)
+- The per-event stream cost injection prices each `message_delta`'s own usage alone, without the `message_start` input and cache counts, the request's speed or the stream's thinking (`common_request_processing.py` `_inject_cost_into_usage_dict`, copied in `inference-messages/src/pricing.rs`)
 
 ## Not copied from main
 
 - Main's stored breakdown raises on an unreadable speed or geo value, which fails the candidate when a logging object is attached. Rust leaves those uplifts out of the breakdown rates instead
 - A call whose web search price main would read off the served model's row answers `NotPorted`
+- On a Rust-priced stream with cost injection, a `message_delta` whose own usage no row prices passes through without `usage.cost`. Main retried such an event under the requested model name (`_completion_cost_or_none`), which resolves the same candidates
 - The breakdown bills unattributed writes and 5m/30m writes as one `CacheTtl::Default` count. Main multiplies each count by the rate separately, so the two can differ in the last bit when a call reports both

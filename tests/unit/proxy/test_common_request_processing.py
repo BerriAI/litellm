@@ -13367,6 +13367,35 @@ class TestProcessChunkWithCostInjection:
         payload: Final = json.loads(injected.decode("utf-8").split("data:", 1)[1].strip())
         assert payload["usage"]["cost"] > 0
 
+    def test_a_stream_the_rust_route_prices_keeps_the_cost_the_route_injected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="claude-opus-5-5",
+            messages=[],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime(2025, 1, 1),
+            litellm_call_id="route-priced",
+            function_id="route-priced",
+        )
+        routed: Final = (
+            b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, '
+            b'"usage": {"output_tokens": 120, "cost": 0.0024}}\n\n'
+        )
+        unrouted: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+            routed, "claude-opus-5-5", logging_obj
+        )
+
+        logging_obj.record_route_metering()
+        kept: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+            routed, "claude-opus-5-5", logging_obj
+        )
+
+        assert kept is routed
+        assert unrouted != routed, "without the route the proxy prices the event itself"
+
     def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         chunk = (

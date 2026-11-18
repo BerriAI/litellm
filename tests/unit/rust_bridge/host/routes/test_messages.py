@@ -122,6 +122,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "detached_drain_timeout": None,
         "detached_drain_limit": None,
         "connect_retry": False,
+        "pricing": None,
     }
 
 
@@ -3219,3 +3220,75 @@ def test_a_bedrock_web_search_rejection_raises_the_bad_request_the_invoke_config
     assert str(mapped) == f"litellm.BadRequestError: {text}"
     assert mapped.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
     assert mapped.model == "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+
+
+def _priced_logger(litellm_params: Mapping[str, object]) -> Logging:
+    logger: Final = Logging(
+        model="claude-opus-5-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="priced",
+        function_id="priced",
+    )
+    logger.update_environment_variables(
+        model="claude-opus-5-5", user=None, optional_params={}, litellm_params=dict(litellm_params)
+    )
+    return logger
+
+
+_ROUTED: Final = MappingProxyType({"metadata": {"model_info": {"id": "deployment-1", "base_model": "claude-opus-5-5"}}})
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "expected"),
+    [
+        (
+            "anthropic/claude-opus-5-5",
+            _ROUTED,
+            {
+                "deployment_id": "deployment-1",
+                "base_model": "claude-opus-5-5",
+                "region": None,
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
+        (
+            "vertex_ai/claude-opus-5-5",
+            {"vertex_location": "us-east5", "data_residency": "EU"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": None,
+                "vertex_location": "us-east5",
+                "data_residency": "EU",
+            },
+        ),
+        ("anthropic/claude-opus-5-5", {**_ROUTED, "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, None),
+        (
+            "anthropic/claude-opus-5-5",
+            {"metadata": {"model_info": {"id": "deployment-1", "pricing_provider": "bedrock"}}},
+            None,
+        ),
+    ],
+)
+def test_settings_hand_the_route_the_deployment_facts_its_logging_would_price_with(
+    model: str, litellm_params: Mapping[str, object], expected: Mapping[str, object] | None
+) -> None:
+    logger: Final = _priced_logger(litellm_params)
+
+    settings: Final = messages_host.settings({"litellm_logging_obj": logger}, {**_CALL, "model": model})
+
+    assert settings["pricing"] == expected
+
+
+def test_settings_leave_pricing_to_python_for_an_invoked_bedrock_model_id() -> None:
+    logger: Final = _priced_logger(_ROUTED)
+
+    settings: Final = messages_host.settings(
+        {"litellm_logging_obj": logger}, {**_CALL, "model": "anthropic/claude-opus-5-5", "model_id": "arn:profile"}
+    )
+
+    assert settings["pricing"] is None

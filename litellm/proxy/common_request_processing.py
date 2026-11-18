@@ -5766,6 +5766,8 @@ class ProxyBaseLLMRequestProcessing:
         """
         if not stream_cost_injection_requested(request_headers):
             return chunk
+        if getattr(litellm_logging_obj, "route_prices_call", False) is True:
+            return chunk
 
         try:
             if isinstance(chunk, dict):

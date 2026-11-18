@@ -3,6 +3,9 @@
 //! try, the served tier, the residency), builds the pricing core's typed query over a snapshot of the live table and
 //! answers with a typed result. A call the core does not price answers `None`, and Python prices it the old way
 
+use std::sync::Arc;
+
+use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::adjust::{AdjustmentKey, Discounts, MarginRule, Margins, adjust as adjusted};
 use litellm_cost::bound::{
     BoundModel, BoundPolicy, BoundQuery, CostShape, FlatSource, GroupRates, RequestCaps,
@@ -13,8 +16,10 @@ use litellm_cost::query::{
     TokenUsage, TokensQuery,
 };
 use litellm_cost::rates::{Pricing, RatesQuery};
-use litellm_cost::receipt::{BilledRates, PriceOutcome, Receipt};
+use litellm_cost::receipt::{PriceOutcome, Receipt};
 use litellm_host_python::{from_py_argument, json_from_py};
+use litellm_inference_messages::PricedCall;
+use litellm_model_catalog::wire::Fields;
 use litellm_model_catalog::{CallIdentity, PricingRows, RowRef, Tried, priced_ref};
 use litellm_python_compat::number::float_of;
 use pyo3::prelude::*;
@@ -115,52 +120,6 @@ enum FlatFacts {
     Group(GroupRates),
 }
 
-/// The per-meter amounts and rates of a priced call, in the fields main stores in its cost breakdown
-#[pyclass(
-    frozen,
-    get_all,
-    name = "NativeReceipt",
-    module = "litellm.rust_bridge._native"
-)]
-pub(crate) struct NativeReceipt {
-    /// The candidate model that priced
-    model: Option<String>,
-    prompt_cost: f64,
-    completion_cost: f64,
-    tools_cost: f64,
-    original_cost: f64,
-    discount_percent: f64,
-    discount_amount: f64,
-    margin_percent: f64,
-    margin_fixed_amount: f64,
-    margin_total_amount: f64,
-    cache_read_cost: f64,
-    cache_creation_cost: f64,
-    reasoning_cost: f64,
-    rates: Option<Py<NativeBilledRates>>,
-    cache_savings: Option<f64>,
-    total: f64,
-}
-
-/// `BilledTokenRates`: the per-token rates the breakdown was billed at
-#[pyclass(
-    frozen,
-    get_all,
-    name = "NativeBilledRates",
-    module = "litellm.rust_bridge._native"
-)]
-pub(crate) struct NativeBilledRates {
-    input: f64,
-    output: f64,
-    cache_read: f64,
-    cache_read_audio: f64,
-    cache_read_image: Option<f64>,
-    cache_write: f64,
-    cache_write_1h: f64,
-    cache_write_12h: f64,
-    reasoning: f64,
-}
-
 /// A row's flat token rates, the raw key facts the auth checks read and whether it bills anything
 #[pyclass(
     frozen,
@@ -225,14 +184,69 @@ pub(crate) fn price(
     row: Option<&Bound<'_, PyMapping>>,
 ) -> PyResult<Option<NativeReceipt>> {
     let document: PriceDocument = from_py_argument(document)?;
-    let Some((candidates, named)) = candidates(snapshot, &document.named, row.is_some()) else {
-        return Ok(None);
-    };
+    let row = row.map(row_fields).transpose()?;
+    priced(snapshot, document, row)
+        .map(|receipt| NativeReceipt::new(py, &receipt))
+        .transpose()
+}
+
+/// The Messages route's pricing over the snapshot taken when the call was set up. It reads the call the way
+/// `completion_cost` reads a native `/v1/messages` result on main: the route's provider and model, the model the
+/// response names and the deployment facts the proxy sent, discount and margin applied, no row of its own
+pub(crate) struct RoutePricing {
+    snapshot: Arc<CostSnapshot>,
+}
+
+impl RoutePricing {
+    pub(crate) fn new(snapshot: Arc<CostSnapshot>) -> Self {
+        Self { snapshot }
+    }
+}
+
+impl litellm_inference_messages::Pricing for RoutePricing {
+    fn price(&self, call: &PricedCall) -> Option<Receipt> {
+        let identity = &call.identity;
+        priced(
+            &self.snapshot,
+            PriceDocument {
+                named: Named::Call(CallFacts {
+                    provider: call.provider.clone(),
+                    request_model: Some(call.request_model.clone()),
+                    response_model: call.response_model.clone(),
+                    base_model: identity.base_model.clone(),
+                    deployment_id: identity.deployment_id.clone(),
+                    region: identity.region.clone(),
+                    ..CallFacts::default()
+                }),
+                usage: call.usage.clone(),
+                requested_model: Some(call.request_model.as_str().into()),
+                service_tier: call.service_tier.clone(),
+                data_residency: identity.data_residency.clone(),
+                vertex_location: identity.vertex_location.as_deref().map(Into::into),
+                at: jiff::Timestamp::now(),
+                adjust: Some(AdjustFacts {
+                    provider: Some(call.provider.as_str().into()),
+                    model: None,
+                    region: identity.region.as_deref().map(Into::into),
+                }),
+            },
+            None,
+        )
+    }
+}
+
+/// The receipt of a token call, `None` when the core leaves it to Python
+fn priced(
+    snapshot: &CostSnapshot,
+    document: PriceDocument,
+    row: Option<Fields>,
+) -> Option<Receipt> {
+    let (candidates, named) = candidates(snapshot, &document.named, row.is_some())?;
     let rows = snapshot.pricing_rows(named, []);
     let (rows, source) = match (row, candidates.first()) {
         (Some(row), Some(first)) => {
             let provider = first.provider.to_string();
-            let (rows, at) = rows.with_per_call(PER_CALL_ROW, row_fields(row)?, &provider);
+            let (rows, at) = rows.with_per_call(PER_CALL_ROW, row, &provider);
             (
                 rows,
                 PriceSource::Row {
@@ -266,8 +280,8 @@ pub(crate) fn price(
         requested_model: document.requested_model,
     }));
     match litellm_cost::price(&rows, &query) {
-        PriceOutcome::Priced(receipt) => Ok(Some(NativeReceipt::new(py, *receipt)?)),
-        PriceOutcome::Unpriced(_) => Ok(None),
+        PriceOutcome::Priced(receipt) => Some(*receipt),
+        PriceOutcome::Unpriced(_) => None,
     }
 }
 
@@ -453,49 +467,6 @@ pub(crate) fn adjust(
         applied.margin.fixed,
         applied.margin.total,
     )
-}
-
-impl NativeReceipt {
-    fn new(py: Python<'_>, receipt: Receipt) -> PyResult<Self> {
-        let rates = receipt
-            .rates
-            .map(|rates| Py::new(py, NativeBilledRates::from(rates)))
-            .transpose()?;
-        Ok(Self {
-            original_cost: receipt.original(),
-            model: receipt.candidate.map(|candidate| candidate.model.into()),
-            prompt_cost: receipt.prompt.get(),
-            completion_cost: receipt.completion.get(),
-            tools_cost: receipt.tools.get(),
-            discount_percent: receipt.discount.percent,
-            discount_amount: receipt.discount.amount,
-            margin_percent: receipt.margin.percent,
-            margin_fixed_amount: receipt.margin.fixed,
-            margin_total_amount: receipt.margin.total,
-            cache_read_cost: receipt.breakdown.cache_read,
-            cache_creation_cost: receipt.breakdown.cache_creation,
-            reasoning_cost: receipt.breakdown.reasoning,
-            rates,
-            cache_savings: receipt.cache_savings,
-            total: receipt.total,
-        })
-    }
-}
-
-impl From<BilledRates> for NativeBilledRates {
-    fn from(rates: BilledRates) -> Self {
-        Self {
-            input: rates.input,
-            output: rates.output,
-            cache_read: rates.cache_read,
-            cache_read_audio: rates.cache_read_audio,
-            cache_read_image: rates.cache_read_image,
-            cache_write: rates.cache_write,
-            cache_write_1h: rates.cache_write_one_hour,
-            cache_write_12h: rates.cache_write_twelve_hours,
-            reasoning: rates.reasoning,
-        }
-    }
 }
 
 #[cfg(test)]
