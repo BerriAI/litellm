@@ -42,6 +42,7 @@ _LOGPROB_ASKS: Final[tuple[tuple[str, Mapping[str, JsonValue]], ...]] = (
 )
 _LOGPROB_FIELDS: Final = frozenset({"responseLogprobs", "logprobs"})
 _ACCEPTED_EFFORT: Final = "high"
+# Levels Google AI Studio answered with a 400 in live calls on 2026-11-18, see the proof in PR #52514.
 _STUDIO_REFUSED_EFFORTS: Final = (
     ("studio-nano", _STUDIO_NANO, "low"),
     ("studio-flash-image", _STUDIO_FLASH_IMAGE, "low"),
