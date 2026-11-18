@@ -7,7 +7,9 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     BranchFacts,
     FeeBilling,
+    FileSearchTool,
     ReceiptFacts,
+    ToolUse,
     adjusted_cost,
     billed_token_rates,
     branch_receipt,
@@ -268,7 +270,20 @@ def test_the_stored_breakdown_reads_the_row_the_caller_names(facts: ReceiptFacts
 def test_the_router_fee_bills_where_the_caller_says(
     billed: FeeBilling, prompt_cost: float, fees: Mapping[str, float]
 ) -> None:
-    receipt: Final = _receipt(ReceiptFacts(router_fee=billed, fee_row=_ROUTER_ROW, tool_fees=1.0))
+    one_search: Final = FileSearchTool(
+        requested=True, provider="openai", row=None, storage_gb=None, days=None, per_call=1.0, azure_gigabyte_day=0.0
+    )
+    tools: Final = ToolUse(
+        provider="openai",
+        maps_grounding=None,
+        image_generation=None,
+        web_search=None,
+        file_search=one_search,
+        vector_store=None,
+        computer_use=None,
+        code_interpreter=None,
+    )
+    receipt: Final = _receipt(ReceiptFacts(router_fee=billed, fee_row=_ROUTER_ROW, tools=tools))
 
     assert receipt.prompt_cost == pytest.approx(prompt_cost)
     assert dict(part_costs(receipt)) == pytest.approx(fees)

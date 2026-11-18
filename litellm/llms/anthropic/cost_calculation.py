@@ -9,7 +9,6 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import BranchFacts, Elapsed, branch_cost
-from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -73,28 +72,9 @@ def get_cost_for_anthropic_web_search(
     usage: Optional["Usage"] = None,
 ) -> float:
     """
-    Get the cost of using a web search tool for Anthropic.
+    Get the cost of using a web search tool for Anthropic, priced in Rust: each reported search request at the row's
+    medium context price.
     """
-    from litellm.types.utils import SearchContextCostPerQuery
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import price_web_search_dispatch
 
-    ## Check if web search requests are in the usage object
-    if model_info is None:
-        return 0.0
-
-    if usage is None:
-        return 0.0
-    web_search_requests: Final = get_web_search_requests_from_usage(usage)
-    if web_search_requests is None:
-        return 0.0
-
-    ## Get the cost per web search request
-    search_context_pricing: Final[SearchContextCostPerQuery] = (
-        model_info.get("search_context_cost_per_query") or SearchContextCostPerQuery()
-    )
-    cost_per_web_search_request: Final = search_context_pricing.get("search_context_size_medium", 0.0)
-    if cost_per_web_search_request is None or cost_per_web_search_request == 0.0:
-        return 0.0
-
-    ## Calculate the total cost
-    total_cost: Final = cost_per_web_search_request * web_search_requests
-    return total_cost
+    return price_web_search_dispatch("anthropic", usage, model_info) or 0.0

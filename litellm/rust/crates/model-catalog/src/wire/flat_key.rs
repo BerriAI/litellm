@@ -128,6 +128,15 @@ fn meter(base: &str) -> Option<Meter> {
         "ocr_cost_per_page" => Some(Meter::Feature(Feature::OcrPage)),
         "browser_open_cost_per_request" => Some(Meter::Feature(Feature::BrowserOpen)),
         "cost_per_additional_result" => Some(Meter::Feature(Feature::AdditionalResult)),
+        "file_search_cost_per_1k_calls" => Some(Meter::Feature(Feature::FileSearchThousandCalls)),
+        "file_search_cost_per_gb_per_day" => Some(Meter::Feature(Feature::FileSearchGigabyteDay)),
+        "vector_store_cost_per_gb_per_day" => Some(Meter::Feature(Feature::VectorStoreGigabyteDay)),
+        "computer_use_input_cost_per_1k_tokens" => {
+            Some(Meter::Feature(Feature::ComputerUseInputThousandTokens))
+        }
+        "computer_use_output_cost_per_1k_tokens" => {
+            Some(Meter::Feature(Feature::ComputerUseOutputThousandTokens))
+        }
         _ => None,
     };
     if fixed.is_some() {
@@ -327,6 +336,34 @@ mod tests {
     #[case::additional_result(
         "cost_per_additional_result",
         key(Meter::Feature(Feature::AdditionalResult), Band::Base, None)
+    )]
+    #[case::file_search_calls(
+        "file_search_cost_per_1k_calls",
+        key(Meter::Feature(Feature::FileSearchThousandCalls), Band::Base, None)
+    )]
+    #[case::file_search_storage(
+        "file_search_cost_per_gb_per_day",
+        key(Meter::Feature(Feature::FileSearchGigabyteDay), Band::Base, None)
+    )]
+    #[case::vector_store_storage(
+        "vector_store_cost_per_gb_per_day",
+        key(Meter::Feature(Feature::VectorStoreGigabyteDay), Band::Base, None)
+    )]
+    #[case::computer_use_input(
+        "computer_use_input_cost_per_1k_tokens",
+        key(
+            Meter::Feature(Feature::ComputerUseInputThousandTokens),
+            Band::Base,
+            None
+        )
+    )]
+    #[case::computer_use_output(
+        "computer_use_output_cost_per_1k_tokens",
+        key(
+            Meter::Feature(Feature::ComputerUseOutputThousandTokens),
+            Band::Base,
+            None
+        )
     )]
     fn parses_every_key_shape(#[case] text: &str, #[case] expected: FlatKey) {
         assert_eq!(FlatKey::parse(text), Some(expected));

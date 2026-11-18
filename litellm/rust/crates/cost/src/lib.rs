@@ -26,6 +26,7 @@ mod speech;
 #[cfg(test)]
 mod testing;
 mod tokens;
+pub mod tools;
 mod transcription;
 mod units;
 pub mod usage;

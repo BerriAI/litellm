@@ -330,10 +330,10 @@ struct Extras {
 /// The label main's stored breakdown lists the Model Router fee under in `additional_costs`
 pub const ROUTER_FEE: &str = "Azure Model Router Flat Cost";
 
-/// The tool fees the caller priced and the Azure AI Model Router fee. Main bills the fee only when it is positive
+/// The built-in tool fees and the Azure AI Model Router fee. Main bills the fee only when it is positive
 /// (`calculate_azure_model_router_flat_cost`), and a router row that is gone bills none
 fn extras<S: RowSource>(source: &S, query: &TokensQuery) -> Extras {
-    let tools = Usd::new(query.tool_fees).unwrap_or(Usd::ZERO);
+    let tools = crate::tools::fees(source, &query.tools, &query.header);
     let fee = query.router_fee.as_ref().and_then(|fee| {
         let rate = units::listed(source.row(&fee.row)?, &Meter::TEXT_INPUT, Channel::Online)?;
         let amount = rate * Quantity::Count(query.usage.billed().prompt_tokens);
@@ -771,11 +771,22 @@ mod tests {
     }
 
     #[rstest]
-    fn tool_fees_the_caller_priced_are_discounted_with_the_tokens() {
+    fn tool_fees_are_discounted_with_the_tokens() {
         let source =
             TestSource::with_row("model", text_row(3.0, 1.0)).with_discounts(&[("openai", 0.5)]);
         let query = TokensQuery {
-            tool_fees: 8.0,
+            tools: crate::tools::ToolUse {
+                file_search: Some(crate::tools::FileSearch {
+                    requested: true,
+                    provider: Some("openai".into()),
+                    row: None,
+                    storage_gb: None,
+                    days: None,
+                    per_call: UnitPrice::new(8.0).unwrap(),
+                    azure_gigabyte_day: UnitPrice::ZERO,
+                }),
+                ..crate::tools::ToolUse::default()
+            },
             ..other_query("openai", usage(10, 2))
         };
         let receipt = priced(price(&source, &query));
