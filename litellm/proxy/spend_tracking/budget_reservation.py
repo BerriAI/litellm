@@ -88,7 +88,7 @@ from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.router import Router
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentPricing, DeploymentTypedDict
 from litellm.types.utils import CallTypes
 
 
@@ -1264,10 +1264,7 @@ def _max_cost_for_cost_info(
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    cache_read_cost_per_token: Final = _to_float(model_info.get("cache_read_input_token_cost"))
-    cached_cost_per_token: Final = (
-        input_cost_per_token if cache_read_cost_per_token is None else cache_read_cost_per_token
-    )
+    cached_cost_per_token: Final = _cached_cost_per_token(model_info)
     output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
     output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
     if cached_tokens > 0 and cached_cost_per_token is None:
@@ -1552,6 +1549,21 @@ def _cached_content_tokens(
     if max_input_tokens is None or not any(names):
         return 0
     return max(0, max_input_tokens - counted_input_tokens)
+
+
+_DEPLOYMENT_PRICES: Final = TypeAdapter(tuple[DeploymentPricing, ...])
+
+
+def _cached_cost_per_token(model_info: Mapping[str, object]) -> float | None:
+    input_rate: Final = _to_float(model_info.get("input_cost_per_token"))
+    cache_read_rate: Final = _to_float(model_info.get("cache_read_input_token_cost"))
+    deployments: Final = _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
+    rates: Final = tuple(
+        pricing.costs.get("cache_read_input_token_cost", pricing.costs.get("input_cost_per_token", input_rate))
+        for pricing in deployments
+    ) or (input_rate if cache_read_rate is None else cache_read_rate,)
+    known_rates: Final = tuple(rate for rate in rates if rate is not None)
+    return max(known_rates) if len(known_rates) == len(rates) else None
 
 
 def _is_input_only_route(route: str) -> bool:

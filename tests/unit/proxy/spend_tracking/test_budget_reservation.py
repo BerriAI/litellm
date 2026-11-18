@@ -766,6 +766,36 @@ def test_cached_content_without_an_input_or_cache_read_price_cannot_be_reserved(
     assert reserved is None
 
 
+def _cache_priced_gemini_deployment(deployment_id: str, cache_read_cost: float) -> dict[str, object]:
+    return Deployment(
+        model_name="custom-gemini",
+        litellm_params=LiteLLM_Params(
+            model=f"vertex_ai/{GEMINI_MODEL}",
+            vertex_project="p",
+            vertex_location="global",
+            input_cost_per_token=1e-06,
+            output_cost_per_token=4e-06,
+            cache_read_input_token_cost=cache_read_cost,
+        ),
+        model_info=ModelInfo(id=deployment_id, max_input_tokens=10_000),
+    ).model_dump()
+
+
+def test_cached_content_through_a_router_is_held_at_the_highest_deployment_cache_read_rate() -> None:
+    router: Final = Router(
+        model_list=[_cache_priced_gemini_deployment("cheap", 1e-07), _cache_priced_gemini_deployment("dear", 3e-07)]
+    )
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[0].replace(GEMINI_MODEL, "custom-gemini"),
+        llm_router=router,
+        input_token_counts={"custom-gemini": 200},
+    )
+
+    assert reserved == pytest.approx(200 * 1e-06 + 9_800 * 3e-07 + 100 * 4e-06)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", GEMINI_ROUTES)
 async def test_a_gemini_body_is_counted_for_the_reservation_from_its_raw_body(route: str) -> None:
