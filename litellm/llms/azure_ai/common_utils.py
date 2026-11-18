@@ -14,7 +14,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
-AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
+FOUNDRY_HOST_SUFFIX: Final = ".services.ai.azure.com"
+AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (FOUNDRY_HOST_SUFFIX, ".openai.azure.com")
 OPENAI_V1_PATH: Final = ("openai", "v1")
 CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")
 _OPENAI_V1_ROUTES: Final = (CHAT_COMPLETIONS_PATH, ("responses",), ("responses", "compact"))
@@ -33,7 +34,7 @@ def foundry_project_root(base_url: httpx.URL) -> tuple[str, ...]:
 def is_foundry_model_inference_base(api_base: str) -> bool:
     parsed: Final = urlparse(api_base)
     host: Final = parsed.hostname
-    if host is None or not host.endswith(".services.ai.azure.com"):
+    if host is None or not host.endswith(FOUNDRY_HOST_SUFFIX):
         return False
     return "/openai/deployments" not in parsed.path
 
@@ -172,6 +173,8 @@ def _is_foundry_v1_base(api_base: str) -> bool:
     base_url: Final = httpx.URL(api_base)
     if foundry_project_root(base_url):
         return True
+    if not base_url.host.endswith(FOUNDRY_HOST_SUFFIX):
+        return False
     segments: Final = _path_segments(base_url)
     route_free: Final = next(
         (segments[: -len(route)] for route in _OPENAI_V1_ROUTES if segments[-len(route) :] == route), segments

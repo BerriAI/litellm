@@ -1,12 +1,14 @@
 import asyncio
 import json
 import queue
+from collections.abc import Awaitable, Callable
 from types import NoneType
 from typing import Final
 
 import httpx
 import pytest
 import respx
+from pydantic import BaseModel
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -14,7 +16,7 @@ from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIC
 from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.responses.main import _will_bridge_to_chat_completions
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
 
@@ -123,8 +125,8 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
         (FOUNDRY_PROJECT_BASE, AzureAIResponsesAPIConfig),
         (f"{FOUNDRY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
         (RESOURCE_V1_BASE, AzureAIResponsesAPIConfig),
-        ("https://res.openai.azure.com/openai/v1", AzureAIResponsesAPIConfig),
-        ("https://res.openai.azure.com/openai/v1/responses", AzureAIResponsesAPIConfig),
+        ("https://res.openai.azure.com/openai/v1", NoneType),
+        ("https://res.openai.azure.com/openai/v1/responses", NoneType),
         (f"{RESOURCE_V1_BASE}/responses/compact", AzureAIResponsesAPIConfig),
         (f"{RESOURCE_V1_BASE}/chat/completions", AzureAIResponsesAPIConfig),
         ("https://res.cognitiveservices.azure.com/openai/v1", NoneType),
@@ -396,7 +398,9 @@ ROUTER_PATCH_TOOL: Final = {
 }
 
 
-async def _sent_router_request(call, url_regex: str, **params: object) -> dict:
+async def _sent_router_request(
+    call: Callable[..., Awaitable[object]], url_regex: str, **params: object
+) -> dict[str, object]:
     route: Final = respx.post(url__regex=url_regex).mock(
         return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
     )
@@ -463,7 +467,7 @@ async def test_a_model_router_sends_custom_tools_inside_a_namespace_as_function_
     assert sent["tools"] == [{**namespace, "tools": [WEATHER_TOOL, ROUTER_PATCH_TOOL]}]
 
 
-def _function_call(name: str, arguments: str) -> dict:
+def _function_call(name: str, arguments: str) -> dict[str, str]:
     return {
         "type": "function_call",
         "id": f"fc_{name}",
@@ -487,11 +491,11 @@ CUSTOM_PATCH_CALL: Final = {
 }
 
 
-def _dumped_item(item: object) -> dict:
+def _dumped_item(item: BaseModel | dict[str, object]) -> dict[str, object]:
     return item if isinstance(item, dict) else item.model_dump(exclude_none=True)
 
 
-def _dumped_output(response: object) -> list[dict]:
+def _dumped_output(response: ResponsesAPIResponse) -> list[dict[str, object]]:
     return [_dumped_item(item) for item in response.output]
 
 
