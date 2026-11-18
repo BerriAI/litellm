@@ -10,7 +10,7 @@ from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -49,7 +49,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.rust_bridge.execution import drive
-from litellm.types.integrations.custom_logger_v2 import Record
+from litellm.types.integrations.custom_logger_v2 import Record, Strict
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, Usage
 
 _IO_KEYS: Final = frozenset({"model_per_project_itpm", "model_per_project_otpm"})
@@ -495,11 +495,25 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
             stash.ptu_ceiling = ceiling  # rebind-ok: the next pre_call line and settlement read the held ceiling
 
 
+def _limiter_field(field: Field, value: object) -> object:
+    if field is not Field.standard_logging_payload:
+        return _plain(value)
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="python" if isinstance(value, Strict) else "json", include={"hidden_params"})
+    if isinstance(value, Mapping):
+        return {"hidden_params": _OUTCOME.validate_python(value).get("hidden_params")}
+    return _plain(value)
+
+
 def _fields(view: object, ctx: CallContext[object], reads: frozenset[Field]) -> Mapping[str, object]:
     projected: Final = reads & (_READS if ctx.call is None or not ctx.call.kind.call_type else _TYPED_READS)
     return {
         Field.deprecated_kwargs.value: None,
-        **{field.value: _plain(value) for field in projected if (value := _member(view, field.value)) is not None},
+        **{
+            field.value: _limiter_field(field, value)
+            for field in projected
+            if (value := _member(view, field.value)) is not None
+        },
     }
 
 

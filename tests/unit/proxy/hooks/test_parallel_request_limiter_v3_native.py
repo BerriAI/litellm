@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 import redis
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, PrivateAttr, TypeAdapter, model_serializer
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -542,6 +542,94 @@ _CHAT: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hel
 
 def _auth(**limits: object) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key=_KEY, **limits)  # pyright: ignore[reportArgumentType]  # pydantic fields by keyword
+
+
+class _SerializationObservedBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    content: str
+    _serializations: int = PrivateAttr(default=0)
+
+    @property
+    def serializations(self) -> int:
+        return self._serializations
+
+    @model_serializer(mode="wrap")
+    def serialize(self, serialize: Callable[[object], object]) -> object:
+        self._serializations += 1
+        return serialize(self)
+
+
+class _ObservedLoggingPayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    response: _SerializationObservedBody
+    hidden_params: Mapping[str, object]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited", (False, True))
+@pytest.mark.parametrize("modeled", (False, True), ids=("mapping", "model"))
+async def test_log_prepare_preserves_payload_and_limit_headers_without_serializing_the_response(
+    limited: bool, modeled: bool
+) -> None:
+    side: Final = _side(Clock())
+    request: Final = Request(_auth(rpm_limit=1 if limited else None), _CHAT)
+    assert await _admit(side, 0, request) is None
+    assert side.native is not None
+    response: Final = _SerializationObservedBody(content="large response" * 1000)
+    hidden: Final = {"additional_headers": {"x-existing": "kept"}, "other": {"trace": "kept"}}
+    payload: Final = (
+        _ObservedLoggingPayload(response=response, hidden_params=hidden)
+        if modeled
+        else {"response": {"content": response.content}, "hidden_params": hidden, "status": "success"}
+    )
+    prepared: Final = await side.native.run_rust(
+        Hook.log_prepare,
+        declared_reads(side.native, Hook.log_prepare),
+        SimpleNamespace(deprecated_kwargs=side.datas[0], standard_logging_payload=payload),
+        _ctx(side, 0, Hook.log_prepare, request),
+    )
+    assert response.serializations == 0
+    assert hidden == {"additional_headers": {"x-existing": "kept"}, "other": {"trace": "kept"}}
+    if not limited:
+        assert prepared is None
+        return
+    assert isinstance(prepared, Patch)
+    original: Final = {"response": response, "hidden_params": hidden, "status": "success"}
+    patched: Final = apply_patch({Field.standard_logging_payload: original}, prepared)
+    assert patched[Field.standard_logging_payload] == {
+        "response": response,
+        "status": "success",
+        "hidden_params": {
+            "other": {"trace": "kept"},
+            "additional_headers": {
+                "x-existing": "kept",
+                "x-ratelimit-api_key-limit-requests": 1,
+                "x-ratelimit-api_key-remaining-requests": 0,
+            },
+        },
+    }
+    refused: Final = await _admit(side, 1, request)
+    assert refused is not None and refused[:2] == ("ProxyRateLimitError", 429)  # pyright: ignore[reportIndexIssue]  # admission outcomes carry the public error tuple
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", (None, "invalid", {}))
+async def test_log_prepare_tolerates_missing_or_nonmapping_payloads_without_losing_limit_enforcement(
+    payload: object,
+) -> None:
+    side: Final = _side(Clock())
+    request: Final = Request(_auth(rpm_limit=1), _CHAT)
+    assert await _admit(side, 0, request) is None
+    assert side.native is not None
+    prepared: Final = await side.native.run_rust(
+        Hook.log_prepare,
+        declared_reads(side.native, Hook.log_prepare),
+        SimpleNamespace(deprecated_kwargs=side.datas[0], standard_logging_payload=payload),
+        _ctx(side, 0, Hook.log_prepare, request),
+    )
+    assert (prepared is None) == (not isinstance(payload, Mapping))
+    refused: Final = await _admit(side, 1, request)
+    assert refused is not None and refused[:2] == ("ProxyRateLimitError", 429)  # pyright: ignore[reportIndexIssue]  # admission outcomes carry the public error tuple
 
 
 @pytest.mark.asyncio
