@@ -1,6 +1,8 @@
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -574,3 +576,77 @@ async def test_update_evicts_old_and_new_cache_keys_after_write():
     assert result.jwt_claim_value == "renamed@example.com"
     assert await user_api_key_cache.async_get_cache(old_cache_key) is None
     assert await user_api_key_cache.async_get_cache(new_cache_key) is None
+
+
+_ISSUER: Final = "https://issuer-a.example.com"
+_JWTAUTH_WITH_ISSUER: Final = LiteLLM_JWTAuth(
+    issuers=[
+        {"issuer": _ISSUER, "jwks_url": f"{_ISSUER}/jwks", "audience": "gateway", "virtual_key_claim_field": "email"}
+    ]
+)
+
+
+async def _create_global_mapping() -> None:
+    from litellm.proxy._types import CreateJWTKeyMappingRequest
+
+    await create_jwt_key_mapping(
+        data=CreateJWTKeyMappingRequest(jwt_claim_name="email", jwt_claim_value="user@example.com", token="a" * 64),
+        user_api_key_dict=_make_admin_auth(),
+    )
+
+
+async def _reactivate_global_mapping() -> None:
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+
+    await update_jwt_key_mapping(
+        data=UpdateJWTKeyMappingRequest(id="mapping-1", is_active=True),
+        user_api_key_dict=_make_admin_auth(),
+    )
+
+
+async def _delete_global_mapping() -> None:
+    from litellm.proxy._types import DeleteJWTKeyMappingRequest
+
+    await delete_jwt_key_mapping(
+        data=DeleteJWTKeyMappingRequest(id="mapping-1"),
+        user_api_key_dict=_make_admin_auth(),
+    )
+
+
+@pytest.mark.parametrize(
+    "write_global_mapping",
+    [_create_global_mapping, _reactivate_global_mapping, _delete_global_mapping],
+    ids=["create", "update", "delete"],
+)
+@pytest.mark.asyncio
+async def test_writing_a_global_mapping_evicts_what_a_configured_issuer_cached_for_its_claim(
+    write_global_mapping: Callable[[], Awaitable[None]],
+) -> None:
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+
+    issuer_key: Final = jwt_key_mapping_cache_key("email", "user@example.com", _ISSUER)
+    other_claim_key: Final = jwt_key_mapping_cache_key("email", "other@example.com", _ISSUER)
+    user_api_key_cache: Final = DualCache()
+    await user_api_key_cache.async_set_cache(key=issuer_key, value="__NO_MAPPING__")
+    await user_api_key_cache.async_set_cache(key=other_claim_key, value="__NO_MAPPING__")
+
+    mock_prisma: Final = _mock_prisma()
+    mock_prisma.db.litellm_jwtkeymapping.create.return_value = _mock_mapping()
+    mock_prisma.db.litellm_jwtkeymapping.find_unique.return_value = _mock_mapping()
+    mock_prisma.db.litellm_jwtkeymapping.update.return_value = _mock_mapping()
+
+    with (
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.litellm_jwtauth", _JWTAUTH_WITH_ISSUER
+        ),
+    ):
+        await write_global_mapping()
+
+    assert await user_api_key_cache.async_get_cache(issuer_key) is None
+    assert await user_api_key_cache.async_get_cache(other_claim_key) == "__NO_MAPPING__"

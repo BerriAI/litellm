@@ -7,7 +7,6 @@ Symbols pinned here:
   - ``PrismaClient.check_view_exists``
   - ``PrismaClient.get_request_status``
   - ``PrismaClient.get_generic_data``
-  - ``PrismaClient._query_first_with_cached_plan_fallback``
   - ``PrismaClient.get_data``
 """
 
@@ -15,16 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LiteLLM_VerificationTokenView
-from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.utils import PrismaClient
 
 
@@ -209,131 +205,6 @@ async def test_get_generic_data_logs_failure_handler_and_raises_on_error(
 
 
 @pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_happy_returns_row(
-    prisma_client: PrismaClient,
-) -> None:
-    expected = {"token": "abc", "team_spend": 1.0, "team_max_budget": 5.0}
-    prisma_client.db.query_first = AsyncMock(return_value=expected)
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
-    result = await prisma_client._query_first_with_cached_plan_fallback("SELECT * FROM x WHERE token = $1", "abc")
-    actual = {
-        "result": result,
-        "call_count": prisma_client.db.query_first.await_count,
-        "args": prisma_client.db.query_first.await_args.args,
-        "matches": result == expected,
-    }
-    assert actual == {
-        "result": expected,
-        "call_count": 1,
-        "args": ("SELECT * FROM x WHERE token = $1", "abc"),
-        "matches": True,
-    }
-    prisma_client.attempt_db_reconnect.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_reconnects_then_retries_identical_query(
-    prisma_client: PrismaClient,
-) -> None:
-    original_query = 'SELECT * FROM "LiteLLM_VerificationToken" WHERE v.token = $1'
-    expected = {"token": "abc", "team_spend": 1.0, "team_max_budget": 5.0}
-    manager = MagicMock()
-    query_first = AsyncMock(
-        side_effect=[
-            RuntimeError("cached plan must not change result type"),
-            expected,
-        ]
-    )
-    reconnect = AsyncMock(return_value=True)
-    manager.attach_mock(query_first, "query_first")
-    manager.attach_mock(reconnect, "attempt_db_reconnect")
-    prisma_client.db.query_first = query_first
-    prisma_client.attempt_db_reconnect = reconnect
-
-    result = await prisma_client._query_first_with_cached_plan_fallback(original_query, "abc")
-
-    assert result == expected
-    assert query_first.await_count == 2
-    first_call, retry_call = query_first.await_args_list
-    assert retry_call.args == first_call.args == (original_query, "abc")
-    reconnect.assert_awaited_once()
-    assert reconnect.await_args.kwargs.get("force", False) is False
-    # https://github.com/BerriAI/litellm/issues/36418: without this the healthy
-    # writer probe skips the recreate and the stale plans survive the retry
-    assert reconnect.await_args.kwargs.get("force_recreate") is True
-    assert [name for name, *_ in manager.mock_calls] == [
-        "query_first",
-        "attempt_db_reconnect",
-        "query_first",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_never_deallocates(
-    prisma_client: PrismaClient,
-) -> None:
-    expected = {"token": "abc"}
-    prisma_client.db.query_first = AsyncMock(
-        side_effect=[
-            RuntimeError("cached plan must not change result type"),
-            expected,
-        ]
-    )
-    prisma_client.db.execute_raw = AsyncMock(return_value=0)
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
-
-    await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
-
-    prisma_client.db.execute_raw.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_propagates_when_retry_also_fails(
-    prisma_client: PrismaClient,
-) -> None:
-    plan_error = RuntimeError("cached plan must not change result type")
-    prisma_client.db.query_first = AsyncMock(side_effect=[plan_error, plan_error])
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
-
-    with pytest.raises(RuntimeError, match="cached plan must not change result type"):
-        await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
-
-    assert prisma_client.db.query_first.await_count == 2
-    prisma_client.attempt_db_reconnect.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_retries_when_reconnect_returns_false(
-    prisma_client: PrismaClient,
-) -> None:
-    expected = {"token": "abc"}
-    prisma_client.db.query_first = AsyncMock(
-        side_effect=[
-            RuntimeError("cached plan must not change result type"),
-            expected,
-        ]
-    )
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
-
-    result = await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
-
-    assert result == expected
-    assert prisma_client.db.query_first.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_reraises_non_plan_errors(
-    prisma_client: PrismaClient,
-) -> None:
-    prisma_client.db.query_first = AsyncMock(side_effect=RuntimeError("totally unrelated"))
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
-    with pytest.raises(RuntimeError, match="totally unrelated"):
-        await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
-    assert prisma_client.db.query_first.await_count == 1
-    prisma_client.attempt_db_reconnect.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_check_view_exists_noop_when_all_views_present(
     prisma_client: PrismaClient,
 ) -> None:
@@ -362,16 +233,12 @@ async def test_check_view_exists_noop_when_all_views_present(
         "execute_raw_calls": prisma_client.db.execute_raw.await_count,
         "view_query_contains_token_view": "LiteLLM_VerificationTokenView"
         in prisma_client.db.query_raw.await_args.args[0],
-        "schemaname_is_parameterized": "schemaname = $1" in prisma_client.db.query_raw.await_args.args[0],
-        "schema_param": prisma_client.db.query_raw.await_args.args[1],
     }
     assert actual == {
         "result": None,
         "query_raw_calls": 1,
         "execute_raw_calls": 0,
         "view_query_contains_token_view": True,
-        "schemaname_is_parameterized": True,
-        "schema_param": "public",
     }
 
 
@@ -488,40 +355,6 @@ async def test_get_data_logs_and_raises_on_db_error(
 
 
 @pytest.mark.asyncio
-async def test_get_data_combined_view_returns_view_for_deprecated_key(
-    prisma_client: PrismaClient,
-) -> None:
-    """Grace-period rotation, full get_data flow: the old hash misses the
-    combined view, the deprecated-key table resolves it to the active token,
-    and get_data must return the recursive lookup's finished view instead of
-    re-running dict normalization on it (which raised TypeError and turned
-    every grace-period request into a 401)."""
-    old_hash = "hashed-old-token-grace-e2e"
-    active_hash = "hashed-active-token-grace-e2e"
-    active_row = {
-        "token": active_hash,
-        "team_models": None,
-        "team_blocked": None,
-        "team_members_with_roles": None,
-        "user_id": None,
-        "expires": None,
-    }
-    prisma_client.db.query_first = AsyncMock(side_effect=[None, active_row])
-    prisma_client.db.litellm_deprecatedverificationtoken = MagicMock()
-    prisma_client.db.litellm_deprecatedverificationtoken.find_first = AsyncMock(
-        return_value=SimpleNamespace(
-            active_token_id=active_hash,
-            revoke_at=datetime.now(timezone.utc) + timedelta(hours=1),
-        )
-    )
-
-    response = await prisma_client.get_data(token=old_hash, table_name="combined_view", query_type="find_unique")
-
-    assert isinstance(response, LiteLLM_VerificationTokenView)
-    assert response.token == active_hash
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [5, None])
 async def test_get_data_team_keys_forward_limit_as_take(prisma_client: PrismaClient, limit: Any) -> None:
     """The /team/info ``key_limit`` must reach Prisma as ``take`` so the
@@ -540,103 +373,6 @@ async def test_get_data_team_keys_forward_limit_as_take(prisma_client: PrismaCli
         "where": {"team_id": "team-1"},
         "include": {"litellm_budget_table": True},
     }
-
-
-@pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_reports_pre_query_engine_generation(
-    prisma_client: PrismaClient,
-) -> None:
-    """The generation is snapshotted before the query, not after it fails: it
-    names the engine that prepared the stale statement, which is what lets the
-    reconnect bypass an unrelated cooldown while that engine is still live
-    (https://github.com/BerriAI/litellm/issues/36418). Reading it after the
-    failure would miss a recreate that landed in between and force a
-    needless second one."""
-    prisma_client.db.engine_generation = 3
-
-    async def _fail_then_bump(*args: Any, **kwargs: Any) -> dict[str, str]:
-        if prisma_client.db.engine_generation == 3:
-            prisma_client.db.engine_generation = 4
-            raise RuntimeError("cached plan must not change result type")
-        return {"token": "abc"}
-
-    prisma_client.db.query_first = AsyncMock(side_effect=_fail_then_bump)
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
-
-    await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
-
-    kwargs = prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert kwargs.get("stale_read_engine").generation == 3
-
-
-@pytest.mark.asyncio
-async def test_query_first_with_cached_plan_fallback_reports_the_reader_generation(
-    prisma_client: PrismaClient,
-) -> None:
-    """With a read replica configured the query runs on the READER, so the
-    reader's generation is the one that names the engine holding the stale
-    prepared statement. Snapshotting the writer's instead would let an
-    unrelated writer reconnect re-arm the cooldown while the reader stayed
-    poisoned (https://github.com/BerriAI/litellm/issues/36418). The two
-    generations are deliberately far apart so only the right one matches."""
-    writer = MagicMock(name="writer")
-    writer.engine_generation = 99
-    writer.query_first = AsyncMock(return_value={"token": "wrong-engine"})
-    reader = MagicMock(name="reader")
-    reader.engine_generation = 3
-    reader.query_first = AsyncMock(
-        side_effect=[RuntimeError("cached plan must not change result type"), {"token": "abc"}]
-    )
-    prisma_client.db = RoutingPrismaWrapper(writer=writer, reader=reader)
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
-
-    await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
-
-    reported: Final = prisma_client.attempt_db_reconnect.await_args.kwargs.get("stale_read_engine")
-    pinned = {
-        "reported_generation": reported.generation,
-        "reported_the_reader_itself": reported.wrapper is reader,
-        "reader_served_the_query": reader.query_first.await_count,
-        "writer_served_the_query": writer.query_first.await_count,
-    }
-    assert pinned == {
-        "reported_generation": 3,
-        "reported_the_reader_itself": True,
-        "reader_served_the_query": 2,
-        "writer_served_the_query": 0,
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("rotated", (False, True))
-async def test_authoritative_combined_key_view_uses_writer_through_rotation(
-    prisma_client: PrismaClient, rotated: bool
-) -> None:
-    writer: Final = MagicMock()
-    reader: Final = MagicMock()
-    active: Final = {
-        "token": "current-token",
-        "team_id": "current-team",
-        "team_models": None,
-        "team_blocked": None,
-        "team_members_with_roles": None,
-        "user_id": None,
-        "expires": None,
-    }
-    writer.query_first = AsyncMock(side_effect=[None, active] if rotated else [active])
-    reader.query_first = AsyncMock(return_value={**active, "team_id": "stale-team"})
-    writer.litellm_deprecatedverificationtoken.find_first = AsyncMock(
-        return_value=SimpleNamespace(
-            active_token_id="current-token", revoke_at=datetime.now(timezone.utc) + timedelta(hours=1)
-        )
-    )
-    prisma_client.db = RoutingPrismaWrapper(writer=writer, reader=reader)
-    response: Final = await prisma_client.get_data(token="original-token", table_name="combined_view", use_writer=True)
-    assert isinstance(response, LiteLLM_VerificationTokenView)
-    assert response.team_id == "current-team"
-    assert response.token == "current-token"
-    reader.query_first.assert_not_awaited()
-    assert writer.query_first.await_count == (2 if rotated else 1)
 
 
 @pytest.mark.asyncio

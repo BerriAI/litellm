@@ -1,6 +1,6 @@
 use crate::{
-    BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, ModelAccessDenied, PremiumRequired,
-    RbacDenial, TeamDenial, VerifyDenial,
+    BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
+    PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
 };
 
 /// `ProxyErrorTypes` values a denial carries.
@@ -12,8 +12,6 @@ pub enum ErrorType {
     ExpiredKey,
     #[strum(serialize = "no_db_connection")]
     NoDbConnection,
-    #[strum(serialize = "token_not_found_in_db")]
-    TokenNotFoundInDb,
     #[strum(serialize = "auth_provider_unavailable")]
     AuthProviderUnavailable,
     #[strum(serialize = "model_cost_map_missing")]
@@ -49,6 +47,12 @@ pub enum PublicDenial {
     BudgetExceeded(BudgetExceeded),
     /// `TeamNotFoundError(team_id)`
     TeamNotFound { team_id: String },
+    /// `KeyNotFoundError(hashed_token)`, whose status, type, param and message are that class's own.
+    KeyNotFound { hash: KeyHash },
+    /// `NoMatchingJWTPublicKeyError(message)`, which the auth exception handler reports as a 401.
+    NoMatchingJwtPublicKey { message: String },
+    /// `IdJagIsNotABearerTokenError(message)`, which the auth exception handler reports as a 401.
+    IdJagNotBearer { message: String },
 }
 
 fn proxy(
@@ -107,6 +111,7 @@ impl KeyDenial {
             Self::MissingKey
             | Self::MalformedKey
             | Self::MasterKeyOnlyRoute { .. }
+            | Self::NoDbConfigured
             | Self::Blocked
             | Self::UserDeactivated { .. } => auth(self),
             Self::UserAuthDisabled => http(403, self),
@@ -116,7 +121,7 @@ impl KeyDenial {
                 status: 401,
                 detail: self.to_string(),
             },
-            Self::NotFound => proxy(401, self, ErrorType::TokenNotFoundInDb, Some("key")),
+            Self::NotFound { hash } => PublicDenial::KeyNotFound { hash: hash.clone() },
             Self::NoToken => http(401, self),
         }
     }
@@ -159,8 +164,13 @@ impl VerifyDenial {
                 proxy(503, self, ErrorType::AuthProviderUnavailable, None)
             }
             Self::Expired => proxy(401, self, ErrorType::ExpiredKey, None),
+            Self::Key(KeyFailure::NoMatch { .. }) => PublicDenial::NoMatchingJwtPublicKey {
+                message: self.to_string(),
+            },
+            Self::IdJagNotBearer => PublicDenial::IdJagNotBearer {
+                message: self.to_string(),
+            },
             Self::Malformed(_)
-            | Self::IdJagNotBearer
             | Self::Key(_)
             | Self::Invalid(_)
             | Self::Assertion(_)
@@ -257,12 +267,25 @@ mod tests {
 
     #[rstest]
     #[case::not_found(
-        KeyDenial::NotFound.into(),
+        KeyDenial::NotFound { hash: KeyHash::new("looked-up") }.into(),
+        PublicDenial::KeyNotFound { hash: KeyHash::new("looked-up") }
+    )]
+    #[case::no_db_configured(
+        KeyDenial::NoDbConfigured.into(),
         PublicDenial::Proxy {
             status: 401,
-            message: "Authentication Error, Invalid API key provided.".to_owned(),
-            error_type: ErrorType::TokenNotFoundInDb,
-            param: Some("key".to_owned()),
+            message: KeyDenial::NoDbConfigured.to_string(),
+            error_type: ErrorType::Auth,
+            param: None,
+        }
+    )]
+    #[case::db_not_connected(
+        KeyDenial::NoDb.into(),
+        PublicDenial::Proxy {
+            status: 400,
+            message: "No connected db.".to_owned(),
+            error_type: ErrorType::NoDbConnection,
+            param: None,
         }
     )]
     #[case::budget(
@@ -476,7 +499,20 @@ mod tests {
     )]
     #[case::unknown_kid(
         VerifyDenial::Key(KeyFailure::NoMatch { keys: Searched::Url(JWKS.to_owned()), kid: None }),
-        PublicDenial::Plain { message: format!("No matching public key found. keys={JWKS}, kid=unset") }
+        PublicDenial::NoMatchingJwtPublicKey {
+            message: format!("No matching public key found. keys={JWKS}, kid=unset")
+        }
+    )]
+    #[case::id_jag(
+        VerifyDenial::IdJagNotBearer,
+        PublicDenial::IdJagNotBearer {
+            message: "an ID-JAG is an authorization grant, not a bearer token; redeem it at the token endpoint"
+                .to_owned()
+        }
+    )]
+    #[case::missing_jwks_url(
+        VerifyDenial::Key(KeyFailure::MissingUrl),
+        PublicDenial::Plain { message: "Missing JWT Public Key URL from environment.".to_owned() }
     )]
     #[case::assertion(
         VerifyDenial::Assertion(AssertionRejection::Invalid(TokenError::MissingClaim("jti".to_owned()))),

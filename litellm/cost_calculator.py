@@ -125,7 +125,13 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
-from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
+from litellm.types.decisions import (
+    DecisionsResponse,
+    DecisionsUsage,
+    OpenAIDecisionCacheWriteTokensDetails,
+    OpenAIDecisionResponse,
+    OpenAIDecisionUsage,
+)
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
@@ -141,6 +147,7 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
@@ -1384,6 +1391,16 @@ def _usage_from_model(usage_model: BaseModel) -> Usage:
     return Usage(**_DumpedUsageFields(**_dumped_usage_fields(usage_model)))
 
 
+def _decisions_cache_write_lifetimes(
+    details: OpenAIDecisionCacheWriteTokensDetails | None,
+) -> CacheCreationTokenDetails | None:
+    if details is None:
+        return None
+    return CacheCreationTokenDetails(
+        ephemeral_30m_input_tokens=details.ttl_30m_tokens, ephemeral_12h_input_tokens=details.ttl_12h_tokens
+    )
+
+
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
     match usage:
         case DecisionsUsage():
@@ -1394,6 +1411,9 @@ def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage
             return PromptTokensDetailsWrapper(
                 cached_tokens=usage.input_tokens_details.cached_tokens,
                 cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+                cache_creation_token_details=_decisions_cache_write_lifetimes(
+                    usage.input_tokens_details.cache_write_tokens_details
+                ),
             )
         case _:
             assert_never(usage)

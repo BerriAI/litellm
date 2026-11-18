@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Any, Final, NamedTuple, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError, model_validator
@@ -2202,12 +2202,137 @@ def _paused_turn_replay(
     return tuple(block for block in tool_invokes if _block_id(block) not in dropped_ids), ()
 
 
+_BACK_TO_BACK_JSON_OBJECTS: Final = re.compile(r"\}\s*\{")
+_NO_SPLIT_TOOL_USE_IDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType({})
+
+
+class _AssistantToolCall(NamedTuple):
+    message_index: int
+    tool_id: str
+    arguments: object
+
+
+def _has_tool_calls(message: object) -> bool:
+    if isinstance(message, dict) and "tool_calls" not in message:
+        return False
+    return bool(message_field(message, "tool_calls"))
+
+
+def _assistant_tool_calls_of(message_index: int, message: object) -> tuple[_AssistantToolCall, ...]:
+    if message_field(message, "role") != "assistant":
+        return ()
+    return tuple(
+        _AssistantToolCall(message_index, tool_id, message_field(message_field(tool_call, "function"), "arguments"))
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if isinstance(tool_id := message_field(tool_call, "id"), str)
+    )
+
+
+def _assistant_turn_indexes(messages: Sequence[object]) -> tuple[int, ...]:
+    is_assistant: Final = tuple(message_field(message, "role") == "assistant" for message in messages)
+    return tuple(
+        itertools.accumulate(
+            current and not previous for previous, current in itertools.pairwise((False, *is_assistant))
+        )
+    )
+
+
+def _split_tool_use_ids_by_message(
+    messages: Sequence[object], object_count: Callable[[object], int], sanitize: Callable[[str], str], infix: str
+) -> tuple[Mapping[str, tuple[str, ...]], ...]:
+    """Per message, the extra tool use ids each tool call of its assistant turn splits into.
+
+    Messages of one turn share one mapping, and a tool call id repeated inside a turn reuses its extra ids.
+    Empty when no tool call in the history carries concatenated JSON argument objects.
+    """
+    calls: Final = tuple(
+        itertools.chain.from_iterable(
+            _assistant_tool_calls_of(index, message)
+            for index, message in enumerate(messages)
+            if _has_tool_calls(message)
+        )
+    )
+    if all(object_count(call.arguments) == 1 for call in calls):
+        return ()
+    turns: Final = _assistant_turn_indexes(messages)
+    largest_counts: Final = MappingProxyType(
+        dict(sorted(((turns[call.message_index], call.tool_id), object_count(call.arguments)) for call in calls))
+    )
+    id_groups: Final = _split_tool_call_ids(
+        tuple((tool_id, count) for (_, tool_id), count in largest_counts.items()), sanitize, infix
+    )
+    by_turn: Final = MappingProxyType(
+        {
+            turn: MappingProxyType(
+                {
+                    tool_id: tuple(sanitize(extra_id) for extra_id in extra_ids if extra_id)
+                    for (_, tool_id), (_, *extra_ids) in group
+                    if extra_ids
+                }
+            )
+            for turn, group in itertools.groupby(
+                zip(largest_counts, id_groups, strict=True), key=lambda pair: pair[0][0]
+            )
+        }
+    )
+    return tuple(by_turn.get(turn, _NO_SPLIT_TOOL_USE_IDS) for turn in turns)
+
+
+def _split_tool_use_ids_at(
+    split_tool_use_ids_by_message: Sequence[Mapping[str, tuple[str, ...]]], message_index: int
+) -> Mapping[str, tuple[str, ...]]:
+    return split_tool_use_ids_by_message[message_index] if split_tool_use_ids_by_message else _NO_SPLIT_TOOL_USE_IDS
+
+
+def _anthropic_argument_object_count(arguments: object) -> int:
+    if not isinstance(arguments, str) or _BACK_TO_BACK_JSON_OBJECTS.search(arguments) is None:
+        return 1
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        return max(len(salvage_concatenated_tool_arguments(arguments)), 1)
+    return 1
+
+
+def _anthropic_tool_inputs(
+    arguments: str | None, tool_name: str, tool_id: str, split_tool_use_ids: Mapping[str, tuple[str, ...]]
+) -> tuple[tuple[str, dict[str, object]], ...]:  # mutable-ok: the tool_use block's input field is typed dict
+    try:
+        return ((tool_id, parse_tool_call_arguments(arguments, tool_name=tool_name, context="Anthropic tool invoke")),)
+    except ValueError:
+        objects: Final = salvage_concatenated_tool_arguments(arguments) if isinstance(arguments, str) else ()
+        tool_use_ids: Final = (tool_id, *split_tool_use_ids.get(tool_id, ()))
+        if not objects or len(objects) > len(tool_use_ids):
+            raise
+        return tuple(zip(tool_use_ids, objects, strict=False))
+
+
+def _reject_split_server_tool_call(tool_inputs: Sequence[object], tool_name: str) -> None:
+    if len(tool_inputs) != 1:
+        raise ValueError(
+            f"Server tool call '{tool_name}' carries {len(tool_inputs)} concatenated JSON argument objects"
+        )
+
+
+def _anthropic_tool_results_for_split_ids(
+    tool_result: AnthropicMessagesToolResultParam, split_ids: Sequence[str]
+) -> tuple[AnthropicMessagesToolResultParam, ...]:
+    shared: Final = {key: value for key, value in tool_result.items() if key != "cache_control"}
+    return tuple(
+        cast(  # cast-ok: a TypedDict rebuilt without one optional key is a plain dict to the type checker
+            AnthropicMessagesToolResultParam, {**shared, "tool_use_id": split_id}
+        )
+        for split_id in split_ids
+    )
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: Sequence[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
     server_tool_call_ids: Container[str] = frozenset(),
+    split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2262,10 +2387,11 @@ def convert_to_anthropic_tool_invoke(
             str,
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
         )
-        tool_input = parse_tool_call_arguments(
+        tool_inputs = _anthropic_tool_inputs(
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"),
-            tool_name=tool_name,
-            context="Anthropic tool invoke",
+            tool_name,
+            tool_id,
+            split_tool_use_ids,
         )
 
         server_tool_result = (
@@ -2274,12 +2400,13 @@ def convert_to_anthropic_tool_invoke(
             else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         )
         if server_tool_result is not None:
+            _reject_split_server_tool_call(tool_inputs, tool_name)
             anthropic_tool_invoke.append(
                 {
                     "type": "server_tool_use",
                     "id": tool_id,
                     "name": tool_name,
-                    "input": tool_input,
+                    "input": tool_inputs[0][1],
                 }
             )
             anthropic_tool_invoke.append(server_tool_result)
@@ -2288,27 +2415,35 @@ def convert_to_anthropic_tool_invoke(
         elif (
             tool_id in server_tool_call_ids or is_anthropic_server_tool_use(tool_id)
         ) and tool_id not in answered_tool_ids:
+            _reject_split_server_tool_call(tool_inputs, tool_name)
             anthropic_tool_invoke.append(
-                {"type": "server_tool_use", "id": tool_id, "name": tool_name, "input": tool_input}
+                {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_inputs[0][1],
+                }
             )
         else:
-            sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
-            _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
-                type="tool_use",
-                id=sanitized_tool_id,
-                name=tool_name,
-                input=tool_input,
-            )
+            _tool_use_params = [
+                AnthropicMessagesToolUseParam(
+                    type="tool_use",
+                    id=sanitize_anthropic_tool_use_id(tool_use_id),
+                    name=tool_name,
+                    input=tool_input,
+                )
+                for tool_use_id, tool_input in tool_inputs
+            ]
 
             _content_element = add_cache_control_to_content(
-                anthropic_content_element=_anthropic_tool_use_param,
+                anthropic_content_element=_tool_use_params[-1],
                 original_content_element=dict(tool),
             )
 
             if "cache_control" in _content_element:
-                _anthropic_tool_use_param["cache_control"] = _content_element["cache_control"]
+                _tool_use_params[-1]["cache_control"] = _content_element["cache_control"]
 
-            anthropic_tool_invoke.append(_anthropic_tool_use_param)
+            anthropic_tool_invoke.extend(_tool_use_params)
 
     return anthropic_tool_invoke
 
@@ -2458,7 +2593,7 @@ _S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
     {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
 )
 _CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
-_EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
+EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
 def _dict_block(block: object) -> Mapping[str, object] | None:
@@ -2477,11 +2612,150 @@ def _is_empty_text_block(block: object) -> bool:
             return False
 
 
+def carries_empty_text(message: object) -> bool:
+    if message_field(message, "role") not in ("user", "assistant"):
+        return False
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return not content.strip()
+    blocks: Final = parts_of(content)
+    return isinstance(content, list) and any(map(_is_empty_text_block, blocks))
+
+
+_CONVERSE_ASSISTANT_NON_TEXT_FIELDS: Final = ("tool_calls", "thinking_blocks")
+
+
+def _is_typed_block(block: object) -> bool:
+    match _dict_block(block):
+        case {"type": "text", "text": str()}:
+            return True
+        case {"type": "text"}:
+            return False
+        case {"type": _}:
+            return True
+        case _:
+            return False
+
+
+def _converse_reads_content(message: Mapping[str, object]) -> bool:
+    return bool(message.get("content")) or any(message.get(field) for field in _CONVERSE_ASSISTANT_NON_TEXT_FIELDS)
+
+
+def _assistant_turn_as_converse_sends_it(message: Mapping[str, object]) -> Mapping[str, object] | None:
+    if message.get("role") != "assistant" or (message.get("content") and not carries_empty_text(message)):
+        return message
+    if litellm.modify_params is not False and all(map(_is_typed_block, parts_of(message.get("content")))):
+        continued: Final = get_assistant_message_block_or_continue_message(
+            cast(ChatCompletionAssistantMessage, message)  # cast-ok: role checked above, the helper reads only content
+        )
+        return continued if _converse_reads_content(continued) else None
+    kept: Final = tuple(block for block in parts_of(message.get("content")) if not _is_empty_text_block(block))
+    trimmed: Final = {**message, "content": list(kept) or None}
+    return trimmed if _converse_reads_content(trimmed) else None
+
+
+_CONVERSE_USER_BLOCK_ROLES: Final = frozenset({"user", "tool"})
+
+
+def _role_runs_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+) -> tuple[tuple[object, tuple[Mapping[str, object], ...]], ...]:
+    runs: Final = itertools.groupby(messages, key=lambda message: message.get("role"))
+    sent_runs: Final = (
+        (role, tuple(turn for turn in map(_assistant_turn_as_converse_sends_it, run) if turn is not None))
+        for role, run in runs
+    )
+    return tuple((role, turns) for role, turns in sent_runs if turns)
+
+
+def _continue_turn_between(previous_role: object, role: object) -> tuple[Mapping[str, object], ...]:
+    if litellm.modify_params is True and {previous_role, role} <= _CONVERSE_USER_BLOCK_ROLES:
+        return (DEFAULT_ASSISTANT_CONTINUE_MESSAGE,)
+    return ()
+
+
+def _needs_user_continue_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "assistant" and not message.get("prefix")
+
+
+def _with_user_continue_turns(
+    messages: Sequence[Mapping[str, object]], user_continue_message: ChatCompletionUserMessage | None
+) -> tuple[Mapping[str, object], ...]:
+    first: Final = next((index for index, message in enumerate(messages) if not _is_system_message(message)), None)
+    if not continues_empty_user_turns(user_continue_message) or first is None:
+        return tuple(messages)
+    continue_message: Final = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
+    leading: Final = (continue_message,) if _needs_user_continue_turn(messages[first]) else ()
+    trailing: Final = (continue_message,) if _needs_user_continue_turn(messages[-1]) else ()
+    return (*messages[:first], *leading, *messages[first:], *trailing)
+
+
+def assistant_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]], user_continue_message: ChatCompletionUserMessage | None
+) -> tuple[Mapping[str, object], ...]:
+    runs: Final = _role_runs_as_converse_sends_them(_with_user_continue_turns(messages, user_continue_message))
+    return tuple(
+        itertools.chain.from_iterable(
+            (*_continue_turn_between(previous_role, role), *turns)
+            for (previous_role, _), (role, turns) in itertools.pairwise(((None, ()), *runs))
+        )
+    )
+
+
+def _is_user_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "user"
+
+
+def _user_turn_as_converse_sends_it(
+    message: Mapping[str, object], user_continue_message: ChatCompletionUserMessage | None
+) -> Mapping[str, object] | None:
+    if not _is_user_turn(message) or not (is_empty_user_message(message) or carries_empty_text(message)):
+        return message
+    sent: Final = get_user_message_block_or_continue_message(
+        cast(ChatCompletionUserMessage, copy.deepcopy(dict(message))),  # cast-ok: a user turn, checked above
+        user_continue_message,
+    )
+    return sent if sent.get("content") else None
+
+
+def user_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+    user_continue_message: ChatCompletionUserMessage | None,
+    rejects_assistant_prefill: bool,
+) -> tuple[Mapping[str, object], ...]:
+    tail_start: Final = len(messages) - sum(1 for _ in itertools.takewhile(_is_user_turn, reversed(messages)))
+    sends_placeholder_turn: Final = (
+        rejects_assistant_prefill
+        and not continues_empty_user_turns(user_continue_message)
+        and 0 < tail_start < len(messages)
+        and messages[tail_start - 1].get("role") == "assistant"
+        and all(map(is_empty_user_message, messages[tail_start:]))
+    )
+    leading_turns: Final = messages[:tail_start] if sends_placeholder_turn else messages
+    sent_turns: Final = (_user_turn_as_converse_sends_it(message, user_continue_message) for message in leading_turns)
+    kept_turns: Final = tuple(turn for turn in sent_turns if turn is not None)
+    if not sends_placeholder_turn:
+        return kept_turns
+    return (*kept_turns, _placeholder_user_turn(messages[tail_start:]))
+
+
+def _placeholder_user_turn(trailing_messages: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    marked: Final = _first_cache_marked(trailing_messages)
+    if marked is None:
+        return {"role": "user", "content": EMPTY_TEXT_PLACEHOLDER}
+    placeholder_block: Final = {
+        "type": "text",
+        "text": EMPTY_TEXT_PLACEHOLDER,
+        "cache_control": message_field(marked, "cache_control"),
+    }
+    return {"role": "user", "content": [placeholder_block]}
+
+
 def _with_placeholder_text(block: object) -> object:
     fields: Final = _dict_block(block)
     if fields is None or not _is_empty_text_block(fields):
         return block
-    return {**fields, "text": _EMPTY_TEXT_PLACEHOLDER}
+    return {**fields, "text": EMPTY_TEXT_PLACEHOLDER}
 
 
 def _survives_assistant_conversion(block: object) -> bool:
@@ -2556,23 +2830,18 @@ def _sanitize_empty_text_content(
     Returns:
         The message with sanitized content if needed, otherwise the original message
     """
-    if message.get("role") not in ["user", "assistant"]:
+    if not carries_empty_text(message):
         return message
 
     content: Final = message_field(message, "content")
     drop_empty_text: Final = message_field(message, "role") == "assistant" and _carries_non_text_content(message)
 
     if isinstance(content, str):
-        if content.strip():
-            return message
         if drop_empty_text:
             return _with_content(message, None, "Dropped empty text content")
-        return _with_content(message, _EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
+        return _with_content(message, EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
 
     blocks: Final = parts_of(content)
-    if not isinstance(content, list) or not any(_is_empty_text_block(block) for block in blocks):
-        return message
-
     if drop_empty_text:
         kept: Final = [block for block in blocks if not _is_empty_text_block(block)]
         return _with_content(message, kept, "Dropped empty text block(s)")
@@ -3033,7 +3302,7 @@ def _tool_result_later_in_turn(
 
 
 def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
-    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=EMPTY_TEXT_PLACEHOLDER)
     add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
     return placeholder
 
@@ -3086,6 +3355,9 @@ def anthropic_messages_pt(
     messages = [_sanitize_empty_text_content(m) for m in messages]
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
+    split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
+        messages, _anthropic_argument_object_count, sanitize_anthropic_tool_use_id, "__concat_"
+    )
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -3216,8 +3488,15 @@ def anthropic_messages_pt(
                 user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
             ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
-                user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                _tool_result = convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                user_content.append(_tool_result)
+                user_content.extend(
+                    _anthropic_tool_results_for_split_ids(
+                        _tool_result,
+                        _split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i).get(
+                            str(message_field(user_message_types_block, "tool_call_id")), ()
+                        ),
+                    )
                 )
 
             msg_i += 1
@@ -3279,6 +3558,7 @@ def anthropic_messages_pt(
                     tool_results=_provider_specific_fields.get("tool_results"),
                     answered_tool_ids=client_answered_tool_ids,
                     server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
+                    split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
                 )
                 if assistant_tool_calls is not None
                 else ()
@@ -4387,11 +4667,51 @@ class BedrockImageProcessor:
         return cls._create_bedrock_block(BedrockSourceBlock(bytes=img_bytes), mime_type, image_format)
 
 
+def _bedrock_argument_object_count(arguments: object) -> int:
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+        MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS,
+        split_concatenated_json_objects,
+    )
+
+    if not isinstance(arguments, str) or not arguments.strip():
+        return 1
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        return min(max(len(split_concatenated_json_objects(arguments)), 1), MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS)
+    return 1
+
+
+def _bedrock_split_tool_use_ids(
+    tool_id: str, object_count: int, split_tool_use_ids: Mapping[str, tuple[str, ...]]
+) -> tuple[str, ...]:
+    reserved: Final = split_tool_use_ids.get(tool_id, ())
+    ids: Final = (
+        (tool_id, *reserved[: object_count - 1])
+        if len(reserved) >= object_count - 1
+        else (tool_id, *(f"{tool_id}_{index}" for index in range(1, object_count)))
+    )
+    return tuple(_sanitize_bedrock_tool_use_id(block_id) for block_id in ids)
+
+
+def _bedrock_tool_results_for_split_ids(
+    tool_result: BedrockContentBlock, split_ids: Sequence[str]
+) -> tuple[BedrockContentBlock, ...]:
+    result: Final = tool_result.get("toolResult")
+    if result is None:
+        return ()
+    return tuple(
+        BedrockContentBlock(toolResult={**result, "toolUseId": _sanitize_bedrock_tool_use_id(split_id)})
+        for split_id in split_ids
+    )
+
+
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
     model: str | None = None,
     deployment_model: str | None = None,
     model_info: Mapping[str, object] | None = None,
+    split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
 ) -> list[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -4429,6 +4749,7 @@ def _convert_to_bedrock_tool_call_invoke(
     - extract id
     """
     from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+        MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS,
         split_concatenated_json_objects,
     )
 
@@ -4460,12 +4781,18 @@ def _convert_to_bedrock_tool_call_invoke(
                         # Split them and emit one toolUse block per object.
                         # Fixes: https://github.com/BerriAI/litellm/issues/20543
                         parsed_objects = split_concatenated_json_objects(arguments)
+                        if len(parsed_objects) > MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+                            raise ValueError(
+                                f"Tool call '{name}' carries {len(parsed_objects)} concatenated JSON argument objects, "
+                                f"more than the {MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS} supported"
+                            ) from None
                         if parsed_objects:
                             # First object keeps the original tool id.
-                            for obj_idx, obj in enumerate(parsed_objects):
-                                block_id = _sanitize_bedrock_tool_use_id(
-                                    tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
-                                )
+                            for block_id, obj in zip(
+                                _bedrock_split_tool_use_ids(tool_id, len(parsed_objects), split_tool_use_ids),
+                                parsed_objects,
+                                strict=True,
+                            ):
                                 bedrock_tool = BedrockToolUseBlock(input=obj, name=name, toolUseId=block_id)
                                 _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
                             # cache_control applies to the whole original
@@ -4890,6 +5217,79 @@ def _sort_bedrock_assistant_content_blocks(
     return sorted(blocks, key=_sort_key)
 
 
+def _is_blank_text_block(block: object) -> bool:
+    text: Final = message_field(block, "text")
+    return message_field(block, "type") in ("text", "guarded_text") and not (isinstance(text, str) and text.strip())
+
+
+def _has_no_content(message: object) -> bool:
+    content: Final = message_field(message, "content")
+    blocks: Final = as_object_list(content)
+    if blocks is not None:
+        return all(map(_is_blank_text_block, blocks))
+    return not content or (isinstance(content, str) and not content.strip())
+
+
+def is_empty_user_message(message: object) -> bool:
+    return message_field(message, "role") == "user" and _has_no_content(message)
+
+
+def continues_empty_user_turns(user_continue_message: object) -> bool:
+    return user_continue_message is not None or bool(litellm.modify_params)
+
+
+def _ends_on_empty_user_turn(
+    messages: Sequence[object],
+    start: int,
+    contents: Sequence[BedrockMessageBlock],
+    user_continue_message: ChatCompletionUserMessage | None,
+) -> bool:
+    if continues_empty_user_turns(user_continue_message):
+        return False
+    if not contents or contents[-1]["role"] != "assistant":
+        return False
+    return all(is_empty_user_message(messages[index]) for index in range(start, len(messages)))
+
+
+def _has_cache_mark(holder: object) -> bool:
+    return message_field(holder, "cache_control") is not None
+
+
+def _cache_mark_holders(message: object) -> Sequence[object]:
+    return (message, *(as_object_list(message_field(message, "content")) or ()))
+
+
+def _first_cache_marked(trailing_messages: Sequence[object]) -> object | None:
+    holders: Final = itertools.chain.from_iterable(map(_cache_mark_holders, trailing_messages))
+    return next(filter(_has_cache_mark, holders), None)
+
+
+def _bedrock_placeholder_turn(
+    trailing_messages: Sequence[object],
+    model: str,
+    deployment_model: str | None,
+    model_info: Mapping[str, object] | None,
+) -> BedrockMessageBlock:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    marked: Final = _first_cache_marked(trailing_messages)
+    cache_point: Final = (
+        None
+        if marked is None
+        else AmazonConverseConfig().get_cache_point_block(
+            cast(ChatCompletionUserMessage, marked),  # cast-ok: get_cache_point_block only reads cache_control
+            block_type="content_block",
+            model=model,
+            deployment_model=deployment_model,
+            model_info=model_info,
+        )
+    )
+    return BedrockMessageBlock(
+        role="user",
+        content=[BedrockContentBlock(text=EMPTY_TEXT_PLACEHOLDER), *([] if cache_point is None else [cache_point])],
+    )
+
+
 def _insert_assistant_continue_message(
     messages: list[BedrockMessageBlock],
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
@@ -5226,6 +5626,7 @@ class BedrockConverseMessagesProcessor:
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
+            bedrock_converse_rejects_assistant_prefill,
             bedrock_converse_rejects_signed_thinking,
         )
 
@@ -5237,12 +5638,22 @@ class BedrockConverseMessagesProcessor:
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
         )
+        message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
+        split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
+            messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
+        )
+        message_count: Final = len(messages)
 
-        while msg_i < len(messages):
+        while msg_i < message_count:
+            if _ends_on_empty_user_turn(
+                message_objects, msg_i, contents, user_continue_message
+            ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+                contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+                break
             user_content: list[BedrockContentBlock] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
-            while msg_i < len(messages) and messages[msg_i]["role"] == "user":
+            while msg_i < message_count and messages[msg_i]["role"] == "user":
                 message_block = get_user_message_block_or_continue_message(
                     message=messages[msg_i],
                     user_continue_message=user_continue_message,
@@ -5327,10 +5738,18 @@ class BedrockConverseMessagesProcessor:
 
             ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
             tool_content: list[BedrockContentBlock] = []
-            while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+            while msg_i < message_count and messages[msg_i]["role"] == "tool":
                 current_message = messages[msg_i]
                 tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
                 tool_content.append(tool_call_result)
+                tool_content.extend(
+                    _bedrock_tool_results_for_split_ids(
+                        tool_call_result,
+                        _split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i).get(
+                            str(message_field(current_message, "tool_call_id")), ()
+                        ),
+                    )
+                )
 
                 # Check if we need to add a separate cachePoint block
                 tool_msg_cache_control = None
@@ -5379,7 +5798,7 @@ class BedrockConverseMessagesProcessor:
                     contents.append(BedrockMessageBlock(role="user", content=tool_content))
             assistant_content: list[BedrockContentBlock] = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+            while msg_i < message_count and messages[msg_i]["role"] == "assistant":
                 assistant_message_block = get_assistant_message_block_or_continue_message(
                     message=messages[msg_i],
                     assistant_continue_message=assistant_continue_message,
@@ -5457,7 +5876,11 @@ class BedrockConverseMessagesProcessor:
                 if _tool_calls:
                     assistant_content.extend(
                         _convert_to_bedrock_tool_call_invoke(
-                            _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
+                            _tool_calls,
+                            model=model,
+                            deployment_model=deployment_model,
+                            model_info=model_info,
+                            split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
                         )
                     )
 
@@ -5689,6 +6112,7 @@ def _bedrock_converse_messages_pt(
     """
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_accepts_redacted_thinking,
+        bedrock_converse_rejects_assistant_prefill,
         bedrock_converse_rejects_signed_thinking,
     )
 
@@ -5700,12 +6124,22 @@ def _bedrock_converse_messages_pt(
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
     )
+    message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
+    split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
+        messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
+    )
+    message_count: Final = len(messages)
 
-    while msg_i < len(messages):
+    while msg_i < message_count:
+        if _ends_on_empty_user_turn(
+            message_objects, msg_i, contents, user_continue_message
+        ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+            contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+            break
         user_content: list[BedrockContentBlock] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "user":
+        while msg_i < message_count and messages[msg_i]["role"] == "user":
             message_block = get_user_message_block_or_continue_message(
                 message=messages[msg_i],
                 user_continue_message=user_continue_message,
@@ -5788,12 +6222,20 @@ def _bedrock_converse_messages_pt(
 
         ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
         tool_content: list[BedrockContentBlock] = []
-        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+        while msg_i < message_count and messages[msg_i]["role"] == "tool":
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
             current_message = messages[msg_i]
 
             # Add the tool result first
             tool_content.append(tool_call_result)
+            tool_content.extend(
+                _bedrock_tool_results_for_split_ids(
+                    tool_call_result,
+                    _split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i).get(
+                        str(message_field(current_message, "tool_call_id")), ()
+                    ),
+                )
+            )
 
             # Check if we need to add a separate cachePoint block
             tool_msg_cache_control = None
@@ -5842,7 +6284,7 @@ def _bedrock_converse_messages_pt(
                 contents.append(BedrockMessageBlock(role="user", content=tool_content))
         assistant_content: list[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+        while msg_i < message_count and messages[msg_i]["role"] == "assistant":
             assistant_message_block = get_assistant_message_block_or_continue_message(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
@@ -5919,7 +6361,11 @@ def _bedrock_converse_messages_pt(
             if _tool_calls:
                 assistant_content.extend(
                     _convert_to_bedrock_tool_call_invoke(
-                        _tool_calls, model=model, deployment_model=deployment_model, model_info=model_info
+                        _tool_calls,
+                        model=model,
+                        deployment_model=deployment_model,
+                        model_info=model_info,
+                        split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
                     )
                 )
 
@@ -6526,22 +6972,26 @@ def _optional_tool_name(value: object) -> str | None:
     return None
 
 
-def _split_tool_call_ids(calls: Sequence[tuple[str | None, int]]) -> tuple[tuple[str | None, ...], ...]:
-    taken: Final = frozenset(sanitize_anthropic_tool_use_id(call_id) for call_id, _ in calls if call_id)
+def _split_tool_call_ids(
+    calls: Sequence[tuple[str | None, int]],
+    sanitize: Callable[[str], str] = sanitize_anthropic_tool_use_id,
+    infix: str = "__concat_",
+) -> tuple[tuple[str | None, ...], ...]:
+    taken: Final = frozenset(sanitize(call_id) for call_id, _ in calls if call_id)
 
     def fresh(call_id: str) -> Iterator[str]:
         return filter(
-            lambda candidate: sanitize_anthropic_tool_use_id(candidate) not in taken,
-            (f"{call_id}__concat_{n}" for n in itertools.count(1)),
+            lambda candidate: sanitize(candidate) not in taken,
+            (f"{call_id}{infix}{n}" for n in itertools.count(1)),
         )
 
     suffixes: Final = MappingProxyType(
-        {sanitize_anthropic_tool_use_id(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
+        {sanitize(call_id): fresh(call_id) for call_id, count in calls if call_id and count > 1}
     )
     return tuple(
         (
             call_id,
-            *(next(suffixes[sanitize_anthropic_tool_use_id(call_id)]) for _ in range(count - 1)),
+            *(next(suffixes[sanitize(call_id)]) for _ in range(count - 1)),
         )
         if call_id
         else (None,) * count
