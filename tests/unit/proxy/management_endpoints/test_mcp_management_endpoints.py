@@ -10921,6 +10921,106 @@ class TestMCPServerResolutionCharacterization:
         health_check.assert_awaited_once_with(server_id)
 
     @pytest.mark.asyncio
+    async def test_fetch_mcp_server_by_alias_health_checks_canonical_id(self) -> None:
+        effects: Final = _ResolutionEffects()
+        canonical_id: Final = "lit3974_server_uuid"
+        alias: Final = "ms"
+        server: Final = generate_mock_mcp_server_db_record(
+            server_id=canonical_id,
+            alias=alias,
+        )
+        prisma: Final = _mock_mcp_resolution_prisma_client(
+            server,
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_perm", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_team"),
+        )
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "microsoft_learn": {
+                    "server_id": canonical_id,
+                    "alias": alias,
+                    "url": "https://learn.microsoft.com/api/mcp",
+                    "transport": "http",
+                }
+            },
+        )
+        mock_client: Final = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_admin",
+            user_id="lit3974_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            effects.patch(manager),
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "create_mcp_client", AsyncMock(return_value=mock_client)),
+        ):
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=alias,
+                user_api_key_dict=auth,
+            )
+
+        assert result.server_id == canonical_id
+        assert result.alias == alias
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_mcp_server_by_alias_reports_unknown_when_health_check_raises(self) -> None:
+        effects: Final = _ResolutionEffects()
+        canonical_id: Final = "lit3974_server_uuid"
+        alias: Final = "ms"
+        server: Final = generate_mock_mcp_server_db_record(
+            server_id=canonical_id,
+            alias=alias,
+        )
+        prisma: Final = _mock_mcp_resolution_prisma_client(
+            server,
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_perm", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_team"),
+        )
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "microsoft_learn": {
+                    "server_id": canonical_id,
+                    "alias": alias,
+                    "url": "https://learn.microsoft.com/api/mcp",
+                    "transport": "http",
+                }
+            },
+        )
+        health_check: Final = AsyncMock(side_effect=RuntimeError("upstream refused connection"))
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_admin",
+            user_id="lit3974_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            effects.patch(manager),
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "health_check_server", health_check),
+        ):
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=alias,
+                user_api_key_dict=auth,
+            )
+
+        assert result.server_id == canonical_id
+        assert result.status == "unknown"
+        assert result.health_check_error == "upstream refused connection"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "source,caller,expected_status",
         [
