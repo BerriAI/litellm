@@ -1334,7 +1334,6 @@ if MCP_AVAILABLE:
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         processor: Final = ProxyBaseLLMRequestProcessing(data={})
 
         async def callback_headers(result: object) -> Mapping[str, str]:
@@ -1346,6 +1345,7 @@ if MCP_AVAILABLE:
             )
 
         try:
+            reject_disallowed_mcp_client(request.headers, user_api_key_dict)
             result: Final = await _call_tool_rest(request, user_api_key_dict, processor)
         except HTTPException as e:
             failure_headers: Final = await callback_headers(None)

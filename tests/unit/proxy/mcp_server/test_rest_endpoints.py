@@ -4967,6 +4967,44 @@ class TestClientAllowlistOnRestRoutes:
         assert "'claude-code'" in denied.value.detail["details"]
         acting.assert_not_awaited()
 
+    async def test_tools_call_rejection_of_an_unlisted_client_carries_callback_response_headers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class TraceHeaders(CustomLogger):
+            async def async_post_call_response_headers_hook(
+                self,
+                data: dict[str, object],
+                user_api_key_dict: UserAPIKeyAuth,
+                response: object,
+                request_headers: dict[str, str] | None = None,
+            ) -> dict[str, str]:
+                return {"x-callback-trace": "trace-1"}
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
+
+        async def rejection() -> HTTPException:
+            with pytest.raises(HTTPException) as denied:
+                await rest_endpoints.call_tool_rest_api(
+                    _build_request(
+                        {"x-mcp-client": "claude-code"},
+                        path="/mcp-rest/tools/call",
+                        method="POST",
+                        json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+                    ),
+                    Response(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+            return denied.value
+
+        without_callback: Final = await rejection()
+        monkeypatch.setattr(litellm, "callbacks", [TraceHeaders()])
+        with_callback: Final = await rejection()
+
+        assert (with_callback.status_code, with_callback.detail) == (403, without_callback.detail)
+        assert "mcp_allowed_clients" in with_callback.detail["details"]
+        assert without_callback.headers is None
+        assert with_callback.headers == {"x-callback-trace": "trace-1"}
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
