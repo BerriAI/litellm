@@ -11,6 +11,12 @@ import httpx
 
 import litellm
 from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL, DEEPGRAM_SPEAK_DEFAULT_MODEL
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+    SpeechDocument,
+    price_units,
+    rate_card,
+    total_or_zero,
+)
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.passthrough_endpoints.pass_through_endpoints import WebSocketSessionUsage
@@ -241,7 +247,8 @@ def deepgram_speak_character_rate(upstream_url: str) -> float | None:
     model_info: Final = lookup_model_info_for_registration(registry_key, LlmProviders.DEEPGRAM.value)
     if isinstance(model_info, ModelInfoLookupMiss) or model_info["key"] != registry_key:
         return None
-    return model_info.get("input_cost_per_character")
+    card: Final = rate_card(registry_key)
+    return None if card is None else card.input_cost_per_character
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,8 +274,19 @@ class DeepgramSpeakMeter:
                 return 0
 
     def price(self, total: int) -> WebSocketSessionUsage:
+        model: Final = deepgram_speak_model(self.upstream_url)
+        outcome: Final = price_units(
+            SpeechDocument(
+                kind="speech",
+                model=model,
+                provider=LlmProviders.DEEPGRAM.value,
+                characters=total,
+                generations=None,
+            ),
+            catalog=MappingProxyType({"input_cost_per_character": self.character_rate}),
+        )
         return WebSocketSessionUsage(
-            model=deepgram_speak_model(self.upstream_url),
+            model=model,
             custom_llm_provider=LlmProviders.DEEPGRAM.value,
-            response_cost=total * self.character_rate,
+            response_cost=total_or_zero(outcome),
         )
