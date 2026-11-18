@@ -49,6 +49,10 @@ pub enum PublicDenial {
     TeamNotFound { team_id: String },
     /// `KeyNotFoundError(hashed_token)`, whose status, type, param and message are that class's own.
     KeyNotFound { hash: KeyHash },
+    /// `NoMatchingJWTPublicKeyError(message)`, which the auth exception handler reports as a 401.
+    NoMatchingJwtPublicKey { message: String },
+    /// `IdJagIsNotABearerTokenError(message)`, which the auth exception handler reports as a 401.
+    IdJagNotBearer { message: String },
 }
 
 fn proxy(
@@ -160,8 +164,13 @@ impl VerifyDenial {
                 proxy(503, self, ErrorType::AuthProviderUnavailable, None)
             }
             Self::Expired => proxy(401, self, ErrorType::ExpiredKey, None),
+            Self::Key(KeyFailure::NoMatch { .. }) => PublicDenial::NoMatchingJwtPublicKey {
+                message: self.to_string(),
+            },
+            Self::IdJagNotBearer => PublicDenial::IdJagNotBearer {
+                message: self.to_string(),
+            },
             Self::Malformed(_)
-            | Self::IdJagNotBearer
             | Self::Key(_)
             | Self::Invalid(_)
             | Self::Assertion(_)
@@ -490,7 +499,20 @@ mod tests {
     )]
     #[case::unknown_kid(
         VerifyDenial::Key(KeyFailure::NoMatch { keys: Searched::Url(JWKS.to_owned()), kid: None }),
-        PublicDenial::Plain { message: format!("No matching public key found. keys={JWKS}, kid=unset") }
+        PublicDenial::NoMatchingJwtPublicKey {
+            message: format!("No matching public key found. keys={JWKS}, kid=unset")
+        }
+    )]
+    #[case::id_jag(
+        VerifyDenial::IdJagNotBearer,
+        PublicDenial::IdJagNotBearer {
+            message: "an ID-JAG is an authorization grant, not a bearer token; redeem it at the token endpoint"
+                .to_owned()
+        }
+    )]
+    #[case::missing_jwks_url(
+        VerifyDenial::Key(KeyFailure::MissingUrl),
+        PublicDenial::Plain { message: "Missing JWT Public Key URL from environment.".to_owned() }
     )]
     #[case::assertion(
         VerifyDenial::Assertion(AssertionRejection::Invalid(TokenError::MissingClaim("jti".to_owned()))),

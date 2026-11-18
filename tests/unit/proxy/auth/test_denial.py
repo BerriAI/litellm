@@ -1,5 +1,6 @@
-from typing import Final
+from typing import Final, TypeGuard
 
+import pytest
 from fastapi import HTTPException
 
 import litellm
@@ -100,3 +101,54 @@ def test_unknown_key_denial_is_the_typed_error_carrying_the_hash_the_core_looked
         "key",
         "401",
     )
+
+
+@pytest.mark.parametrize(
+    ("denial", "error_class", "message"),
+    [
+        (
+            RustDenial.NoMatchingJwtPublicKey(message="No matching public key found. keys=u, kid=k"),
+            auth_denial.NoMatchingJWTPublicKeyError,
+            "No matching public key found. keys=u, kid=k",
+        ),
+        (
+            RustDenial.IdJagNotBearer(message="an ID-JAG is an authorization grant"),
+            auth_denial.IdJagIsNotABearerTokenError,
+            "an ID-JAG is an authorization grant",
+        ),
+    ],
+)
+def test_a_refused_jwt_keeps_the_error_class_the_failure_row_records(
+    denial: RustDenial, error_class: type[Exception], message: str
+) -> None:
+    error: Final = auth_denial.denial_error(denial)
+
+    assert type(error) is error_class
+    assert str(error) == message
+
+
+_ERROR_CLASSES: Final[dict[RustDenial, type[Exception]]] = {
+    RustDenial.Proxy(status=401, message="m", error_type="auth_error", param=None): ProxyException,
+    RustDenial.Http(status=403, detail="d"): HTTPException,
+    RustDenial.InvalidVirtualKey(status=401, detail="d"): HTTPException,
+    RustDenial.ModelAccess(status=401, detail="d", internal_message="i"): ModelAccessDeniedHTTPException,
+    RustDenial.Plain(message="m"): Exception,
+    RustDenial.BudgetExceeded(
+        current_cost=2.0, max_budget=1.0, message="m", entity_type=None, entity_id=None
+    ): litellm.BudgetExceededError,
+    RustDenial.TeamNotFound(team_id="t"): TeamNotFoundError,
+    RustDenial.KeyNotFound(hash="h"): KeyNotFoundError,
+    RustDenial.NoMatchingJwtPublicKey(message="m"): auth_denial.NoMatchingJWTPublicKeyError,
+    RustDenial.IdJagNotBearer(message="m"): auth_denial.IdJagIsNotABearerTokenError,
+}
+
+
+def _is_variant(value: object) -> TypeGuard[type[RustDenial]]:
+    return isinstance(value, type) and issubclass(value, RustDenial)
+
+
+def test_every_denial_the_core_renders_is_raised_as_exactly_one_named_class() -> None:
+    raised: Final = {type(denial): type(auth_denial.denial_error(denial)) for denial in _ERROR_CLASSES}
+
+    assert raised == {type(denial): error_class for denial, error_class in _ERROR_CLASSES.items()}
+    assert set(raised) == {value for value in vars(RustDenial).values() if _is_variant(value)}

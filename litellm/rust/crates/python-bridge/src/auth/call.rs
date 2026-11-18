@@ -805,6 +805,12 @@ pub(crate) enum DenialView {
     KeyNotFound {
         hash: String,
     },
+    NoMatchingJwtPublicKey {
+        message: String,
+    },
+    IdJagNotBearer {
+        message: String,
+    },
 }
 
 impl From<PublicDenial> for DenialView {
@@ -853,6 +859,10 @@ impl From<PublicDenial> for DenialView {
             PublicDenial::KeyNotFound { hash } => Self::KeyNotFound {
                 hash: hash.as_str().to_owned(),
             },
+            PublicDenial::NoMatchingJwtPublicKey { message } => {
+                Self::NoMatchingJwtPublicKey { message }
+            }
+            PublicDenial::IdJagNotBearer { message } => Self::IdJagNotBearer { message },
         }
     }
 }

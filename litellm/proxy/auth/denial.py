@@ -18,6 +18,14 @@ from litellm.rust_bridge._native import (
 )
 
 
+class NoMatchingJWTPublicKeyError(Exception):
+    pass
+
+
+class IdJagIsNotABearerTokenError(Exception):
+    pass
+
+
 def _invalid_virtual_key(status: int, detail: str) -> HTTPException:
     error: Final = HTTPException(status_code=status, detail=detail)
     setattr(error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
@@ -54,6 +62,10 @@ def denial_error(denial: RustDenial) -> Exception:
             return TeamNotFoundError(team_id=team_id)
         case RustDenial.KeyNotFound(hash=hashed_token):
             return KeyNotFoundError(hashed_token)
+        case RustDenial.NoMatchingJwtPublicKey(message=message):
+            return NoMatchingJWTPublicKeyError(message)
+        case RustDenial.IdJagNotBearer(message=message):
+            return IdJagIsNotABearerTokenError(message)
         case unknown:
             raise RuntimeError(f"rust auth returned a denial this host does not know: {unknown!r}")
 

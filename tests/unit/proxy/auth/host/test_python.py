@@ -285,6 +285,34 @@ async def test_a_token_signed_by_another_key_is_denied_with_the_proxy_message() 
         auth_denial.raise_denial(outcome)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "error_class", "message"),
+    [
+        ({"kid": "rotated-away"}, auth_denial.NoMatchingJWTPublicKeyError, "kid=rotated-away"),
+        (
+            {"kid": "k1", "typ": "oauth-id-jag+jwt"},
+            auth_denial.IdJagIsNotABearerTokenError,
+            "an ID-JAG is an authorization grant, not a bearer token",
+        ),
+    ],
+    ids=["unknown_kid", "id_jag_as_bearer"],
+)
+async def test_a_refused_jwt_is_raised_as_the_error_class_its_failure_row_records(
+    headers: dict[str, str], error_class: type[Exception], message: str
+) -> None:
+    token: Final = jwt.encode(
+        {"sub": "admin-1", "exp": int(time.time()) + 600}, SIGNING_KEY, algorithm="RS256", headers=headers
+    )
+
+    outcome: Final = await _authorize(token, "/key/generate", UserApiKeyCache(), _Jwks())
+
+    assert outcome.denial is not None
+    error: Final = auth_denial.denial_error(outcome.denial)
+    assert type(error) is error_class
+    assert message in str(error)
+
+
 class _ScriptedHttp:
     """Answers each GET with the next scripted reply, raising it when it is an exception, and records the
     headers it was sent."""
