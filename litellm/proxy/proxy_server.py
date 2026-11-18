@@ -3715,12 +3715,8 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
     Redis miss is final: the per-pod in-memory copy outlives the Redis TTL and only
     holds this pod's writes, so it is consulted only when Redis is unreachable."""
     batch: Final = active_spend_counter_batch()
-    if batch is not None:
-        batched: Final = await batch.read(counter_key)
-        if batched is not None:
-            return batched
-
-    value, authoritative = await spend_counter_store.read(counter_key)
+    batched: Final = None if batch is None else await batch.read(counter_key)
+    value, authoritative = await spend_counter_store.read(counter_key) if batched is None else batched
     return (float(value) if value is not None else None), authoritative
 
 

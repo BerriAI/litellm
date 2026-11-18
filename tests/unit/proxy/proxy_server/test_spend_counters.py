@@ -45,6 +45,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_u
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
 from litellm.redis.stores.spend_counters import user_window_counter
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 
 from .conftest import normalize
@@ -83,6 +84,19 @@ async def test_get_current_spend_reads_redis_first(monkeypatch):
 
     assert result == 42.5
     assert spend.commands == ["GET spend:key:abc"]
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_inside_the_batch_scope_reads_an_integral_counter_as_a_float(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, redis={"spend:key:abc": 1})
+
+    with spend_counter_batch_scope(spend.store(), frozenset({"spend:key:abc"})):
+        result: Final = await ps.get_current_spend(counter_key="spend:key:abc", fallback_spend=0.0)
+
+    assert spend.commands == ["MGET spend:key:abc"]
+    assert f"Current cost: {result}" == "Current cost: 1.0"
 
 
 @pytest.mark.asyncio
