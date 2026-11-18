@@ -321,12 +321,12 @@ def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
     return response if response is not None and (response.headers or response.content) else None
 
 
-def _github_copilot_custom_app_hint(custom_llm_provider: str) -> str | None:
+def _github_copilot_custom_app_hint(custom_llm_provider: str, request_kwargs: Mapping[str, object]) -> str | None:
     if custom_llm_provider != "github_copilot":
         return None
-    from litellm.llms.github_copilot.common_utils import custom_github_app_hint
+    from litellm.llms.github_copilot.per_user_auth import github_copilot_sign_in_app_hint
 
-    return custom_github_app_hint()
+    return github_copilot_sign_in_app_hint(request_kwargs).strip() or None
 
 
 def _map_openai_exception(
@@ -370,7 +370,7 @@ def _map_openai_exception(
         exception_provider = "OpenAI" + "Exception"
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
-    copilot_app_hint: Final = _github_copilot_custom_app_hint(custom_llm_provider)
+    copilot_app_hint: Final = _github_copilot_custom_app_hint(custom_llm_provider, request_kwargs)
     if (
         copilot_app_hint is not None
         and getattr(original_exception, "status_code", None) in (400, 401, 403)

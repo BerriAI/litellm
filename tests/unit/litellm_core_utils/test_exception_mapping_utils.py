@@ -3748,6 +3748,21 @@ def test_github_copilot_integration_mismatch_tells_custom_app_users_where_the_pe
     assert "https://github.com/settings/apps" in caught.value.message, caught.value.message
 
 
+def test_github_copilot_app_installation_error_skips_the_device_login_app_hint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
+    upstream_text: Final = "bad request: Personal Access Tokens are not supported for this endpoint"
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-4o",
+            original_exception=_copilot_error(400, {"message": upstream_text}),
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs={"litellm_credential_name": "org-app", "github_copilot_user_session": _APP_SESSION},
+        )
+    assert upstream_text in caught.value.message, caught.value.message
+    assert "Copilot Requests" not in caught.value.message, caught.value.message
+
+
 def test_openai_error_never_mentions_the_copilot_app_permission(monkeypatch):
     monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
     request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
