@@ -3343,3 +3343,35 @@ def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseab
     assert body["error"]["code"] == -32000
     assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
     assert body["error"]["data"]["code"] == "403"
+
+
+@pytest.mark.parametrize("path", ("/a2a/agent-1", "/a2a/agent-1/message/send", "/v1/a2a/agent-1/message/send"))
+@pytest.mark.parametrize(
+    ("payload", "code", "message"),
+    (
+        (b"", -32700, "Parse error"),
+        (b" ", -32700, "Parse error"),
+        (b"{", -32700, "Parse error"),
+        (b"[]", -32600, "Invalid Request"),
+        (b'"text"', -32600, "Invalid Request"),
+        (b"null", -32600, "Invalid Request"),
+        (b"true", -32600, "Invalid Request"),
+        (b"1", -32600, "Invalid Request"),
+    ),
+)
+def test_a2a_body_errors_use_jsonrpc(
+    monkeypatch: pytest.MonkeyPatch, path: str, payload: bytes, code: int, message: str
+) -> None:
+    from fastapi import FastAPI
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.a2a_endpoints import router
+
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).post(path, content=payload, headers={"content-type": "application/json"})
+
+    assert response.status_code == 400
+    assert response.json() == {"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": message}}

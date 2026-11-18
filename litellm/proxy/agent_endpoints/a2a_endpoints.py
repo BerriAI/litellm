@@ -311,6 +311,12 @@ async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPExcep
 
     error: Final = refusal if isinstance(refusal, ProxyException) else status_typed_proxy_exception(refusal)
     _close_dangling_otel_server_span(request, int(error.code), exc=refusal)
+    if error.type == "invalid_request_error" and error.param == "request_body" and int(error.code) == 400:
+        try:
+            json.loads(await request.body())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _jsonrpc_error(None, -32700, "Parse error")
+        return _jsonrpc_error(None, -32600, "Invalid Request")
     return JSONResponse(
         content={
             "jsonrpc": "2.0",
@@ -822,6 +828,11 @@ async def invoke_agent_a2a(
     request_data: dict[str, object] = body
     try:
         body = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return _jsonrpc_error(None, -32700, "Parse error")
+    if as_str_mapping(body) is None:
+        return _jsonrpc_error(None, -32600, "Invalid Request")
+    try:
         request_data = body
 
         verbose_proxy_logger.debug("A2A request for agent '%s': %s", agent_id, body)
