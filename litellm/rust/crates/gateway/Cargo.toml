@@ -20,6 +20,8 @@ futures-util.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-config.workspace = true
 litellm-config-load.workspace = true
+litellm-db.workspace = true
+litellm-db-resolve.workspace = true
 litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
@@ -37,7 +39,6 @@ serde.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 uuid.workspace = true
-veil.workspace = true
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true
