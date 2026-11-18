@@ -24,7 +24,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
+from litellm.proxy.openai_files_endpoints.common_utils import model_less_team_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyCommaSeparatedModelsStreamError,
@@ -2906,7 +2906,7 @@ async def test_a_model_less_file_call_uses_the_team_openai_deployment_ingest_upl
     older: Final = _team_a_openai_db_deployment("deployment-z", "https://older-openai.example/v1", datetime(2026, 1, 1))
     newer: Final = _team_a_openai_db_deployment("deployment-a", "https://newer-openai.example/v1", datetime(2026, 6, 1))
     router: Final = litellm.Router(model_list=[dict(newer), dict(older)] if newer_first else [dict(older), dict(newer)])
-    ingest_deployment: Final = get_team_provider_deployment(router, _TEAM_A_MEMBER, "openai")
+    ingest_deployment: Final = await model_less_team_deployment(router, _TEAM_A_MEMBER, "openai")
 
     with respx.mock(assert_all_called=False) as respx_mock:
         route: Final = respx_mock.get(url__regex=r"/v1/vector_stores/vs_team/files/file-ingested$").mock(

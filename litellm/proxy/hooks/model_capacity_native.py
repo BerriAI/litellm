@@ -362,13 +362,15 @@ class CapacityHost:
         return auth
 
     def facts(self, model: str | None, *, call_type: bool = False) -> Mapping[str, object]:
-        found: Final[dict[str, object]] = {"settings": self.settings({})}  # mutable-ok: built once per call
-        if model is not None:
-            found["group"] = self.group({"model": model})
-            found["borrowing"] = self.borrowing_limits({"model": model})
-        if call_type:
-            found["call_type"] = self.stash_call_type({})
-        return found
+        return {
+            "settings": self.settings({}),
+            **(
+                {"group": self.group({"model": model}), "borrowing": self.borrowing_limits({"model": model})}
+                if model is not None
+                else {}
+            ),
+            **({"call_type": self.stash_call_type({})} if call_type else {}),
+        }
 
     @_host_call_sync
     def settings(self, _args: Mapping[str, object]) -> object:

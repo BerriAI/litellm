@@ -17,7 +17,8 @@ import {
   type CustomerOrganizationFormError,
 } from "./customerOrganizationForm";
 
-import CustomerBudgetGroupsEditor, { BudgetInput } from "./CustomerBudgetGroupsEditor";
+import CustomerBudgetInput from "./CustomerBudgetInput";
+import CustomerBudgetGroupsEditor from "./CustomerBudgetGroupsEditor";
 
 interface Props {
   open: boolean;
@@ -88,15 +89,12 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
                 </p>
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="cc-budget">{t("customerPortal.createDialog.maxBudget")}</Label>
-              <BudgetInput
-                id="cc-budget"
-                label={t("customerPortal.createDialog.maxBudget")}
-                value={fields.monthlyBudget}
-                onChange={(monthlyBudget) => setFields({ ...fields, monthlyBudget })}
-              />
-            </div>
+            <CustomerBudgetInput
+              id="cc-budget"
+              budgetId={fields.budgetId}
+              amount={fields.monthlyBudget}
+              onChange={(budgetId, monthlyBudget) => setFields({ ...fields, budgetId, monthlyBudget })}
+            />
             <CustomerBudgetGroupsEditor
               groups={fields.groups}
               defaultGroupId={fields.defaultGroupId}
@@ -106,7 +104,7 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
                 setError(null);
               }}
             />
-            <details className="group border-t pt-4">
+            <details hidden={Boolean(fields.budgetId)} className="group border-t pt-4">
               <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-medium">
                 <ChevronRight className="size-4 group-open:rotate-90" />
                 {t("customerPortal.createDialog.advanced")}
