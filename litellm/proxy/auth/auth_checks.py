@@ -1827,11 +1827,21 @@ async def common_checks(
     return True
 
 
+def _default_internal_user_params() -> Mapping[str, object]:
+    return litellm.default_internal_user_params or {}
+
+
+def _default_role_for_unset_user_role() -> LitellmUserRoles:
+    if _default_internal_user_params().get("user_role") == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY:
+        return LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    return LitellmUserRoles.INTERNAL_USER
+
+
 def effective_user_role(user_role: str | None) -> LitellmUserRoles:
     try:
         return LitellmUserRoles(user_role)
     except ValueError:
-        return LitellmUserRoles.INTERNAL_USER
+        return _default_role_for_unset_user_role()
 
 
 def get_user_role(
@@ -3245,7 +3255,7 @@ async def get_user_object(
                 )
                 from litellm.proxy.management_helpers.utils import initial_budget_windows_json
 
-                default_params: Final[Mapping[str, object]] = litellm.default_internal_user_params or {}
+                default_params: Final = _default_internal_user_params()
                 scalar_default_params: Final = {
                     key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
                 }
@@ -8329,7 +8339,7 @@ async def _identity_grants(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> tuple[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None], ...]:
     return (
@@ -8541,14 +8551,18 @@ async def _vector_store_grants(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     strict_layers: frozenset[GrantLayer] = frozenset(),
 ) -> tuple[tuple[GrantLayer, _VectorStorePermissionsRow | None], ...]:
     """Each identity's own grant. The stores its access groups list count as if they were on its own list.
     A strict team layer can only lose grants without its groups, so it keeps auth's stand-in team."""
     try:
-        team: Final = team_object if "team" in strict_layers else await _team_read_again(valid_token, team_object)
+        team: Final = (
+            team_object
+            if "team" in strict_layers or prisma_client is None
+            else await _team_read_again(valid_token, team_object)
+        )
         group_stores: Final = await access_group_vector_stores(valid_token, team, unreadable="raise")
     except Exception as e:
         # Skipping an unreadable team or group could empty a list and lift the restriction.
@@ -8598,17 +8612,24 @@ def _require_vector_store_grant(
 async def _cached_object_permission(
     object_permission_id: str | None,
     loaded: LiteLLM_ObjectPermissionTable | None,
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> LiteLLM_ObjectPermissionTable | None:
     """
     The grant row auth already attached to the key, team or user, else the cached row by id. Both are
     evicted on every worker when the grant changes, so the request path never reads the table directly.
     """
-    if object_permission_id is None:
-        return None
     if loaded is not None:
         return loaded
+    if object_permission_id is None:
+        return None
+    if prisma_client is None:
+        raise ProxyException(
+            message="Could not read vector store permission without a database",
+            type=ProxyErrorTypes.internal_server_error,
+            param="vector_store",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     return await get_object_permission(
         object_permission_id=object_permission_id,
         prisma_client=prisma_client,
@@ -8664,10 +8685,6 @@ async def vector_store_access_check(
     #########################################################
     # Get the vector store the user is trying to access
     #########################################################
-    if prisma_client is None:
-        verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
-        return True
-
     typed_request_body: Final = _typed_request_body(request_body)
     requested_ids: Final = (
         _strict_requested_vector_store_ids(typed_request_body)
@@ -8710,6 +8727,62 @@ async def vector_store_access_check(
                 object_permissions=grant,
             )
     return True
+
+
+class _ProxyAuthSettings(Protocol):
+    @property
+    def general_settings(self) -> Mapping[str, object]: ...
+
+
+def _proxy_auth_settings(proxy: _ProxyAuthSettings) -> Mapping[str, object]:
+    return proxy.general_settings
+
+
+async def vector_store_access_check_for_caller(store_ids: tuple[str, ...], caller: UserAPIKeyAuth) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UI_TEAM_ID
+    from litellm.proxy.auth.user_api_key_auth import team_object_from_token
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    team: Final = (
+        None
+        if caller.team_id is None
+        else team_object_from_token(caller).model_copy(update={"object_permission": caller.team_object_permission})
+        if caller.team_id == UI_TEAM_ID or prisma_client is None
+        else await get_team_object(
+            team_id=caller.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            parent_otel_span=caller.parent_otel_span,
+        )
+    )
+    deny_by_default: Final = _vector_store_deny_by_default(_proxy_auth_settings(proxy_server))
+    user: Final = (
+        await get_user_object(
+            user_id=caller.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+            parent_otel_span=caller.parent_otel_span,
+        )
+        if prisma_client is not None and "user" in _strict_grant_layers(deny_by_default, caller, team)
+        else None
+    )
+    await vector_store_access_check(
+        request_body={"vector_store_ids": list(store_ids)},
+        team_object=team,
+        valid_token=caller,
+        user_object=user,
+        deny_by_default=deny_by_default,
+        llm_router=llm_router,
+    )
 
 
 def _provider_vector_store_id(vector_store_id: str) -> str:

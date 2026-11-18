@@ -111,9 +111,14 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: echo "name=rust-bridge-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-  assert-shard-coverage:
+  plan:
+    name: plan
     permissions:
       contents: read
+      pull-requests: read
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      skipped: ${{ steps.plan.outputs.skipped }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -122,10 +127,32 @@ jobs:
           persist-credentials: false
       - name: Assert every test directory and file is claimed by a shard
         run: python3 .github/scripts/assert_ci_coverage.py --shards
+      - name: Run every job off pull requests, on release branches and on labelled pull requests
+        id: plan
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mode=core
+          [ -n "${PR_NUMBER}" ] || mode=full
+          case "${BASE_REF}" in
+            rc/* | stable/* | lts/*) mode=full ;;
+          esac
+          if [ "${mode}" = core ]; then
+            labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')" || mode=full
+            ! grep -qx 'run-all-unit-shards' <<< "${labels:-}" || mode=full
+          fi
+          if [ "${mode}" = full ]; then
+            skipped='["unit-core"]'
+          else
+            skipped='["unit","docs","helm","openai-sdk-compat","redis-compat"]'
+          fi
+          printf 'mode=%s\nskipped=%s\n' "${mode}" "${skipped}" | tee -a "$GITHUB_OUTPUT"
   unit:
     name: ${{ matrix.shard }}
-    needs: [rust-bridge, assert-shard-coverage]
-    if: ${{ !cancelled() }}
+    needs: [rust-bridge, plan]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
     runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
@@ -1006,7 +1033,7 @@ jobs:
             timeout-minutes: 5
             job-timeout-minutes: 60
             dist: loadscope
-    steps:
+    steps: &unit-steps
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         timeout-minutes: 3
         with:
@@ -1062,7 +1089,7 @@ jobs:
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
 
       - name: Check litellm/schema.prisma against the merge base
-        if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'db-and-spend' && github.event_name == 'pull_request'
+        if: steps.changes.outputs.decision != 'skip' && (matrix.shard == 'db-and-spend' || matrix.shard == 'core-spend') && github.event_name == 'pull_request'
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1160,6 +1187,113 @@ jobs:
           name: coverage-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage.xml
           retention-days: 1
+  unit-core:
+    name: ${{ matrix.shard }}
+    needs: [rust-bridge, plan]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'core' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.job-timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: core-spend
+            test-path: |-
+              tests/unit/proxy/db/test_db_spend_update_writer.py
+              tests/unit/proxy/spend_tracking/test_spend_tracking_utils.py
+              tests/unit/proxy/hooks/test_proxy_track_cost_callback.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: core-auth
+            test-path: |-
+              tests/unit/proxy/auth/test_user_api_key_auth.py
+              tests/unit/proxy/auth/test_user_api_key_auth_request_flow.py
+              tests/unit/proxy/auth/test_auth_checks.py
+              tests/unit/proxy/auth/test_auth_checks_object_access_and_lookup.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: core-management
+            test-path: |-
+              tests/unit/proxy/management_endpoints/test_key_management_endpoints.py
+              tests/unit/proxy/management_endpoints/test_team_endpoints.py
+              tests/unit/proxy/management_endpoints/test_internal_user_endpoints.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: core-request-path
+            test-path: |-
+              tests/unit/proxy/test_litellm_pre_call_utils.py
+              tests/unit/proxy/hooks/test_parallel_request_limiter_v3.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: core-logging-streaming
+            test-path: |-
+              tests/unit/litellm_core_utils/test_litellm_logging.py
+              tests/unit/litellm_core_utils/test_streaming_handler.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: core-router
+            test-path: |-
+              tests/unit/test_router/test_router.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: load
+
+          - shard: core-router-core
+            test-path: |-
+              tests/unit/test_router/core
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: core-router-files
+            test-path: |-
+              tests/unit/test_router
+              --ignore=tests/unit/test_router/core
+              --ignore=tests/unit/test_router/test_router.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+    steps: *unit-steps
   ui-unit:
     name: ui-unit
     permissions:
@@ -1248,6 +1382,8 @@ jobs:
             --pool forks --maxWorkers=14
   docs:
     name: docs
+    needs: plan
+    if: ${{ needs.plan.outputs.mode == 'full' }}
     permissions:
       contents: read
       pull-requests: read
@@ -1331,6 +1467,8 @@ jobs:
           uv run --no-sync python ./tests/documentation_tests/test_circular_imports.py
   helm:
     name: helm
+    needs: plan
+    if: ${{ needs.plan.outputs.mode == 'full' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -1372,8 +1510,8 @@ jobs:
           echo "$chart: all $declared declared test suites ran"
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
-    needs: rust-bridge
-    if: ${{ !cancelled() }}
+    needs: [rust-bridge, plan]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
     permissions:
       contents: read
       pull-requests: read
@@ -1451,8 +1589,8 @@ jobs:
         run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
   redis-compat:
     name: redis-py ${{ matrix.redis-py }} compatibility
-    needs: rust-bridge
-    if: ${{ !cancelled() }}
+    needs: [rust-bridge, plan]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
     permissions:
       contents: read
       id-token: write
@@ -1559,7 +1697,7 @@ jobs:
           fail_ci_if_error: false
   coverage:
     name: coverage
-    needs: unit
+    needs: [unit, unit-core]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1615,7 +1753,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [rust-bridge, assert-shard-coverage, unit, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
+    needs: [rust-bridge, plan, unit, unit-core, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -1625,4 +1763,5 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
+          jq -e '(.plan.outputs.skipped // "[]" | fromjson) as $skipped
+            | all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and (.key | IN($skipped[]))))' <<< "$NEEDS" > /dev/null

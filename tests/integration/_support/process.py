@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address
-from itertools import accumulate
+from itertools import accumulate, count
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
+from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, ConnectionBudget
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
 from tests.integration._support.database import scratch_database
@@ -738,6 +739,11 @@ def private_configuration(config: Path, directory: Path) -> Path:
     return destination
 
 
+def pool_limit_for_prisma(connections: int) -> int:
+    """The smallest ``database_connection_pool_limit`` that leaves Prisma ``connections`` after the Rust pool's share."""
+    return next(total for total in count(MIN_CONNECTION_LIMIT) if ConnectionBudget.split(total).python == connections)
+
+
 def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, str] = os.environ) -> Path:
     if inherited.get("INTEGRATION_WORKER_ISOLATION") != "1":
         return config
@@ -760,7 +766,10 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return destination
     configured: Final = {
         **settings,
-        "general_settings": {"database_connection_pool_limit": 2, **CONFIGURATION.validate_python(general)},
+        "general_settings": {
+            "database_connection_pool_limit": pool_limit_for_prisma(2),
+            **CONFIGURATION.validate_python(general),
+        },
     }
     destination.write_text(yaml.safe_dump(configured, sort_keys=False))
     return destination

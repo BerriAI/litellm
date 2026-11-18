@@ -829,10 +829,12 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
+        guardrail_context={"metadata": {"guardrails": ("requested-guardrail",)}},
     )
 
     assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
-    assert proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"] == logging_obj.model_call_details
+    request_data = proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"]
+    assert (request_data["request_id"], request_data["metadata"]["guardrails"]) == ("request-1", ["requested-guardrail"])
 
 
 @pytest.mark.asyncio
