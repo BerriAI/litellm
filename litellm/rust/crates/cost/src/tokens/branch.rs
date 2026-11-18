@@ -185,7 +185,7 @@ pub(super) fn prices_tokens(row: &impl LoweredRow) -> bool {
     positive(Meter::TEXT_INPUT)
         || positive(Meter::TEXT_OUTPUT)
         || row.prices().tiers().is_some()
-        || row.facts().prices_by_results
+        || row.facts().prices_by_results()
 }
 
 /// The rate `_per_second_pricing_cost_from_info` bills, `None` for a row it leaves to the token branches
