@@ -2342,13 +2342,17 @@ _RejectedFrameBiller: TypeAlias = Callable[
 ]
 
 
+class _FailedTurnRecorder(Protocol):
+    def __call__(self, failure: Exception, request_body: Mapping[str, object], *, started_at: datetime) -> None: ...
+
+
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: _GuardrailWalk,
     record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
     *,
-    record_failed_turn: Callable[[Exception, Mapping[str, object]], None] | None = None,
+    record_failed_turn: _FailedTurnRecorder | None = None,
     record_guarded_frame: Callable[[], None] | None = None,
     bill_rejected_frame: _RejectedFrameBiller = _bill_rejected_frame,
     team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]] = _key_team_object,
@@ -2464,7 +2468,9 @@ def _responses_ws_frame_guard(
             guardrail_information=guardrail_information,
             pii_tokens=pii_tokens,
             bill_refusal=partial(bill_refusal, guarded_data, guardrail_information, started_at),
-            record_failed_turn=record_failed_turn,
+            record_failed_turn=None
+            if record_failed_turn is None
+            else partial(record_failed_turn, started_at=started_at),
         )
 
     return guard
@@ -2726,6 +2732,21 @@ def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
 
 
 _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+_NO_TURN_REQUEST: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class _FailedTurn:
+    failure: Exception
+    request_body: Mapping[str, object]
+    guardrail_information: tuple[Mapping[str, object], ...]
+    started_at: datetime | None
+
+    def failure_hook_data(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
+        turn_data: Final = _with_guardrail_information(
+            _with_turn_request(request_data, self.request_body), self.guardrail_information
+        )
+        return turn_data if self.started_at is None else {**turn_data, "start_time": self.started_at}
 
 
 @dataclass(slots=True)
@@ -2734,13 +2755,15 @@ class _FailedTurns:
     socket's close-time failure, so its failure hooks run once, even when the session limit cancels the relay before
     it returns one, and see every refused turn's guardrail records, but they write no second row for them. A close on
     any other error writes that error's own row, which must not bill the refused turns' guardrail records again. When
-    that error is the first turn the provider failed, its row stores that turn's request, not the connection's. A
-    socket whose relay guarded no frame failed on its first frame, so that row stores the first frame's request and
-    the guardrail records of the walk that shaped it, as an HTTP request the router refuses after its guardrails."""
+    that error is the first turn the provider failed, its row stores that turn's request and start time, not the
+    connection's. Any other such error belongs to no turn, so its row stores an empty request, as a provider event
+    with no open turn does. A socket whose relay guarded no frame failed on its first frame, so that row stores the
+    first frame's request and the guardrail records of the walk that shaped it, as an HTTP request the router refuses
+    after its guardrails."""
 
     first: Exception | None = None
     records: tuple[Mapping[str, object], ...] = ()
-    failed_turn: tuple[Exception, Mapping[str, object], tuple[Mapping[str, object], ...]] | None = None
+    failed_turn: _FailedTurn | None = None
     guarded_a_frame: bool = False
 
     def saw_frame(self) -> None:
@@ -2756,16 +2779,17 @@ class _FailedTurns:
         failure: Exception,
         request_body: Mapping[str, object],
         guardrail_information: tuple[Mapping[str, object], ...] = (),
+        *,
+        started_at: datetime | None = None,
     ) -> None:
         if self.failed_turn is None:
-            self.failed_turn = (failure, request_body, guardrail_information)
+            self.failed_turn = _FailedTurn(failure, request_body, guardrail_information, started_at)
 
     def failure_hook_data(self, exception: Exception, request_data: Mapping[str, object]) -> Mapping[str, object]:
-        if self.failed_turn is not None and exception is self.failed_turn[0]:
-            _failure, request_body, guardrail_information = self.failed_turn
-            return _with_guardrail_information(_with_turn_request(request_data, request_body), guardrail_information)
+        if self.failed_turn is not None and exception is self.failed_turn.failure:
+            return self.failed_turn.failure_hook_data(request_data)
         if exception is not self.first:
-            return request_data
+            return _with_turn_request(request_data, _NO_TURN_REQUEST)
         return {
             **_with_guardrail_information(request_data, self.records),
             FAILURE_ROW_ALREADY_WRITTEN_KEY: FAILURE_ROW_ALREADY_WRITTEN,

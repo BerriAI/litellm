@@ -2823,7 +2823,14 @@ class TestResponsesWSFirstFrameModelAuth:
 
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+            return_value=(
+                {
+                    "model": "gpt-4o-mini",
+                    "litellm_metadata": {},
+                    "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": {"model": "gpt-4o-mini"}},
+                },
+                MagicMock(),
+            )
         )
 
         async def fake_llm_call():
@@ -4135,7 +4142,14 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.close = AsyncMock()
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {"tags": ["ws-tag"]}}, MagicMock())
+            return_value=(
+                {
+                    "model": "gpt-4o-mini",
+                    "litellm_metadata": {"tags": ["ws-tag"]},
+                    "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": {"model": "gpt-4o-mini"}},
+                },
+                MagicMock(),
+            )
         )
         guardrail_costs = {"two": 0.2, "three": 0.3, "four": 0.4}
         refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
@@ -4293,6 +4307,7 @@ class TestResponsesWSFirstFrameModelAuth:
         turn_failure = litellm.BadRequestError(message="bad beta turn", model="gpt-4o-mini", llm_provider="openai")
         later_turn_failure = litellm.BadRequestError(message="bad gamma turn", model="gpt-4o-mini", llm_provider="openai")
         other_failure = litellm.APIConnectionError(message="socket dropped", model="gpt-4o-mini", llm_provider="openai")
+        turn_outlived_by = 0.2
         spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
         spend_logger = ProxyDBLogger(spend_writer=lambda: spend_writer)
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-socket", request_route="/v1/responses")
@@ -4304,6 +4319,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 )
                 guarded.record_failed_turn(turn_failure, {"input": "beta"})
                 guarded.record_failed_turn(later_turn_failure, {"input": "gamma"})
+                await asyncio.sleep(turn_outlived_by)
                 return turn_failure if closed_by_the_failed_turn else other_failure
 
             return relay()
@@ -4339,6 +4355,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 proxy_logging_obj,
             ),
         ):
+            socket_opened_at = datetime.datetime.now()
             await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=user_api_key_dict)
             await drain_logging_tasks(timeout=1)
             (write,) = [write.kwargs for write in spend_writer.update_database.await_args_list]
@@ -4346,8 +4363,12 @@ class TestResponsesWSFirstFrameModelAuth:
 
         assert write["completion_response"] is (turn_failure if closed_by_the_failed_turn else other_failure)
         assert json.loads(row["proxy_server_request"]) == (
-            {"input": "beta", "user": "end-user-1"} if closed_by_the_failed_turn else connection_body
+            {"input": "beta", "user": "end-user-1"} if closed_by_the_failed_turn else {"user": "end-user-1"}
         )
+        if closed_by_the_failed_turn:
+            assert socket_opened_at <= write["start_time"] < socket_opened_at + datetime.timedelta(
+                seconds=turn_outlived_by
+            )
 
     @staticmethod
     async def _close_time_failure_of_socket(
@@ -4458,7 +4479,7 @@ class TestResponsesWSFirstFrameModelAuth:
         assert [json.loads(row["metadata"])["guardrail_information"] for row in rows] == [[record]]
 
     @pytest.mark.asyncio
-    async def test_a_relay_crash_after_a_guarded_frame_keeps_the_connection_request_on_its_failure_row(self):
+    async def test_a_relay_crash_after_a_guarded_frame_stores_an_empty_request_on_its_failure_row(self):
         crash = RuntimeError("the relay crashed between turns")
 
         def route_request(data, **kwargs):
@@ -4473,8 +4494,11 @@ class TestResponsesWSFirstFrameModelAuth:
         )
 
         assert failure["original_exception"] is crash
-        assert failure["request_data"]["proxy_server_request"] == _HOTEL_CONNECTION_REQUEST
-        assert [json.loads(row["proxy_server_request"]) for row in rows] == [_HOTEL_CONNECTION_REQUEST["body"]]
+        assert failure["request_data"]["proxy_server_request"] == {
+            **_HOTEL_CONNECTION_REQUEST,
+            "body": {"user": "proxy-set-end-user"},
+        }
+        assert [json.loads(row["proxy_server_request"]) for row in rows] == [{"user": "proxy-set-end-user"}]
 
     @pytest.mark.asyncio
     async def test_a_refused_turn_row_shares_the_session_id_of_the_turns_the_router_relays(self):
@@ -4587,7 +4611,14 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.close = AsyncMock()
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+            return_value=(
+                {
+                    "model": "gpt-4o-mini",
+                    "litellm_metadata": {},
+                    "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": {"model": "gpt-4o-mini"}},
+                },
+                MagicMock(),
+            )
         )
         refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
         crash = RuntimeError("relay crashed")
@@ -4671,7 +4702,14 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.close = AsyncMock(side_effect=lambda code, reason: closes.append((code, reason)))
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+            return_value=(
+                {
+                    "model": "gpt-4o-mini",
+                    "litellm_metadata": {},
+                    "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": {"model": "gpt-4o-mini"}},
+                },
+                MagicMock(),
+            )
         )
         refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
 
