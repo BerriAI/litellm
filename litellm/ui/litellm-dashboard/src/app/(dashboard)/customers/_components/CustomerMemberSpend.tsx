@@ -16,7 +16,7 @@ const PAGE_SIZE_OPTIONS = [5, 10, 25];
 const MEMBER_TABLE_PARSERS = {
   memberSearch: parseAsString.withDefault(""),
   memberPage: parseAsInteger.withDefault(1),
-  memberPageSize: parseAsNumberLiteral(PAGE_SIZE_OPTIONS).withDefault(10),
+  memberPageSize: parseAsNumberLiteral(PAGE_SIZE_OPTIONS).withDefault(5),
   budgetSort: customerBudgetSortParser,
 };
 export default function CustomerMemberSpend({

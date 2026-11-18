@@ -44,7 +44,7 @@ const names = (highest: number, count: number) =>
   Array.from({ length: count }, (_, index) => `Member ${highest - index}`);
 
 describe("CustomerMemberSpend pagination", () => {
-  it("shows the ten highest spenders by default and changes page size without losing customer filters", async () => {
+  it("shows the five highest spenders by default and changes page size without losing customer filters", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomerMemberSpend data={data} onMemberClick={vi.fn()} />, {
@@ -52,14 +52,14 @@ describe("CustomerMemberSpend pagination", () => {
       onUrlUpdate,
     });
 
-    expect(visibleMembers()).toEqual(names(26, 10));
-    await user.click(screen.getByRole("button", { name: "Go to next page" }));
-    expect(visibleMembers()).toEqual(names(16, 10));
-    await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "5");
     expect(visibleMembers()).toEqual(names(26, 5));
-    expect(screen.getByRole("button", { name: "Go to previous page" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
     expect(visibleMembers()).toEqual(names(21, 5));
+    await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "10");
+    expect(visibleMembers()).toEqual(names(26, 10));
+    expect(screen.getByRole("button", { name: "Go to previous page" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(visibleMembers()).toEqual(names(16, 10));
     await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "25");
     expect(visibleMembers()).toEqual(names(26, 25));
     await waitFor(() =>
@@ -75,10 +75,10 @@ describe("CustomerMemberSpend pagination", () => {
     const user = userEvent.setup();
     const onMemberClick = vi.fn();
     renderWithProviders(<CustomerMemberSpend data={data} onMemberClick={onMemberClick} />, {
-      searchParams: "?memberPageSize=5&memberPage=3",
+      searchParams: "?memberPageSize=10&memberPage=2",
     });
 
-    expect(visibleMembers()).toEqual(names(16, 5));
+    expect(visibleMembers()).toEqual(names(16, 10));
     fireEvent.change(screen.getByRole("textbox", { name: "Search customer members" }), {
       target: { value: "Member 26" },
     });
@@ -89,13 +89,13 @@ describe("CustomerMemberSpend pagination", () => {
     expect(onMemberClick).toHaveBeenCalledWith("member-26");
   });
 
-  it("falls back to ten rows for an unsupported page size and clamps an out-of-range page", () => {
+  it("falls back to five rows for an unsupported page size and clamps an out-of-range page", () => {
     renderWithProviders(<CustomerMemberSpend data={data} onMemberClick={vi.fn()} />, {
       searchParams: "?memberPageSize=0&memberPage=999",
     });
 
-    expect(visibleMembers()).toEqual(names(6, 6));
-    expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("10");
+    expect(visibleMembers()).toEqual(names(1, 1));
+    expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("5");
     expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
   });
 });
