@@ -14,7 +14,6 @@ import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure_ai.cost_calculator import (
-    calculate_azure_model_router_flat_cost,
     cost_per_token,
     is_azure_model_router,
 )

@@ -111,27 +111,3 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
             )
         return transformed_response
 
-    def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> dict | None:
-        """
-        Calculate additional costs for Azure Model Router.
-
-        Adds a flat infrastructure cost of $0.14 per M input tokens for using the Model Router.
-
-        Args:
-            model: The model name (should be a model router model)
-            prompt_tokens: Number of prompt tokens
-            completion_tokens: Number of completion tokens
-
-        Returns:
-            Dictionary with additional costs, or None if not applicable.
-        """
-        from litellm.llms.azure_ai.cost_calculator import (
-            calculate_azure_model_router_flat_cost,
-        )
-
-        flat_cost: Final = calculate_azure_model_router_flat_cost(model=model, prompt_tokens=prompt_tokens)
-
-        if flat_cost > 0:
-            return {"Azure Model Router Flat Cost": flat_cost}
-
-        return None

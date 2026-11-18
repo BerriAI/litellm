@@ -4092,41 +4092,36 @@ def test_gemini_without_cache_tokens_details():
     print("✅ Gemini without cacheTokensDetails works correctly")
 
 
-def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
-    """
-    Test that _get_additional_costs is only called for azure_ai provider.
-
-    completion_cost() guards the call with `if custom_llm_provider == "azure_ai"`.
-    This test verifies that non-azure_ai providers get additional_costs=None
-    (reflected by the absence of "additional_costs" in cost_breakdown),
-    while azure_ai providers can include additional costs.
-    """
-    from litellm.cost_calculator import _get_additional_costs
-
-    # Non-azure_ai providers should return None
-    result = _get_additional_costs(
-        model="gpt-4o",
-        custom_llm_provider="openai",
-        prompt_tokens=100,
-        completion_tokens=50,
+@pytest.mark.parametrize(("provider", "billed"), [("azure", True), ("openai", False), ("anthropic", False)])
+def test_only_azure_providers_bill_the_model_router_fee_beside_a_routed_model(
+    _local_model_cost_map: None, provider: str, billed: bool
+) -> None:
+    model: Final = "claude-sonnet-4-5" if provider == "anthropic" else "gpt-4o"
+    logging_obj: Final = Logging(
+        model="azure-model-router",
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="router-fee",
+        function_id="router-fee",
     )
-    assert result is None, "Non-azure_ai providers should have no additional costs"
-
-    result = _get_additional_costs(
-        model="claude-sonnet-4-20250514",
-        custom_llm_provider="anthropic",
-        prompt_tokens=100,
-        completion_tokens=50,
+    response: Final = ModelResponse(
+        model=model, usage=Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
     )
-    assert result is None, "Anthropic should have no additional costs"
+    response._hidden_params = {"custom_llm_provider": provider, "model": "azure-model-router"}
 
-    result = _get_additional_costs(
-        model="gemini-2.0-flash",
-        custom_llm_provider="vertex_ai",
-        prompt_tokens=100,
-        completion_tokens=50,
+    cost: Final = completion_cost(
+        completion_response=response, model=model, custom_llm_provider=provider, litellm_logging_obj=logging_obj
     )
-    assert result is None, "Vertex AI should have no additional costs"
+
+    breakdown: Final = logging_obj.cost_breakdown or {}
+    fees: Final = breakdown.get("additional_costs") or {}
+    assert bool(fees) is billed
+    assert cost == pytest.approx(breakdown["input_cost"] + sum(fees.values()))
+    assert fees.get("Azure Model Router Flat Cost", 0.0) == pytest.approx(
+        1_000_000 * litellm.model_cost["azure_ai/model_router"]["input_cost_per_token"] if billed else 0.0
+    )
 
 
 def test_custom_pricing_applies_cache_read_input_cost():
