@@ -357,6 +357,92 @@ async def test_acompact_responses_sends_a_model_router_on_a_project_by_deploymen
     assert json.loads(request.content)["model"] == "model-router"
 
 
+CUSTOM_TOOL: Final = {"type": "custom", "name": "apply_patch", "description": "Apply a patch"}
+RESPONSES_CALLS: Final = (
+    pytest.param(r".*/responses(\?.*)?$", litellm.aresponses, id="responses"),
+    pytest.param(r".*/responses/compact(\?.*)?$", litellm.acompact_responses, id="compact"),
+)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("url_regex,call", RESPONSES_CALLS)
+async def test_a_model_router_drops_custom_tools_under_drop_params(url_regex, call):
+    route: Final = respx.post(url__regex=url_regex).mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await call(
+        model="azure_ai/model_router/model-router",
+        input="What is the weather in SF?",
+        tools=[WEATHER_TOOL, CUSTOM_TOOL],
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+        drop_params=True,
+    )
+
+    assert [tool["name"] for tool in json.loads(route.calls.last.request.content)["tools"]] == ["get_weather"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "tool_choice,sent_tool_choice", [({"type": "custom", "name": "apply_patch"}, None), ("auto", "auto")]
+)
+async def test_a_model_router_drops_only_a_tool_choice_naming_a_custom_tool(tool_choice, sent_tool_choice):
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="What is the weather in SF?",
+        tools=[WEATHER_TOOL, CUSTOM_TOOL],
+        tool_choice=tool_choice,
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls.last.request.content).get("tool_choice") == sent_tool_choice
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("url_regex,call", RESPONSES_CALLS)
+async def test_a_model_router_rejects_custom_tools_without_drop_params(url_regex, call):
+    route: Final = respx.post(url__regex=url_regex)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
+        await call(
+            model="azure_ai/model_router/model-router",
+            input="What is the weather in SF?",
+            tools=[CUSTOM_TOOL],
+            api_base=FOUNDRY_PROJECT_BASE,
+            api_key="fake-key",
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_default_foundry_model_keeps_custom_tools():
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-4.1",
+        input="What is the weather in SF?",
+        tools=[CUSTOM_TOOL],
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["tools"] == [CUSTOM_TOOL]
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_aresponses_streams_a_model_router_on_a_project_as_it_answers():

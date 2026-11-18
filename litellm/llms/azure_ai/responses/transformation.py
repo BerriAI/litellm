@@ -1,7 +1,10 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
@@ -12,7 +15,7 @@ from litellm.llms.azure_ai.common_utils import (
     foundry_project_root,
     get_azure_ai_auth_headers,
 )
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -20,11 +23,40 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _RESPONSES_PATH: Final = ("openai", "v1", "responses")
+_REQUEST_TOOLS: Final = TypeAdapter(tuple[object, ...])
 
 
 def _responses_url(api_base: str) -> str:
     base_url: Final = httpx.URL(api_base)
     return str(base_url.copy_with(path="/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH)), query=None))
+
+
+def _is_custom_tool(tool: object) -> bool:
+    match tool:
+        case {"type": "custom"}:
+            return True
+        case _:
+            return False
+
+
+def _without_custom_tools(mapped: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, object]:
+    tools: Final = _REQUEST_TOOLS.validate_python(mapped.get("tools") or ())
+    if not any(_is_custom_tool(tool) for tool in tools):
+        return mapped
+    if not drop_params:
+        raise UnsupportedParamsError(
+            message=(
+                "azure_ai Model Router rejects `custom` tools on the Responses API. Send them as function tools, or "
+                "set `drop_params: true` to drop them"
+            ),
+            llm_provider=LlmProviders.AZURE_AI.value,
+            model=model,
+        )
+    drops_tool_choice: Final = _is_custom_tool(mapped.get("tool_choice"))
+    return {
+        **{key: value for key, value in mapped.items() if key != "tool_choice" or not drops_tool_choice},
+        "tools": [tool for tool in tools if not _is_custom_tool(tool)],
+    }
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
@@ -84,6 +116,19 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         if model is not None and AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router":
             return False
         return super().should_fake_stream(model, stream, custom_llm_provider)
+
+    def map_openai_params(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: return type fixed by the override contract
+        mapped: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent types the mapped params as a bare dict  # mutable-ok: same
+            response_api_optional_params, model, drop_params
+        )
+        if AzureFoundryModelInfo.get_azure_ai_route(model) != "model_router":
+            return mapped
+        return dict(_without_custom_tools(mapped, model, drop_params))
 
     def supports_native_websocket(self) -> bool:
         return False
