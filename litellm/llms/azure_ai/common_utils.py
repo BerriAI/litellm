@@ -249,11 +249,13 @@ def is_foundry_project_agent(model: str | None) -> bool:
     return not model.split("agents/", 1)[1].startswith(FOUNDRY_CLASSIC_AGENT_ID_PREFIX)
 
 
+def _serves_openai_v1(api_base: str) -> bool:
+    return is_azure_openai_v1_host(api_base) or bool(foundry_project_root(httpx.URL(api_base)))
+
+
 def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
-    if resolved_base is not None and not (
-        is_azure_openai_v1_host(resolved_base) or foundry_project_root(httpx.URL(resolved_base))
-    ):
+    if resolved_base is not None and not _serves_openai_v1(resolved_base):
         return False
     if model is None:
         return True
@@ -262,9 +264,9 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
 
 
-def is_foundry_project_model_router(model: str | None, api_base: str | None) -> bool:
+def is_foundry_v1_model_router(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
-    if model is None or resolved_base is None or not foundry_project_root(httpx.URL(resolved_base)):
+    if model is None or resolved_base is None or not _serves_openai_v1(resolved_base):
         return False
     return AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router"
 
