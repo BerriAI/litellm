@@ -1738,15 +1738,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     @staticmethod
     def _iter_file_ids_from_messages(messages: Sequence[AllMessageValues]) -> Iterator[str]:
         for message in messages:
-            role: Final = message.get("role")
-            if role not in ("user", "tool", "function"):
+            if (role := message.get("role")) not in ("user", "tool", "function"):
                 continue
-            content: Final = message.get("content")
-            if not isinstance(content, Iterable) or isinstance(content, (str, Mapping)):
+            if not isinstance((content := message.get("content")), Iterable) or isinstance(content, (str, Mapping)):
                 continue
             for part in content:
-                file_id: Final = _chat_message_file_id(part, role)
-                if file_id is not None:
+                if (file_id := _chat_message_file_id(part, role)) is not None:
                     yield file_id
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
