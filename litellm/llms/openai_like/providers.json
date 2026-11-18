@@ -202,6 +202,11 @@
     "api_base_env": "CORALBRICKS_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "siapi": {
+    "base_url": "https://siapi.ai/v1",
+    "api_key_env": "SIAPI_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "cortecs": {
     "base_url": "https://api.cortecs.ai/v1",
     "api_key_env": "CORTECS_API_KEY",
