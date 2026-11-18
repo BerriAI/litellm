@@ -741,10 +741,14 @@ async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
 @pytest.mark.asyncio
 @respx.mock
 @pytest.mark.parametrize(
-    "earlier_response_id,bridged",
-    [pytest.param("chatcmpl-earlier", True, id="bridged-turn"), pytest.param("resp_earlier", False, id="native-turn")],
+    "model,earlier_response_id,bridged",
+    [
+        pytest.param("azure_ai/model_router/model-router", "chatcmpl-earlier", True, id="router-after-bridged-turn"),
+        pytest.param("azure_ai/model_router/model-router", "resp_earlier", False, id="router-after-native-turn"),
+        pytest.param("azure_ai/gpt-5.6-terra", "chatcmpl-earlier", False, id="deployment-after-bridged-turn"),
+    ],
 )
-async def test_a_model_router_follow_up_stays_where_its_previous_turn_was_answered(earlier_response_id, bridged):
+async def test_only_a_model_router_follow_up_to_a_bridged_turn_stays_on_the_bridge(model, earlier_response_id, bridged):
     chat_route: Final = respx.post(url__regex=r".*/chat/completions(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_chat_completion_payload("FW-GLM-5.3-Flash"))
     )
@@ -753,7 +757,7 @@ async def test_a_model_router_follow_up_stays_where_its_previous_turn_was_answer
     )
 
     await litellm.aresponses(
-        model="azure_ai/model_router/model-router",
+        model=model,
         input="And the next step?",
         previous_response_id=ResponsesAPIRequestUtils._build_responses_api_response_id(
             custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
@@ -766,18 +770,25 @@ async def test_a_model_router_follow_up_stays_where_its_previous_turn_was_answer
 
 
 @pytest.mark.parametrize(
-    "earlier_response_id,stored",
-    [pytest.param("chatcmpl-earlier", False, id="bridged-turn"), pytest.param("resp_earlier", True, id="native-turn")],
+    "model,earlier_response_id,stored",
+    [
+        pytest.param("azure_ai/model_router/model-router", "chatcmpl-earlier", False, id="router-after-bridged-turn"),
+        pytest.param("azure_ai/model_router/model-router", "resp_earlier", True, id="router-after-native-turn"),
+        pytest.param("azure_ai/gpt-5.6-terra", "chatcmpl-earlier", True, id="deployment-after-bridged-turn"),
+        pytest.param("azure/model-router", "chatcmpl-earlier", True, id="azure-openai-router-after-bridged-turn"),
+    ],
 )
-def test_a_model_router_follow_up_is_stored_by_the_provider_only_after_a_native_turn(earlier_response_id, stored):
+def test_a_follow_up_is_stored_by_the_provider_unless_it_stays_on_the_model_router_bridge(
+    model, earlier_response_id, stored
+):
     previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
         custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
     )
 
     assert (
         provider_stores_the_conversation(
-            "azure_ai/model_router/model-router",
-            "azure_ai",
+            model,
+            None,
             {"api_base": FOUNDRY_PROJECT_BASE, "previous_response_id": previous_response_id},
         )
         is stored
