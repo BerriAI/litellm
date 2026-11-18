@@ -1134,14 +1134,13 @@ def _upstream_request_filter_or_pin(
     request_headers: Mapping[str, str],
     route_headers: Mapping[str, object],
     custom_llm_provider: str | None,
+    configured_route: bool,
 ) -> UpstreamRequestFilter:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
 
     if upstream_request_filter is not None:
         return upstream_request_filter
-    vendor_route: Final = (
-        custom_llm_provider is not None and custom_llm_provider not in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
-    )
+    claude_route: Final = configured_route or custom_llm_provider in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
     route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
     caller_credentials: Final[Mapping[str, str]] = (
         {}
@@ -1155,7 +1154,7 @@ def _upstream_request_filter_or_pin(
     )
     return partial(
         _with_pinned_profile_id_for_claude_or_where_sent,
-        None if vendor_route else pinned_anthropic_user_profile_id(user_api_key_dict),
+        pinned_anthropic_user_profile_id(user_api_key_dict) if claude_route else None,
         caller_credentials,
     )
 
@@ -1549,7 +1548,12 @@ async def pass_through_request(
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         outbound_headers, upstream_body = _filtered_upstream_request(
             _upstream_request_filter_or_pin(
-                upstream_request_filter, user_api_key_dict, request.headers, custom_headers, custom_llm_provider
+                upstream_request_filter,
+                user_api_key_dict,
+                request.headers,
+                custom_headers,
+                custom_llm_provider,
+                configured_route=request_dispatched_to_pass_through_endpoint(request),
             ),
             upstream_headers,
             outgoing_body,
