@@ -6606,8 +6606,20 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("version", ["v1", "v1beta"])
-@pytest.mark.parametrize("role", ["user", "assistant", "tool", "responses-tool"])
-@pytest.mark.parametrize("media", ["file", "image"])
+@pytest.mark.parametrize(
+    ("role", "media"),
+    [
+        ("user", "file"),
+        ("user", "image"),
+        ("assistant", "file"),
+        ("assistant", "image"),
+        ("assistant-images", "image"),
+        ("tool", "file"),
+        ("tool", "image"),
+        ("responses-tool", "file"),
+        ("responses-tool", "image"),
+    ],
+)
 @pytest.mark.parametrize("has_access", [True, False], ids=["owner", "different-key"])
 async def test_chat_file_references_use_managed_file_access(
     version: str, role: str, media: str, has_access: bool
@@ -6631,6 +6643,8 @@ async def test_chat_file_references_use_managed_file_access(
             "model": model,
             "input": [{"type": "function_call_output", "call_id": "call_1", "output": [output_part]}],
         }
+    elif role == "assistant-images":
+        request = {"model": model, "messages": [{"role": "assistant", "images": [{"image_url": image_url}]}]}
     else:
         part: Final = {"type": "file", "file": file} if media == "file" else {"type": "image_url", "image_url": image_url}
         request = {"model": model, "messages": [{"role": role, "content": [part]}]}

@@ -223,6 +223,19 @@ def _chat_message_file_id(part: object, role: str) -> str | None:
     return source.url
 
 
+def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
+    images: Final = as_object_list(value)
+    if images is None:
+        return
+    for image in images:
+        if (fields := as_str_mapping(image)) is None:
+            continue
+        if (image_url := as_str_mapping(fields.get("image_url"))) is None:
+            continue
+        if isinstance((url := image_url.get("url")), str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
+            yield url
+
+
 def _gemini_tool_result_file_ids_from_responses_input(input_data: object) -> Iterator[str]:
     from litellm.responses.litellm_completion_transformation.transformation import (
         TOOL_CALL_OUTPUT_ITEM_TYPES,
@@ -2021,8 +2034,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     @staticmethod
     def _iter_file_ids_from_messages(messages: Sequence[AllMessageValues]) -> Iterator[str]:
         for message in messages:
-            if (role := message.get("role")) not in ("user", "assistant", "tool", "function"):
+            if not isinstance((role := _keyed_get(message, "role")), str) or role not in (
+                "user",
+                "assistant",
+                "tool",
+                "function",
+            ):
                 continue
+            if role == "assistant":
+                yield from _gemini_assistant_image_file_ids(_keyed_get(message, "images"))
             if not _is_object_iterable(content := _keyed_get(message, "content")) or isinstance(
                 content, (str, Mapping)
             ):
