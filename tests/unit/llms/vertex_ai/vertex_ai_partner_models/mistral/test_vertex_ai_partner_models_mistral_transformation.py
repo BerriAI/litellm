@@ -1,4 +1,6 @@
 import base64
+import copy
+import re
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final
@@ -11,6 +13,8 @@ from pydantic import TypeAdapter
 import litellm
 import litellm.main
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.fixture
@@ -168,3 +172,81 @@ def test_mistral_extra_body_labels_join_the_labels_header_instead_of_the_body(mo
         "stream": False,
         "safe_prompt": True,
     }
+
+
+MISTRAL_TOOL_CALL_ID: Final = re.compile(r"[a-zA-Z0-9]{9}")
+SENT_MAPPINGS: Final = TypeAdapter(list[Mapping[str, object]])
+
+
+def _tool_call(tool_call_id: str | None, name: str) -> dict[str, object]:
+    return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+def test_mistral_chat_sends_replayed_tool_call_ids_as_nine_alphanumeric_characters(monkeypatch: pytest.MonkeyPatch):
+    replayed_ids: Final = ("call_u0U86kcRTK484QKTyPKASCeg", "call_abc123", "toolu_01ABCdef", "D681PevKs")
+    messages: Final = [
+        {"role": "user", "content": "Weather and time in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_tool_call(tool_call_id, f"tool_{n}") for n, tool_call_id in enumerate(replayed_ids)],
+        },
+        *({"role": "tool", "tool_call_id": tool_call_id, "content": "ok"} for tool_call_id in replayed_ids),
+        {"role": "user", "content": "Sum it up."},
+    ]
+    callers_messages: Final = copy.deepcopy(messages)
+
+    def send(transport: httpx.MockTransport, _: pytest.MonkeyPatch) -> None:
+        litellm.completion(
+            model="vertex_ai/mistral-large-2411",
+            messages=messages,
+            vertex_location="us-central1",
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+
+    sent_messages: Final = SENT_MAPPINGS.validate_python(
+        SENT_BODY.validate_json(_sent_mistral_request(send, monkeypatch).content)["messages"]
+    )
+    sent_call_ids: Final = [
+        tool_call["id"] for tool_call in SENT_MAPPINGS.validate_python(sent_messages[1]["tool_calls"])
+    ]
+    sent_reply_ids: Final = [message["tool_call_id"] for message in sent_messages[2:6]]
+
+    assert sent_reply_ids == sent_call_ids
+    assert all(
+        isinstance(tool_call_id, str) and MISTRAL_TOOL_CALL_ID.fullmatch(tool_call_id) for tool_call_id in sent_call_ids
+    )
+    assert len(set(sent_call_ids)) == len(replayed_ids)
+    assert sent_call_ids[3] == "D681PevKs"
+    assert messages == callers_messages
+
+
+async def test_mistral_chat_maps_a_tool_call_id_the_same_way_on_sync_and_async_requests(local_model_cost_map):
+    config: Final = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-medium-3", provider=LlmProviders.VERTEX_AI
+    )
+    history: Final = [
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call("call_abc123", "get_weather")]},
+        {"role": "tool", "tool_call_id": "call_abc123", "content": "18C"},
+    ]
+
+    sync_messages: Final = config.transform_messages(messages=copy.deepcopy(history), model="mistral-medium-3")
+    async_messages: Final = await config.transform_messages(
+        messages=copy.deepcopy(history), model="mistral-medium-3", is_async=True
+    )
+
+    assert async_messages == sync_messages
+    assert sync_messages[1]["tool_call_id"] != "call_abc123"
+
+
+def test_mistral_chat_sends_a_tool_call_without_an_id_as_is(local_model_cost_map):
+    config: Final = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-medium-3", provider=LlmProviders.VERTEX_AI
+    )
+    tool_call: Final = _tool_call(None, "get_weather")
+
+    sent: Final = config.transform_messages(
+        messages=[{"role": "assistant", "content": None, "tool_calls": [tool_call]}], model="mistral-medium-3"
+    )
+
+    assert sent[0]["tool_calls"] == [tool_call]
