@@ -1,0 +1,196 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT app_id,\n       resource_type,\n       resource_id,\n       alias,\n       spend,\n       spend_reset_window,\n       budget_id,\n       default_tier_budget_id,\n       default_customer_member_budget_id,\n       auto_create_customers,\n       customer_margin,\n       created_at,\n       created_by,\n       updated_at,\n       updated_by\nFROM \"LiteLLM_AppTable\"\nWHERE app_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "app_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "app_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "resource_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "resource_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "resource_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "resource_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "alias"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "spend_reset_window",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "spend_reset_window"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "default_tier_budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "default_tier_budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "default_customer_member_budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "default_customer_member_budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "auto_create_customers",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "auto_create_customers"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "customer_margin",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "customer_margin"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AppTable\"",
+            "name": "updated_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "112246fb33c34379bec0db942b1b13770980622c135d2d4c1334c149c8961bd0"
+}

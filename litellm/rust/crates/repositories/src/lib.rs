@@ -1,4 +1,5 @@
-//! Rust repositories for the auth objects the proxy reads from Postgres when its auth cache misses.
+//! Rust repositories for the auth objects the proxy reads from Postgres when its auth cache misses, and the
+//! customer hierarchy rows its spend counters reseed from.
 //!
 //! Each repository is a folder that owns its queries, the shaping of their rows into what the auth flow consumes,
 //! and any memory tier private to that object. Queries are private to their folder, so every read goes through a
@@ -11,7 +12,13 @@ macro_rules_attribute::attribute_alias! {
 }
 
 mod access_group;
+mod app;
+mod app_customer_member;
+mod app_customer_organization;
 mod budget;
+mod customer_member;
+mod customer_organization;
+mod customer_team;
 mod database;
 mod end_user;
 mod jwt_key_mapping;
@@ -30,7 +37,13 @@ mod user;
 mod utc_timestamp;
 
 pub use access_group::{AccessGroup, AccessGroupRepository};
+pub use app::{App, AppRepository};
+pub use app_customer_member::{AppCustomerMember, AppCustomerMemberRepository};
+pub use app_customer_organization::{AppCustomerOrganization, AppCustomerOrganizationRepository};
 pub use budget::{Budget, BudgetRepository};
+pub use customer_member::{CustomerMember, CustomerMemberRepository};
+pub use customer_organization::{CustomerOrganization, CustomerOrganizationRepository};
+pub use customer_team::{CustomerTeam, CustomerTeamRepository};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
 pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim};
