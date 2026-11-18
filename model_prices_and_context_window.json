@@ -32258,6 +32258,11 @@
         "output_cost_per_image_token_batches": 3e-05,
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "high"
+        ],
         "rpm": 1000.0,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
@@ -32277,6 +32282,7 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -55146,6 +55152,7 @@
             "/v1/images/edits",
             "/v1/batch"
         ],
+        "supports_logprobs": false,
         "supports_reasoning": false
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
@@ -79996,6 +80003,12 @@
         "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "medium",
+            "high"
+        ],
         "rpm": 1000.0,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -80014,6 +80027,8 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -80064,6 +80079,7 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -80111,6 +80127,8 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
