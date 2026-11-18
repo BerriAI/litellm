@@ -598,7 +598,10 @@ def _shared_capabilities_set_true(entry: Mapping[str, object]) -> frozenset[str]
 
 def _distinct_withdrawals(entries: Iterable[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
     return tuple(
-        {(_entry_backend_keys(entry), _shared_capabilities_set_true(entry)): entry for entry in entries}.values()
+        {
+            (_entry_backend_keys(entry), _shared_capabilities_set_true(entry), _vertex_pass_through_target(entry)): entry
+            for entry in entries
+        }.values()
     )
 
 
@@ -614,7 +617,7 @@ def _catalog_sets_true(catalog: Mapping[str, Mapping[str, object]], catalog_keys
     return entry is not None and entry.get(field) is True
 
 
-def _vertex_pass_through_target(entry: Mapping[str, object]) -> tuple[str, str] | None:
+def _vertex_pass_through_info(entry: Mapping[str, object]) -> tuple[tuple[str, str], object] | None:
     import litellm
 
     litellm_params: Final = entry.get("litellm_params")
@@ -639,23 +642,46 @@ def _vertex_pass_through_target(entry: Mapping[str, object]) -> tuple[str, str] 
     )
     project: Final = credential_values.get("vertex_project") or litellm_params.get("vertex_project")
     location: Final = credential_values.get("vertex_location") or litellm_params.get("vertex_location")
+    credentials: Final = credential_values.get("vertex_credentials") or litellm_params.get("vertex_credentials")
     if not project or not location:
         return None
-    return str(project), str(location)
+    return (str(project), str(location)), credentials
+
+
+def _vertex_pass_through_target(entry: Mapping[str, object]) -> tuple[str, str] | None:
+    info: Final = _vertex_pass_through_info(entry)
+    return info[0] if info is not None else None
 
 
 def _withdraw_vertex_pass_through_credentials(
     removed: Mapping[str, object],
     served: Iterable[Mapping[str, object]],
 ) -> None:
-    target: Final = _vertex_pass_through_target(removed)
-    if target is None:
+    removed_info: Final = _vertex_pass_through_info(removed)
+    if removed_info is None:
         return
-    if any(_vertex_pass_through_target(entry) == target for entry in served):
-        return
+    target: Final = removed_info[0]
     from litellm.router_host import router_host
 
-    router_host().remove_vertex_pass_through_credentials(project_id=target[0], location=target[1])
+    # When a surviving live deployment still claims the same target, re-register its credentials
+    # so the cache holds the active deployment's service account rather than the retired one.
+    survivor_creds: object = None
+    has_survivor: bool = False
+    for entry in served:
+        entry_info: Final = _vertex_pass_through_info(entry)
+        if entry_info is not None and entry_info[0] == target:
+            has_survivor = True
+            survivor_creds = entry_info[1]
+            break
+
+    if has_survivor:
+        router_host().add_vertex_pass_through_credentials(
+            project_id=target[0],
+            location=target[1],
+            vertex_credentials=survivor_creds,  # pyright: ignore[reportArgumentType]
+        )
+    else:
+        router_host().remove_vertex_pass_through_credentials(project_id=target[0], location=target[1])
 
 
 def withdraw_shared_capabilities(
@@ -1659,9 +1685,11 @@ class HostRegistry(HostModelInfo):
     def replace_model_list(self, model_list: "list[UntypedEntry]") -> None:  # mutable-ok: the list as assigned
         """``router.model_list = [...]``: the list is swapped as given, without reindexing, and
         router-core takes it whole."""
+        previous: Final = [copy.deepcopy(dict(entry)) for entry in self._core_model_list]
         self._core_model_list.replace(model_list)
         self._registry_version += 1
         self._on_change()
+        self._withdraw_shared_capabilities(previous, self._served_by_live_routers())
 
     def _served_by_other_routers(self) -> tuple[UntypedEntry, ...]:
         others: Final = (tuple(registry._core_model_list) for registry in live_registries() if registry is not self)

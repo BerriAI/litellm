@@ -951,9 +951,13 @@ def test_withdraw_vertex_pass_through_credentials_on_disable_and_sibling_preserv
             def invoke(self, name):
                 return lambda **kwargs: None
 
-        # Sibling still has use_in_pass_through=True: keep credentials registered.
+        # Sibling still has use_in_pass_through=True with its own credentials:
+        # Re-registers sibling credentials to avoid retaining the removed deployment's service account.
+        sibling_creds = '{"type": "service_account", "client_email": "sibling@proj.iam.gserviceaccount.com"}'
+        sibling["litellm_params"]["vertex_credentials"] = sibling_creds
         withdraw_shared_capabilities(_NoopHost(), removed, None, [sibling])
         assert key in passthrough_endpoint_router.deployment_key_to_vertex_credentials
+        assert passthrough_endpoint_router.deployment_key_to_vertex_credentials[key].vertex_credentials == sibling_creds
 
         # No remaining sibling with use_in_pass_through=True: unregister credentials.
         disabled = {
@@ -969,3 +973,29 @@ def test_withdraw_vertex_pass_through_credentials_on_disable_and_sibling_preserv
         assert key not in passthrough_endpoint_router.deployment_key_to_vertex_credentials
     finally:
         passthrough_endpoint_router.remove_vertex_credentials(project_id=project, location=location)
+
+
+def test_distinct_withdrawals_includes_vertex_target():
+    from litellm.router_rust.surface.registry import _distinct_withdrawals
+
+    entry1 = {
+        "model_name": "vertex-1",
+        "litellm_params": {
+            "model": "vertex_ai/gemini-flash",
+            "vertex_project": "proj-1",
+            "vertex_location": "us-central1",
+            "use_in_pass_through": True,
+        },
+    }
+    entry2 = {
+        "model_name": "vertex-2",
+        "litellm_params": {
+            "model": "vertex_ai/gemini-flash",
+            "vertex_project": "proj-2",
+            "vertex_location": "europe-west1",
+            "use_in_pass_through": True,
+        },
+    }
+
+    distinct = _distinct_withdrawals([entry1, entry2])
+    assert len(distinct) == 2, f"Expected 2 distinct withdrawals for different vertex targets, got {len(distinct)}"
