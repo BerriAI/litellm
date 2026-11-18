@@ -2696,6 +2696,34 @@ def test_request_skips_budget_checks_for_mcp_tool_calls_that_cost_nothing(
     ), f"{route} {request_body}"
 
 
+def test_request_skips_budget_checks_prices_the_server_a_colliding_tool_name_routes_to(monkeypatch):
+    """A paid server can list a tool under a free server's prefixed name; routing sends the call to the paid server."""
+    from litellm.proxy.auth.auth_checks import request_skips_budget_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    free_server = ("docs-id", "docs", None)
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "config_mcp_servers",
+        {server[0]: _mcp_server(*server) for server in (free_server, _PAID_SERVER)},
+    )
+    monkeypatch.setattr(  # test-quality-ok: the routing map is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "published_tool_routes",
+        {"search": "docs", "docs-search": _PAID_SERVER[1]},
+    )
+
+    def skips(name: str) -> bool:
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name}}
+        return request_skips_budget_checks(route="/mcp", model=None, llm_router=None, request_body=body)
+
+    # The check must price the server execution picks, whichever server that is.
+    routed = global_mcp_server_manager.get_mcp_server_from_tool_name("docs-search")
+    assert routed is not None
+    assert skips("docs-search") is (routed.server_id == free_server[0])
+    assert skips("docs-other") is True  # no mapping: still the free server's own tool
+
+
 @pytest.mark.asyncio
 async def test_get_skill_names_from_access_groups_reads_cached_group_rows():
     from litellm.proxy._types import LiteLLM_AccessGroupTable

@@ -1137,7 +1137,9 @@ def _mcp_scope_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
 def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -> bool:
     """A tool call is free when no MCP server charges, or when every server that could run it is free for it.
 
-    Only a name with a known server prefix, or a REST ``server_id``, says which server runs it. Display names can
+    Only a name with a known server prefix, a name the tool routing maps to a server, or a REST ``server_id``, says
+    which server runs it. A server can list a tool under another server's prefixed name; routing then sends the call
+    to the listing server, so both servers are priced. Display names can
     send a name to another tool, so a call stays budget checked when a server that could run it has any, or when
     any server shows a tool under the name."""
     if not _is_mcp_tool_call(route=route, request_body=request_body):
@@ -1162,6 +1164,7 @@ def is_zero_cost_mcp_tool_call(route: str, request_body: Mapping[str, object]) -
         server
         for server in (
             global_mcp_server_manager.server_owning_tool_name_prefix(tool_name),
+            global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name),
             (
                 global_mcp_server_manager.get_mcp_server_by_id(requested_server_id)
                 or global_mcp_server_manager.get_mcp_server_by_identifier(requested_server_id)
