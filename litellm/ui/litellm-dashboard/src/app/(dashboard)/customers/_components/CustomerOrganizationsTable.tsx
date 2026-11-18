@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { SortingState } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { createSerializer, parseAsString } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
@@ -21,14 +21,13 @@ const COLUMNS = [
   { id: "budget", label: "customerPortal.hierarchy.maxBudget" },
   { id: "share", label: "customerPortal.list.columns.overallSpendShare" },
   { id: "tokens", label: "customerPortal.list.columns.tokens", numeric: true },
-  { id: "cacheCost", label: "customerPortal.tokenUsage.cacheCost", numeric: true },
   { id: "status", label: "customerPortal.list.columns.status" },
 ] as const;
 const TOKEN_BREAKDOWN = [
-  { id: "inputTokens", label: "usage.statStrip.tokenPopover.inputTokens" },
-  { id: "outputTokens", label: "usage.statStrip.tokenPopover.outputTokens" },
-  { id: "cacheReadTokens", label: "customerPortal.tokenUsage.cacheReadTokens" },
-  { id: "cacheWriteTokens", label: "customerPortal.tokenUsage.cacheWriteTokens" },
+  { id: "inputTokens", label: "usage.statStrip.tokenPopover.inputTokens", nested: false },
+  { id: "cacheReadTokens", label: "customerPortal.tokenUsage.cacheReadTokens", nested: true },
+  { id: "cacheWriteTokens", label: "customerPortal.tokenUsage.cacheWriteTokens", nested: true },
+  { id: "outputTokens", label: "usage.statStrip.tokenPopover.outputTokens", nested: false },
 ] as const;
 
 export default function CustomerOrganizationsTable({
@@ -78,7 +77,7 @@ export default function CustomerOrganizationsTable({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="-mx-2 gap-2"
+                  className={cn("-mx-2 gap-2", id === "share" && "h-auto min-h-8 py-1 text-left whitespace-normal")}
                   onClick={() => onSort([{ id, desc: active ? !descending : id !== "customer" && id !== "budget" }])}
                 >
                   {t(label)}
@@ -193,9 +192,6 @@ export default function CustomerOrganizationsTable({
                 <TableCell className="px-3 text-right tabular-nums">
                   <CustomerTokenTotal usage={usage} />
                 </TableCell>
-                <TableCell className="px-3 text-right tabular-nums">
-                  <CustomerCacheCost usage={usage} />
-                </TableCell>
                 <TableCell className="px-4 text-right">
                   <span
                     className={cn(
@@ -218,24 +214,42 @@ function CustomerTokenTotal({ usage }: { usage: CustomerUsageTotal | null }) {
   const { t } = useTranslation();
   if (!usage) return "—";
   const total = t("format.number", { val: usage.tokens });
+  const cacheReadRatio = usage.inputTokens > 0 ? usage.cacheReadTokens / usage.inputTokens : null;
+  const percentCached =
+    cacheReadRatio !== null && cacheReadRatio >= 0 && cacheReadRatio <= 1
+      ? t("customerPortal.tokenUsage.percentCached", {
+          percent: t("format.number", { val: cacheReadRatio, style: "percent", maximumFractionDigits: 0 }),
+        })
+      : undefined;
   return (
     <Popover>
       <PopoverTrigger
+        openOnHover
+        delay={200}
         aria-label={t("customerPortal.tokenUsage.viewTokenBreakdown", { total })}
-        className="inline-flex items-center gap-1 rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        aria-description={percentCached}
+        className="rounded-sm text-right focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {total}
-        <ChevronDown aria-hidden="true" className="size-3 text-muted-foreground" />
+        <span className="underline decoration-muted-foreground/60 decoration-dotted underline-offset-4">
+          {t("format.number", { val: usage.tokens, notation: "compact", maximumFractionDigits: 2 })}
+        </span>
+        {percentCached && <span className="block text-xs text-muted-foreground">{percentCached}</span>}
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-56">
+      <PopoverContent align="end" className="gap-2">
         <PopoverTitle>{t("customerPortal.tokenUsage.tokenBreakdown")}</PopoverTitle>
         <dl className="space-y-1 tabular-nums">
-          {TOKEN_BREAKDOWN.map(({ id, label }) => (
+          {TOKEN_BREAKDOWN.map(({ id, label, nested }) => (
             <div key={id} className="flex justify-between gap-3">
-              <dt>{t(label)}</dt>
+              <dt className={cn("text-muted-foreground", nested && "pl-3")}>{t(label)}</dt>
               <dd>{t("format.number", { val: usage[id] })}</dd>
             </div>
           ))}
+          <div className="mt-2 flex justify-between gap-3 border-t border-border pt-2">
+            <dt className="text-muted-foreground">{t("customerPortal.tokenUsage.cacheCost")}</dt>
+            <dd className="text-right">
+              <CustomerCacheCost usage={usage} />
+            </dd>
+          </div>
         </dl>
       </PopoverContent>
     </Popover>

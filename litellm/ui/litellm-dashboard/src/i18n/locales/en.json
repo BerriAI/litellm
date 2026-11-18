@@ -20921,6 +20921,7 @@
     "tokenUsage": {
       "tokenBreakdown": "Token breakdown",
       "viewTokenBreakdown": "{{total}} total tokens. View breakdown",
+      "percentCached": "{{percent}} cached",
       "cacheReadTokens": "Cache read tokens",
       "cacheWriteTokens": "Cache write tokens",
       "cacheCost": "Cache cost",

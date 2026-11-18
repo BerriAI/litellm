@@ -136,7 +136,7 @@ describe("customer organization overview", () => {
     await screen.findByRole("link", { name: "Customer 29" });
     const spendTable = within(screen.getByRole("table", { name: "Customer organizations" }));
     expect(spendTable.getByRole("columnheader", { name: "Tokens", exact: true })).toBeInTheDocument();
-    expect(spendTable.getByRole("columnheader", { name: "Cache cost" })).toBeInTheDocument();
+    expect(spendTable.queryByRole("columnheader", { name: "Cache cost" })).not.toBeInTheDocument();
     expect(customerLinks()[0]).toHaveTextContent("Customer 29");
     expect(customerLinks()[0]).toHaveAttribute(
       "href",
@@ -161,10 +161,10 @@ describe("customer organization overview", () => {
     const row = screen.getByRole("row", { name: /Customer 00/ });
     const totalTokens = within(row).getByRole("button", { name: "100 total tokens. View breakdown" });
     expect(totalTokens).toHaveTextContent("100");
-    expect(within(row).getByRole("cell", { name: "$0.75" })).toBeInTheDocument();
+    expect(within(row).getByText("17% cached")).toBeInTheDocument();
     await user.click(totalTokens);
     expect(await screen.findByRole("dialog", { name: "Token breakdown" })).toHaveTextContent(
-      /Input tokens\s*60\s*Output tokens\s*40\s*Cache read tokens\s*10\s*Cache write tokens\s*4/,
+      /Input tokens\s*60\s*Cache read tokens\s*10\s*Cache write tokens\s*4\s*Output tokens\s*40\s*Cache cost\s*\$0\.75/,
     );
     await user.keyboard("{Escape}");
     expect(within(row).getByText("$8.00 / $10.00")).toBeInTheDocument();
@@ -196,10 +196,10 @@ describe("customer organization overview", () => {
       ).toBeInTheDocument();
       expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
       const row = within(screen.getByRole("row", { name: /Customer 00/ }));
-      expect(row.getByRole("cell", { name: /\$0\.05\s*Partial cost/ })).toBeInTheDocument();
+      expect(row.getByText("20% cached")).toBeInTheDocument();
       await user.click(row.getByRole("button", { name: "100 total tokens. View breakdown" }));
       expect(await screen.findByRole("dialog", { name: "Token breakdown" })).toHaveTextContent(
-        /Cache read tokens\s*12\s*Cache write tokens\s*6/,
+        /Cache read tokens\s*12\s*Cache write tokens\s*6\s*Output tokens\s*40\s*Cache cost\s*\$0\.05\s*Partial cost/,
       );
       await user.keyboard("{Escape}");
       expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
