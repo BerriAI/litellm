@@ -2,7 +2,7 @@
 import collections
 import json
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
@@ -134,6 +134,29 @@ _RowT = TypeVar("_RowT")
 
 class _SupportsModelDump(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _DeploymentEntry(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=_DeploymentEntry)
+_DeploymentT_co: Final = TypeVar("_DeploymentT_co", bound=_DeploymentEntry, covariant=True)
+
+
+class _DeploymentRegistry(Protocol[_DeploymentT_co]):
+    def aliases(self) -> Mapping[str, object] | None: ...
+
+    def all(self) -> Iterable[_DeploymentT_co]: ...
+
+
+def _registered_deployment(registry: _DeploymentRegistry[_DeploymentT], model: str) -> _DeploymentT | None:
+    model_group_alias: Final = registry.aliases()
+    model_name: Final = (
+        model_group_alias[model] if model_group_alias is not None and model in model_group_alias else model
+    )
+    matches: Final = [deployment for deployment in registry.all() if deployment.get("model_name") == model_name]
+    return matches[-1] if matches else None
 
 
 class _ActivityRow(TypedDict):
@@ -2463,24 +2486,10 @@ async def calculate_spend(request: SpendCalculateRequest):
                 )
 
             # check if model in llm_router
-            _model_in_llm_router = None
             cost_per_token: CostPerToken | None = None
-            if llm_router is not None:
-                router_registry: Final = llm_router.registry()
-                model_group_alias: Final = router_registry.aliases()
-                if model_group_alias is not None and request.model in model_group_alias:
-                    # lookup alias in llm_router
-                    _model_group_name: Final = model_group_alias[request.model]
-                    for model in router_registry.all():
-                        if model.get("model_name") == _model_group_name:
-                            _model_in_llm_router = model
-
-                else:
-                    # no model_group aliases set -> try finding model in llm_router
-                    # find model in llm_router
-                    for model in router_registry.all():
-                        if model.get("model_name") == request.model:
-                            _model_in_llm_router = model
+            _model_in_llm_router: Final = (
+                None if llm_router is None else _registered_deployment(llm_router.registry(), request.model)
+            )
 
             """
             3 cases for /spend/calculate

@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, TypedDict, cast
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter
@@ -15,6 +15,7 @@ from typing_extensions import ReadOnly
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -427,7 +428,7 @@ def _prepare_mcp_server_data(
     data: NewMCPServerRequest | UpdateMCPServerRequest,
     exclude_unset: bool = False,
     fields_set: set[str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Helper function to prepare MCP server data for database operations.
     Handles JSON field serialization for mcp_info and env fields.
@@ -593,6 +594,10 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None)
 def _credentials_blob_to_mutable_dict(blob: str | Mapping[str, object]) -> dict[str, object]:
     parsed_blob: Final[dict[str, object]] = json.loads(blob) if isinstance(blob, str) else dict(blob)
     return parsed_blob
+
+
+def _credentials_blob(value: object) -> str | Mapping[str, object]:
+    return value if isinstance(value, str) else as_str_mapping(value) or {}
 
 
 def _mcp_server_table_actions(
@@ -1393,7 +1398,7 @@ async def update_mcp_server(
         if auth_type_changed or url_changed or issuer_changed
         else {}
     )
-    supplied: Final = _credentials_blob_to_mutable_dict(prepared_data.get("credentials") or {})
+    supplied: Final = _credentials_blob_to_mutable_dict(_credentials_blob(prepared_data.get("credentials") or {}))
     safe_submitted: Final = (
         oauth_credentials_for_upstream_edit(
             supplied,
@@ -1452,7 +1457,7 @@ async def update_mcp_server(
             # within the client-forwarded class (true_passthrough ↔ oauth_delegate) keeps
             # the same declared app and so must merge, not replace.
             if not auth_type_changed:
-                new_creds: Final = _credentials_blob_to_mutable_dict(data_dict["credentials"])
+                new_creds: Final = _credentials_blob_to_mutable_dict(_credentials_blob(data_dict["credentials"]))
                 # New values override existing; existing keys not in update are preserved. A client
                 # rotation additionally drops the previous app's stale minted token keys.
                 merged: Final = _drop_stale_minted_on_client_rotation({**retained_credentials, **new_creds}, new_creds)

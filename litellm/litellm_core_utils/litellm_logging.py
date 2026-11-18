@@ -646,6 +646,7 @@ _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _DECODED_BODY: Final = TypeAdapter(object)
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
+_LoggedMessages: Final = TypeVar("_LoggedMessages")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
@@ -1405,7 +1406,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return _initialize_standard_callback_dynamic_params(kwargs)
 
-    def initialize_standard_built_in_tools_params(self, kwargs: dict | None = None) -> StandardBuiltInToolsParams:
+    def initialize_standard_built_in_tools_params(
+        self, kwargs: Mapping[str, object] | None = None
+    ) -> StandardBuiltInToolsParams:
         """
         Initialize the standard built-in tools params from the kwargs
 
@@ -7724,7 +7727,9 @@ class StandardLoggingPayloadSetup:
         return start_time_float, end_time_float, completion_start_time_float
 
     @staticmethod
-    def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
+    def append_system_prompt_messages(
+        kwargs: Mapping[str, object] | None = None, messages: _LoggedMessages | None = None
+    ) -> _LoggedMessages | list[object] | None:
         """
         Prepend the request's top-level `system` prompt, text or content blocks, to the logged messages
         """

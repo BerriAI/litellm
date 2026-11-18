@@ -974,7 +974,7 @@ class _ControlPlaneLicense(Protocol):
     def is_premium(self) -> bool: ...
 
 
-def _decrypt_env_var() -> Mapping[str, str]:
+def _decrypt_env_var() -> Mapping[str, str | bool]:
     from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
     return decrypt_env_var()
@@ -994,16 +994,18 @@ def _migrate_control_plane() -> None:
 
 @dataclass(frozen=True, slots=True)
 class CliDependencies:
-    decrypt_env: Callable[[], Mapping[str, str]] = _decrypt_env_var
+    decrypt_env: Callable[[], Mapping[str, str | bool]] = _decrypt_env_var
     license_check: Callable[[], _ControlPlaneLicense] = _control_plane_license_check
     migrate_control_plane: Callable[[], None] = _migrate_control_plane
 
 
-def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str]]) -> None:
+def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str | bool]]) -> None:
     if os.getenv("USE_AWS_KMS") != "True":
         return
 
     for key, value in decrypt_env().items():
+        if not isinstance(value, str):
+            raise TypeError(f"str expected, not {type(value).__name__}")
         os.environ[key] = value
 
 

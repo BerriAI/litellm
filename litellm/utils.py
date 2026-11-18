@@ -94,6 +94,7 @@ from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
+    attribute_or_none,
     bind_budget_reservation_to_callbacks,
     decoded_json_object,
     has_attributes,
@@ -7909,6 +7910,15 @@ def _has_no_default(param: _SignatureParameterDefault) -> bool:
     return param.default == param.empty
 
 
+class _NamedAnnotation(Protocol):
+    @property
+    def __name__(self) -> str: ...
+
+
+def _annotation_name(param: object) -> str:
+    return require_attributes(attribute_or_none(param, "annotation"), _NamedAnnotation, "__name__").__name__
+
+
 def function_to_dict(input_function) -> dict:
     """Using type hints and numpy-styled docstring,
     produce a dictionary usable for OpenAI function calling
@@ -7944,7 +7954,7 @@ def function_to_dict(input_function) -> dict:
 
     for param_name, param in param_info.items():
         if hasattr(param, "annotation"):
-            param_type = json_schema_type(param.annotation.__name__)
+            param_type = json_schema_type(_annotation_name(param))
         else:
             param_type = None
         param_description = None

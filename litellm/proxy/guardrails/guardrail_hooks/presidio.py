@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import accumulate, count, pairwise
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, NoReturn, Optional, Protocol, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -230,6 +230,18 @@ def _to_detection(item: PresidioAnalyzeResponseItem) -> _Detection:
         int(item.get("end") or 0),
         float(item.get("score") or 0.0),
     )
+
+
+def _key_as_analyze_item(key: object) -> NoReturn:
+    raise AttributeError(f"{type(key).__name__!r} object has no attribute 'get'", name="get", obj=key)
+
+
+def _analyze_items(
+    analyze_results: Sequence[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
+) -> Sequence[PresidioAnalyzeResponseItem]:
+    if isinstance(analyze_results, dict):
+        return tuple(map(_key_as_analyze_item, analyze_results))
+    return analyze_results
 
 
 def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponseItem]) -> tuple[_Detection, ...]:
@@ -874,7 +886,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
-        analyze_results: Any,
+        analyze_results: Sequence[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
         request_data: dict | None,
         masked_entity_count: dict[str, int],
     ) -> str:
@@ -896,7 +908,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = cast("dict[str, str]", request_data["metadata"]["pii_tokens"])  # cast-ok: this hook's map
 
-        runs: Final = _resolve_overlapping_spans(analyze_results)
+        runs: Final = _resolve_overlapping_spans(_analyze_items(analyze_results))
         # Every message and content part numbers its runs from 1 into this one map, so a
         # token another part already holds for a different value takes a spare number.
         # No token in the map is numbered above its size, so spares start above both.

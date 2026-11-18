@@ -11,7 +11,7 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast, runtime_checkable
 
 import anyio
 from fastapi import HTTPException
@@ -23,7 +23,7 @@ from litellm.cost_calculator import infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields
 from litellm.proxy._types import UserAPIKeyAuth
@@ -101,6 +101,16 @@ class _EndpointTranslation(Protocol):
 
 def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTranslation:
     return translation
+
+
+class _ModuloDivisor(Protocol):
+    def __rmod__(self, other: int, /) -> object: ...
+
+
+def _remainder(counter: int, divisor: object) -> object:
+    if has_attributes(divisor, _ModuloDivisor, "__rmod__"):
+        return counter % divisor
+    raise TypeError(f"unsupported operand type(s) for %: '{type(counter).__name__}' and '{type(divisor).__name__}'")
 
 
 def resolve_endpoint_translation(
@@ -748,7 +758,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         request_data: _RequestData,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
-        sampling_rate: int,
+        sampling_rate: object,
         end_of_stream_only: object,
         mappings: Mapping[CallTypes, type["BaseTranslation"]],
     ) -> AsyncGenerator[object, None]:
@@ -847,7 +857,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 if (
                     not end_of_stream_only
                     and not self._chunk_has_finish_reason(item)
-                    and chunk_counter % sampling_rate == 0
+                    and _remainder(chunk_counter, sampling_rate) == 0
                 ):
                     async for out in _round(item, is_final=False):
                         yield out
@@ -1154,10 +1164,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         def _streaming_setting(name: str, default: object) -> object:
             return self.resolve_streaming_flag(guardrail_to_apply, name, default)
 
-        def _streaming_flag(name: str, default: object) -> Any:
-            return _streaming_setting(name, default)
-
-        sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
+        sampling_rate: Final = _streaming_setting("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
         end_of_stream_only: object = _streaming_setting("streaming_end_of_stream_only", False)
         # "block_only" (default) drops guardrail text rewrites on the streaming
@@ -1329,7 +1336,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # Process chunk based on sampling rate
                 if buffer_until_moderated:
                     withheld_items.append(item)
-                if chunk_counter % sampling_rate == 0 and pending_scan is None:
+                if _remainder(chunk_counter, sampling_rate) == 0 and pending_scan is None:
                     endpoint_translation = mappings[CallTypes(call_type)]()
                     scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
                     if scan_key is not None:

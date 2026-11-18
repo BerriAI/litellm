@@ -10,7 +10,7 @@ contract of `base_llm_http_handler.audio_transcriptions`.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, NoReturn, SupportsFloat, SupportsIndex
@@ -19,7 +19,7 @@ from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import Buffer
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -73,6 +73,7 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _STRUCTURED_CONTEXT: Final = TypeAdapter(SonioxContext)
 _FORM_BOOL: Final = TypeAdapter(bool)
 _ITEMS: Final = TypeAdapter(tuple[object, ...])
+_DECODED_JSON: Final = TypeAdapter(object)
 _BRACKETED_FORM_FIELD: Final = re.compile(
     r"(?P<param>context|translation)\[(?P<field>\w+)\](?:\[\]\[(?P<entry_field>\w+)\])?"
 )
@@ -178,6 +179,14 @@ def _as_float(value: object) -> float:
     if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
         return float(value)
     raise TypeError(f"float() argument must be a string or a real number, not {type(value).__name__!r}")
+
+
+def _concatenated(texts: Sequence[object]) -> str:
+    strings: Final = tuple(text for text in texts if isinstance(text, str))
+    if len(strings) == len(texts):
+        return "".join(strings)
+    first_bad: Final = next(position for position, text in enumerate(texts) if not isinstance(text, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(texts[first_bad]).__name__} found")
 
 
 def _is_soniox_context(value: object) -> bool:
@@ -362,7 +371,10 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         else:
             transcript = payload if isinstance(payload, dict) else {}
 
-        tokens: Final[list[dict[str, Any]]] = transcript.get("tokens") or []
+        tokens: Final = tuple(
+            decoded_json_object(token)
+            for token in iter_items(_DECODED_JSON.validate_python(transcript.get("tokens")) or ())
+        )
 
         # Decide what to put in `text` based on response_format:
         #   - "srt": render tokens as SRT subtitles (synthesized from timestamps)
@@ -384,7 +396,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             elif transcript.get("text"):
                 text = transcript["text"]
             elif tokens:
-                text = "".join(t.get("text", "") for t in tokens)
+                text = _concatenated(tuple(t.get("text", "") for t in tokens))
             else:
                 text = ""
 

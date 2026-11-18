@@ -35,7 +35,9 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     coerce_token_limit,
     drops_unsupported_params,
+    json_contains,
     map_finish_reason,
+    subscript,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -3469,7 +3471,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -3486,6 +3488,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if isinstance(_candidate, dict):
                 tool_name_reverse_map = _candidate
 
+        response_format_schema: Final = (
+            JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
+        )
+        if not isinstance(completion_response, dict):
+            _raise_for_non_object_body(completion_response)
         model_response = self.transform_parsed_response(
             completion_response=completion_response,
             raw_response=raw_response,
@@ -3494,7 +3501,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             prefix_prompt=prefix_prompt,
             speed=speed,
             tool_name_reverse_map=tool_name_reverse_map,
-            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
+            response_format_schema=response_format_schema,
         )
         return model_response
 
@@ -3555,6 +3562,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _raise_for_non_object_body(completion_response: object) -> NoReturn:
+    _ = subscript(completion_response, "error" if json_contains(completion_response, "error") else "content")
+    raise TypeError(f"expected a JSON object response body, got {type(completion_response).__name__}")
 
 
 class JsonModeRequest(BaseModel):

@@ -1,6 +1,6 @@
 import builtins
-from collections.abc import Sequence
-from typing import Any, Final, Literal
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
 from pydantic import Field, PrivateAttr, TypeAdapter
@@ -26,7 +26,7 @@ class VideoObject(LiteLLMBaseModel):
     seconds: str | None = None
     size: str | None = None
     model: str | None = None
-    usage: dict[str, Any] | None = None
+    usage: Mapping[str, builtins.object] | None = None
     _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
     @property

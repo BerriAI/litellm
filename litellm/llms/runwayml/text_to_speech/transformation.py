@@ -28,6 +28,7 @@ from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -79,7 +80,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None,
-        base_llm_http_handler: Any,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
@@ -114,15 +115,6 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             or get_secret_str("RUNWAYML_API_KEY")
         )
 
-        # Convert voice to appropriate format
-        voice_param: str | dict | None = voice
-        if isinstance(voice, str):
-            # Keep as string, will be processed in map_openai_params
-            voice_param = voice
-        elif isinstance(voice, dict):
-            # Already in dict format, pass through
-            voice_param = voice
-
         litellm_params_dict.update(
             {
                 "api_key": api_key,
@@ -134,7 +126,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
-            voice=voice_param,
+            voice=voice if isinstance(voice, str) else None,
             text_to_speech_provider_config=self,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider="runwayml",
@@ -389,7 +381,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         input: str,
         voice: str | dict | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:

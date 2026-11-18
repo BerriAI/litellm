@@ -2,7 +2,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypeVar, cast
+from typing import Final, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -46,6 +46,11 @@ from litellm.types.utils import (
 
 _JsonDict: TypeAlias = dict[str, object]
 _JsonDictList: TypeAlias = list[_JsonDict]
+
+
+class _GenAICompletionRequest(TypedDict, extra_items=object):
+    model: ReadOnly[str]
+    messages: ReadOnly[list[AllMessageValues]]
 
 
 class _ToolCallAccumulator(TypedDict):
@@ -485,7 +490,7 @@ class GoogleGenAIAdapter:
         config: Mapping[str, object] | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
         **kwargs,
-    ) -> dict[str, Any]:
+    ) -> _GenAICompletionRequest:
         """
         Transform generate_content request to litellm completion format
 
@@ -514,7 +519,7 @@ class GoogleGenAIAdapter:
         messages: Final = self._transform_contents_to_messages(contents_list, system_instruction=system_instruction)
 
         # Create base request as dict (which is compatible with ChatCompletionRequest)
-        completion_request: Final[_JsonDict] = {
+        completion_request: Final[_GenAICompletionRequest] = {
             "model": model,
             "messages": messages,
         }
@@ -570,7 +575,7 @@ class GoogleGenAIAdapter:
         #########################################################
         # forward any litellm specific params
         #########################################################
-        completion_request_dict = dict(completion_request)
+        completion_request_dict = completion_request.copy()
         if litellm_params:
             completion_request_dict = self._add_generic_litellm_params_to_request(
                 completion_request_dict=completion_request_dict,
@@ -581,9 +586,9 @@ class GoogleGenAIAdapter:
 
     def _add_generic_litellm_params_to_request(
         self,
-        completion_request_dict: _JsonDict,
+        completion_request_dict: _GenAICompletionRequest,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> _JsonDict:
+    ) -> _GenAICompletionRequest:
         """Add generic litellm params to request. e.g add api_base, api_key, api_version, etc.
 
         Args:

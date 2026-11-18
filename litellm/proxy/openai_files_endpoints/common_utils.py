@@ -329,7 +329,13 @@ def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
     return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
-def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
+class _FileIdLike(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+def encode_file_id_with_model(
+    file_id: str | _FileIdLike, model: str, id_type: Literal["file", "batch"] = "file"
+) -> str:
     """
     Encode a file/batch ID with model routing information.
 
@@ -383,7 +389,10 @@ def encode_batch_response_ids(response, model: str) -> None:
             setattr(
                 response,
                 attr,
-                encode_file_id_with_model(file_id=getattr(response, attr), model=model),
+                encode_file_id_with_model(
+                    file_id=require_attributes(attribute_or_none(response, attr), _FileIdLike, "startswith"),
+                    model=model,
+                ),
             )
 
 

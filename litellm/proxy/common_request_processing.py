@@ -88,6 +88,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     FinishEvidence,
+    attribute_or_none,
     finish_evidence_of,
     finite_cost,
     get_or_create_metadata_bucket,
@@ -843,6 +844,37 @@ class _ClosesAsync(Protocol):
 
 class _DeferredLoggingSlot(Protocol):
     enqueue_deferred_logging: Callable[[], None] | None
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _truthy_get(container: object, key: str) -> object:
+    return require_attributes(container, _SupportsGet, "get").get(key) if container else None
+
+
+def _model_info_id(model_info: object) -> object:
+    return require_attributes(model_info, _SupportsGet, "get").get("id", None) if model_info else None
+
+
+def _params_model_id(litellm_params: object) -> object:
+    params: Final = require_attributes(litellm_params, _SupportsGet, "get")
+    direct_model_id: Final = _model_info_id(params.get("model_info"))
+    if direct_model_id:
+        return direct_model_id
+    return _model_info_id(_truthy_get(params.get("metadata"), "model_info"))
+
+
+def _logging_obj_model_id(logging_obj: object) -> object:
+    litellm_params: Final = attribute_or_none(logging_obj, "litellm_params")
+    params_model_id: Final = _params_model_id(litellm_params) if litellm_params else None
+    if params_model_id:
+        return params_model_id
+    call_kwargs: Final = attribute_or_none(logging_obj, "kwargs")
+    if not call_kwargs:
+        return params_model_id
+    return _params_model_id(require_attributes(call_kwargs, _SupportsGet, "get").get("litellm_params", {}))
 
 
 def serialize_http_exception_detail(
@@ -2876,7 +2908,7 @@ class ProxyBaseLLMRequestProcessing:
         *,
         user_api_key_dict: UserAPIKeyAuth,
         call_id: str | None = None,
-        model_id: str | None = None,
+        model_id: object = None,
         cache_key: str | None = None,
         api_base: str | None = None,
         version: str | None = None,
@@ -5981,47 +6013,17 @@ class ProxyBaseLLMRequestProcessing:
             return None
         return {**obj, "usage": {**usage, "cost": cost_val}}
 
-    def maybe_get_model_id(self, _logging_obj: LiteLLMLoggingObj | None) -> str | None:
+    def maybe_get_model_id(self, _logging_obj: LiteLLMLoggingObj | None) -> object:
         """
         Get model_id from logging object or request metadata.
 
         The router sets model_info.id when selecting a deployment. This tries multiple locations
         where the ID might be stored depending on the request lifecycle stage.
         """
-        model_id = None
-        if _logging_obj:
-            # 1. Try getting from litellm_params (updated during call)
-            if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
-                # First check direct model_info path (set by router.py with selected deployment)
-                model_info = _logging_obj.litellm_params.get("model_info") or {}
-                model_id = model_info.get("id", None)
-
-                # Fallback to nested metadata path
-                if not model_id:
-                    metadata = _logging_obj.litellm_params.get("metadata") or {}
-                    model_info = metadata.get("model_info") or {}
-                    model_id = model_info.get("id", None)
-
-            # 2. Fallback to kwargs (initial)
-            if not model_id:
-                _kwargs: Final = getattr(_logging_obj, "kwargs", None)
-                if _kwargs:
-                    litellm_params: Final = _kwargs.get("litellm_params", {})
-                    # First check direct model_info path
-                    model_info = litellm_params.get("model_info") or {}
-                    model_id = model_info.get("id", None)
-
-                    # Fallback to nested metadata path
-                    if not model_id:
-                        metadata = litellm_params.get("metadata") or {}
-                        model_info = metadata.get("model_info") or {}
-                        model_id = model_info.get("id", None)
-
-        # 3. Final fallback to the request metadata the router updates in place with the selected deployment
-        if not model_id:
-            model_id = self._metadata_model_id("litellm_metadata") or self._metadata_model_id("metadata")
-
-        return model_id
+        logged_model_id: Final = _logging_obj_model_id(_logging_obj) if _logging_obj else None
+        if logged_model_id:
+            return logged_model_id
+        return self._metadata_model_id("litellm_metadata") or self._metadata_model_id("metadata")
 
     def _metadata_model_id(self, metadata_key: str) -> str | None:
         match self.data.get(metadata_key):

@@ -247,6 +247,7 @@ if TYPE_CHECKING:
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+    from litellm.proxy.hooks.mcp_semantic_filter.hook import SemanticToolFilterConfig
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
     Span = _Span | Any
@@ -1546,6 +1547,16 @@ class _AnthropicBetaHeadersReloadConfig(TypedDict, total=False):
 @with_config(ConfigDict(extra="allow", strict=True))
 class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
     websearch_interception_params: ReadOnly[object]
+
+
+class _SemanticToolFilterLitellmSettings(TypedDict, total=False):
+    mcp_semantic_tool_filter: ReadOnly["SemanticToolFilterConfig | None"]
+
+
+def _stored_semantic_filter_config(
+    litellm_settings: _SemanticToolFilterLitellmSettings,
+) -> "SemanticToolFilterConfig | None":
+    return litellm_settings.get("mcp_semantic_tool_filter", None)
 
 
 _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
@@ -9386,7 +9397,7 @@ class ProxyConfig:
                 json.loads(stored_settings) if isinstance(stored_settings, str) else stored_settings
             )
 
-            mcp_semantic_filter_config: Final = litellm_settings.get("mcp_semantic_tool_filter", None)
+            mcp_semantic_filter_config: Final = _stored_semantic_filter_config(litellm_settings)
 
             if mcp_semantic_filter_config is None:
                 return
@@ -11598,7 +11609,7 @@ class ProxyStartupEvent:
     async def initialize_semantic_tool_filter(
         cls,
         llm_router: Router | None,
-        litellm_settings: dict[str, Any],
+        litellm_settings: _SemanticToolFilterLitellmSettings,
     ):
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
@@ -18354,7 +18365,9 @@ async def model_info_v2(
         all_models = [
             m
             for m in copy.deepcopy(llm_router.registry().all())
-            if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
+            if not _byok_row_outside_caller_teams(
+                _with_get(_UNTYPED_VALUE.validate_python(m)).get("model_info", {}), allowed_team_ids
+            )
         ]
 
         if user_model is not None:

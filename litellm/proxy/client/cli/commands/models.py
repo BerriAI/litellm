@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 # third party imports
 import click
@@ -13,11 +13,12 @@ import yaml
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, require_attributes, subscript
 
 # local imports
 from ... import Client
 from ._cli_context import cli_context_values
+from .auth import joined_names
 
 _DECODED_YAML: Final = TypeAdapter(object)
 
@@ -38,21 +39,21 @@ class _ModelInfoColumnConfig(TypedDict):
 class ModelYamlInfo:
     model_name: str
     model_params: Mapping[str, object]
-    model_info: dict[str, object]
+    model_info: Mapping[str, object]
     model_id: str
-    access_groups: list[str]
+    access_groups: object
     provider: str
 
     @property
     def access_groups_str(self) -> str:
-        return ", ".join(self.access_groups) if self.access_groups else ""
+        return joined_names(self.access_groups) if self.access_groups else ""
 
 
 def _get_model_info_obj_from_yaml(model: dict[str, Any], model_id: str) -> ModelYamlInfo:
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: Final[str] = model["model_name"]
     model_params: Final = decoded_json_object(_DECODED_YAML.validate_python(model["litellm_params"]))
-    model_info: Final[dict[str, Any]] = model.get("model_info", {})
+    model_info: Final = decoded_json_object(_DECODED_YAML.validate_python(model.get("model_info", {})))
     access_groups: Final = model_info.get("access_groups", [])
     provider: Final = model_id.split("/", 1)[0] if "/" in model_id else model_id
     return ModelYamlInfo(
@@ -69,13 +70,19 @@ def _str_field(model: Mapping[str, object], key: str, default: str) -> str:
     return str(model.get(key, default))
 
 
-def format_iso_datetime_str(iso_datetime_str: str | None) -> str:
+class _IsoDatetimeText(Protocol):
+    def replace(self, old: str, new: str, /) -> str: ...
+
+
+def format_iso_datetime_str(iso_datetime_str: object) -> str:
     """Format an ISO format datetime string to human-readable date with minute resolution."""
     if not iso_datetime_str:
         return ""
     try:
         # Parse ISO format datetime string
-        dt: Final = datetime.fromisoformat(iso_datetime_str.replace("Z", "+00:00"))
+        dt: Final = datetime.fromisoformat(
+            require_attributes(iso_datetime_str, _IsoDatetimeText, "replace").replace("Z", "+00:00")
+        )
         return dt.strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError):
         return str(iso_datetime_str)

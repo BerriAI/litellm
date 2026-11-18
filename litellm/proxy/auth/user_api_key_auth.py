@@ -217,6 +217,8 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
     from litellm.proxy.auth.host.python import PythonAuthHost
     from litellm.rust_bridge._native import RustAuthOutcome, RustAuthSettings
 
@@ -1669,7 +1671,8 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
 
     if open_telemetry_logger is None:
         return
-    if (existing_span := getattr(request.state, "parent_otel_span", None)) is not None:
+    existing_span: Final[_Span | None] = getattr(request.state, "parent_otel_span", None)
+    if existing_span is not None:
         set_request_parent_otel_span(existing_span)
         return
     parent_otel_span: Final = open_telemetry_logger.create_litellm_proxy_request_started_span(

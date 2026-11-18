@@ -1,12 +1,15 @@
+from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, json_contains, require_attributes
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -17,7 +20,6 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
     JavelinGuardInput,
     JavelinGuardRequest,
-    JavelinGuardResponse,
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
@@ -25,6 +27,22 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _JavelinVerdict(TypedDict):
+    assessments: ReadOnly[object]
+
+
+class _AssessmentSlot(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _JsonLookup(Protocol):
+    def get(self, key: str, default: object = ..., /) -> object: ...
+
+
+class _JsonPairs(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
 
 
 class JavelinGuardrail(CustomGuardrail):
@@ -88,7 +106,7 @@ class JavelinGuardrail(CustomGuardrail):
         self,
         request: JavelinGuardRequest,
         event_type: GuardrailEventHooks,
-    ) -> JavelinGuardResponse:
+    ) -> _JavelinVerdict:
         """
         Call the Javelin guard API.
         """
@@ -103,7 +121,7 @@ class JavelinGuardrail(CustomGuardrail):
             headers["x-javelin-application"] = self.application
 
         status: GuardrailStatus = "guardrail_failed_to_respond"
-        javelin_response: JavelinGuardResponse | None = None
+        javelin_response: _JavelinVerdict | None = None
         exception_str = ""
 
         try:
@@ -119,12 +137,16 @@ class JavelinGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug(
                 "Javelin Guardrail: Javelin guard API response: %s", _DECODED_JSON.validate_python(response.json())
             )
-            response_data: Final = response.json()
+            response_data: Final = _DECODED_JSON.validate_python(response.json())
             # Ensure the response has the required assessments field
-            if "assessments" not in response_data:
+            if not json_contains(response_data, "assessments"):
+                if not has_attributes(response_data, _AssessmentSlot, "__setitem__"):
+                    raise TypeError(f"'{type(response_data).__name__}' object does not support item assignment")
                 response_data["assessments"] = []
 
-            javelin_response = {"assessments": response_data.get("assessments", [])}
+            javelin_response = {
+                "assessments": require_attributes(response_data, _JsonLookup, "get").get("assessments", [])
+            }
             status = "success"
             return javelin_response
         except Exception as e:
@@ -218,16 +240,16 @@ class JavelinGuardrail(CustomGuardrail):
         # Debug: Log the full Javelin response
         verbose_proxy_logger.debug("Javelin Guardrail: Full Javelin response: %s", javelin_response)
 
-        for assessment in assessments:
+        for assessment in iter_items(assessments):
             verbose_proxy_logger.debug("Javelin Guardrail: Processing assessment: %s", assessment)
-            for assessment_type, assessment_data in assessment.items():
+            for assessment_type, assessment_data in require_attributes(assessment, _JsonPairs, "items").items():
                 verbose_proxy_logger.debug(
                     "Javelin Guardrail: Processing assessment_type: %s, data: %s",
                     assessment_type,
                     assessment_data,
                 )
                 # Check if this assessment indicates rejection
-                if assessment_data.get("request_reject") is True:
+                if require_attributes(assessment_data, _JsonLookup, "get").get("request_reject") is True:
                     should_reject = True
                     verbose_proxy_logger.debug(
                         "Javelin Guardrail: Request rejected by Javelin guardrail: %s (assessment_type: %s)",
@@ -235,8 +257,8 @@ class JavelinGuardrail(CustomGuardrail):
                         assessment_type,
                     )
 
-                    results = assessment_data.get("results", {})
-                    reject_prompt = str(results.get("reject_prompt", ""))
+                    results = require_attributes(assessment_data, _JsonLookup, "get").get("results", {})
+                    reject_prompt = str(require_attributes(results, _JsonLookup, "get").get("reject_prompt", ""))
 
                     verbose_proxy_logger.debug(
                         "Javelin Guardrail: Extracted reject_prompt: '%s'",

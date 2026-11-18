@@ -10,7 +10,7 @@ methods; richer repositories live in their own modules.
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
+from typing import TYPE_CHECKING, Final, Generic, Protocol
 
 from pydantic import TypeAdapter
 
@@ -60,7 +60,7 @@ class PrismaTableRepository(Generic[RowT_co]):
         return self._prisma_client
 
     @property
-    def prisma_client(self) -> Any:
+    def prisma_client(self) -> object:
         return self._connected_client()
 
     def _selected_database(self) -> object:

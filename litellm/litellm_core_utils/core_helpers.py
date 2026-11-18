@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream, StandardLoggingKubernetesPodRouting
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 

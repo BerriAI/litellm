@@ -1,6 +1,6 @@
 import builtins
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 import requests
 from pydantic import ConfigDict, TypeAdapter
@@ -39,7 +39,7 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
+    def list(self, return_request: bool = False) -> builtins.list[dict[str, object]] | requests.Request:
         """
         Get the list of models supported by the server.
 
