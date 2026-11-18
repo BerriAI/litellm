@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
@@ -171,6 +172,24 @@ def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object 
     return next((config[key] for key in keys if config.get(key) is not None), None)
 
 
+_GOOGLE_GENAI_CONFIG_FIELDS: Final = ("config", "generationConfig", "generation_config")
+
+
+def google_genai_config_field(data: object) -> str | None:
+    fields: Final = as_str_mapping(data)
+    if fields is None:
+        return None
+    return next((field for field in _GOOGLE_GENAI_CONFIG_FIELDS if fields.get(field)), None)
+
+
+def google_genai_request_config(data: object) -> object:
+    fields: Final = as_str_mapping(data)
+    config_field: Final = google_genai_config_field(fields)
+    if fields is None or config_field is None:
+        return None
+    return fields[config_field]
+
+
 _INTEGER_STRING: Final = re.compile(r"[+-]?\d+")
 _NUMBER_STRING: Final = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 
@@ -257,7 +276,7 @@ def _deployment_supports_response_format(model: str, custom_llm_provider: str | 
     return supported_params is None or "response_format" in supported_params
 
 
-def _genai_media_part(part: Mapping[str, object]) -> ChatCompletionImageObject | ChatCompletionFileObject | None:
+def genai_media_part(part: Mapping[str, object]) -> ChatCompletionImageObject | ChatCompletionFileObject | None:
     inline: Final = _validated(_GENAI_INLINE_DATA, part.get("inline_data")) or _validated(
         _GENAI_INLINE_DATA, part.get("inlineData")
     )
@@ -291,7 +310,7 @@ def _genai_message_part(part: object) -> _GenAIMessagePart | None:
     if fields is None:
         return None
     text: Final = fields.get("text")
-    return ChatCompletionTextObject(type="text", text=text) if isinstance(text, str) else _genai_media_part(fields)
+    return ChatCompletionTextObject(type="text", text=text) if isinstance(text, str) else genai_media_part(fields)
 
 
 def _genai_content_parts(value: object) -> Sequence[object]:
@@ -319,7 +338,7 @@ def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
         for part in (_validated(_GENAI_CONTENT_PARTS, response.get("parts", ())) or ())
         if (part_fields := _validated(_CONFIG_FIELDS, part)) is not None
     )
-    media: Final = tuple(converted for fields in media_fields if (converted := _genai_media_part(fields)) is not None)
+    media: Final = tuple(converted for fields in media_fields if (converted := genai_media_part(fields)) is not None)
     return ChatCompletionToolMessage(
         role="tool",
         tool_call_id=f"call_{response.get('name', 'unknown')}",

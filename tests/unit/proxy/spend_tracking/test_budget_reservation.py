@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -29,12 +30,15 @@ from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
     _get_budget_counters,
+    _max_cost_for_cost_info,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
     count_request_input_tokens,
     reserve_budget_for_request,
 )
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -570,3 +574,208 @@ def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
     assert fixed_budget_window(window) is None
+
+
+GEMINI_MODEL: Final = "gemini-3.8-flash"
+GEMINI_ROUTES: Final = (
+    f"/vertex_ai/v1/projects/p/locations/global/publishers/google/models/{GEMINI_MODEL}:generateContent",
+    f"/gemini/v1beta/models/{GEMINI_MODEL}:generateContent",
+    f"/v1beta/models/{GEMINI_MODEL}:generateContent",
+)
+GEMINI_QUESTION: Final = {"contents": [{"role": "user", "parts": [{"text": "Reply with one word: pong"}]}]}
+
+
+def _gemini_rate(field: str) -> float:
+    rate: Final = litellm.get_model_info(GEMINI_MODEL).get(field)
+    assert isinstance(rate, float), f"{GEMINI_MODEL} has no {field} in the cost map"
+    return rate
+
+
+def _gemini_output_rate() -> float:
+    return max(_gemini_rate("output_cost_per_token"), _gemini_rate("output_cost_per_reasoning_token"))
+
+
+def _gemini_window() -> int:
+    window: Final = litellm.get_model_info(GEMINI_MODEL).get("max_input_tokens")
+    assert isinstance(window, int)
+    return window
+
+
+def _gemini_question_tokens() -> int:
+    tokens: Final = count_input_tokens_for_model(request_body=GEMINI_QUESTION, model=GEMINI_MODEL)
+    assert tokens is not None
+    return tokens
+
+
+@pytest.mark.parametrize("route", GEMINI_ROUTES)
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"generationConfig": {"maxOutputTokens": 64}},
+        {"generation_config": {"max_output_tokens": 64}},
+        {"config": {"maxOutputTokens": 64}},
+    ],
+    ids=["generationConfig", "generation_config", "sdk-config"],
+)
+def test_a_gemini_body_reserves_its_prompt_and_output_cap_not_the_context_window(
+    route: str, config: dict[str, object]
+) -> None:
+    reserved: Final = estimate_request_max_cost(request_body=GEMINI_QUESTION | config, route=route, llm_router=None)
+
+    assert reserved == pytest.approx(
+        _gemini_question_tokens() * _gemini_rate("input_cost_per_token") + 64 * _gemini_output_rate()
+    )
+
+
+@pytest.mark.parametrize("openai_cap", ["max_tokens", "max_completion_tokens", "max_output_tokens"])
+def test_a_top_level_openai_cap_does_not_shrink_a_gemini_hold_because_gemini_ignores_it(openai_cap: str) -> None:
+    body: Final = GEMINI_QUESTION | {openai_cap: 1, "generationConfig": {"maxOutputTokens": 64}}
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[2], llm_router=None)
+
+    assert reserved == pytest.approx(
+        _gemini_question_tokens() * _gemini_rate("input_cost_per_token") + 64 * _gemini_output_rate()
+    )
+
+
+@pytest.mark.parametrize("field", ["candidateCount", "candidate_count"])
+def test_a_gemini_candidate_count_reserves_each_candidates_output(field: str) -> None:
+    def reserved(candidates: int) -> float:
+        body: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 64, field: candidates}}
+        cost: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+        assert cost is not None
+        return cost
+
+    assert reserved(3) - reserved(1) == pytest.approx(2 * 64 * _gemini_output_rate())
+
+
+@pytest.mark.parametrize(
+    "cached_content",
+    [
+        {"cachedContent": "cachedContents/ctx-1"},
+        {"cached_content": "cachedContents/ctx-1"},
+        {"generationConfig": {"maxOutputTokens": 64, "cachedContent": "cachedContents/ctx-1"}},
+        {"config": {"maxOutputTokens": 64, "cached_content": "cachedContents/ctx-1"}},
+    ],
+    ids=["top-level", "top-level-snake", "generation-config", "sdk-config"],
+)
+def test_a_named_cached_content_reserves_the_rest_of_the_window_at_the_cache_read_rate_but_not_in_the_input_floor(
+    cached_content: dict[str, object],
+) -> None:
+    body: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 64}} | cached_content
+    question_tokens: Final = _gemini_question_tokens()
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+    floor: Final = estimate_request_input_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+
+    assert reserved == pytest.approx(
+        question_tokens * _gemini_rate("input_cost_per_token")
+        + (_gemini_window() - question_tokens) * _gemini_rate("cache_read_input_token_cost")
+        + 64 * _gemini_output_rate()
+    )
+    assert floor == pytest.approx(question_tokens * _gemini_rate("input_cost_per_token"))
+
+
+@pytest.mark.parametrize(
+    "unsized",
+    [
+        {"contents": [{"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]}]},
+        {"contents": [{"role": "user", "parts": [{"fileData": {"mimeType": "video/mp4", "fileUri": "gs://b/a.mp4"}}]}]},
+        {"contents": [{"role": "user", "parts": [{"fileData": {"mimeType": "application/pdf", "fileUri": "gs://b/r.pdf"}}]}]},
+        GEMINI_QUESTION | {"tools": [{"googleSearch": {}}]},
+    ],
+    ids=["inline-image", "file-video", "file-pdf", "google-search"],
+)
+def test_a_gemini_body_whose_input_google_sizes_on_its_side_reserves_the_whole_window(
+    unsized: dict[str, object],
+) -> None:
+    body: Final = unsized | {"generationConfig": {"maxOutputTokens": 64}}
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+
+    assert reserved == pytest.approx(
+        _gemini_window() * _gemini_rate("input_cost_per_token") + 64 * _gemini_output_rate()
+    )
+
+
+_CACHED_BODY: Final = GEMINI_QUESTION | {
+    "cachedContent": "cachedContents/ctx-1",
+    "generationConfig": {"maxOutputTokens": 100},
+}
+
+
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [
+        pytest.param(
+            {"input_cost_per_token": 1e-06, "output_cost_per_token": 4e-06, "max_input_tokens": 10_000},
+            200 * 1e-06 + 9_800 * 1e-06 + 100 * 4e-06,
+            id="no-cache-read-price-uses-the-input-rate",
+        ),
+        pytest.param(
+            {"input_cost_per_token": 1e-06, "output_cost_per_token": 4e-06, "cache_read_input_token_cost": 1e-07},
+            200 * 1e-06 + 100 * 4e-06,
+            id="unknown-window-adds-nothing",
+        ),
+        pytest.param(
+            {
+                "max_input_tokens": 10_000,
+                "tiered_pricing": [
+                    {
+                        "range": [0, 1_000],
+                        "input_cost_per_token": 1e-06,
+                        "cache_read_input_token_cost": 1e-07,
+                        "output_cost_per_token": 2e-06,
+                    },
+                    {
+                        "range": [1_000, 10_000],
+                        "input_cost_per_token": 3e-06,
+                        "cache_read_input_token_cost": 3e-07,
+                        "output_cost_per_token": 6e-06,
+                    },
+                ],
+            },
+            200 * 3e-06 + 9_800 * 3e-07 + 100 * 6e-06,
+            id="tiered-prices-at-the-tier-the-whole-window-falls-in",
+        ),
+    ],
+)
+def test_cached_content_reservation_prices_the_rest_of_the_window(
+    model_info: dict[str, object], expected: float
+) -> None:
+    reserved: Final = _max_cost_for_cost_info(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[0],
+        model="custom-gemini",
+        model_info=model_info,
+        input_tokens=200,
+    )
+
+    assert reserved == pytest.approx(expected)
+
+
+def test_cached_content_without_an_input_or_cache_read_price_cannot_be_reserved() -> None:
+    reserved: Final = _max_cost_for_cost_info(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[0],
+        model="custom-gemini",
+        model_info={"output_cost_per_token": 4e-06, "max_input_tokens": 10_000},
+        input_tokens=0,
+    )
+
+    assert reserved is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", GEMINI_ROUTES)
+async def test_a_gemini_body_is_counted_for_the_reservation_from_its_raw_body(route: str) -> None:
+    counts: Final = await count_request_input_tokens(
+        request_body=GEMINI_QUESTION,
+        route=route,
+        llm_router=None,
+        team_id=None,
+        raw_body=json.dumps(GEMINI_QUESTION).encode(),
+    )
+
+    assert counts == {GEMINI_MODEL: _gemini_question_tokens()}
+    assert counts[GEMINI_MODEL] > 0

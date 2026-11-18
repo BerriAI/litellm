@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
+import wave
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 
+import litellm
 from litellm.proxy.spend_tracking.input_tokens import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     count_input_tokens,
@@ -280,3 +283,209 @@ def test_a_compaction_item_counts_only_its_summary(model: str) -> None:
     assert count_input_tokens_for_model(request_body=padded_body, model=model) == count_input_tokens_for_model(
         request_body=plain_body, model=model
     )
+
+
+GEMINI_MODEL: Final = "gemini-3.8-flash"
+
+
+def _wav_base64(seconds: int) -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as recording:
+        recording.setnchannels(1)
+        recording.setsampwidth(2)
+        recording.setframerate(16_000)
+        recording.writeframes(b"\x00\x00" * 16_000 * seconds)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _gemini_tokens(*contents: dict[str, object], **fields: object) -> int | None:
+    return count_input_tokens_for_model(request_body={"contents": list(contents), **fields}, model=GEMINI_MODEL)
+
+
+def _user(*parts: object) -> dict[str, object]:
+    return {"role": "user", "parts": list(parts)}
+
+
+def test_a_gemini_text_body_counts_its_text_not_the_context_window() -> None:
+    text: Final = "Summarize the quarterly report in three bullet points. " * 40
+
+    assert _gemini_tokens(_user({"text": text})) == litellm.token_counter(model=GEMINI_MODEL, text=text)
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        pytest.param({"role": "user", "parts": {"text": "Name a prime."}}, id="single-content-single-part"),
+        pytest.param([{"role": "user", "parts": "Name a prime."}], id="bare-string-parts"),
+        pytest.param("Name a prime.", id="bare-string-contents"),
+    ],
+)
+def test_a_gemini_body_in_any_shape_gemini_accepts_counts_its_text(contents: object) -> None:
+    assert count_input_tokens_for_model(request_body={"contents": contents}, model=GEMINI_MODEL) == (
+        litellm.token_counter(model=GEMINI_MODEL, text="Name a prime.")
+    )
+
+
+def test_every_gemini_turn_counts_whatever_its_role() -> None:
+    question: Final = _user({"text": "What is the weather in Paris?"})
+    tool_turns: Final = (
+        {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        {
+            "role": "function",
+            "parts": [{"functionResponse": {"name": "get_weather", "response": {"forecast": "sunny " * 200}}}],
+        },
+    )
+
+    with_tool_turns: Final = _gemini_tokens(question, *tool_turns)
+    question_only: Final = _gemini_tokens(question)
+
+    assert with_tool_turns is not None and question_only is not None
+    assert with_tool_turns - question_only >= 200
+
+
+def test_a_gemini_thought_signature_is_not_counted() -> None:
+    call: Final = {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}
+    signed: Final = {"role": "model", "parts": [{**call, "thoughtSignature": base64.b64encode(b"s" * 3000).decode()}]}
+
+    unsigned_tokens: Final = _gemini_tokens(_user({"text": "Weather?"}), {"role": "model", "parts": [call]})
+
+    assert unsigned_tokens is not None
+    assert _gemini_tokens(_user({"text": "Weather?"}), signed) == unsigned_tokens
+
+
+@pytest.mark.parametrize("field", ["systemInstruction", "system_instruction"])
+def test_a_gemini_system_instruction_is_counted(field: str) -> None:
+    instruction: Final = "Answer like a pirate and never mention the weather. " * 10
+    question: Final = _user({"text": "Hi"})
+
+    with_instruction: Final = _gemini_tokens(question, **{field: {"parts": [{"text": instruction}]}})
+    without_instruction: Final = _gemini_tokens(question)
+
+    assert with_instruction is not None and without_instruction is not None
+    assert with_instruction - without_instruction == litellm.token_counter(model=GEMINI_MODEL, text=instruction)
+
+
+def test_gemini_function_declarations_are_counted() -> None:
+    declarations: Final = [
+        {
+            "functionDeclarations": [
+                {"name": f"lookup_{index}", "description": "Look up a customer record by id. " * 5}
+                for index in range(10)
+            ]
+        }
+    ]
+    question: Final = _user({"text": "Find customer 7."})
+
+    with_tools: Final = _gemini_tokens(question, tools=declarations)
+    without_tools: Final = _gemini_tokens(question)
+
+    assert with_tools is not None and without_tools is not None
+    assert with_tools - without_tools >= 10 * litellm.token_counter(
+        model=GEMINI_MODEL, text="Look up a customer record by id. " * 5
+    )
+
+
+@pytest.mark.parametrize(
+    ("config_field", "schema_field"),
+    [
+        ("generationConfig", "responseSchema"),
+        ("generation_config", "response_json_schema"),
+        ("config", "response_schema"),
+    ],
+)
+def test_a_gemini_response_schema_is_counted(config_field: str, schema_field: str) -> None:
+    schema: Final = {
+        "type": "OBJECT",
+        "properties": {f"field_{index}": {"type": "STRING", "description": "A customer note. " * 5} for index in range(10)},
+    }
+    question: Final = _user({"text": "Fill the form."})
+
+    with_schema: Final = _gemini_tokens(question, **{config_field: {"maxOutputTokens": 64, schema_field: schema}})
+    without_schema: Final = _gemini_tokens(question, **{config_field: {"maxOutputTokens": 64}})
+
+    assert with_schema is not None and without_schema is not None
+    assert with_schema - without_schema == litellm.token_counter(model=GEMINI_MODEL, text=json.dumps(schema))
+
+
+def test_inline_gemini_audio_counts_by_its_duration() -> None:
+    question: Final = {"text": "Transcribe this."}
+    text_only: Final = _gemini_tokens(_user(question))
+    two_seconds: Final = _gemini_tokens(_user(question, {"inlineData": {"mimeType": "audio/wav", "data": _wav_base64(2)}}))
+    four_seconds: Final = _gemini_tokens(
+        _user(question, {"inline_data": {"mime_type": "audio/wav", "data": _wav_base64(4)}})
+    )
+
+    assert text_only is not None and two_seconds is not None and four_seconds is not None
+    assert two_seconds > text_only
+    assert four_seconds - text_only == 2 * (two_seconds - text_only)
+
+
+def test_media_nested_in_a_gemini_function_response_counts_like_a_top_level_part() -> None:
+    audio: Final = {"inlineData": {"mimeType": "audio/wav", "data": _wav_base64(2)}}
+    response: Final = {"name": "record", "response": {"status": "ok"}}
+
+    nested: Final = _gemini_tokens(_user({"functionResponse": {**response, "parts": [audio]}}))
+    top_level: Final = _gemini_tokens(_user({"functionResponse": {**response, "parts": []}}, audio))
+
+    assert nested is not None
+    assert nested == top_level
+
+
+_PNG_PIXEL: Final = base64.b64encode(
+    bytes.fromhex(
+        "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+        "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
+    )
+).decode()
+
+
+@pytest.mark.parametrize(
+    ("part", "fields"),
+    [
+        pytest.param({"inlineData": {"mimeType": "image/png", "data": _PNG_PIXEL}}, {}, id="inline-image"),
+        pytest.param(
+            {"inline_data": {"mime_type": "application/pdf", "data": base64.b64encode(b"%PDF-1.4").decode()}},
+            {},
+            id="inline-pdf",
+        ),
+        pytest.param({"inlineData": {"mimeType": "video/mp4", "data": "AAAA"}}, {}, id="inline-video"),
+        pytest.param({"inlineData": {"mimeType": "text/plain", "data": "aGVsbG8="}}, {}, id="inline-text-file"),
+        pytest.param({"inlineData": "not-an-object"}, {}, id="malformed-inline-data"),
+        pytest.param(
+            {"inlineData": {"mimeType": "audio/aac", "data": base64.b64encode(b"\xff\xf1" * 4000).decode()}},
+            {},
+            id="audio-without-a-readable-duration",
+        ),
+        pytest.param({"fileData": {"mimeType": "image/png", "fileUri": "gs://b/cat.png"}}, {}, id="file-image"),
+        pytest.param({"file_data": {"mime_type": "video/mp4", "file_uri": "gs://b/clip.mp4"}}, {}, id="file-video"),
+        pytest.param({"fileData": {"fileUri": "gs://b/report.pdf"}}, {}, id="file-without-mime"),
+        pytest.param(
+            {"functionResponse": {"name": "snap", "response": {}, "parts": [{"inlineData": {"mimeType": "image/png", "data": _PNG_PIXEL}}]}},
+            {},
+            id="image-in-function-response",
+        ),
+        pytest.param({"text": "Search it."}, {"tools": [{"googleSearch": {}}]}, id="google-search-tool"),
+        pytest.param({"text": "Read it."}, {"tools": [{"urlContext": {}}]}, id="url-context-tool"),
+        pytest.param(
+            {"text": "Run it."},
+            {"tools": [{"functionDeclarations": [{"name": "f"}], "codeExecution": {}}]},
+            id="code-execution-beside-functions",
+        ),
+    ],
+)
+def test_a_gemini_body_with_input_google_sizes_on_its_side_is_unsized(
+    part: dict[str, object], fields: dict[str, object]
+) -> None:
+    assert _gemini_tokens(_user({"text": "Describe it."}, part), **fields) is None
+
+
+@pytest.mark.asyncio
+async def test_a_gemini_body_with_a_raw_body_is_counted_in_python_when_rust_declines_it() -> None:
+    request_body: Final = {"contents": [_user({"text": "Explain photosynthesis to a ten year old. " * 30})]}
+
+    counts: Final = await count_input_tokens(
+        request_body=request_body, raw_body=json.dumps(request_body).encode(), models=(GEMINI_MODEL,)
+    )
+
+    assert counts == {GEMINI_MODEL: count_input_tokens_for_model(request_body=request_body, model=GEMINI_MODEL)}
+    assert counts[GEMINI_MODEL] > 0

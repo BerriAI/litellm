@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -18,7 +18,9 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.google_genai.adapters.transformation import google_genai_request_config
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     get_annual_budget_window_start,
@@ -54,6 +56,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.spend_tracking.input_tokens import (
+    REQUEST_BODY_FIELDS,
     count_input_tokens,
     count_input_tokens_for_model,
     inline_pdf_file_count,
@@ -1241,23 +1244,35 @@ def _max_cost_for_cost_info(
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
-    output_multiplier: Final = _get_output_multiplier(request_body=request_body)
+    body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
+    output_multiplier: Final = _get_output_multiplier(request_body=body)
+    cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
+        tier: Final = select_tier_for_input(
+            tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens + cached_tokens
+        )
         if tier is not None:
             output_rate = max(
                 tier_rate(tier, "output_cost_per_token"),
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
-            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * output_rate
+            return (
+                estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
+                + cached_tokens * tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+                + output_tokens * output_multiplier * output_rate
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
+    cache_read_cost_per_token: Final = _to_float(model_info.get("cache_read_input_token_cost"))
+    cached_cost_per_token: Final = (
+        input_cost_per_token if cache_read_cost_per_token is None else cache_read_cost_per_token
+    )
     output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
     output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
-    cost = 0.0
+    if cached_tokens > 0 and cached_cost_per_token is None:
+        return None
+    cost = cached_tokens * (cached_cost_per_token or 0.0)
     if input_cost_per_token is not None:
         cost += estimated_input_tokens * input_cost_per_token
     elif estimated_input_tokens > 0:
@@ -1491,6 +1506,9 @@ _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_outpu
 
 
 def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+    if "contents" in request_body:
+        gemini_config: Final = _gemini_generation_config(request_body)
+        return _largest_int(gemini_config.get(field) for field in _GEMINI_OUTPUT_TOKEN_FIELDS)
     inference_config: Final = request_body.get("inferenceConfig")
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
@@ -1499,13 +1517,41 @@ def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 
 
-def _get_output_multiplier(request_body: dict) -> int:
-    output_multiplier = 1
-    for key in ("n", "best_of"):
-        value = _to_int(request_body.get(key))
-        if value is not None:
-            output_multiplier = max(output_multiplier, value)
-    return output_multiplier
+def _get_output_multiplier(request_body: Mapping[str, object]) -> int:
+    gemini_config: Final = _gemini_generation_config(request_body)
+    counts: Final = (
+        *(request_body.get(key) for key in ("n", "best_of")),
+        *(gemini_config.get(key) for key in _GEMINI_CANDIDATE_COUNT_FIELDS),
+    )
+    return max(_largest_int(counts) or 1, 1)
+
+
+_GEMINI_OUTPUT_TOKEN_FIELDS: Final = ("maxOutputTokens", "max_output_tokens")
+_GEMINI_CANDIDATE_COUNT_FIELDS: Final = ("candidateCount", "candidate_count")
+_CACHED_CONTENT_FIELDS: Final = ("cachedContent", "cached_content")
+
+
+def _gemini_generation_config(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    config: Final = as_str_mapping(google_genai_request_config(request_body)) if "contents" in request_body else None
+    return MappingProxyType({}) if config is None else config
+
+
+def _largest_int(values: Iterable[object]) -> int | None:
+    return max((value for value in map(_to_int, values) if value is not None), default=None)
+
+
+def _cached_content_tokens(
+    request_body: Mapping[str, object], model_info: Mapping[str, object], counted_input_tokens: int
+) -> int:
+    gemini_config: Final = _gemini_generation_config(request_body)
+    names: Final = (
+        *(request_body.get(field) for field in _CACHED_CONTENT_FIELDS),
+        *(gemini_config.get(field) for field in _CACHED_CONTENT_FIELDS),
+    )
+    max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
+    if max_input_tokens is None or not any(names):
+        return 0
+    return max(0, max_input_tokens - counted_input_tokens)
 
 
 def _is_input_only_route(route: str) -> bool:

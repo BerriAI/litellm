@@ -18,10 +18,16 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS, PDF_DATA_URL_PREFIX
+from litellm.google_genai.adapters.transformation import genai_media_part, google_genai_request_config
+from litellm.litellm_core_utils.audio_utils.utils import audio_duration_tokens
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, str_keyed
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_media_for_tpm
 from litellm.litellm_core_utils.token_counter import (
     deployment_openai_model,
     pdf_page_pricing,
@@ -49,7 +55,20 @@ TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
 _OPENAI_PREFIX: Final = "openai/"
 
-_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
+REQUEST_BODY_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+_INPUT_SIZE_FIELDS: Final = (
+    "messages",
+    "prompt",
+    "input",
+    "query",
+    "documents",
+    "tools",
+    "tool_choice",
+    "contents",
+    "systemInstruction",
+    "system_instruction",
+)
 
 
 def _approximate_input_size(request_body: Mapping[str, object]) -> int:
@@ -246,6 +265,8 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 text=request_body.get("documents"),
             )
             return query_tokens + document_tokens
+        if "contents" in request_body:
+            return _count_gemini_tokens(request_body=REQUEST_BODY_FIELDS.validate_python(request_body), model=model)
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
@@ -269,3 +290,112 @@ def _count_text_tokens(model: str, text: object) -> int:
             continue
         token_count += litellm.token_counter(model=model, text=str(item))
     return token_count
+
+
+_GEMINI_SYSTEM_INSTRUCTION_FIELDS: Final = ("systemInstruction", "system_instruction")
+_GEMINI_FUNCTION_DECLARATION_FIELDS: Final = frozenset({"functionDeclarations", "function_declarations"})
+_GEMINI_INLINE_DATA_FIELDS: Final = ("inlineData", "inline_data")
+_GEMINI_FILE_DATA_FIELDS: Final = ("fileData", "file_data")
+_GEMINI_FUNCTION_RESPONSE_FIELDS: Final = ("functionResponse", "function_response")
+_GEMINI_UNBILLED_PART_FIELDS: Final = frozenset({"thoughtSignature", "thought_signature"})
+_GEMINI_RESPONSE_SCHEMA_FIELDS: Final = (
+    "responseSchema",
+    "response_schema",
+    "responseJsonSchema",
+    "response_json_schema",
+)
+
+
+def _count_gemini_tokens(request_body: Mapping[str, object], model: str) -> int | None:
+    system_parts: Final = (_gemini_parts(request_body.get(field)) for field in _GEMINI_SYSTEM_INSTRUCTION_FIELDS)
+    parts: Final = chain(_gemini_parts(request_body.get("contents")), *system_parts)
+    return _sum_if_all_sized(
+        (
+            _gemini_function_declaration_tokens(request_body.get("tools"), model),
+            _gemini_response_schema_tokens(request_body, model),
+            *(_gemini_part_tokens(part, model) for part in parts),
+        )
+    )
+
+
+def _gemini_response_schema_tokens(request_body: Mapping[str, object], model: str) -> int:
+    config: Final = as_str_mapping(google_genai_request_config(request_body))
+    if config is None:
+        return 0
+    return sum(_count_text_tokens(model=model, text=config.get(field)) for field in _GEMINI_RESPONSE_SCHEMA_FIELDS)
+
+
+def _sum_if_all_sized(counts: Sequence[int | None]) -> int | None:
+    sized: Final = tuple(count for count in counts if count is not None)
+    return sum(sized) if len(sized) == len(counts) else None
+
+
+def _gemini_items(value: object) -> Sequence[object]:
+    if value is None:
+        return ()
+    items: Final = as_object_list(value)
+    return (value,) if items is None else items
+
+
+def _gemini_parts(contents: object) -> Iterator[object]:
+    return chain.from_iterable(map(_gemini_content_parts, _gemini_items(contents)))
+
+
+def _gemini_content_parts(content: object) -> Sequence[object]:
+    fields: Final = as_str_mapping(content)
+    if fields is None or "parts" not in fields:
+        return (content,)
+    return _gemini_items(fields.get("parts"))
+
+
+def _gemini_function_declaration_tokens(tools: object, model: str) -> int | None:
+    entries: Final = tuple(map(as_str_mapping, _gemini_items(tools)))
+    if any(entry is None or not entry.keys() <= _GEMINI_FUNCTION_DECLARATION_FIELDS for entry in entries):
+        return None
+    return _count_text_tokens(model=model, text=tools)
+
+
+def _gemini_part_tokens(part: object, model: str) -> int | None:
+    fields: Final = as_str_mapping(part)
+    if fields is None:
+        return _count_text_tokens(model=model, text=part)
+    if any(field in fields for field in _GEMINI_FILE_DATA_FIELDS):
+        return None
+    if any(field in fields for field in _GEMINI_INLINE_DATA_FIELDS):
+        return _gemini_inline_audio_tokens(fields, model)
+    text: Final = fields.get("text")
+    if isinstance(text, str):
+        return _count_text_tokens(model=model, text=text)
+    return _gemini_structured_part_tokens(fields, model)
+
+
+def _gemini_inline_audio_tokens(part: Mapping[str, object], model: str) -> int | None:
+    block: Final = genai_media_part(part)
+    if block is None:
+        return None
+    _, media = split_media_for_tpm((block,))
+    audio: Final = tuple(map(_input_audio_data, media))
+    if not audio:
+        return None
+    return _sum_if_all_sized(tuple(audio_duration_tokens(data, (model,), model) if data else None for data in audio))
+
+
+def _input_audio_data(block: Mapping[str, object]) -> str | None:
+    audio: Final = as_str_mapping(block.get("input_audio")) if block.get("type") == "input_audio" else None
+    data: Final = audio.get("data") if audio is not None else None
+    return data if isinstance(data, str) else None
+
+
+def _gemini_structured_part_tokens(part: Mapping[str, object], model: str) -> int | None:
+    response_field: Final = next((field for field in _GEMINI_FUNCTION_RESPONSE_FIELDS if field in part), None)
+    response: Final = as_str_mapping(part.get(response_field)) if response_field is not None else None
+    billed: Final = {key: value for key, value in part.items() if key not in _GEMINI_UNBILLED_PART_FIELDS}
+    if response_field is None or response is None:
+        return _count_text_tokens(model=model, text=billed)
+    response_without_parts: Final = {key: value for key, value in response.items() if key != "parts"}
+    return _sum_if_all_sized(
+        (
+            _count_text_tokens(model=model, text={**billed, response_field: response_without_parts}),
+            *(_gemini_part_tokens(nested, model) for nested in _gemini_items(response.get("parts"))),
+        )
+    )
