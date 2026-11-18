@@ -4,11 +4,13 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.videos.transformation import veo_video_count_from_parameters
 from litellm.secret_managers.main import get_secret_str
@@ -37,6 +39,8 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
     """
@@ -60,7 +64,7 @@ def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
 
 def _json_payload(raw_response: httpx.Response) -> object:
     """Read an HTTP response body as an opaque JSON payload."""
-    return raw_response.json()
+    return _DECODED_JSON.validate_python(raw_response.json())
 
 
 def _usage_video_resolution_from_parameters(
@@ -120,6 +124,13 @@ class GeminiVideoConfig(BaseVideoConfig):
 
         All other params are passed through as-is to support Gemini-specific parameters.
         """
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "gemini",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
         mapped_params: Final[dict[str, object]] = {}
 
         # Get supported OpenAI params (exclude "model" and "prompt" which are handled separately)
@@ -155,7 +166,7 @@ class GeminiVideoConfig(BaseVideoConfig):
 
         # Pass through any other params that weren't mapped (Gemini-specific params)
         for key, value in video_create_optional_params.items():
-            if key not in openai_params_to_map and key not in mapped_params:
+            if key not in openai_params_to_map and key not in mapped_params and key not in unsupported:
                 mapped_params[key] = value
 
         return mapped_params

@@ -19,6 +19,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
@@ -33,6 +34,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
     """
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/flux-pro/v1.1-ultra"
+    MODEL_FAMILY_ROOTS: tuple[str, ...] = ("fal-ai/flux-pro/",)
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
@@ -222,7 +224,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

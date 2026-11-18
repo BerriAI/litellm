@@ -1,12 +1,20 @@
 import asyncio
 import gc
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Final, TypeVar
 
 import litellm
+from tests.large_text import text
 
 T = TypeVar("T")
+
+
+def uncounted_text() -> str:
+    """`tests.large_text.text` 100 times behind a fresh prefix, so no earlier count can have cached its token count and
+    a timed count of it is a full tokenization."""
+    return f"{uuid.uuid4()} {text * 100}"
 
 
 def warm_tokenizer(model: str) -> None:

@@ -1,9 +1,11 @@
 """LangFlow run API: POST {api_base}/api/v1/run/{flow_id}"""
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -11,6 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -26,6 +29,8 @@ else:
     HTTPHandler = Any
     AsyncHTTPHandler = Any
     CustomStreamWrapper = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class LangFlowError(BaseLLMException):
@@ -179,7 +184,7 @@ class LangFlowConfig(BaseConfig):
         verbose_logger.debug("LangFlow request payload: %s", payload)
         return payload
 
-    def _extract_content_from_response(self, response_json: dict) -> str | None:
+    def _extract_content_from_response(self, response_json: Mapping[str, object]) -> str | None:
         """
         Extract the assistant text from a LangFlow run response.
 
@@ -236,7 +241,7 @@ class LangFlowConfig(BaseConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise LangFlowError(
                 message=f"LangFlow returned a non-JSON response: {e}",
@@ -245,7 +250,7 @@ class LangFlowConfig(BaseConfig):
 
         verbose_logger.debug("LangFlow response: %s", response_json)
 
-        content: Final = self._extract_content_from_response(response_json)
+        content: Final = self._extract_content_from_response(decoded_json_object(response_json))
         if content is None:
             raise LangFlowError(
                 message=(

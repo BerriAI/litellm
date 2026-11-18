@@ -29,6 +29,8 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     TeamGone,
     sync_team_roster,
 )
+from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
 TEAM: Final = "t1"
@@ -37,6 +39,11 @@ _STRINGS: Final = TypeAdapter(list[str])
 _FILTER: Final = TypeAdapter(dict[str, object])
 _FILTERS: Final = TypeAdapter(list[dict[str, object]])
 _MEMBERS: Final = TypeAdapter(list[Member])
+
+
+@pytest.fixture(autouse=True)
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 class _UserRow(BaseModel):
@@ -171,7 +178,6 @@ class _Db:
         memberships: Sequence[tuple[str, str]],
         tokens: Sequence[Mapping[str, object]],
         budgets: Sequence[Mapping[str, object]],
-        jwt_mappings: Sequence[Mapping[str, object]],
         team_deleted_before_update: bool = False,
     ) -> None:
         self.litellm_usertable = _UserTable(ledger, users)
@@ -182,7 +188,6 @@ class _Db:
         self.litellm_verificationtoken = _Rows("verificationtoken", ledger, tokens)
         self.litellm_deletedverificationtoken = _Rows("deletedverificationtoken", ledger)
         self.litellm_budgettable = _Rows("budgettable", ledger, budgets)
-        self.litellm_jwtkeymapping = _Rows("jwtkeymapping", ledger, jwt_mappings)
 
 
 class _Tx:
@@ -221,7 +226,6 @@ class _FakePrisma:
         memberships: Sequence[tuple[str, str]] = (),
         tokens: Sequence[Mapping[str, object]] = (),
         budgets: Sequence[Mapping[str, object]] = (),
-        jwt_mappings: Sequence[Mapping[str, object]] = (),
         fail_commit: bool = False,
         replica_teams: Sequence[LiteLLM_TeamTable] | None = None,
         team_deleted_before_update: bool = False,
@@ -229,10 +233,10 @@ class _FakePrisma:
         """``db`` is the routed client, which a read replica may serve; ``writer_db`` is the writer."""
         self.ledger = _Ledger()
         self.writer_db = _Db(
-            self.ledger, users, teams, memberships, tokens, budgets, jwt_mappings, team_deleted_before_update
+            self.ledger, users, teams, memberships, tokens, budgets, team_deleted_before_update
         )
         self.db = (
-            _Db(self.ledger, users, replica_teams, memberships, tokens, budgets, jwt_mappings)
+            _Db(self.ledger, users, replica_teams, memberships, tokens, budgets)
             if replica_teams is not None
             else self.writer_db
         )
@@ -517,7 +521,9 @@ async def test_added_members_link_the_team_member_budget_when_the_team_names_one
 
 
 @pytest.mark.asyncio
-async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_them():
+async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_them(
+    rust_auth_stores: RustAuthStores,
+):
     prisma = _FakePrisma(
         users=[_user("alice", TEAM), _user("bob", TEAM, "t2")],
         teams=[_team(_member("alice"), _member("bob"))],
@@ -527,7 +533,9 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
             {"token": "k-bob-personal", "user_id": "bob"},
             {"token": "k-alice", "user_id": "alice", "team_id": TEAM},
         ],
-        jwt_mappings=[{"token": "k-bob", "jwt_claim_name": "sub", "jwt_claim_value": "bob-claim", "jwt_issuer": None}],
+    )
+    rust_auth_stores.jwt_key_mapping.mappings.append(
+        JwtMapping(token="k-bob", jwt_claim_name="sub", jwt_claim_value="bob-claim")
     )
     jwt_key = jwt_key_mapping_cache_key("sub", "bob-claim", None)
     cache = _cache_with("k-bob", "k-alice", jwt_key, "bob")
@@ -666,8 +674,8 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
         key_object_in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
     )
     for key in member_keys:
-        cache.in_memory_cache_for(key).set_cache(key=key, value={"cache_key": key})
-    seeded = [key for key in member_keys if cache.in_memory_cache_for(key).get_cache(key) is not None]
+        cache.set_local(key, {"cache_key": key}, None)
+    seeded = [key for key in member_keys if cache.get_local(key) is not None]
     prisma = _FakePrisma(
         users=[_user(u, TEAM) for u in removed],
         teams=[_team(*(_member(u) for u in removed))],
@@ -681,7 +689,7 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
     ):
         sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
         await _until_reached_or_done(client.reached, sync)
-        still_cached = [key for key in seeded if cache.in_memory_cache_for(key).get_cache(key) is not None]
+        still_cached = [key for key in seeded if cache.get_local(key) is not None]
         client.release.set()
         outcome = await sync
         await _drain_publishes()
@@ -689,35 +697,6 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
     assert seeded == member_keys
     assert still_cached == []
-
-
-class _AuthRedisCache:
-    namespace = None
-
-    def __init__(self, entries: dict[str, object]) -> None:
-        self.entries = dict(entries)
-        self.round_trips = 0
-
-    async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
-        return self.entries.get(key)
-
-    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        self.entries[key] = value
-
-    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        self.entries[key] = value
-
-    def delete_cache(self, key: str) -> None:
-        self.entries.pop(key, None)
-
-    async def async_delete_cache(self, key: str) -> None:
-        self.round_trips += 1
-        self.entries.pop(key, None)
-
-    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
-        self.round_trips += 1
-        for key in keys:
-            self.entries.pop(key, None)
 
 
 @pytest.mark.asyncio
@@ -740,14 +719,9 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
             team_membership_reservation_cache_key(user_id=u, team_id=TEAM),
         )
     ]  # comprehension-ok: a test fixture listing each member's four cache keys
-    redis = _AuthRedisCache({key: {"cache_key": key} for key in member_keys})
-    cache = UserApiKeyCache(
-        in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
-        key_object_in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
-    )
-    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    cache, redis = shared_cache(FakeAuthCache(redis={key: {"cache_key": key} for key in member_keys}))
     for key in member_keys:
-        cache.in_memory_cache_for(key).set_cache(key=key, value={"cache_key": key})
+        cache.set_local(key, {"cache_key": key}, None)
     prisma = _FakePrisma(
         users=[_user(u, TEAM) for u in removed],
         teams=[_team(*(_member(u) for u in removed))],
@@ -768,17 +742,17 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
     assert refilled == []
-    assert not any(key in redis.entries for key in member_keys)
+    assert not any(key in redis.redis for key in member_keys)
 
 
-class _SlowToAcknowledgeRedisCache(_AuthRedisCache):
-    def __init__(self, entries: dict[str, object]) -> None:
-        super().__init__(entries)
+class _SlowToAcknowledgeRedis(FakeAuthCache):
+    def __init__(self, redis: dict[str, object]) -> None:
+        super().__init__(redis=redis)
         self.acknowledge = asyncio.Event()
         self.reached = asyncio.Event()
 
-    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
-        await super().delete_cache_keys(keys)
+    async def delete(self, keys: Sequence[str]) -> None:
+        await super().delete(keys)
         self.reached.set()
         await self.acknowledge.wait()
 
@@ -789,10 +763,8 @@ async def test_a_removed_members_team_key_cannot_refill_from_redis_while_the_evi
 ):
     monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     token = hashlib.sha256(b"key-bob").hexdigest()
-    redis = _SlowToAcknowledgeRedisCache({token: {"token": token}})
-    cache = UserApiKeyCache()
-    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
-    cache.in_memory_cache_for(token).set_cache(key=token, value={"token": token})
+    cache, redis = shared_cache(_SlowToAcknowledgeRedis({token: {"token": token}}))
+    cache.set_local(token, {"token": token}, None)
     prisma = _FakePrisma(
         users=[_user("bob", TEAM)],
         teams=[_team(_member("bob"))],
@@ -808,7 +780,7 @@ async def test_a_removed_members_team_key_cannot_refill_from_redis_while_the_evi
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset({"bob"})
     assert served_while_waiting is None
-    assert token not in redis.entries
+    assert token not in redis.redis
 
 
 def _removal_of(removed: Sequence[str]) -> tuple[_FakePrisma, set[str]]:
@@ -863,9 +835,7 @@ async def test_the_redis_round_trips_do_not_grow_with_the_member_count(monkeypat
     for size in (5, 300):
         removed = [f"u{index:03d}" for index in range(size)]
         prisma, _ = _removal_of(removed)
-        redis = _AuthRedisCache({})
-        cache = UserApiKeyCache()
-        cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+        cache, redis = shared_cache()
         client = _SlowPublishRedisClient()
 
         with patch(
@@ -876,7 +846,7 @@ async def test_the_redis_round_trips_do_not_grow_with_the_member_count(monkeypat
             await _drain_publishes()
 
         assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
-        round_trips[size] = (redis.round_trips, client.round_trips)
+        round_trips[size] = (len(redis.commands), client.round_trips)
     assert round_trips[300] == round_trips[5]
 
 

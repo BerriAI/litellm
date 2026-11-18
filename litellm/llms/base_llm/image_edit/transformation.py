@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
@@ -32,9 +32,10 @@ class BaseImageEditConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -139,6 +140,14 @@ class BaseImageEditConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         pass
+
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        """
+        Number of identical upstream requests the handler sends and merges into one response.
+
+        Override for providers that return one image per call, so a caller's `n` still yields `n` images.
+        """
+        return 1
 
     def use_multipart_form_data(self) -> bool:
         """

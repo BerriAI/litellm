@@ -10,6 +10,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
     AWSPreparedRequest = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BedrockImageEditPreparedRequest(LiteLLMBaseModel):
@@ -317,7 +320,7 @@ class BedrockImageEdit(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         verbose_logger.debug("raw model_response: %s", response.text)
-        response_dict: Final = response.json()
+        response_dict: Final = _DECODED_JSON.validate_python(response.json())
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 
