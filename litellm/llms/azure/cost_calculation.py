@@ -3,8 +3,9 @@ Helper util for handling azure openai-specific cost calculation
 - e.g.: prompt caching, audio tokens
 """
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost
 from litellm.types.utils import Usage
+from litellm.utils import get_model_info
 
 
 def cost_per_token(
@@ -23,11 +24,6 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## Use generic cost calculator for all other cases
-    ## This properly handles: text tokens, audio tokens, cached tokens, reasoning tokens, etc.
-    return generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="azure",
-        service_tier=service_tier,
+    return branch_cost(
+        model, "azure", usage, get_model_info(model=model, custom_llm_provider="azure"), service_tier=service_tier
     )

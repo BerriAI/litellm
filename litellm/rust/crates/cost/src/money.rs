@@ -13,6 +13,8 @@ pub struct Usd(f64);
 pub struct Multiplier(f64);
 
 impl UnitPrice {
+    pub const ZERO: Self = Self(0.0);
+
     pub fn new(usd_per_unit: f64) -> Option<Self> {
         (usd_per_unit.is_finite() && usd_per_unit >= 0.0).then_some(Self(usd_per_unit))
     }

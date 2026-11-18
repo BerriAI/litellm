@@ -228,6 +228,70 @@ pub struct TokensQuery {
     /// The model the client asked for, which decides the Azure AI Model Router fee
     #[cfg_attr(feature = "serde", serde(default))]
     pub requested_model: Option<Box<str>>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub rules: TokenRules,
+    /// How long the call ran, for a row billed by the second. `None` leaves such a row to the caller
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub elapsed: Option<Elapsed>,
+    /// The characters Vertex AI bills, `None` when nobody counted them
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub characters: Option<CharacterCounts>,
+    /// An embedding call, which Vertex AI bills by token whatever the model
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub embedding: bool,
+    /// The counts as reported, for the provider branches that bill them instead of `usage`
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub raw: RawCounts,
+}
+
+/// Which of main's token pricing paths prices the row
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize),
+    serde(rename_all = "snake_case")
+)]
+pub enum TokenRules {
+    /// The provider branch of `cost_per_token`
+    #[default]
+    Branch,
+    /// `generic_cost_per_token`: the row with every basis fact the caller gave
+    Generic,
+    /// `requested_model_info_override`: a row billed by the second, then Anthropic's uplifts for Anthropic, else
+    /// `Generic`
+    Override,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default))]
+pub struct Elapsed {
+    pub response_ms: f64,
+    /// The audio file a transcription row bills instead of the response time
+    pub audio_seconds: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default))]
+pub struct CharacterCounts {
+    pub prompt: Option<u64>,
+    pub completion: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default))]
+pub struct RawCounts {
+    pub completion_tokens: u64,
+    /// `prompt_tokens_details.cached_tokens`
+    pub cached_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_writes: Option<WritesByTtl>,
+    /// `completion_tokens_details.reasoning_tokens`
+    pub reasoning_tokens: u64,
+    /// `usage.reasoning_tokens`, else the completion details' count
+    pub stated_reasoning_tokens: u64,
+    pub citation_tokens: u64,
+    /// `prompt_tokens_details.web_search_requests`
+    pub search_queries: u64,
 }
 
 /// Billed quantities of a token call, with the overlap between cached and per-modality counts already removed
@@ -308,6 +372,22 @@ impl PriceQuery {
             Self::Guardrail(_) => Kind::Guardrail,
             Self::A2a(_) => Kind::A2a,
             Self::Mcp(_) => Kind::Mcp,
+        }
+    }
+}
+
+impl TokensQuery {
+    /// A `cost_per_token` branch query with no elapsed time, characters or raw counts
+    pub fn new(header: Header, usage: TokenUsage) -> Self {
+        Self {
+            header,
+            usage,
+            requested_model: None,
+            rules: TokenRules::Branch,
+            elapsed: None,
+            characters: None,
+            embedding: false,
+            raw: RawCounts::default(),
         }
     }
 }

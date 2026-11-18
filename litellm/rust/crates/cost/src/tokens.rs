@@ -1,9 +1,10 @@
-//! The `tokens` kind: a chat, Messages or Responses call billed by its prompt and completion tokens, a port of the
-//! token path of `completion_cost` (`cost_calculator.py`) for the P1 providers. The first candidate with a row
+//! The `tokens` kind: a chat, Messages or Responses call billed by its prompt and completion tokens, a port of
+//! `cost_per_token` (`cost_calculator.py`) and the token path of `completion_cost`. The first candidate with a row
 //! prices the call, as main's candidate loop moves on only when pricing raises. A rate the row lacks is billed at
-//! 0.0 and listed in `defaulted_to_zero`, as main's `get_model_info` defaults it. Providers and cases not ported
-//! yet answer `NotPorted`, so the caller prices them the old way
+//! 0.0 and listed in `defaulted_to_zero`, as main's `get_model_info` defaults it. Cases not ported yet answer
+//! `NotPorted`, so the caller prices them the old way
 
+mod branch;
 mod breakdown;
 mod custom;
 mod rule;
@@ -11,19 +12,31 @@ mod rule;
 use crate::adjust::{Discount, Margin};
 use crate::calculate;
 use crate::call::CallContext;
-use crate::money::Usd;
-use crate::priced::Outcome;
-use crate::query::{Candidate, Kind, PriceSource, TokensQuery};
+use crate::money::{UnitPrice, Usd};
+use crate::price::Meter;
+use crate::priced::{Line, Outcome, Quantity, Side};
+use crate::query::{Candidate, Kind, PriceSource, ReportedCost, TokensQuery};
 use crate::quote::Quote;
 use crate::receipt::{PriceOutcome, Receipt, Unpriced};
 use crate::row::{LoweredRow, RowRef, RowSource};
 
-use rule::{Lookup, Rule};
+use branch::Sides;
+use rule::{Lookup, Rule, Stated};
 
 pub(crate) fn price<S: RowSource>(source: &S, query: &TokensQuery) -> PriceOutcome {
     let header = &query.header;
-    if header.reported.is_some() {
-        return Unpriced::NotPorted(Kind::Tokens).into();
+    if let Some(reported) = &header.reported {
+        return match rule::stated(query) {
+            Some(stated) => stated_cost(source, query, stated, reported),
+            None => Unpriced::NotPorted(Kind::Tokens).into(),
+        };
+    }
+    if let Some(candidate) = header
+        .candidates
+        .first()
+        .filter(|_| rule::free_without_row(query))
+    {
+        return rowless(source, query, candidate, Sides::default());
     }
     let no_row = || {
         Unpriced::NoRow {
@@ -33,7 +46,11 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &TokensQuery) -> PriceOutco
     };
     match &header.source {
         PriceSource::FlatPerToken(rates) => custom::price(source, query, rates),
-        PriceSource::PerSecond { .. } | PriceSource::Rows { .. } | PriceSource::PerQuery { .. } => {
+        PriceSource::PerSecond { rate } => match header.candidates.first() {
+            Some(candidate) => rowless(source, query, candidate, per_second(*rate, query)),
+            None => no_row(),
+        },
+        PriceSource::Rows { .. } | PriceSource::PerQuery { .. } => {
             Unpriced::NotPorted(Kind::Tokens).into()
         }
         PriceSource::Row {
@@ -63,6 +80,105 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &TokensQuery) -> PriceOutco
     }
 }
 
+/// `custom_cost_per_second` times the response time, all of it on the completion side
+fn per_second(rate: UnitPrice, query: &TokensQuery) -> Sides {
+    let elapsed_ms = query.elapsed.unwrap_or_default().response_ms;
+    let amount = Usd::new(rate.get() * elapsed_ms / 1000.0).unwrap_or(Usd::ZERO);
+    Sides {
+        lines: vec![Line {
+            meter: Meter::WallClockSecond,
+            quantity: Quantity::Measured(elapsed_ms / 1000.0),
+            unit_price: rate,
+            amount,
+            fallback_from: None,
+            side: Side::Completion,
+        }],
+        defaulted_to_zero: Vec::new(),
+        prompt: Usd::ZERO,
+        completion: amount,
+    }
+}
+
+/// A cost the provider stated: Perplexity's is the completion side whatever the row, xAI's is split in the ratio the
+/// token math gives, all on the completion side when no row prices it
+fn stated_cost<S: RowSource>(
+    source: &S,
+    query: &TokensQuery,
+    stated: Stated,
+    reported: &ReportedCost,
+) -> PriceOutcome {
+    let Some(candidate) = query.header.candidates.first() else {
+        return Unpriced::NoRow { tried: Vec::new() }.into();
+    };
+    let Some(usd) = Usd::new(reported.usd) else {
+        return Unpriced::NotPorted(Kind::Tokens).into();
+    };
+    let all_to_completion = Sides {
+        completion: usd,
+        ..Sides::default()
+    };
+    let unstated = TokensQuery {
+        header: crate::query::Header {
+            reported: None,
+            ..query.header.clone()
+        },
+        ..query.clone()
+    };
+    let token_math = match stated {
+        Stated::AllToCompletion => return rowless(source, query, candidate, all_to_completion),
+        Stated::Proportional => price(source, &unstated),
+    };
+    let sides = match token_math {
+        PriceOutcome::Priced(priced) => {
+            let total = priced.prompt.get() + priced.completion.get();
+            match total > 0.0 {
+                true => {
+                    let prompt = reported.usd * priced.prompt.get() / total;
+                    Sides {
+                        prompt: Usd::new(prompt).unwrap_or(Usd::ZERO),
+                        completion: Usd::new(reported.usd - prompt).unwrap_or(Usd::ZERO),
+                        ..Sides::default()
+                    }
+                }
+                false => all_to_completion,
+            }
+        }
+        PriceOutcome::Unpriced(Unpriced::NoRow { .. }) => all_to_completion,
+        unpriced @ PriceOutcome::Unpriced(_) => return unpriced,
+    };
+    rowless(source, query, candidate, sides)
+}
+
+/// A receipt no row priced: a stated cost, custom pricing per second or a free branch
+fn rowless<S: RowSource>(
+    source: &S,
+    query: &TokensQuery,
+    candidate: &Candidate,
+    sides: Sides,
+) -> PriceOutcome {
+    let receipt = Receipt {
+        candidate: Some(candidate.clone()),
+        row: None,
+        lines: sides.lines,
+        defaulted_to_zero: sides.defaulted_to_zero,
+        rates: None,
+        prompt: sides.prompt,
+        completion: sides.completion,
+        tools: Usd::ZERO,
+        additional: Usd::ZERO,
+        discount: Discount::default(),
+        margin: Margin::default(),
+        breakdown: Default::default(),
+        parts: Vec::new(),
+        cache_savings: None,
+        basis: query.header.basis.clone(),
+        total: 0.0,
+    };
+    receipt
+        .settled(source, &query.header.adjustments, Some(&candidate.model))
+        .into()
+}
+
 /// Prices the call under one candidate's row. `None` where main's pricing raises, so the next candidate is tried
 fn attempt<S: RowSource>(
     source: &S,
@@ -81,16 +197,22 @@ fn attempt<S: RowSource>(
     let usage = query.usage.billed();
     let prices = row.prices().for_prompt(usage.prompt_tokens);
     let quote = prices.quote(&call, usage.prompt_tokens);
-    let (lines, defaulted_to_zero, prompt, completion) =
-        match calculate(prices, row.adjustments(), &usage, &call) {
-            Outcome::Priced(priced) => (
-                priced.lines,
-                priced.missing,
-                priced.prompt,
-                priced.completion,
-            ),
-            Outcome::Unpriced { missing } => (Vec::new(), missing, Usd::ZERO, Usd::ZERO),
-        };
+    let calculated = || match calculate(prices, row.adjustments(), &usage, &call) {
+        Outcome::Priced(priced) => Sides {
+            lines: priced.lines,
+            defaulted_to_zero: priced.missing,
+            prompt: priced.prompt,
+            completion: priced.completion,
+        },
+        Outcome::Unpriced { missing } => Sides {
+            defaulted_to_zero: missing,
+            ..Sides::default()
+        },
+    };
+    let sides = match rule {
+        Rule::Formula(formula) => branch::sides(formula, row, query, &call, calculated),
+        _ => calculated(),
+    };
     let named = source
         .resolve(candidate)
         .and_then(|named| source.row(&named));
@@ -123,14 +245,14 @@ fn attempt<S: RowSource>(
     let receipt = Receipt {
         candidate: Some(candidate.clone()),
         row: Some(at.clone()),
-        lines,
-        defaulted_to_zero,
+        lines: sides.lines,
+        defaulted_to_zero: sides.defaulted_to_zero,
         breakdown: rates
             .map(|rates| breakdown::breakdown(&rates, &query.usage, false))
             .unwrap_or_default(),
         rates,
-        prompt,
-        completion,
+        prompt: sides.prompt,
+        completion: sides.completion,
         tools,
         additional: Usd::ZERO,
         discount: Discount::default(),
@@ -276,8 +398,8 @@ mod parity {
             ),
         };
         let source = source.with_discounts(&discounts).with_margins(margins);
-        let query = TokensQuery {
-            header: Header {
+        let query = TokensQuery::new(
+            Header {
                 candidates: vec![candidate(provider.clone(), model)],
                 source: price_source,
                 basis: Basis {
@@ -295,9 +417,8 @@ mod parity {
                 },
                 reported: None,
             },
-            usage: usage(&case["usage"]),
-            requested_model: None,
-        };
+            usage(&case["usage"]),
+        );
         match price(&source, &query) {
             PriceOutcome::Priced(receipt) => *receipt,
             PriceOutcome::Unpriced(unpriced) => panic!("unpriced: {unpriced:?}"),
@@ -574,8 +695,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::other_provider(Provider::Other("openai".to_owned()), "gpt-5")]
-    #[case::vertex_gemini(Provider::VertexAi, "gemini-3-pro")]
     #[case::azure_model_router(Provider::AzureAi, "model-router")]
     fn a_provider_or_model_not_ported_yet_is_left_to_python(
         #[case] provider: Provider,
@@ -655,5 +774,140 @@ mod tests {
 
         assert_eq!(receipt.total, 30.0);
         assert_eq!(receipt.rates.map(|rates| rates.input), breakdown_input_rate);
+    }
+
+    fn other(provider: &str) -> Provider {
+        Provider::Other(provider.to_owned())
+    }
+
+    fn stated(query: TokensQuery, usd: f64) -> TokensQuery {
+        TokensQuery {
+            header: crate::query::Header {
+                reported: Some(crate::query::ReportedCost {
+                    source: "usage.cost".into(),
+                    usd,
+                }),
+                ..query.header
+            },
+            ..query
+        }
+    }
+
+    fn sides(outcome: PriceOutcome) -> (f64, f64) {
+        let receipt = priced(outcome);
+        (receipt.prompt.get(), receipt.completion.get())
+    }
+
+    #[rstest]
+    fn lemonade_bills_nothing_for_a_model_without_a_row() {
+        let query = tokens_query(other("lemonade"), "local-7b", usage(100, 10));
+        assert_eq!(sides(price(&TestSource::default(), &query)), (0.0, 0.0));
+    }
+
+    #[rstest]
+    #[case::priced_row(true)]
+    #[case::no_row(false)]
+    fn perplexity_bills_its_stated_cost_on_the_completion_side(#[case] with_row: bool) {
+        let source = if with_row {
+            TestSource::with_row("sonar", text_row(1.0, 1.0))
+        } else {
+            TestSource::default()
+        };
+        let query = stated(
+            tokens_query(other("perplexity"), "sonar", usage(10, 10)),
+            0.5,
+        );
+        assert_eq!(sides(price(&source, &query)), (0.0, 0.5));
+    }
+
+    #[rstest]
+    #[case::split_by_token_math(Some(text_row(1.0, 3.0)), (1.0, 3.0))]
+    #[case::all_to_completion_without_a_row(None, (0.0, 4.0))]
+    #[case::all_to_completion_when_tokens_price_nothing(Some(text_row(0.0, 0.0)), (0.0, 4.0))]
+    fn xai_splits_its_stated_cost_in_the_ratio_of_the_token_math(
+        #[case] row: Option<TestRow>,
+        #[case] expected: (f64, f64),
+    ) {
+        let source = row.map_or_else(TestSource::default, |row| TestSource::with_row("grok", row));
+        let query = stated(tokens_query(other("xai"), "grok", usage(10, 10)), 4.0);
+        assert_eq!(sides(price(&source, &query)), expected);
+    }
+
+    #[rstest]
+    #[case::left_to_python_without_the_time(None, None)]
+    #[case::billed_by_the_response_time(Some(2500.0), Some(1.25))]
+    fn a_row_billed_by_the_second_needs_the_elapsed_time(
+        #[case] response_ms: Option<f64>,
+        #[case] expected: Option<f64>,
+    ) {
+        let row = TestRow {
+            prices: crate::testing::prices(&[(
+                Meter::WallClockSecond,
+                crate::price::ServiceTier::Standard,
+                crate::testing::BASE,
+                0.5,
+            )]),
+            ..TestRow::default()
+        };
+        let source = TestSource::with_row("provisioned", row);
+        let query = TokensQuery {
+            elapsed: response_ms.map(|response_ms| crate::query::Elapsed {
+                response_ms,
+                audio_seconds: 0.0,
+            }),
+            ..tokens_query(other("groq"), "provisioned", usage(10, 10))
+        };
+        let outcome = price(&source, &query);
+        match expected {
+            Some(prompt) => assert_eq!(sides(outcome), (prompt, 0.0)),
+            None => assert_eq!(outcome, Unpriced::NotPorted(Kind::Tokens).into()),
+        }
+    }
+
+    #[rstest]
+    #[case::named_branch_reads_no_residency("deepseek", 10.0)]
+    #[case::openai_reads_residency("openai", 15.0)]
+    #[case::generic_branch_reads_residency("mistral", 15.0)]
+    #[case::azure_reads_no_residency("azure", 10.0)]
+    fn each_branch_reads_the_residency_main_passed_it(
+        #[case] provider: &str,
+        #[case] expected: f64,
+    ) {
+        let row = TestRow {
+            adjustments: Adjustments::new([(
+                Uplift::Residency(crate::price::Residency::Eu),
+                Multiplier::new(1.5).unwrap(),
+            )]),
+            ..text_row(1.0, 0.0)
+        };
+        let source = TestSource::with_row("model", row);
+        let query = tokens_query(other(provider), "model", usage(10, 0));
+        let query = TokensQuery {
+            header: crate::query::Header {
+                basis: crate::query::Basis {
+                    data_residency: Some(crate::query::DataResidency::Eu),
+                    ..query.header.basis.clone()
+                },
+                ..query.header
+            },
+            ..query
+        };
+        assert_eq!(sides(price(&source, &query)).0, expected);
+    }
+
+    #[rstest]
+    fn a_generic_branch_row_without_token_prices_bills_nothing() {
+        let row = TestRow {
+            prices: crate::testing::prices(&[(
+                Meter::Output(crate::price::OutputUnit::Image(None)),
+                crate::price::ServiceTier::Standard,
+                crate::testing::BASE,
+                0.04,
+            )]),
+            ..TestRow::default()
+        };
+        let source = TestSource::with_row("image-model", row);
+        let query = tokens_query(other("recraft"), "image-model", usage(10, 10));
+        assert_eq!(sides(price(&source, &query)), (0.0, 0.0));
     }
 }

@@ -41,14 +41,20 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     AdjustedCost,
     AdjustFacts,
     BatchLineDocument,
+    BranchFacts,
     CallFacts,
+    Characters,
     ClipUsage,
     ClipUse,
+    CustomPricing,
+    CustomRates,
     DurationClip,
+    Elapsed,
     ImageDocument,
     MeteredUse,
     OcrDocument,
     OtherClip,
+    ReportedCost,
     RerankDocument,
     SessionDocument,
     SpeechDocument,
@@ -59,6 +65,9 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     adjusted_cost,
     batch_usage,
     billed_token_rates,
+    branch_cost,
+    custom_cost,
+    custom_pricing_usage,
     part_costs,
     price,
     price_session,
@@ -89,9 +98,6 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.anthropic.cost_calculation import (
     get_anthropic_web_search_requests_from_response,
 )
-from litellm.llms.azure.cost_calculation import (
-    cost_per_token as azure_openai_cost_per_token,
-)
 from litellm.llms.azure_ai.cost_calculator import (
     cost_per_token as azure_ai_cost_per_token,
 )
@@ -102,47 +108,24 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
 )
-from litellm.llms.databricks.cost_calculator import (
-    cost_per_token as databricks_cost_per_token,
-)
-from litellm.llms.deepseek.cost_calculator import (
-    cost_per_token as deepseek_cost_per_token,
-)
-from litellm.llms.fireworks_ai.cost_calculator import (
-    cost_per_token as fireworks_ai_cost_per_token,
-)
-from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
-from litellm.llms.lemonade.cost_calculator import (
-    cost_per_token as lemonade_cost_per_token,
-)
+from litellm.llms.databricks.cost_calculator import pricing_row as databricks_pricing_row
+from litellm.llms.fireworks_ai.cost_calculator import pricing_row as fireworks_pricing_row
 from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import (
-    cost_per_token as openai_cost_per_token,
-)
-from litellm.llms.openai.cost_calculation import (
     priced_video,
 )
-from litellm.llms.perplexity.cost_calculator import (
-    cost_per_token as perplexity_cost_per_token,
-)
-from litellm.llms.tencent.cost_calculator import (
-    cost_per_token as tencent_cost_per_token,
-)
+from litellm.llms.perplexity.cost_calculator import pricing_row as perplexity_pricing_row
+from litellm.llms.perplexity.cost_calculator import stated_cost as perplexity_stated_cost
 from litellm.llms.together_ai.cost_calculator import (
     get_model_params_and_category,
     has_together_registry_pricing,
 )
 from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_generation_cost
-from litellm.llms.vertex_ai.cost_calculator import (
-    cost_per_character as google_cost_per_character,
-)
-from litellm.llms.vertex_ai.cost_calculator import (
-    cost_per_token as google_cost_per_token,
-)
-from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
-from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
+from litellm.llms.xai.cost_calculator import billed_usage as xai_billed_usage
+from litellm.llms.xai.cost_calculator import pricing_row as xai_pricing_row
+from litellm.llms.xai.cost_calculator import stated_cost as xai_stated_cost
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.rust_bridge._native import NativeReceipt, NativeUnpriced, billable_service_tier
 from litellm.types.agents import LiteLLMSendMessageResponse
@@ -174,7 +157,6 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
-    ModelInfoBase,
     PromptTokensDetailsWrapper,
     ServiceTier,
     StandardBuiltInToolsParams,
@@ -270,57 +252,6 @@ _RUST_PRICED_CALL_TYPES: Final = frozenset(
 )
 _RUST_PRICED_PROVIDERS: Final = frozenset({"anthropic", "bedrock", "vertex_ai", "azure_ai"})
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
-
-
-def _cost_per_token_custom_pricing_helper(
-    prompt_tokens: float = 0,
-    completion_tokens: float = 0,
-    response_time_ms: float | None = 0.0,
-    cached_tokens: float = 0,
-    cache_creation_tokens: float = 0,
-    ### CUSTOM PRICING ###
-    custom_cost_per_token: CostPerToken | None = None,
-    custom_cost_per_second: float | None = None,
-) -> tuple[float, float] | None:
-    """Internal helper function for calculating cost, if custom pricing given.
-
-    prompt_tokens is assumed to include both cached_tokens and cache_creation_tokens
-    (OpenAI-compatible convention). Anthropic-style usage where prompt_tokens excludes
-    cache tokens is handled at the caller (cost_per_token) before invoking this helper.
-    """
-    if custom_cost_per_token is None and custom_cost_per_second is None:
-        return None
-
-    if custom_cost_per_token is not None:
-        input_cost_per_token: Final = custom_cost_per_token["input_cost_per_token"]
-        output_cost_per_token: Final = custom_cost_per_token["output_cost_per_token"]
-
-        cache_read_input_token_cost: Final = custom_cost_per_token.get(
-            "cache_read_input_token_cost",
-            input_cost_per_token,
-        )
-        cache_creation_input_token_cost: Final = custom_cost_per_token.get(
-            "cache_creation_input_token_cost",
-            input_cost_per_token,
-        )
-
-        regular_prompt_tokens: Final = max(
-            prompt_tokens - cached_tokens - cache_creation_tokens,
-            0,
-        )
-
-        input_cost: Final = (
-            regular_prompt_tokens * input_cost_per_token
-            + cached_tokens * cache_read_input_token_cost
-            + cache_creation_tokens * cache_creation_input_token_cost
-        )
-        output_cost = completion_tokens * output_cost_per_token
-        return input_cost, output_cost
-    elif custom_cost_per_second is not None:
-        output_cost = custom_cost_per_second * (response_time_ms or 0.0) / 1000
-        return 0, output_cost
-
-    return None
 
 
 def _get_additional_costs(
@@ -500,69 +431,8 @@ class OCRPricing(TypedDict, total=False):
     annotation_cost_per_page: ReadOnly[float | None]
 
 
-_WALL_CLOCK_PRICED_MODES: Final = frozenset({"audio_transcription", "chat", "completion", "embedding", "responses"})
 _GROQ_WHISPER_TRANSCRIPTION_MODELS: Final = frozenset({"whisper-large-v3", "whisper-large-v3-turbo"})
 _GROQ_MINIMUM_TRANSCRIPTION_SECONDS: Final = 10.0
-
-
-def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
-    return (
-        (model_info.get("input_cost_per_token") or 0.0) > 0
-        or (model_info.get("output_cost_per_token") or 0.0) > 0
-        or model_info.get("tiered_pricing") is not None
-    )
-
-
-def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
-    mode: Final = model_info.get("mode")
-    return mode is None or mode in _WALL_CLOCK_PRICED_MODES
-
-
-def _per_second_pricing_cost(
-    model: str,
-    custom_llm_provider: str | None,
-    response_time_ms: float | None,
-    audio_seconds: float = 0.0,
-) -> tuple[float, float] | None:
-    try:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
-        return None
-    return _per_second_pricing_cost_from_info(model_info, response_time_ms, audio_seconds)
-
-
-def _per_second_pricing_cost_from_info(
-    model_info: ModelInfoBase,
-    response_time_ms: float | None,
-    audio_seconds: float = 0.0,
-) -> tuple[float, float] | None:
-    if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
-        return None
-    cost_per_second: Final = model_info.get("cost_per_second")
-    input_cost_per_second: Final = model_info.get("input_cost_per_second")
-    output_cost_per_second: Final = model_info.get("output_cost_per_second")
-    resolved_cost_per_second: Final = (
-        cost_per_second
-        if cost_per_second is not None
-        else input_cost_per_second
-        if input_cost_per_second is not None
-        else output_cost_per_second
-    )
-    if resolved_cost_per_second is None:
-        return None
-
-    seconds: Final = (
-        audio_seconds
-        if audio_seconds > 0 and model_info.get("mode") == "audio_transcription"
-        else (response_time_ms or 0.0) / 1000
-    )
-    verbose_logger.debug(
-        "For model=%s - cost_per_second: %s; response time: %s",
-        model_info.get("key"),
-        resolved_cost_per_second,
-        response_time_ms,
-    )
-    return resolved_cost_per_second * seconds, 0.0
 
 
 def cost_per_token(
@@ -680,37 +550,32 @@ def cost_per_token(
     if _is_anthropic_style:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
-    response_cost: Final = _cost_per_token_custom_pricing_helper(
-        prompt_tokens=_normalized_prompt_tokens,
-        completion_tokens=completion_tokens,
-        response_time_ms=response_time_ms,
-        cached_tokens=_cache_read_tokens,
-        cache_creation_tokens=_cache_creation_tokens,
-        custom_cost_per_second=custom_cost_per_second,
-        custom_cost_per_token=custom_cost_per_token,
-    )
-
-    if response_cost is not None:
-        return response_cost[0], response_cost[1]
+    elapsed: Final = Elapsed(response_ms=response_time_ms or 0.0, audio_seconds=audio_transcription_file_duration)
+    custom: Final = _custom_pricing(custom_cost_per_token, custom_cost_per_second)
+    if custom is not None:
+        return custom_cost(
+            model,
+            custom_llm_provider or "",
+            custom_pricing_usage(
+                prompt_tokens=int(_normalized_prompt_tokens),
+                completion_tokens=completion_tokens,
+                cached_tokens=int(_cache_read_tokens),
+                cache_creation_tokens=int(_cache_creation_tokens),
+            ),
+            custom,
+            response_time_ms,
+        )
 
     if requested_model_info_override is not None:
-        per_second: Final = _per_second_pricing_cost_from_info(
-            requested_model_info_override, response_time_ms, audio_transcription_file_duration
-        )
-        if per_second is not None:
-            return per_second
-        if custom_llm_provider == "anthropic":
-            return anthropic_cost_per_token(
-                model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
-            )
-        return generic_cost_per_token(
-            model=model,
-            usage=usage_block,
-            custom_llm_provider=custom_llm_provider or "",
+        return branch_cost(
+            model,
+            custom_llm_provider or "",
+            usage_block,
+            requested_model_info_override,
             service_tier=service_tier,
-            data_residency=data_residency,
-            vertex_location=vertex_location,
-            model_info=requested_model_info_override,
+            data_residency=None if custom_llm_provider == "anthropic" else data_residency,
+            vertex_location=None if custom_llm_provider == "anthropic" else vertex_location,
+            branch=BranchFacts(rules="override", elapsed=elapsed),
         )
 
     model_cost_ref: Final = litellm.model_cost
@@ -864,88 +729,20 @@ def cost_per_token(
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
             search_response=response if isinstance(response, SearchResponse) else None,
         )
-    elif (
-        per_second_cost := _per_second_pricing_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            response_time_ms=response_time_ms,
-            audio_seconds=audio_transcription_file_duration,
-        )
-    ) is not None:
-        return per_second_cost
-    elif custom_llm_provider == "vertex_ai":
-        cost_router: Final = google_cost_router(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            call_type=call_type,
-        )
-        if cost_router == "cost_per_character":
-            return google_cost_per_character(
-                model=model_without_prefix,
-                custom_llm_provider=custom_llm_provider,
-                prompt_characters=prompt_characters,
-                completion_characters=completion_characters,
-                usage=usage_block,
-                service_tier=service_tier,
-                vertex_location=vertex_location,
-            )
-        elif cost_router == "cost_per_token":
-            return google_cost_per_token(
-                model=model_without_prefix,
-                custom_llm_provider=custom_llm_provider,
-                usage=usage_block,
-                service_tier=service_tier,
-                vertex_location=vertex_location,
-            )
     elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
+        return anthropic_cost_per_token(model=model, usage=usage_block, service_tier=service_tier, elapsed=elapsed)
     elif custom_llm_provider == "bedrock":
         resolved_bedrock_info: Final = bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False)
         if resolved_bedrock_info is not None:
-            return generic_cost_per_token(
-                model=model,
-                usage=usage_block,
-                custom_llm_provider="bedrock",
+            return branch_cost(
+                model,
+                "bedrock",
+                usage_block,
+                resolved_bedrock_info,
                 service_tier=service_tier,
-                model_info=resolved_bedrock_info,
+                branch=BranchFacts(rules="generic", elapsed=elapsed),
             )
-        return bedrock_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
-    elif custom_llm_provider == "openai":
-        return openai_cost_per_token(
-            model=model,
-            usage=usage_block,
-            service_tier=service_tier,
-            data_residency=data_residency,
-        )
-    elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
-    elif custom_llm_provider == "fireworks_ai":
-        return fireworks_ai_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "azure":
-        return azure_openai_cost_per_token(
-            model=model,
-            usage=usage_block,
-            response_time_ms=response_time_ms,
-            service_tier=service_tier,
-        )
-    elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
-    elif custom_llm_provider == "deepseek":
-        return deepseek_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "tencent":
-        return tencent_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "perplexity":
-        return perplexity_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "xai":
-        return xai_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "lemonade":
-        return lemonade_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
-        from litellm.llms.dashscope.cost_calculator import (
-            cost_per_token as dashscope_cost_per_token,
-        )
-
-        return dashscope_cost_per_token(model=model, usage=usage_block, custom_llm_provider=custom_llm_provider)
+        return bedrock_cost_per_token(model=model, usage=usage_block, service_tier=service_tier, elapsed=elapsed)
     elif custom_llm_provider == "azure_ai":
         return azure_ai_cost_per_token(
             model=model,
@@ -954,18 +751,91 @@ def cost_per_token(
             request_model=request_model,
             service_tier=service_tier,
         )
-    else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-        if _has_token_or_tiered_pricing(model_info):
-            return generic_cost_per_token(
-                model=model,
-                usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
-                service_tier=service_tier,
-                data_residency=data_residency,
-            )
-        verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
-        return 0.0, 0.0
+    stated: Final = _stated_cost(custom_llm_provider, usage_block)
+    priced_model, row, row_provider = _branch_row(
+        model, model_without_prefix, custom_llm_provider, usage_block, stated is not None
+    )
+    return branch_cost(
+        priced_model,
+        custom_llm_provider,
+        xai_billed_usage(usage_block) if custom_llm_provider == "xai" else usage_block,
+        row,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        branch=BranchFacts(
+            elapsed=elapsed,
+            characters=None
+            if prompt_characters is None and completion_characters is None
+            else Characters(prompt=prompt_characters, completion=completion_characters),
+            embedding=call_type in _EMBEDDING_CALL_TYPES,
+            reported=stated,
+        ),
+        row_provider=row_provider,
+    )
+
+
+_EMBEDDING_CALL_TYPES: Final = frozenset({CallTypes.embedding.value, CallTypes.aembedding.value})
+
+_MODEL_INFO_BRANCHES: Final = frozenset(
+    {"openai", "azure", "gemini", "deepseek", "tencent", "dashscope", "qwencloud", "qwen_ai_platform"}
+)
+
+
+def _custom_pricing(
+    custom_cost_per_token: CostPerToken | None, custom_cost_per_second: float | None
+) -> CustomPricing | None:
+    if custom_cost_per_token is not None:
+        return CustomPricing(
+            per_token=CustomRates(
+                input=custom_cost_per_token["input_cost_per_token"],
+                output=custom_cost_per_token["output_cost_per_token"],
+                cache_read=custom_cost_per_token.get("cache_read_input_token_cost"),
+                cache_write=custom_cost_per_token.get("cache_creation_input_token_cost"),
+            ),
+            per_second=None,
+        )
+    if custom_cost_per_second is not None:
+        return CustomPricing(per_token=None, per_second=custom_cost_per_second)
+    return None
+
+
+def _stated_cost(custom_llm_provider: str, usage: Usage) -> ReportedCost | None:
+    """The cost a provider billed from its own usage fields reported, which its branch bills instead of tokens."""
+    if custom_llm_provider == "perplexity":
+        return perplexity_stated_cost(usage)
+    if custom_llm_provider != "xai":
+        return None
+    reported: Final = xai_stated_cost(usage)
+    return None if reported is None else ReportedCost(source="usage.cost", usd=reported)
+
+
+def _branch_row(
+    model: str, model_without_prefix: str, custom_llm_provider: str, usage: Usage, stated: bool
+) -> tuple[str, Mapping[str, object] | None, str | None]:
+    """The model name, the row and the provider the row is lowered under for ``custom_llm_provider``'s branch of
+    ``cost_per_token``, each looked up the way that branch looked it up. A lookup raises for an unmapped model, as
+    main's did."""
+    if custom_llm_provider == "vertex_ai":
+        return (
+            model_without_prefix,
+            litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider),
+            None,
+        )
+    if custom_llm_provider == "databricks":
+        return model, databricks_pricing_row(model), None
+    if custom_llm_provider == "fireworks_ai":
+        fireworks_row: Final = fireworks_pricing_row(model)
+        return model, fireworks_row, fireworks_row["litellm_provider"]
+    if custom_llm_provider == "perplexity":
+        return model, perplexity_pricing_row(model, usage), None
+    if custom_llm_provider == "xai":
+        return model, xai_pricing_row(model, stated), None
+    if custom_llm_provider == "lemonade":
+        return model, None, None
+    if custom_llm_provider in _MODEL_INFO_BRANCHES:
+        return model, litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider), None
+    return model, cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider), None
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):

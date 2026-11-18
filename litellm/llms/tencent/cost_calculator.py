@@ -1,16 +1,17 @@
 from typing import Final
 
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
     flat_image_cost,
-    generic_cost_per_token,
     resolve_image_model_info,
 )
 from litellm.types.utils import ImageResponse, ModelInfo, Usage
+from litellm.utils import get_model_info
 
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
-    return generic_cost_per_token(model=model, usage=usage, custom_llm_provider="tencent")
+    return branch_cost(model, "tencent", usage, get_model_info(model=model, custom_llm_provider="tencent"))
 
 
 def _deployment_image_token_pricing(model_info: ModelInfo | None) -> ModelInfo | None:
