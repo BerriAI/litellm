@@ -11,15 +11,26 @@ import re
 import time
 import unittest
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.served_output_texts import (
+    LOGGED_RESPONSE_OVERRIDE_KEY,
+    SERVED_OUTPUT_TEXTS_KEY,
+    logged_stream_chunks,
+    record_served_output_texts,
+    served_output_texts,
+    served_stream_output_texts,
+)
 from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
 from litellm.proxy.guardrails.guardrail_initializers import initialize_ztds
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 
 def _expect_dict(value: object) -> dict[str, object]:  # mutable-ok: test helper narrows dynamic JSON dict
@@ -971,6 +982,112 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("alice@example.com", relaxed_blocks[0]["text"])
         self.assertIn("[EMAIL_TOKEN_", relaxed_blocks[0]["text"])
         self.assertEqual(relaxed_blocks[1], {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}})
+
+    async def test_restored_output_and_pre_call_inputs_stay_tokenized_in_logging_backends(self) -> None:
+        self.assertFalse(bool(litellm.turn_off_message_logging))
+
+        raw_nonstream_msgs: Final[list[dict[str, object]]] = [  # mutable-ok: mutable message fixture
+            {"role": "user", "content": "Email alice@corp.com"}
+        ]
+        logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[dict(m) for m in raw_nonstream_msgs],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-log-nonstream",
+            function_id="",
+        )
+        req: Final[dict[str, object]] = {  # mutable-ok: proxy request payload fixture
+            "litellm_call_id": "call-log-nonstream",
+            "litellm_logging_obj": logging_obj,
+            "messages": raw_nonstream_msgs,
+            "input": "Email alice@corp.com",
+        }
+        await self.guardrail.async_pre_call_hook({}, {}, req, "acompletion")
+        self.assertNotIn("alice@corp.com", str(logging_obj.messages))
+        self.assertNotIn("alice@corp.com", str(logging_obj.model_call_details.get("input")))
+        self.assertIn("[EMAIL_TOKEN_", str(logging_obj.messages))
+        self.assertIn("[EMAIL_TOKEN_", str(logging_obj.model_call_details.get("input")))
+
+        provider_resp: Final = ModelResponse(
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Sent to [EMAIL_TOKEN_1]"}}]
+        )
+        caller_resp: Final = await self.guardrail.async_post_call_success_hook(req, {}, provider_resp)
+        self.assertIsInstance(caller_resp, ModelResponse)
+        assert isinstance(caller_resp, ModelResponse)
+        self.assertEqual(caller_resp.choices[0].message.content, "Sent to alice@corp.com")
+
+        # Simulate common_request_processing.py recording served_output_texts after post_call_success_hook
+        record_served_output_texts(logging_obj.model_call_details, served_output_texts(caller_resp))
+        self.assertEqual(logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY), ("Sent to [EMAIL_TOKEN_1]",))
+
+        logged_final: Final = StandardLoggingPayloadSetup.get_final_response_obj(
+            provider_resp.model_dump(),
+            provider_resp,
+            logging_obj.model_call_details,
+        )
+        self.assertNotIn("alice@corp.com", str(logged_final))
+        self.assertIn("[EMAIL_TOKEN_1]", str(logged_final))
+        self.assertNotIn("alice@corp.com", str(req.get(LOGGED_RESPONSE_OVERRIDE_KEY)))
+
+        raw_stream_msgs: Final[list[dict[str, object]]] = [  # mutable-ok: mutable streaming message fixture
+            {"role": "user", "content": "Contact bob@corp.com"}
+        ]
+        stream_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[dict(m) for m in raw_stream_msgs],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-log-stream",
+            function_id="",
+        )
+        stream_req: Final[dict[str, object]] = {  # mutable-ok: proxy streaming request payload fixture
+            "litellm_call_id": "call-log-stream",
+            "litellm_logging_obj": stream_logging_obj,
+            "messages": raw_stream_msgs,
+            "stream": True,
+        }
+        await self.guardrail.async_pre_call_hook({}, {}, stream_req, "acompletion")
+        self.assertNotIn("bob@corp.com", str(stream_logging_obj.messages))
+        self.assertIn("[EMAIL_TOKEN_", str(stream_logging_obj.messages))
+
+        async def _provider_stream() -> AsyncGenerator[ModelResponseStream, None]:
+            yield ModelResponseStream(choices=[{"index": 0, "delta": {"content": "Echo "}, "finish_reason": None}])
+            yield ModelResponseStream(
+                choices=[{"index": 0, "delta": {"content": "[EMAIL_TOKEN_1]"}, "finish_reason": None}]
+            )
+            yield ModelResponseStream(choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}])
+
+        served_chunks: Final[list[ModelResponseStream]] = []  # mutable-ok: accumulated caller chunks
+        async for chunk in self.guardrail.async_post_call_streaming_iterator_hook({}, _provider_stream(), stream_req):
+            served_chunks.append(chunk)
+
+        caller_text: Final = "".join(c.choices[0].delta.content or "" for c in served_chunks)
+        self.assertEqual(caller_text, "Echo bob@corp.com!")
+
+        # Simulate ProxyLogging._record_served_stream_output after stream completes
+        record_served_output_texts(stream_logging_obj.model_call_details, served_stream_output_texts(served_chunks))
+        self.assertEqual(
+            stream_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY),
+            ("Echo [EMAIL_TOKEN_1]!",),
+        )
+
+        tokenized_assembled: Final = ModelResponse(
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Echo [EMAIL_TOKEN_1]!"}}]
+        )
+        logged_stream_final: Final = StandardLoggingPayloadSetup.get_final_response_obj(
+            tokenized_assembled.model_dump(),
+            tokenized_assembled,
+            stream_logging_obj.model_call_details,
+        )
+        self.assertNotIn("bob@corp.com", str(logged_stream_final))
+        self.assertIn("[EMAIL_TOKEN_1]", str(logged_stream_final))
+
+        langfuse_logged_chunks: Final = logged_stream_chunks(stream_req, served_chunks)
+        self.assertNotIn("bob@corp.com", str(langfuse_logged_chunks))
+        self.assertIn("[EMAIL_TOKEN_1]", str(langfuse_logged_chunks))
 
 
 if __name__ == "__main__":

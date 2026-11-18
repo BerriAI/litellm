@@ -26,6 +26,14 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
+from litellm.litellm_core_utils.served_output_texts import (
+    LOGGED_RESPONSE_OVERRIDE_KEY,
+    LOGGED_STREAM_CHUNKS_OVERRIDE_KEY,
+    PRESERVE_SERVED_OUTPUT_TEXTS_KEY,
+    SERVED_OUTPUT_TEXTS_KEY,
+    served_output_texts,
+    served_stream_output_texts,
+)
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponseStream
 
@@ -769,6 +777,7 @@ class ZTDSGuardrail(CustomGuardrail):
         try:
             self._sanitize_request_mapping(data, session_id)
             self._sanitize_caller_metadata(data, session_id)
+            self._sync_logging_object_pre_call(data.get("litellm_logging_obj"), session_id)
         except Exception:
             self.zeroize_session(session_id)
             data.pop("_ztds_session_id", None)
@@ -840,6 +849,10 @@ class ZTDSGuardrail(CustomGuardrail):
                     raw_calls, session_id, is_caller_visible=True, parent_key="tool_calls"
                 )
                 updated_inputs["tool_calls"] = sanitized_calls  # pyright: ignore[reportGeneralTypeIssues]  # preserves tool call dicts cleanly while sanitizing arguments
+            self._sync_logging_object_pre_call(
+                logging_obj if logging_obj is not None else request_data.get("litellm_logging_obj"),
+                session_id,
+            )
         except Exception:
             self.zeroize_session(session_id)
             request_data.pop("_ztds_session_id", None)
@@ -926,6 +939,103 @@ class ZTDSGuardrail(CustomGuardrail):
             parts = content_dict.get("parts") if content_dict is not None else attribute_or_none(cand_content, "parts")
             self._restore_parts_sequence(parts, session_id)
 
+    def _sync_logging_object_pre_call(self, logging_obj: object, session_id: str) -> None:
+        if logging_obj is None:
+            return
+        raw_messages: Final = attribute_or_none(logging_obj, "messages")
+        if raw_messages is not None:
+            sanitized_messages: Final = self._sanitize_payload_node(
+                raw_messages, session_id, is_caller_visible=True, parent_key="messages"
+            )
+            update_fn: Final = attribute_or_none(logging_obj, "update_messages")
+            if callable(update_fn):
+                _ = update_fn(sanitized_messages)
+        model_call_details: Final = _as_str_dict(attribute_or_none(logging_obj, "model_call_details"))
+        if model_call_details is None:
+            return
+        for field_key in ("input", "messages", "prompt"):
+            raw_field = model_call_details.get(field_key)
+            if raw_field is not None:
+                model_call_details[field_key] = self._sanitize_payload_node(
+                    raw_field, session_id, is_caller_visible=True, parent_key=field_key
+                )
+        lp_dict: Final = _as_str_dict(model_call_details.get("litellm_params"))
+        if lp_dict is not None:
+            self._sanitize_caller_metadata(lp_dict, session_id)
+        if self.reverse_on_output:
+            model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
+
+    def _lock_tokenized_logging_output(
+        self,
+        data: dict[str, object],  # mutable-ok: record tokenized logging override on request carrier
+        tokenized_response: object,
+    ) -> None:
+        data[LOGGED_RESPONSE_OVERRIDE_KEY] = (  # rebind-ok: preserve pre-restoration response for loggers
+            tokenized_response
+        )
+        model_call_details: Final = _as_str_dict(
+            attribute_or_none(data.get("litellm_logging_obj"), "model_call_details")
+        )
+        if model_call_details is None:
+            return
+        tokenized_texts: Final = served_output_texts(tokenized_response)
+        if tokenized_texts is not None:
+            model_call_details[SERVED_OUTPUT_TEXTS_KEY] = tokenized_texts
+        else:
+            model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
+        model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
+
+    def _arm_stream_logging_lock(self, request_data: Mapping[str, object]) -> None:
+        model_call_details: Final = _as_str_dict(
+            attribute_or_none(request_data.get("litellm_logging_obj"), "model_call_details")
+        )
+        if model_call_details is not None:
+            model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
+
+    def _lock_tokenized_stream_logging(
+        self,
+        request_data: dict[str, object],  # mutable-ok: record tokenized stream override on request carrier
+        tokenized_chunks: Sequence[object],
+    ) -> None:
+        chunk_tuple: Final = tuple(tokenized_chunks)
+        request_data[LOGGED_STREAM_CHUNKS_OVERRIDE_KEY] = (  # rebind-ok: preserve pre-restoration stream chunks
+            chunk_tuple
+        )
+        model_call_details: Final = _as_str_dict(
+            attribute_or_none(request_data.get("litellm_logging_obj"), "model_call_details")
+        )
+        if model_call_details is None:
+            return
+        tokenized_texts: Final = served_stream_output_texts(chunk_tuple)
+        if tokenized_texts is not None:
+            model_call_details[SERVED_OUTPUT_TEXTS_KEY] = tokenized_texts
+        else:
+            model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
+        model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
+
+    def _restore_stream_chunk(self, chunk: object, session_id: str) -> object:
+        caller_chunk: Final = copy.deepcopy(chunk)
+        chunk_dict: Final = _as_dict(caller_chunk)
+        if chunk_dict is not None:
+            raw_choices: Final = _as_list(chunk_dict.get("choices"))
+            if raw_choices is not None:
+                for entry in raw_choices:
+                    choice_dict = _as_dict(entry)
+                    if choice_dict is not None:
+                        delta_dict = _as_dict(choice_dict.get("delta"))
+                        if delta_dict is not None and isinstance(delta_dict.get("content"), str):
+                            delta_dict["content"] = self.restore_text(str(delta_dict["content"]), session_id)
+            return caller_chunk
+        choices: Final = _as_sequence(attribute_or_none(caller_chunk, "choices"))
+        if choices is not None:
+            for choice in choices:
+                delta = attribute_or_none(choice, "delta")
+                if delta is not None:
+                    content = attribute_or_none(delta, "content")
+                    if isinstance(content, str):
+                        delta.content = self.restore_text(content, session_id)  # pyright: ignore[reportAttributeAccessIssue]  # stream delta exposes mutable .content
+        return caller_chunk
+
     async def async_post_call_success_hook(
         self,
         data: dict[str, object],  # mutable-ok: inherited post_call hook signature
@@ -939,6 +1049,7 @@ class ZTDSGuardrail(CustomGuardrail):
 
         try:
             if self.reverse_on_output:
+                self._lock_tokenized_logging_output(data, response)
                 caller_response: Final = copy.deepcopy(response)
                 response_dict: Final = _as_dict(caller_response)
                 if response_dict is not None:
@@ -998,35 +1109,20 @@ class ZTDSGuardrail(CustomGuardrail):
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Restores caller-visible tokens across stream chunks and zeroizes session on exit."""
         session_id: Final = self._extract_session_id(request_data)
+        should_restore: Final = session_id is not None and self.reverse_on_output
+        tokenized_chunks: Final[list[object]] = []  # mutable-ok: retain pre-restoration stream chunks for logging
+        if should_restore:
+            self._arm_stream_logging_lock(request_data)
         try:
             async for chunk in response:
-                if session_id is not None and self.reverse_on_output:
-                    caller_chunk = copy.deepcopy(chunk)
-                    chunk_dict = _as_dict(caller_chunk)
-                    if chunk_dict is not None:
-                        raw_choices = _as_list(chunk_dict.get("choices"))
-                        if raw_choices is not None:
-                            for entry in raw_choices:
-                                choice_dict = _as_dict(entry)
-                                if choice_dict is not None:
-                                    delta_dict = _as_dict(choice_dict.get("delta"))
-                                    if delta_dict is not None and isinstance(delta_dict.get("content"), str):
-                                        delta_dict["content"] = self.restore_text(
-                                            str(delta_dict["content"]), session_id
-                                        )
-                    else:
-                        choices = _as_sequence(attribute_or_none(caller_chunk, "choices"))
-                        if choices is not None:
-                            for choice in choices:
-                                delta = attribute_or_none(choice, "delta")
-                                if delta is not None:
-                                    content = attribute_or_none(delta, "content")
-                                    if isinstance(content, str):
-                                        delta.content = self.restore_text(content, session_id)  # pyright: ignore[reportAttributeAccessIssue]  # stream delta exposes mutable .content
-                    yield caller_chunk  # pyright: ignore[reportReturnType]  # yields ModelResponseStream or test/dict chunk wrapper
+                if should_restore and session_id is not None:
+                    tokenized_chunks.append(chunk)
+                    yield self._restore_stream_chunk(chunk, session_id)  # pyright: ignore[reportReturnType]  # yields ModelResponseStream or test/dict chunk wrapper
                 else:
                     yield chunk  # pyright: ignore[reportReturnType]  # yields ModelResponseStream or test/dict chunk wrapper
         finally:
+            if should_restore:
+                self._lock_tokenized_stream_logging(request_data, tokenized_chunks)
             if session_id is not None:
                 self.zeroize_session(session_id)
 

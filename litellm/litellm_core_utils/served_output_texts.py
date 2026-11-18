@@ -3,7 +3,7 @@ post-call guardrail rewrote rather than the provider response the proxy assemble
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal
 
@@ -13,10 +13,14 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 
 SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
+PRESERVE_SERVED_OUTPUT_TEXTS_KEY: Final = "preserve_served_output_texts"
+LOGGED_RESPONSE_OVERRIDE_KEY: Final = "_litellm_logged_response_override"
+LOGGED_STREAM_CHUNKS_OVERRIDE_KEY: Final = "_litellm_logged_stream_chunks_override"
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
 _TEXTS: Final = TypeAdapter(tuple[str | None, ...])
+_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
 
 ServedTexts = tuple[str | None, ...]
 
@@ -164,9 +168,19 @@ def _indexed_texts_by_choice(indexed_texts: Sequence[tuple[int, str | None]]) ->
 
 
 def record_served_output_texts(model_call_details: dict[str, object], texts: ServedTexts | None) -> None:
-    if texts is None:
+    if texts is None or model_call_details.get(PRESERVE_SERVED_OUTPUT_TEXTS_KEY) is True:
         return
     model_call_details[SERVED_OUTPUT_TEXTS_KEY] = texts  # rebind-ok: model_call_details is the shared kwargs bag
+
+
+def logged_stream_chunks(request_data: Mapping[str, object], relayed: Sequence[object]) -> Sequence[object]:
+    override: Final = request_data.get(LOGGED_STREAM_CHUNKS_OVERRIDE_KEY)
+    if override is None:
+        return relayed
+    try:
+        return _OBJECT_TUPLE.validate_python(override)
+    except ValidationError:
+        return relayed
 
 
 def overlay_served_output_texts(

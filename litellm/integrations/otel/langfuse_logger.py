@@ -19,6 +19,10 @@ from litellm.integrations.otel.model.request_io import request_input, response_o
 from litellm.integrations.otel.model.trace_controls import caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.context import request_root_span
+from litellm.litellm_core_utils.served_output_texts import (
+    LOGGED_RESPONSE_OVERRIDE_KEY,
+    logged_stream_chunks,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -85,7 +89,8 @@ class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
         user_api_key_dict: "UserAPIKeyAuth",
         response: object,
     ) -> None:
-        self._stamp_root_io(data, lambda: response_output(response))
+        logged_response: Final = data.get(LOGGED_RESPONSE_OVERRIDE_KEY, response)
+        self._stamp_root_io(data, lambda: response_output(logged_response))
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -101,7 +106,9 @@ class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
         async for chunk in response:
             relayed.append(chunk)
             yield chunk
-        self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))
+        self._stamp_root_io(
+            request_data, lambda: stream_output(logged_stream_chunks(request_data, tuple(relayed)), request_data)
+        )
 
     def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
         if not self._capture_span_content():
