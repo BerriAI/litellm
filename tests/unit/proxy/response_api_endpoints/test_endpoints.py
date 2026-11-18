@@ -4426,7 +4426,10 @@ class TestResponsesWSFirstFrameModelAuth:
 
         refusal = RateLimitError(message="No deployments available", llm_provider="openai", model="gpt-4o-mini")
 
+        record = {"guardrail_name": "presidio", "guardrail_status": guardrail}
+
         def run_guardrail(user_api_key_dict, data, call_type, guardrails_only):
+            data["litellm_metadata"]["standard_logging_guardrail_information"] = [record]
             if guardrail == "blocks":
                 raise ValueError("the guardrail blocked an email")
             return {**data, "input": data["input"].replace("qa@example.com", "<EMAIL_ADDRESS>")}
@@ -4436,6 +4439,7 @@ class TestResponsesWSFirstFrameModelAuth:
         assert failure["original_exception"] is refusal
         assert failure["request_data"]["proxy_server_request"] == {**_HOTEL_CONNECTION_REQUEST, "body": stored_body}
         assert [json.loads(row["proxy_server_request"]) for row in rows] == [stored_body]
+        assert [json.loads(row["metadata"])["guardrail_information"] for row in rows] == [[record]]
 
     @pytest.mark.asyncio
     async def test_a_relay_crash_after_a_guarded_frame_keeps_the_connection_request_on_its_failure_row(self):

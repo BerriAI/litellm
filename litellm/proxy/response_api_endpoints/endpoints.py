@@ -2724,11 +2724,12 @@ class _FailedTurns:
     it returns one, and see every refused turn's guardrail records, but they write no second row for them. A close on
     any other error writes that error's own row, which must not bill the refused turns' guardrail records again. When
     that error is the first turn the provider failed, its row stores that turn's request, not the connection's. A
-    socket whose relay guarded no frame failed on its first frame, so that row stores the first frame's request."""
+    socket whose relay guarded no frame failed on its first frame, so that row stores the first frame's request and
+    the guardrail records of the walk that shaped it, as an HTTP request the router refuses after its guardrails."""
 
     first: Exception | None = None
     records: tuple[Mapping[str, object], ...] = ()
-    failed_turn: tuple[Exception, Mapping[str, object]] | None = None
+    failed_turn: tuple[Exception, Mapping[str, object], tuple[Mapping[str, object], ...]] | None = None
     guarded_a_frame: bool = False
 
     def saw_frame(self) -> None:
@@ -2739,28 +2740,37 @@ class _FailedTurns:
         if self.first is None:
             self.first = refusal
 
-    def add_failed_turn(self, failure: Exception, request_body: Mapping[str, object]) -> None:
+    def add_failed_turn(
+        self,
+        failure: Exception,
+        request_body: Mapping[str, object],
+        guardrail_information: tuple[Mapping[str, object], ...] = (),
+    ) -> None:
         if self.failed_turn is None:
-            self.failed_turn = (failure, request_body)
+            self.failed_turn = (failure, request_body, guardrail_information)
 
     def failure_hook_data(self, exception: Exception, request_data: Mapping[str, object]) -> Mapping[str, object]:
         if self.failed_turn is not None and exception is self.failed_turn[0]:
-            return _with_turn_request(request_data, self.failed_turn[1])
+            _failure, request_body, guardrail_information = self.failed_turn
+            return _with_guardrail_information(_with_turn_request(request_data, request_body), guardrail_information)
         if exception is not self.first:
             return request_data
-        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
-        bucket: Final = request_data.get(metadata_key)
-        fields: Final = _WS_FRAME.validate_python(bucket) if isinstance(bucket, dict) else {}
-        recorded: Final = (*_recorded_guardrail_information(fields), *self.records)
         return {
-            **request_data,
+            **_with_guardrail_information(request_data, self.records),
             FAILURE_ROW_ALREADY_WRITTEN_KEY: FAILURE_ROW_ALREADY_WRITTEN,
-            **(
-                {metadata_key: {**fields, _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in recorded]}}
-                if recorded
-                else {}
-            ),
         }
+
+
+def _with_guardrail_information(
+    request_data: Mapping[str, object], records: tuple[Mapping[str, object], ...]
+) -> Mapping[str, object]:
+    if not records:
+        return request_data
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
+    bucket: Final = request_data.get(metadata_key)
+    fields: Final = _WS_FRAME.validate_python(bucket) if isinstance(bucket, dict) else {}
+    recorded: Final = (*_recorded_guardrail_information(fields), *records)
+    return {**request_data, metadata_key: {**fields, _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in recorded]}}
 
 
 def _first_frame_request_recorder(failed_turns: _FailedTurns, failure: Exception) -> _RejectedFrameBiller:
@@ -2774,7 +2784,11 @@ def _first_frame_request_recorder(failed_turns: _FailedTurns, failure: Exception
             _PROXY_SERVER_REQUEST_ADAPTER.validate_python(stored).get("body") if isinstance(stored, dict) else None
         )
         if isinstance(body, dict):
-            failed_turns.add_failed_turn(failure, _WS_FRAME.validate_python(body))
+            failed_turns.add_failed_turn(
+                failure,
+                _WS_FRAME.validate_python(body),
+                _recorded_guardrail_information(frame_data.get(get_metadata_variable_name_from_kwargs(frame_data))),
+            )
 
     return record_blocked_first_frame
 
@@ -2788,7 +2802,7 @@ async def _add_first_frame_request(
         guarded: Final = await guard(first_message)
     except Exception:  # noqa: BLE001  # the guard's biller already recorded a blocked frame's request
         return
-    failed_turns.add_failed_turn(failure, responses_ws_turn_request_body(guarded.frame))
+    failed_turns.add_failed_turn(failure, responses_ws_turn_request_body(guarded.frame), guarded.guardrail_information)
 
 
 def _with_turn_request(request_data: Mapping[str, object], request_body: Mapping[str, object]) -> Mapping[str, object]:

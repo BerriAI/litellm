@@ -2978,7 +2978,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
-        description="With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.",
+        description="With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses over HTTP or WebSocket without previous_response_id or conversation): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.",
     )
     claude_code_marketplace_auth_required: bool = Field(
         False,
