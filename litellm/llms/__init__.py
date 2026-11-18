@@ -25,27 +25,9 @@ def get_cost_for_google_maps_grounding_request(
     Gemini API and Vertex AI can populate the Maps grounding counter, so every other provider
     returns None.
     """
-    if custom_llm_provider != "gemini" and not custom_llm_provider.startswith("vertex_ai"):
-        return None
-    from .gemini.cost_calculator import cost_per_google_maps_grounding_request
+    from litellm.llms.gemini.cost_calculator import maps_grounding_cost
 
-    return cost_per_google_maps_grounding_request(usage=usage, model_info=model_info)
-
-
-def _with_served_model_search_pricing(
-    model_info: "ModelInfo",
-    response_model: str | None,
-    served_model_provider: str,
-    lookup_model_info: "Callable[[str, str | None], ModelInfo | None] | None",
-) -> "ModelInfo":
-    if model_info.get("search_context_cost_per_query") is not None or response_model is None:
-        return model_info
-    served_model_info: Final = (
-        lookup_model_info(response_model, served_model_provider) if lookup_model_info is not None else None
-    )
-    if served_model_info is None:
-        return model_info
-    return {**model_info, "search_context_cost_per_query": served_model_info.get("search_context_cost_per_query")}
+    return maps_grounding_cost(usage, model_info, custom_llm_provider)
 
 
 def get_cost_for_web_search_request(
@@ -56,7 +38,8 @@ def get_cost_for_web_search_request(
     lookup_model_info: "Callable[[str, str | None], ModelInfo | None] | None" = None,
 ) -> float | None:
     """
-    Get the cost for a web search request for a given model.
+    Get the cost for a web search request for a given model, priced in Rust by the provider's own calculator.
+    ``None`` for a provider without one.
 
     Args:
         custom_llm_provider: The custom LLM provider.
@@ -65,66 +48,9 @@ def get_cost_for_web_search_request(
         response_model: The model the provider response names.
         lookup_model_info: Looks up a model's cost map entry, returning None when it is not mapped.
     """
-    if custom_llm_provider == "gemini":
-        from .gemini.cost_calculator import cost_per_web_search_request
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import price_web_search_dispatch
 
-        return cost_per_web_search_request(usage=usage, model_info=model_info)
-    elif custom_llm_provider == "anthropic":
-        from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
-
-        return get_cost_for_anthropic_web_search(
-            model_info=_with_served_model_search_pricing(model_info, response_model, "anthropic", lookup_model_info),
-            usage=usage,
-        )
-    elif custom_llm_provider.startswith("vertex_ai"):
-        # Anthropic Claude models on Vertex AI populate server_tool_use.web_search_requests
-        # (same as the direct Anthropic API), not prompt_tokens_details.web_search_requests
-        # (which is the Gemini field). Route claude-* models to the Anthropic calculator.
-        model_key: Final[str] = model_info.get("key", "") if model_info else ""
-        if "claude" in (response_model or model_key).lower():
-            from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
-
-            verbose_logger.debug("vertex_ai/claude model detected — routing web search cost to Anthropic calculator")
-            return get_cost_for_anthropic_web_search(
-                model_info=_with_served_model_search_pricing(
-                    model_info, response_model, "vertex_ai", lookup_model_info
-                ),
-                usage=usage,
-            )
-
-        from .vertex_ai.gemini.cost_calculator import (
-            cost_per_web_search_request as cost_per_web_search_request_vertex_ai,
-        )
-
-        return cost_per_web_search_request_vertex_ai(usage=usage, model_info=model_info)
-    elif custom_llm_provider == "azure_ai":
-        from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
-
-        azure_ai_model_key: Final[str] = model_info.get("key", "") if model_info else ""
-        if "claude" not in azure_ai_model_key.lower() and get_web_search_requests_from_usage(usage) is None:
-            return None
-        from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
-
-        return get_cost_for_anthropic_web_search(
-            model_info=_with_served_model_search_pricing(model_info, response_model, "azure_ai", lookup_model_info),
-            usage=usage,
-        )
-    elif custom_llm_provider == "perplexity":
-        # Perplexity handles search costs internally in its own cost calculator
-        # Return 0.0 to indicate costs are already accounted for
-        return 0.0
-    elif custom_llm_provider == "xai":
-        from .xai.cost_calculator import cost_per_web_search_request
-
-        return cost_per_web_search_request(usage=usage, model_info=model_info)
-    elif custom_llm_provider == "groq":
-        from .groq.cost_calculator import (
-            cost_per_web_search_request as groq_cost_per_web_search_request,
-        )
-
-        return groq_cost_per_web_search_request(usage=usage, model_info=model_info)
-    else:
-        return None
+    return price_web_search_dispatch(custom_llm_provider, usage, model_info, response_model, lookup_model_info)
 
 
 def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTranslation"]]:
