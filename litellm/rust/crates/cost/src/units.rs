@@ -8,7 +8,9 @@ use crate::call::CallContext;
 use crate::money::{UnitPrice, Usd};
 use crate::price::{Channel, Meter, Price, ServiceTier, When};
 use crate::priced::{Line, Outcome, Quantity, Side};
-use crate::query::{Basis, Candidate, Header, PriceSource};
+use crate::query::{
+    AdjustmentPolicy, Basis, Candidate, Header, PriceSource, TokenRules, TokenUsage, TokensQuery,
+};
 use crate::receipt::{Breakdown, PriceOutcome, Receipt, Unpriced};
 use crate::row::{LoweredRow, RowRef, RowSource};
 use crate::usage::Usage;
@@ -126,6 +128,42 @@ pub(crate) fn bill<S: RowSource>(
         )
         .into(),
     }
+}
+
+/// The token usage a speech or transcription call reported and the row main's `generic_cost_per_token` read for it
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+pub struct TokenBilled {
+    pub row: RowRef,
+    pub usage: TokenUsage,
+}
+
+/// `generic_cost_per_token` of `tokens` with the header's service tier and data residency, as main bills a speech or
+/// transcription call whose row prices tokens
+pub(crate) fn generic_tokens<S: RowSource>(
+    source: &S,
+    header: &Header,
+    tokens: &TokenBilled,
+) -> PriceOutcome {
+    let query = TokensQuery {
+        rules: TokenRules::Generic,
+        ..TokensQuery::new(
+            Header {
+                source: PriceSource::Row {
+                    row: tokens.row.clone(),
+                },
+                basis: Basis {
+                    vertex_location: None,
+                    ..header.basis.clone()
+                },
+                adjustments: AdjustmentPolicy::None,
+                reported: None,
+                ..header.clone()
+            },
+            tokens.usage.clone(),
+        )
+    };
+    crate::tokens::price(source, &query)
 }
 
 /// Billed lines, the meters the call used that no row prices, and each side's total
