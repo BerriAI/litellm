@@ -6338,7 +6338,47 @@ def _bridged_transform_request(
     )
 
 
-@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("conversation", ["conv_prior", {"id": "conv_prior"}, None, ""])
+@pytest.mark.parametrize("nested", [False, True])
+def test_unforwarded_conversation_keeps_chat_system_prompt_in_cacheable_input(conversation: object, nested: bool) -> None:
+    kwargs: Final = {"extra_body": {"conversation": conversation}} if nested else {"conversation": conversation}
+    response_body: Final = {
+        "id": "resp_conversation",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_conversation",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "QA_OK", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        litellm.completion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            **kwargs,
+        )
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6.2-sol",
+        "input": [
+            {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Be brief."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        ],
+    }
+
+
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}])
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
 def test_chained_turn_keeps_leading_system_strings_in_instructions(
     continuation: dict[str, str], location: str
