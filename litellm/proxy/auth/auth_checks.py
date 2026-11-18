@@ -1827,37 +1827,21 @@ async def common_checks(
     return True
 
 
+def _default_internal_user_params() -> Mapping[str, object]:
+    return litellm.default_internal_user_params or {}
+
+
 def _default_role_for_unset_user_role() -> LitellmUserRoles:
-    """
-    Role applied when a user's stored role is null or invalid. Uses the
-    configured Default Role from `default_internal_user_params` when one is
-    set, and INTERNAL_USER_VIEW_ONLY otherwise, matching the defaults in
-    DefaultInternalUserParams, SSO login, and SCIM provisioning.
-    """
-    if litellm.default_internal_user_params:
-        configured_role: Final = litellm.default_internal_user_params.get("user_role")
-        if isinstance(configured_role, LitellmUserRoles):
-            return configured_role
-        if configured_role is not None:
-            try:
-                return LitellmUserRoles(configured_role)
-            except ValueError:
-                pass
-    return LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    if _default_internal_user_params().get("user_role") == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY:
+        return LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    return LitellmUserRoles.INTERNAL_USER
 
 
 def effective_user_role(user_role: str | None) -> LitellmUserRoles:
     try:
         return LitellmUserRoles(user_role)
     except ValueError:
-        fallback: Final = _default_role_for_unset_user_role()
-        verbose_proxy_logger.warning(
-            "effective_user_role: stored user_role %r is not a valid role. "
-            "Evaluating as %s instead. Assign the user an explicit role to resolve this.",
-            user_role,
-            fallback.value,
-        )
-        return fallback
+        return _default_role_for_unset_user_role()
 
 
 def get_user_role(
@@ -3271,7 +3255,7 @@ async def get_user_object(
                 )
                 from litellm.proxy.management_helpers.utils import initial_budget_windows_json
 
-                default_params: Final[Mapping[str, object]] = litellm.default_internal_user_params or {}
+                default_params: Final = _default_internal_user_params()
                 scalar_default_params: Final = {
                     key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
                 }
