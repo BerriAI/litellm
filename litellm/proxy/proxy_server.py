@@ -12169,10 +12169,10 @@ class ProxyStartupEvent:
         from litellm.proxy.mcp_server.utils import is_mcp_available
 
         if is_mcp_available() and should_load_db_object("mcp"):
-            from litellm.proxy.mcp_server.auth_profile_db import startup_profile_refusal
+            from litellm.proxy.management_helpers.mcp_auth_profile_grants import mcp_auth_profile_startup_refusal
             from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-            profile_refusal: Final = await startup_profile_refusal(
+            profile_refusal: Final = await mcp_auth_profile_startup_refusal(
                 global_mcp_server_manager.config_mcp_servers.values(), prisma_client
             )
             if profile_refusal is not None:

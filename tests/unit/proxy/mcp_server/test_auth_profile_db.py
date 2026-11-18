@@ -15,6 +15,7 @@ from litellm.proxy.mcp_server.auth_profiles import (
     UnsupportedOAuth2Flow,
     UnsupportedProfileHost,
 )
+from litellm.proxy.management_helpers.mcp_auth_profile_grants import GrantHolder, StillGranted
 from litellm.proxy.mcp_server.auth_profile_db import StoredProfileOwners, SubmittedProfiles, startup_profile_refusal
 from litellm.proxy.mcp_server.db import McpIdentifierConflict, create_mcp_server_if_identifier_free, update_mcp_server
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
@@ -1049,6 +1050,74 @@ async def test_a_put_turning_a_profiled_server_into_stdio_is_refused(monkeypatch
 
     assert refused == UnsupportedProfileHost("analytics", "stdio")
     assert ([dict(row) for row in store.servers], store.profiles) == before
+
+
+async def test_a_put_dropping_a_granted_profile_is_refused_and_rolled_back() -> None:
+    store: Final = FakeMcpPrisma()
+    await _two_profile_server(store)
+    store.key_grants["nightly-bot"] = ["B"]
+    before: Final = [dict(row) for row in store.profiles]
+
+    refused: Final = await _update(
+        store, UpdateMCPServerWithProfilesRequest(server_id="analytics", additional_auth=[_bot("A")]), "admin"
+    )
+    emptied: Final = await _update(
+        store, UpdateMCPServerWithProfilesRequest(server_id="analytics", additional_auth=[]), "admin"
+    )
+
+    assert refused == emptied == StillGranted((GrantHolder("key", "nightly-bot", ("B",)),))
+    assert store.profiles == before
+
+
+@pytest.mark.asyncio
+async def test_a_put_cannot_drop_a_granted_profile_a_concurrent_put_just_added() -> None:
+    store: Final = FakeMcpPrisma()
+    await _create(store, _new_server("analytics", _bot("A")), "admin")
+    store.key_grants["nightly-bot"] = ["new-bots"]
+    store.hold_profile_lookups_until(2)
+
+    resent, added = await asyncio.gather(
+        _update(store, UpdateMCPServerWithProfilesRequest(server_id="analytics", additional_auth=[_bot("A")]), "admin"),
+        _update(
+            store,
+            UpdateMCPServerWithProfilesRequest(server_id="analytics", additional_auth=[_bot("A"), _bot("new-bots")]),
+            "admin",
+        ),
+    )
+
+    assert resent == StillGranted((GrantHolder("key", "nightly-bot", ("new-bots",)),))
+    assert isinstance(added, LiteLLM_MCPServerTable)
+    assert _profile_ids(store) == {"analytics": ["A", "new-bots"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renamed", [{}, {"server_name": "ghost-renamed"}], ids=["plain", "identifier-write"])
+async def test_a_put_of_profiles_to_a_missing_server_writes_no_profile_rows(renamed: dict[str, object]) -> None:
+    store: Final = FakeMcpPrisma()
+
+    updated: Final = await _update(
+        store,
+        UpdateMCPServerWithProfilesRequest(server_id="ghost", additional_auth=[_bot("ghost-bots")], **renamed),
+        "admin",
+    )
+
+    assert updated is None
+    assert store.profiles == []
+
+
+@pytest.mark.asyncio
+async def test_a_put_dropping_an_ungranted_profile_removes_it() -> None:
+    store: Final = FakeMcpPrisma()
+    await _two_profile_server(store)
+    store.key_grants["nightly-bot"] = ["A"]
+
+    updated: Final = await _update(
+        store, UpdateMCPServerWithProfilesRequest(server_id="analytics", additional_auth=[_bot("A")]), "admin"
+    )
+
+    assert isinstance(updated, LiteLLM_MCPServerTable)
+    assert _profile_ids(store) == {"analytics": ["A"]}
+    assert "additional_auth" not in store.servers[0]
 
 
 class _Clock:
