@@ -286,6 +286,39 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
 )
 
 
+GENERIC_STREAM_ERROR_MESSAGE: Final = "Response API in-stream error"
+_SHAPE_SCALAR_FIELDS: Final = frozenset({"type", "code", "status", "id"})
+_REDACTED_UPSTREAM_HEADERS: Final = frozenset(
+    {"authorization", "cookie", "proxy-authorization", "set-cookie", "x-api-key", "api-key"}
+)
+
+
+def _payload_fields(value: object) -> Mapping[str, object] | None:
+    if _is_json_object(value):
+        return value
+    if isinstance(value, BaseModel):
+        extra: Final[Mapping[str, object]] = value.__pydantic_extra__ or {}
+        sent: Final[Mapping[str, object]] = {name: getattr(value, name, None) for name in value.model_fields_set}
+        return {**sent, **extra}
+    return None
+
+
+def _shape_scalar(value: str | int) -> str | int:
+    return str.__str__(value) if isinstance(value, str) else value
+
+
+def _payload_shape(value: object) -> object:
+    fields: Final = _payload_fields(value)
+    if fields is None:
+        return type(value).__name__
+    return {
+        key: _shape_scalar(item)
+        if key in _SHAPE_SCALAR_FIELDS and isinstance(item, (str, int)) and not isinstance(item, bool)
+        else _payload_shape(item)
+        for key, item in sorted(fields.items(), key=lambda field: str(field[0]))
+    }
+
+
 def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]:
     if _is_json_object(error_obj):
         raw_message = error_obj.get("message")
@@ -299,7 +332,7 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
         raw_message = None
         raw_type = None
         raw_code = None
-    message: Final = str(raw_message) if raw_message is not None else "Response API in-stream error"
+    message: Final = str(raw_message) if raw_message is not None else GENERIC_STREAM_ERROR_MESSAGE
     error_type: Final = raw_type if isinstance(raw_type, str) else None
     code: Final = str(raw_code) if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else None
     return message, error_type, code
@@ -779,6 +812,30 @@ class BaseResponsesAPIStreamingIterator:
     def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
         self._earlier_rounds_spend = earlier
 
+    def _log_messageless_error_event(self, event: object, error_obj: object) -> None:
+        try:
+            if _error_event_fields(error_obj)[0] != GENERIC_STREAM_ERROR_MESSAGE:
+                return
+            shape: Final = _payload_shape(event)
+            upstream_headers: Final = {
+                name.lower(): "<redacted>" if name.lower() in _REDACTED_UPSTREAM_HEADERS else value
+                for name, value in self._raw_response_headers.items()
+            }
+            verbose_logger.warning(
+                "Responses stream error event from %s/%s carried no error message; "
+                "event shape: %s; upstream headers: %s",
+                self.custom_llm_provider,
+                self.model,
+                shape,
+                upstream_headers,
+                extra={
+                    "stream_error_event_shape": shape,
+                    "stream_error_upstream_headers": upstream_headers,
+                },
+            )
+        except Exception as diagnostic_error:  # noqa: BLE001  # a diagnostic must never change how the stream fails
+            verbose_logger.debug("could not describe a message-less stream error event: %r", diagnostic_error)
+
     def _map_error_event_exception(self, error_obj: object) -> Exception:
         return map_stream_error_to_exception(
             error_obj,
@@ -798,6 +855,7 @@ class BaseResponsesAPIStreamingIterator:
             if chunk_type == "response.failed"
             else _error_event_error_object(result)
         )
+        self._log_messageless_error_event(result, error_obj)
 
         mapped_exception: Final = self._map_error_event_exception(error_obj)
         if not _mid_stream_fallback_eligible(mapped_exception):
