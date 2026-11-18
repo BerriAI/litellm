@@ -30,7 +30,8 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import lru_cache, partial, wraps
 from importlib import resources
@@ -337,7 +338,18 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+    Sized,
+)
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -2423,14 +2435,10 @@ def client(original_function):
             print_verbose(
                 f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
             )
-            # if caching is false or cache["no-cache"]==True, don't run this
             if (
                 (
-                    (
-                        (kwargs.get("caching", None) is None and litellm.cache is not None)
-                        or kwargs.get("caching", False) is True
-                    )
-                    and kwargs.get("cache", {}).get("no-cache", False) is not True
+                    (kwargs.get("caching", None) is None and litellm.cache is not None)
+                    or kwargs.get("caching", False) is True
                 )
                 and kwargs.get("aembedding", False) is not True
                 and kwargs.get("atext_completion", False) is not True
@@ -3171,6 +3179,21 @@ _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading
 )
 
 
+_HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED: Final[ContextVar[bool]] = ContextVar(
+    "litellm_huggingface_tokenizer_downloads_allowed", default=True
+)
+
+
+@contextmanager
+def without_huggingface_tokenizer_downloads() -> Generator[None]:
+    """Count with a tokenizer already in memory or tiktoken, never waiting on a Hugging Face download"""
+    token: Final = _HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED.set(False)
+    try:
+        yield
+    finally:
+        _HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED.reset(token)
+
+
 def huggingface_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
     """Which HuggingFace tokenizer `token_counter` selects for a model; `None` means tiktoken."""
     if model in litellm.cohere_models and "command-r" in model:
@@ -3297,6 +3320,12 @@ def _return_huggingface_tokenizer(
     if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
         return None
     key: Final = (kind, _huggingface_tokenizer_backend())
+    if (
+        kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS
+        and not _HUGGINGFACE_TOKENIZER_DOWNLOADS_ALLOWED.get()
+        and not isinstance(outcomes.by_tokenizer.get(key), _HuggingFaceTokenizerLoaded)
+    ):
+        return None
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
         known: Final = outcomes.known(key, partial(_retry_huggingface_tokenizer_load, model, key, outcomes))
         outcome: Final = (

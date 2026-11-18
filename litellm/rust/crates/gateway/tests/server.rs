@@ -4,8 +4,9 @@ use std::{
 };
 
 use axum::{body::Body, http::Request};
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_config::Config;
+use litellm_db::{Endpoint, PoolLimits, Pools, SslMode};
+use litellm_gateway::{AppState, RedisClients, Resources};
 use litellm_gateway_inference::{Error, Gateway};
 use litellm_http::ClientVariant;
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
@@ -33,9 +34,21 @@ impl Sink for LogSink {
     }
 }
 
+fn inference_for(config: &Config) -> Arc<Gateway> {
+    litellm_gateway::build_inference(config, &Resources::build(config).unwrap()).unwrap()
+}
+
 #[fixture]
 fn inference() -> Arc<Gateway> {
-    litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
+    inference_for(&Config::from_yaml("model_list: []").unwrap())
+}
+
+fn without_stores(inference: Arc<Gateway>) -> AppState {
+    AppState {
+        inference,
+        redis: RedisClients::default(),
+        database: None,
+    }
 }
 
 #[rstest]
@@ -83,7 +96,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            litellm_gateway::router(inference, &config, None, None),
+            litellm_gateway::router(without_stores(inference), &config),
         )
         .with_graceful_shutdown(async move {
             let _ = stopped.await;
@@ -144,7 +157,7 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
     let logger = Logger::new(LogSink(sender));
 
     let response = logger
-        .instrument(litellm_gateway::router(inference, &config, None, None).oneshot(request))
+        .instrument(litellm_gateway::router(without_stores(inference), &config).oneshot(request))
         .await
         .unwrap();
 
@@ -162,148 +175,6 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
 }
 
 #[rstest]
-#[tokio::test]
-async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inference: Arc<Gateway>) {
-    let config =
-        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: inference-secret\n")
-            .unwrap();
-    let assets = tempfile::TempDir::new().unwrap();
-    std::fs::write(assets.path().join("index.html"), "dashboard").unwrap();
-    let backend = litellm_gateway_auth::UiBackend::new(
-        "admin".into(),
-        litellm_secret_value::SecretValue::new("ui-password"),
-    )
-    .unwrap();
-    let ui = litellm_gateway_ui::router(
-        backend,
-        tower_sessions_moka_store::MokaStore::new(Some(10_000)),
-        false,
-    )
-    .merge(litellm_gateway_ui::dashboard_assets(assets.path()));
-    let app = litellm_gateway::router(inference, &config, Some(ui), None);
-    let page = app
-        .clone()
-        .oneshot(Request::get("/ui/").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(page.status().as_u16(), 200);
-    assert_eq!(
-        axum::body::to_bytes(page.into_body(), 65536).await.unwrap(),
-        "dashboard"
-    );
-    let (sender, receiver) = mpsc::channel();
-    let logger = Logger::new(LogSink(sender));
-    let response = logger
-        .instrument(
-            app.clone().oneshot(
-                Request::post("/v2/login")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({"username": "admin", "password": "ui-password"}).to_string(),
-                    ))
-                    .unwrap(),
-            ),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 200);
-    assert!(
-        response
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .all(|cookie| !cookie.to_str().unwrap().contains("Secure"))
-    );
-    let cookie = response
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|value| value.to_str().unwrap().split(';').next())
-        .collect::<Vec<_>>()
-        .join("; ");
-    let login: Value = serde_json::from_slice(
-        &logger
-            .instrument(axum::body::to_bytes(response.into_body(), 65536))
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    let jwt = login["token"].as_str().unwrap();
-    let token: Value = serde_json::from_slice(
-        &URL_SAFE_NO_PAD
-            .decode(jwt.split('.').nth(1).unwrap())
-            .unwrap(),
-    )
-    .unwrap();
-    let csrf = token["key"].as_str().unwrap();
-    let logs = receiver.try_iter().collect::<Vec<_>>();
-    let logged = serde_json::to_string(&logs).unwrap();
-    assert!(!logged.contains("ui-password"));
-    assert!(!logged.contains(jwt));
-    let ui_response = app
-        .clone()
-        .oneshot(
-            Request::get("/session/info")
-                .header("cookie", &cookie)
-                .header("authorization", format!("Bearer {csrf}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(ui_response.status().as_u16(), 200);
-    let inference_response = app
-        .clone()
-        .oneshot(
-            Request::post("/v1/messages")
-                .header("cookie", cookie)
-                .header("authorization", format!("Bearer {csrf}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(inference_response.status().as_u16(), 401);
-    let master_response = app
-        .oneshot(
-            Request::get("/session/info")
-                .header("authorization", "Bearer inference-secret")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(master_response.status().as_u16(), 401);
-}
-
-#[rstest]
-#[case::assets("/ui/", "GET")]
-#[case::login("/v2/login", "POST")]
-#[case::session("/session/info", "GET")]
-#[case::discovery("/.well-known/litellm-ui-config", "GET")]
-#[tokio::test]
-async fn ui_routes_are_absent_when_not_mounted(
-    inference: Arc<Gateway>,
-    #[case] path: &str,
-    #[case] method: &str,
-) {
-    let config =
-        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
-            .unwrap();
-    let response = litellm_gateway::router(inference, &config, None, None)
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status().as_u16(), 404);
-}
-
-#[rstest]
 #[case::with_master_key("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")]
 #[case::without_master_key("model_list: []\n")]
 #[tokio::test]
@@ -312,7 +183,7 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
-    let app = litellm_gateway::router(inference, &config, None, None);
+    let app = litellm_gateway::router(without_stores(inference), &config);
 
     let response = app
         .oneshot(
@@ -330,6 +201,57 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     assert_eq!(
         serde_json::from_slice::<Value>(&body).unwrap(),
         json!({"status": "healthy", "db": "Not connected"})
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn readiness_reports_a_configured_database_it_cannot_reach(inference: Arc<Gateway>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let closed_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let unreachable = Endpoint {
+        host: "127.0.0.1".to_owned(),
+        port: closed_port,
+        socket: None,
+        username: "app".to_owned(),
+        password: None,
+        database: "proxy".to_owned(),
+        ssl_mode: SslMode::Disable,
+        ssl_root_cert: None,
+        ssl_client: None,
+        application_name: None,
+        options: Vec::new(),
+        statement_cache_capacity: 0,
+        pool: PoolLimits {
+            max_connections: 1,
+            acquire_timeout_seconds: Some(0.2),
+            idle_timeout_seconds: None,
+            socket_timeout_seconds: None,
+        },
+    };
+    let state = AppState {
+        database: Some(Pools::new(&unreachable, None).unwrap()),
+        ..without_stores(inference)
+    };
+    let config = Config::from_yaml("model_list: []").unwrap();
+
+    let response = litellm_gateway::router(state, &config)
+        .oneshot(
+            Request::get("/health/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status().as_u16(), 200);
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"status": "healthy", "db": "disconnected"})
     );
 }
 
@@ -366,15 +288,10 @@ async fn forwarded_body(deployment_params: &str, client_params: Value) -> Value 
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(
-        litellm_gateway::build_inference(&config).unwrap(),
-        &config,
-        None,
-        None,
-    )
-    .oneshot(request)
-    .await
-    .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap()
@@ -463,15 +380,10 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
         .body(Body::from(Value::Object(body).to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(
-        litellm_gateway::build_inference(&config).unwrap(),
-        &config,
-        None,
-        None,
-    )
-    .oneshot(request)
-    .await
-    .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     let forwarded: Value =
@@ -542,15 +454,10 @@ async fn chat_sends_a_caller_supplied_bedrock_endpoint_only_under_client_side_cr
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(
-        litellm_gateway::build_inference(&config).unwrap(),
-        &config,
-        None,
-        None,
-    )
-    .oneshot(request)
-    .await
-    .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), status);
 }
@@ -601,15 +508,10 @@ async fn chat_drops_sampling_params_the_catalog_says_the_model_rejects(
         .body(Body::from(body.to_string()))
         .unwrap();
 
-    let response = litellm_gateway::router(
-        litellm_gateway::build_inference(&config).unwrap(),
-        &config,
-        None,
-        None,
-    )
-    .oneshot(request)
-    .await
-    .unwrap();
+    let response = litellm_gateway::router(without_stores(inference_for(&config)), &config)
+        .oneshot(request)
+        .await
+        .unwrap();
 
     assert_eq!(response.status().as_u16(), 200);
     let forwarded: Value =

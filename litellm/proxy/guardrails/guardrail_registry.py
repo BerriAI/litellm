@@ -27,6 +27,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
 )
@@ -149,7 +150,9 @@ def _encrypted_param(key: str, value: object, new_encryption_key: str | None, de
         return value
     try:
         return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
-    except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
+    except Exception:  # no salt key or master key configured: store the value as written
+        if fips_mode_active():
+            raise
         return value
 
 

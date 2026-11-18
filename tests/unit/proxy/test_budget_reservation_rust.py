@@ -52,6 +52,7 @@ from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
+from tests.unit.proxy.rust_auth_stores import GroupBudget, RustAuthStores, install_rust_auth_stores
 from tests.unit.proxy.spend_tracking.native_budgets_replica import (
     RespRedis,
     install_native_owner,
@@ -2590,34 +2591,33 @@ async def test_small_prompt_is_tokenized_inline(spend_counter_state):
     assert threads == [threading.main_thread()]
 
 
-class _ModelAccessGroupBudgetPrisma:
-    """Serves ``LiteLLM_ModelAccessGroupBudgetTable`` rows, recording what reached the database."""
+class _ExplodingPrismaClient:
+    """Model access group budget rows come from the Rust store; a Prisma read is a bug."""
 
-    def __init__(self, **max_budget_by_group) -> None:
-        self.rows = {
-            group: SimpleNamespace(
-                access_group_name=group,
-                spend=7.0,
-                litellm_budget_table=None
-                if max_budget is None
-                else SimpleNamespace(max_budget=max_budget, budget_limits=None),
-            )
-            for group, max_budget in max_budget_by_group.items()
-        }
-        self.batches = []
-        self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many))
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"unexpected database access: {name}")
 
-    async def _find_many(self, **kwargs):
-        requested = list(kwargs["where"]["access_group_name"]["in"])
-        self.batches.append(requested)
-        return [self.rows[group] for group in requested if group in self.rows]
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
+
+
+def _seed_model_access_group_budgets(stores: RustAuthStores, **max_budget_by_group: float | None) -> None:
+    """``LiteLLM_ModelAccessGroupBudgetTable`` rows as the Rust model access group store serves them."""
+    stores.model_access_group.groups.update(
+        {group: GroupBudget(spend=7.0, max_budget=max_budget) for group, max_budget in max_budget_by_group.items()}
+    )
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_counter_blocks_a_request_over_the_group_budget(spend_counter_state):
+async def test_model_access_group_counter_blocks_a_request_over_the_group_budget(
+    spend_counter_state, rust_auth_stores: RustAuthStores
+):
     """End to end through the reservation path, which is what runs when reservations are enabled."""
     counter_cache, key_cache = spend_counter_state
-    prisma_client = _ModelAccessGroupBudgetPrisma(premium=1.0)
+    _seed_model_access_group_budgets(rust_auth_stores, premium=1.0)
+    prisma_client = _ExplodingPrismaClient()
     valid_token = UserAPIKeyAuth(api_key="hashed", token="tok", matched_model_access_groups=["premium"])
 
     with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
@@ -2664,7 +2664,7 @@ async def _reserve_for_model_access_groups(key_cache, groups, estimate):
             ),
             team_object=None,
             user_object=None,
-            prisma_client=_ModelAccessGroupBudgetPrisma(),
+            prisma_client=_ExplodingPrismaClient(),
             user_api_key_cache=key_cache,
             proxy_logging_obj=ProxyLogging(user_api_key_cache=key_cache),
         )
