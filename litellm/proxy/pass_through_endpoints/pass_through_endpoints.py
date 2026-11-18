@@ -607,7 +607,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         logging/guardrails) or relay it to the client without materializing it in memory
         (LIT-4009: large batch results files must not be buffered in proxy RSS).
         """
-        fallback_plan: Final[object] = getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None)
+        fallback_plan: Final[object] = getattr(getattr(request, "state", None), PASSTHROUGH_FALLBACK_STATE, None)
         if isinstance(fallback_plan, VectorStorePassthroughPlan):
             fallback_request: Final = async_client.build_request(
                 request.method,
@@ -2134,7 +2134,7 @@ async def pass_through_request(
             raw_body=state_raw_body,
             raw_response=raw_response,
         )
-        fallback_plan: Final[object] = getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None)
+        fallback_plan: Final[object] = getattr(getattr(request, "state", None), PASSTHROUGH_FALLBACK_STATE, None)
         if isinstance(fallback_plan, VectorStorePassthroughPlan):
             url = response.request.url
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
@@ -2833,7 +2833,7 @@ def create_pass_through_route(
             elif isinstance(custom_body_data, dict):
                 final_custom_body = custom_body_data
 
-            native_plan: Final[object] = getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None)
+            native_plan: Final[object] = getattr(getattr(request, "state", None), PASSTHROUGH_FALLBACK_STATE, None)
             is_stream: Final = bool(is_streaming_request or stream) and not isinstance(
                 native_plan, VectorStorePassthroughPlan
             )
