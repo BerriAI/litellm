@@ -509,12 +509,12 @@ def _chunk_tool_names(chunk: object) -> tuple[str, ...]:
 class _StreamChunkToolNames(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.names: list[str] = []
+        self.names: tuple[str, ...] = ()
         self.saw_tool_call: Final = threading.Event()
 
     def _record(self, chunk: object) -> None:
         names: Final = _chunk_tool_names(chunk)
-        self.names.extend(names)
+        self.names = (*self.names, *names)
         if names:
             self.saw_tool_call.set()
 
