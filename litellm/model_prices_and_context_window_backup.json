@@ -34814,6 +34814,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.5": {
+        "deprecation_date": "2026-10-14",
+        "deprecation_source": "https://developers.openai.com/codex/models",
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.5",
         "max_input_tokens": 1050000,
@@ -34893,6 +34895,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.4": {
+        "deprecation_date": "2026-08-31",
+        "deprecation_source": "https://developers.openai.com/codex/models",
         "litellm_provider": "chatgpt",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
@@ -34946,6 +34950,8 @@
         "supports_minimal_reasoning_effort": false
     },
     "chatgpt/gpt-5.3-codex-spark": {
+        "deprecation_date": "2026-09-14",
+        "deprecation_source": "https://developers.openai.com/codex/models",
         "litellm_provider": "chatgpt",
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
