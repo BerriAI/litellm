@@ -134,6 +134,10 @@ class MCPServerRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPServer
     table_name = "litellm_mcpservertable"
 
 
+class MCPAuthProfileRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPAuthProfileTable"]):
+    table_name = "litellm_mcpauthprofiletable"
+
+
 class ManagedObjectRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedObjectTable"]):
     table_name = "litellm_managedobjecttable"
 

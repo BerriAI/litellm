@@ -1647,11 +1647,12 @@ _REGISTRY_DUMP_SECRET_FIELDS: Final = frozenset(
         "id_jag_resource_client_secret",
         "aws_secret_access_key",
         "aws_session_token",
+        "additional_auth",
     }
 )
 
 
-def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str, str]]:
+def redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str, str]]:
     """A JSON-safe view of the server registry with credential fields masked, for debug logging.
 
     The registry holds long-lived secrets as plain strings (the static token, OAuth client secret,
@@ -3024,7 +3025,7 @@ class MCPServerManager:
                 )
 
         verbose_logger.debug(
-            "Loaded MCP Servers: %s", json.dumps(_redacted_registry_dump(self.config_mcp_servers), indent=4)
+            "Loaded MCP Servers: %s", json.dumps(redacted_registry_dump(self.config_mcp_servers), indent=4)
         )
 
         await self.hydrate_config_servers_dcr_clients()

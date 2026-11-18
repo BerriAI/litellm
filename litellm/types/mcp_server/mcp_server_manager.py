@@ -1,9 +1,19 @@
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Any, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    AliasChoices,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from typing_extensions import Self
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -98,6 +108,44 @@ _PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter
 def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
     decoded: Final = json.loads(value) if isinstance(value, str) and value else value
     return _PINNED_TOOLS.validate_python(decoded or None)
+
+
+MCPAuthProfileAuthType: TypeAlias = Literal[
+    MCPAuth.oauth2,
+    MCPAuth.api_key,
+    MCPAuth.bearer_token,
+    MCPAuth.basic,
+    MCPAuth.token,
+    MCPAuth.authorization,
+]
+
+
+class MCPAuthProfile(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    auth_type: MCPAuthProfileAuthType
+    oauth2_flow: Literal["client_credentials"] | None = None
+    client_id: str | None = Field(default=None, repr=False)
+    client_secret: str | None = Field(default=None, repr=False)
+    token_url: str | None = None
+    scopes: tuple[str, ...] | None = None
+    token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None
+    authentication_token: str | None = Field(
+        default=None, repr=False, validation_alias=AliasChoices("authentication_token", "auth_value")
+    )
+
+
+_FIELD_DUMP: Final = TypeAdapter(Mapping[str, object])
+
+
+def omit_empty_additional_auth(
+    handler: SerializerFunctionWrapHandler, model: object, additional_auth: object
+) -> Mapping[str, object]:
+    fields: Final = _FIELD_DUMP.validate_python(handler(model))
+    if additional_auth:
+        return fields
+    return {key: value for key, value in fields.items() if key != "additional_auth"}
 
 
 class MCPServer(LiteLLMBaseModel):
@@ -271,7 +319,12 @@ class MCPServer(LiteLLMBaseModel):
     short_prefix: str | None = None
     allow_sampling: bool = False
     allow_elicitation: bool = False
+    additional_auth: tuple[MCPAuthProfile, ...] | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_additional_auth(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        return omit_empty_additional_auth(handler, self, self.additional_auth)
 
     def __repr__(self) -> str:
         return (

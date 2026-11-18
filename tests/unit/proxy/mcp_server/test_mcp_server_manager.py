@@ -87,6 +87,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     global_mcp_server_manager,
     listed_tools_caller_for,
     oauth_endpoints_unresolved,
+    redacted_registry_dump,
     resolve_openapi_tool_auth,
     should_strip_caller_authorization,
 )
@@ -1077,6 +1078,33 @@ class TestMCPServerManager:
         assert "gateway-client" in dump
         assert "resource-client-id" in dump
         assert "https://org-idp.example/oauth2/token" in dump
+
+    def test_registry_debug_dump_masks_the_secrets_of_additional_auth_profiles(self) -> None:
+        server: Final = MCPServer.model_validate(
+            {
+                "server_id": "tickets",
+                "name": "tickets",
+                "transport": MCPTransport.http,
+                "url": "https://mcp.example/tickets",
+                "additional_auth": [
+                    {
+                        "id": "tickets-bots",
+                        "auth_type": "oauth2",
+                        "oauth2_flow": "client_credentials",
+                        "client_id": "tickets-bots-app",
+                        "client_secret": "tickets-bots-secret",
+                        "token_url": "https://auth.example/token",
+                    },
+                    {"id": "tickets-key", "auth_type": "bearer_token", "authentication_token": "tickets-static-token"},
+                ],
+            }
+        )
+
+        dump: Final = redacted_registry_dump({"tickets": server})
+
+        printed: Final = json.dumps(dump)
+        assert dump["tickets"]["url"] == "https://mcp.example/tickets"
+        assert [s for s in ("tickets-bots-app", "tickets-bots-secret", "tickets-static-token") if s in printed] == []
 
     async def test_load_servers_from_config_warns_on_invalid_alias(self, config_only_mcp_manager_factory, caplog):
         """Invalid aliases from config should emit warnings during load."""

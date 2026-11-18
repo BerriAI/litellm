@@ -590,8 +590,27 @@ model LiteLLM_MCPServerTable {
   submitted_at     DateTime?
   reviewed_at      DateTime?
   review_notes     String?
+  auth_profiles    LiteLLM_MCPAuthProfileTable[]
 
   @@index([approval_status])
+}
+
+model LiteLLM_MCPAuthProfileTable {
+  profile_id            String   @id
+  profile_id_normalized String   @unique
+  server_id             String
+  auth_type             String
+  oauth2_flow           String?
+  credentials           Json     @default("{}")
+  token_url             String?
+  scopes                String[] @default([])
+  created_at            DateTime @default(now())
+  created_by            String?
+  updated_at            DateTime @default(now()) @updatedAt
+  updated_by            String?
+  server                LiteLLM_MCPServerTable @relation(fields: [server_id], references: [server_id], onDelete: Cascade)
+
+  @@index([server_id])
 }
 
 // Named collection of {server_id, tool_name} pairs that can be granted to keys/teams
