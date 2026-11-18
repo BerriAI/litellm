@@ -47,7 +47,10 @@ async fn responses_aliases_run_the_core_route(
             events.as_bytes()
         );
     } else {
-        assert_eq!(support::json(response).await, completed);
+        assert_eq!(
+            support::json(response).await,
+            json!({"id": "response-1", "model": "public/model", "output": [], "provider_extra": true})
+        );
     }
 }
 

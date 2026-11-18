@@ -18,6 +18,7 @@ use crate::{
     Ended, Error, Gateway, JsonObject,
     caching::CacheHeaders,
     headers::Routing,
+    model_restamp::ReportedModel,
     request,
     routing::{self, Host, RouteAttempt},
     stream_outcome::{self, Streamed},
@@ -54,11 +55,13 @@ pub(crate) async fn create<H: Host>(
     )
     .await?;
     let routing = Routing::served(&routed);
+    let reported = ReportedModel::of(&model, &routed);
     let (ran, cache) = routed.output.response;
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         Bytes::from(Error::from(error).responses_sse_frame())
     });
-    let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
+    let ran = stream_outcome::bytes(reported.complete(ran));
+    let response = litellm_host_http::render(stream, ran)?;
     Ok((Extension(routing), cache.apply(response)).into_response())
 }
 

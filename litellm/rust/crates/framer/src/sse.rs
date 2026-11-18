@@ -229,24 +229,40 @@ fn parse_retry(value: &[u8]) -> Option<u64> {
     str::from_utf8(value).ok()?.parse().ok()
 }
 
+fn write(event: &SseEvent, dst: &mut BytesMut) {
+    if let Some(name) = &event.event {
+        dst.put_slice(format!("event: {name}\n").as_bytes());
+    }
+    for line in event.data.split('\n') {
+        dst.put_slice(format!("data: {line}\n").as_bytes());
+    }
+    if let Some(id) = &event.id {
+        dst.put_slice(format!("id: {id}\n").as_bytes());
+    }
+    if let Some(retry) = event.retry {
+        dst.put_slice(format!("retry: {retry}\n").as_bytes());
+    }
+    dst.put_u8(b'\n');
+}
+
 impl Encoder<SseEvent> for SseCodec {
     type Error = SseError;
 
     fn encode(&mut self, event: SseEvent, dst: &mut BytesMut) -> Result<(), SseError> {
-        if let Some(name) = event.event {
-            dst.put_slice(format!("event: {name}\n").as_bytes());
-        }
-        for line in event.data.split('\n') {
-            dst.put_slice(format!("data: {line}\n").as_bytes());
-        }
-        if let Some(id) = event.id {
-            dst.put_slice(format!("id: {id}\n").as_bytes());
-        }
-        if let Some(retry) = event.retry {
-            dst.put_slice(format!("retry: {retry}\n").as_bytes());
-        }
-        dst.put_u8(b'\n');
+        write(&event, dst);
         Ok(())
+    }
+}
+
+impl From<SseEvent> for SseBlock {
+    /// The block that carries `event`, as [`SseCodec`] writes it.
+    fn from(event: SseEvent) -> Self {
+        let mut bytes = BytesMut::new();
+        write(&event, &mut bytes);
+        Self {
+            bytes: bytes.freeze(),
+            event: Some(event),
+        }
     }
 }
 
@@ -341,6 +357,24 @@ mod tests {
                 Err("reset"),
                 Ok(Bytes::from_static(b"data: partial\n\n")),
             ]
+        );
+    }
+
+    #[rstest]
+    fn an_event_is_written_as_the_block_that_carries_it() {
+        let event = SseEvent {
+            event: Some("delta".into()),
+            data: "a\nb".into(),
+            id: None,
+            retry: None,
+        };
+
+        assert_eq!(
+            SseBlock::from(event.clone()),
+            SseBlock {
+                bytes: Bytes::from_static(b"event: delta\ndata: a\ndata: b\n\n"),
+                event: Some(event),
+            }
         );
     }
 
