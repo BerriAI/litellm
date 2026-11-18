@@ -8,6 +8,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 import json
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ import pytest
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
@@ -3496,3 +3498,143 @@ def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
         anthropic_message_request=FAILED_TOOL_RESULT_REQUEST  # pyright: ignore[reportArgumentType]  # a JSON request in the Anthropic shape
     )
     assert "is_error" not in json.dumps(request["messages"], default=str)
+
+
+_DEFERRED_WEATHER_TOOL: Final[Mapping[str, object]] = {
+    "name": "get_weather",
+    "description": "Current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    "defer_loading": True,
+    "strict": True,
+    "eager_input_streaming": True,
+    "input_examples": [{"city": "Paris"}],
+    "allowed_callers": ["code_execution_20250825"],
+    "cache_control": {"type": "ephemeral"},
+}
+_ANTHROPIC_ONLY_TOOL_FIELDS: Final = (
+    "defer_loading",
+    "strict",
+    "eager_input_streaming",
+    "input_examples",
+    "allowed_callers",
+    "cache_control",
+)
+
+
+class DescriptionRewritingGuardrail(CustomGuardrail):
+    """Rewrites every tool description, like a guardrail that redacts text inside tool definitions."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [
+            {**tool, "function": {**tool["function"], "description": "[redacted]"}}
+            for tool in inputs.get("tools") or []
+        ]
+        return inputs
+
+
+class FirstToolDroppingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = list(inputs.get("tools") or [])[1:]
+        return inputs
+
+
+class ToolFieldEditingGuardrail(CustomGuardrail):
+    """Redacts the tool's input examples and removes defer_loading, the way a guardrail sees them in the OpenAI tool."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [
+            {
+                **tool,
+                "function": {
+                    **tool["function"],
+                    "parameters": {
+                        **{
+                            key: value
+                            for key, value in tool["function"].get("parameters", {}).items()
+                            if key != "defer_loading"
+                        },
+                        "input_examples": [{"city": "[REDACTED]"}],
+                    },
+                },
+            }
+            for tool in inputs.get("tools") or []
+        ]
+        return inputs
+
+
+async def _tools_sent_after_guardrail(
+    guardrail: CustomGuardrail, *tools: Mapping[str, object]
+) -> Sequence[Mapping[str, object]]:
+    """Run an Anthropic /v1/messages request with these tools through the guardrail and return the tools it sends on."""
+    data: Final[dict[str, object]] = {  # mutable-ok: the handler writes the guardrailed tools back into it
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 50,
+        "messages": [{"role": "user", "content": "What's the weather in Paris?"}],
+        "tools": [dict(tool) for tool in tools],
+    }
+    await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+    sent: Final = data["tools"]
+    assert isinstance(sent, list)
+    return tuple(fields for tool in sent if (fields := as_str_mapping(tool)) is not None)
+
+
+class TestAnthropicMessagesHandlerKeepsAnthropicOnlyToolFields:
+    """Regression for #51469: a guardrail on /v1/messages round-trips tools through the OpenAI shape, which has no
+    place for Anthropic-only fields, so they were lost even when the guardrail changed nothing."""
+
+    async def test_unchanged_tools_keep_anthropic_only_fields(self) -> None:
+        (sent_tool,) = await _tools_sent_after_guardrail(
+            MockPassThroughGuardrail(guardrail_name="echo"), _DEFERRED_WEATHER_TOOL
+        )
+
+        assert {field: sent_tool.get(field) for field in _ANTHROPIC_ONLY_TOOL_FIELDS} == {
+            field: _DEFERRED_WEATHER_TOOL[field] for field in _ANTHROPIC_ONLY_TOOL_FIELDS
+        }
+
+    async def test_rewritten_tools_keep_anthropic_only_fields_and_the_rewrite(self) -> None:
+        (sent_tool,) = await _tools_sent_after_guardrail(
+            DescriptionRewritingGuardrail(guardrail_name="redact"), _DEFERRED_WEATHER_TOOL
+        )
+
+        assert sent_tool["description"] == "[redacted]"
+        assert sent_tool["defer_loading"] is True
+        assert sent_tool["strict"] is True
+        assert sent_tool["input_examples"] == [{"city": "Paris"}]
+
+    async def test_a_tool_the_guardrail_drops_stays_dropped(self) -> None:
+        sent_tools: Final = await _tools_sent_after_guardrail(
+            FirstToolDroppingGuardrail(guardrail_name="drop"),
+            {**_DEFERRED_WEATHER_TOOL, "name": "dropped_tool"},
+            _DEFERRED_WEATHER_TOOL,
+        )
+
+        assert [tool["name"] for tool in sent_tools] == ["get_weather"]
+        assert sent_tools[0]["defer_loading"] is True
+
+    async def test_a_field_the_guardrail_redacts_or_removes_keeps_the_guardrail_edit(self) -> None:
+        (sent_tool,) = await _tools_sent_after_guardrail(
+            ToolFieldEditingGuardrail(guardrail_name="edit"), _DEFERRED_WEATHER_TOOL
+        )
+
+        assert sent_tool["input_examples"] == [{"city": "[REDACTED]"}]
+        assert "defer_loading" not in sent_tool
+        assert sent_tool["strict"] is True
+        assert sent_tool["allowed_callers"] == ["code_execution_20250825"]
