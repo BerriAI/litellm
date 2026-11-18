@@ -118,4 +118,6 @@ def test_responses_stream_never_restarts_after_non_lifecycle_output(
         assert received[0].method == "POST" and received[0].target.startswith(AZURE_TARGET), received
         assert sum(name == "response.created" for name, _ in events) == 1, response.text
         assert output_event["type"] in [name for name, _ in events], response.text
-        assert [name for name, _ in events] == ["response.created", output_event["type"], "response.failed"], response.text
+        assert [name for name, _ in events] == ["response.created", output_event["type"], "response.failed"], (
+            response.text
+        )
