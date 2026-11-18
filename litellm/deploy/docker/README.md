@@ -43,7 +43,7 @@ CGR_TOKEN=$(chainctl auth token --audience apk.cgr.dev) \
 docker build --secret id=cgr-token,env=CGR_TOKEN -f litellm/deploy/docker/Dockerfile.fips .
 ```
 
-It leaves out the LiteAdmin agent and the litellm-proxy Rust server. After a reviewed dependency change, regenerate `fips_elf_inventory.txt` with the command at the top of `scan_bundled_crypto.sh`
+It leaves out the LiteAdmin agent and the litellm-proxy Rust server. A PKCS#12 file passed as `sslidentity` in `DATABASE_URL` must use a PBMAC1 MAC (`openssl pkcs12 -export -pbmac1_pbkdf2 ...`), because the FIPS provider refuses the older PKCS#12 MAC. After a reviewed dependency change, regenerate `fips_elf_inventory.txt` with the command at the top of `scan_bundled_crypto.sh`
 
 ## One image, many components
 
