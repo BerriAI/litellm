@@ -474,7 +474,7 @@ impl LegacyLogging {
     /// A failure after the stream reached the caller bills the delivered chunks as
     /// partial usage. The sync path has no loop to schedule that on, so it falls back to
     /// the plain failure handler.
-    fn stream_failure(&mut self, py: Python<'_>) -> PyResult<HookStep<Self, ()>> {
+    fn stream_failure(&mut self, py: Python<'_>, detached: bool) -> PyResult<HookStep<Self, ()>> {
         let (Some(logger), Some(error), Some(stream), Some(billing)) = (
             &self.logger,
             &self.error,
@@ -498,6 +498,7 @@ impl LegacyLogging {
                 &stream.chunks,
                 error,
                 &stream.head,
+                detached,
             ),
         );
         match scheduled {
@@ -884,7 +885,7 @@ impl LegacyLogging {
             self.close_api_window(py, timing.end_time)?;
         }
         if self.stream.is_some() {
-            return self.stream_failure(py);
+            return self.stream_failure(py, origin == FailureOrigin::DetachedStream);
         }
         if origin == FailureOrigin::Call && self.logger.is_some() && self.runs_deployment_hooks() {
             let error = self.error.as_ref().ok_or(HostError::MissingState)?;

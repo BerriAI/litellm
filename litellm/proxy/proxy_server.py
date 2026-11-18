@@ -682,7 +682,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
+from litellm.proxy.db.connection_budget import rust_connections
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -1628,11 +1628,13 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
+    connections: Final = rust_connections(os.environ)
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
         os.environ.get("DATABASE_URL_READ_REPLICA") or None,
-        RUST_RESERVED_CONNECTIONS,
+        writer_connections=connections.writer,
+        reader_connections=connections.reader,
     )
     resources.push_async_callback(database.aclose)
     return database
@@ -1689,6 +1691,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         proxy_batch_polling_interval, \
         shared_aiohttp_session
     global ui_login_enabled  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
+    global database_url_configured  # noqa: PLW0603  # read once at startup so auth does not look the secret up per request
     import json
 
     resources.callback(_forget_prisma_client)
@@ -1796,9 +1799,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Final[str | None] = get_secret("DATABASE_URL", None)
+        database_url_configured = isinstance(_db_url, str) and _db_url.strip() != ""  # rebind-ok: set once at startup
         prisma_client = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await ProxyStartupEvent.setup_prisma_client(
-                database_url=_db_url,
+                database_url=_db_url if database_url_configured else None,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_cache=user_api_key_cache,
             )
@@ -3344,6 +3348,7 @@ disable_spend_logs = False
 litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()
 jwt_http_handler: Final = JwksHTTPHandler()
 ui_login_enabled: bool = True
+database_url_configured: bool = False  # rebind-ok: set once at startup so auth does not look the secret up per request
 prompt_injection_detection_obj: Final[OPTIONAL_PromptInjectionDetection | None] = None
 store_model_in_db: bool = False
 open_telemetry_logger: OpenTelemetry | None = None
@@ -10198,16 +10203,10 @@ class ProxyConfig:
         config: Final = await self.get_config(config_file_path=user_config_file_path)
         credential_list: Final = self.load_credential_list(config=config)
 
-        ## COMBINED LIST ##
-        combined_list: Final = db_credentials + credential_list
-
-        ## DELETE ##
-        idx_to_delete: Final = []
-        for idx, credential in enumerate(litellm.credential_list):
-            if credential.credential_name not in [cred.credential_name for cred in combined_list]:
-                idx_to_delete.append(idx)
-        for idx in sorted(idx_to_delete, reverse=True):
-            litellm.credential_list.pop(idx)
+        names_to_keep: Final = frozenset(cred.credential_name for cred in db_credentials + credential_list)
+        litellm.credential_list[:] = tuple(
+            cred for cred in litellm.credential_list if cred.credential_name in names_to_keep
+        )
 
     async def get_credentials(self, prisma_client: PrismaClient):
         try:
@@ -16363,6 +16362,12 @@ def _deployment_api_base(
     )
 
 
+def _inference_base_model(deployment: _TokenCountDeployment, responses_request: Mapping[str, object]) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request).get("base_model")
+    ) or _non_empty_str(deployment.get("model_info", {}).get("base_model"))
+
+
 def _deployment_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
@@ -16696,6 +16701,10 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            base_model=_inference_base_model(deployment_view, routed_request),
+            user_continue_message=_inference_params(deployment_view.get("litellm_params", {}), routed_request).get(
+                "user_continue_message"
+            ),
             deployment_params=deployment_defaults,
         )
     )

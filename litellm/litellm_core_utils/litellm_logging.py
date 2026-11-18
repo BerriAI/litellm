@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, Typ
 from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
 from openai import Stream as OpenAIStream
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
@@ -766,6 +766,13 @@ class _ExceptionHeaders(Protocol):
     headers: object
 
 
+def _failure_callback_mapping(value: object) -> Mapping[str, object]:
+    try:
+        return _LITELLM_PARAMS.validate_python(value or {})
+    except ValidationError:
+        return {}
+
+
 def _callback_control_params(litellm_params: object) -> dict[str, object]:
     mapping: Final = as_str_mapping(litellm_params)
     if isinstance(mapping, dict):
@@ -985,6 +992,7 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
+    _telemetry_failure_logged_attempt: object = None
     v2_scope: RequestScope | None = None
     v2_auth: object = None
     v2_failure_delivered: bool = False
@@ -3105,6 +3113,74 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt.model_call_details = dict(self.model_call_details)
         return attempt
 
+    def failure_callbacks_blocked_for_attempt(self) -> bool:
+        current_marker: Final = self._model_call_details_view.get("current_attempt_api_call_start_time")
+        logged_marker: Final = self._model_call_details_view.get("async_failure_logged_attempt")
+        return self._model_call_details_view.get("has_logged_async_failure", False) is True and not same_attempt_marker(
+            current_marker, logged_marker
+        )
+
+    async def _log_failed_attempt(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None,
+        end_time: datetime.datetime | None,
+    ) -> None:
+        marker: Final = self._model_call_details_view.get("current_attempt_api_call_start_time")
+        if not self.failure_callbacks_blocked_for_attempt() or same_attempt_marker(
+            marker, self._telemetry_failure_logged_attempt
+        ):
+            return
+        self._telemetry_failure_logged_attempt = marker
+        callbacks: Final = tuple(
+            callback
+            for callback in self.get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+                global_callbacks=litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Existing registry has no public accessor
+            )
+            if isinstance(callback, CustomLogger) and callback.logs_every_failed_attempt
+        )
+        if not callbacks:
+            return
+        attempt: Final = self.attempt_scoped_copy()
+        attempt.model_call_details.pop("standard_logging_object", None)
+        attempt.model_call_details.pop(FAILED_PROMPT_TOKEN_ESTIMATE_KEY, None)
+        params: Final = _failure_callback_mapping(self._model_call_details_view.get("litellm_params"))
+        metadata: Final = _failure_callback_mapping(params.get("metadata"))
+        internal: Final = _failure_callback_mapping(metadata.get("_otel_internal"))
+        spans_logged: Final[object] = internal.get("spans_logged") or {}
+        attempt.model_call_details["litellm_params"] = {
+            **params,
+            "metadata": {
+                **metadata,
+                "_otel_internal": {**internal, "spans_logged": copy.copy(spans_logged)},
+            },
+        }
+        attempt.litellm_params = attempt.model_call_details["litellm_params"]
+        attempt_start_time: Final = (
+            marker if start_time is None and isinstance(marker, datetime.datetime) else start_time
+        )
+        attempt_start, attempt_end = attempt._failure_handler_helper_fn(
+            exception, traceback_exception, attempt_start_time, end_time, estimate_prompt_tokens=False
+        )
+        if attempt._should_estimate_failed_prompt():
+            attempt.model_call_details[
+                FAILED_PROMPT_TOKEN_ESTIMATE_KEY
+            ] = await attempt._offloaded_prompt_token_estimate()
+        for callback in callbacks:
+            try:
+                if not attempt.should_run_callback(callback, params, "async_failure_handler"):
+                    continue
+                await callback.async_log_failed_attempt(
+                    kwargs=attempt.model_call_details,
+                    start_time=attempt_start,
+                    end_time=attempt_end,
+                )
+            except Exception:  # noqa: BLE001  # Third-party callbacks must not fail the request
+                verbose_logger.exception("LiteLLM.LoggingError: failed attempt callback %s", callback)
+                attempt._handle_callback_failure(callback=callback)
+
     def guardrail_scoped_copy(self) -> "Logging":
         request_params: Final = _LITELLM_PARAMS.validate_python(
             self.litellm_params or {}  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
@@ -3663,7 +3739,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 call_type=call_type,
                 route=route if isinstance(route, str) else None,
                 stream=self.stream is True,
-                synchronous=call_type in _SYNC_CALL_TYPES
+                synchronous=self.v2_scope is None
+                and call_type in _SYNC_CALL_TYPES
                 and self.is_sync_litellm_request(require_attributes(params, _ParamsLookup, "get")),
                 internal_origin=v2_derive.call_internal_origin(args),
             ),
@@ -5223,8 +5300,14 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
     def _failure_handler_helper_fn(
-        self, exception, traceback_exception, start_time=None, end_time=None, *, estimate_prompt_tokens: bool = True
-    ):
+        self,
+        exception: Exception,
+        traceback_exception: str | None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        *,
+        estimate_prompt_tokens: bool = True,
+    ) -> tuple[datetime.datetime, datetime.datetime]:
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
@@ -5651,6 +5734,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.invalidate_baseline_cache_estimate("failed_request")
         await self.special_failure_handlers(exception=exception)
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
+            await self._log_failed_attempt(exception, traceback_exception, start_time, end_time)
             return
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
@@ -6931,23 +7015,12 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(dynamic_rate_limiter_obj)
         return dynamic_rate_limiter_obj
     elif logging_integration == "dynamic_rate_limiter_v3":
-        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            PROXY_DynamicRateLimitHandlerV3,
-        )
-
-        for callback in _in_memory_loggers:
-            if isinstance(callback, PROXY_DynamicRateLimitHandlerV3):
-                return callback
+        from litellm.proxy.hooks.model_capacity_native import native_dynamic_rate_limiter
 
         if internal_usage_cache is None:
             raise Exception(f"Internal Error: Cache cannot be empty - internal_usage_cache={internal_usage_cache}")
 
-        dynamic_rate_limiter_obj_v3: Final = PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=internal_usage_cache)
-
-        if llm_router is not None and isinstance(llm_router, litellm.Router):
-            dynamic_rate_limiter_obj_v3.update_variables(llm_router=llm_router)
-        _in_memory_loggers.append(dynamic_rate_limiter_obj_v3)
-        return dynamic_rate_limiter_obj_v3
+        return native_dynamic_rate_limiter(internal_usage_cache, llm_router)  # pyright: ignore[reportReturnType]  # a native V2 callback takes the legacy entry's place
     elif logging_integration == "langtrace":
         if "LANGTRACE_API_KEY" not in os.environ:
             raise ValueError("LANGTRACE_API_KEY not found in environment variables")
@@ -7552,13 +7625,10 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, PROXY_DynamicRateLimitHandler):
                     return callback
         elif logging_integration == "dynamic_rate_limiter_v3":
-            from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-                PROXY_DynamicRateLimitHandlerV3,
-            )
+            from litellm.proxy.hooks.model_capacity_native import registered_native_dynamic_rate_limiter
 
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PROXY_DynamicRateLimitHandlerV3):
-                    return callback
+            if (native := registered_native_dynamic_rate_limiter()) is not None:
+                return native  # pyright: ignore[reportReturnType]  # a native V2 callback takes the legacy entry's place
 
         elif logging_integration == "langtrace":
             from litellm.integrations.opentelemetry import OpenTelemetry

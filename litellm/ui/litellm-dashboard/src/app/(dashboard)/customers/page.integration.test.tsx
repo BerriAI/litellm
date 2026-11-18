@@ -133,9 +133,9 @@ describe("customer organization overview", () => {
       "aria-valuenow",
       "25",
     );
-    await user.click(screen.getByRole("button", { name: "Share of overall spend" }));
+    await user.click(screen.getByRole("button", { name: "Overall spend share" }));
     await waitFor(() => expect(customerLinks()[0]).toHaveTextContent("Customer 00"));
-    expect(screen.getByRole("columnheader", { name: "Share of overall spend" })).toHaveAttribute(
+    expect(screen.getByRole("columnheader", { name: "Overall spend share" })).toHaveAttribute(
       "aria-sort",
       "descending",
     );
@@ -144,7 +144,9 @@ describe("customer organization overview", () => {
     expect(within(row).getByText("Reached limit")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
     expect(await screen.findByText("Page 2 of 2")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: /Search by customer/ }), { target: { value: "Customer 29" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Search by name or ID/ }), {
+      target: { value: "Customer 29" },
+    });
     await screen.findByText("Page 1 of 1");
     expect(customerLinks()).toHaveLength(1);
     expect(within(screen.getByRole("row", { name: /Customer 29/ })).getByText("25%")).toBeInTheDocument();
@@ -182,13 +184,13 @@ describe("customer organization overview", () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />, { searchParams: "?search=customer&sort_by=customer&sort_order=asc&page=2" });
     await screen.findByRole("link", { name: "Customer 25" });
-    await user.click(screen.getByRole("button", { name: "Create customer organization" }));
+    await user.click(screen.getByRole("button", { name: "Create organization" }));
     fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New organization" } });
     fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: "new-org" } });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create customer" }));
     await screen.findByRole("link", { name: "New organization" });
     expect(customerLinks()[0]).toHaveTextContent("New organization");
-    expect(screen.getByRole("textbox", { name: /Search by customer/ })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: /Search by name or ID/ })).toHaveValue("");
     expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
     expect(creations).toEqual([expect.objectContaining({ customer_org_id: "new-org", alias: "New organization" })]);
   });

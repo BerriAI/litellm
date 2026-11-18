@@ -46,7 +46,7 @@ The rule is about where config and kwargs get coerced, not about who may depend 
 
 ## Existing code
 
-Some code still coerces Python-shaped values past the boundary, for example the `REDIS_*` merge in `gateway/src/redis/layers.rs` and the flag and number readers in `redis-resolve/src/options.rs`. Do not add more. When you change one, move the coercion to its boundary instead of extending it in place
+Some code still coerces Python-shaped values past the boundary, for example the `REDIS_*` merge in `redis-resolve/src/layers.rs` and the flag and number readers in `redis-resolve/src/options.rs`. Do not add more. When you change one, move the coercion to its boundary instead of extending it in place
 
 ## Tests
 

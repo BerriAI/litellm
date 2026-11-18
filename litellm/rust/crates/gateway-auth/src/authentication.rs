@@ -54,10 +54,6 @@ impl IdentityResolver for LocalAdministrator {
         Box::pin(async move {
             let allowed = match identity.authentication.method {
                 AuthenticationMethod::MasterKey => identity.principal == master_principal(),
-                AuthenticationMethod::Session => {
-                    identity.principal.authority() == "litellm:local-ui"
-                        && identity.principal.kind() == PrincipalKind::Human
-                }
                 AuthenticationMethod::External(_) => false,
             };
             if !allowed {

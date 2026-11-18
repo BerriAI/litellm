@@ -1,6 +1,8 @@
 import asyncio
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
 
 import httpx
@@ -17,7 +19,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import AliasMissing, RegisteredAgentFacts, key_facts
+from litellm.proxy.auth.host.facts import AliasMissing, RegisteredAgentFacts, TeamMissing
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
@@ -85,10 +87,6 @@ async def test_an_end_user_id_is_kept_when_no_database_can_validate_it() -> None
     assert await _host().validated_end_user_id("from-body") == "from-body"
 
 
-def test_key_facts_carry_the_keys_own_end_user() -> None:
-    assert key_facts(UserAPIKeyAuth(token="hashed", end_user_id="from-key")).end_user_id == "from-key"
-
-
 @pytest.mark.asyncio
 async def test_without_an_end_user_no_limits_are_stamped() -> None:
     end_user: Final = await _host().end_user(None)
@@ -104,6 +102,36 @@ async def test_newer_cached_team_values_replace_the_keys_copy() -> None:
     token: Final = await _host().with_team(key, team)
 
     assert (token.token, token.team_id, token.team_models, token.team_max_budget) == ("hashed", "t", ["new"], 5.0)
+
+
+class _FailingTeams:
+    def __init__(self, error: Exception) -> None:
+        self.error: Final = error
+
+    async def find_unique(self, **_: object) -> None:
+        raise self.error
+
+
+def _host_whose_team_read_fails(error: Exception) -> PythonAuthHost:
+    tables: Final = SimpleNamespace(litellm_teamtable=_FailingTeams(error))
+    return replace(_host(), prisma_client=SimpleNamespace(db=tables, writer_db=tables))  # pyright: ignore[reportArgumentType]  # only the team table is read
+
+
+@pytest.mark.asyncio
+async def test_a_team_read_the_database_cannot_serve_raises_the_connection_error() -> None:
+    outage: Final = httpx.ConnectError("connection refused")
+
+    with pytest.raises(httpx.ConnectError) as raised:
+        await _host_whose_team_read_fails(outage).team("team-a", upsert=False)
+
+    assert raised.value is outage
+
+
+@pytest.mark.asyncio
+async def test_a_team_read_that_fails_for_another_reason_reads_as_unreadable() -> None:
+    read: Final = await _host_whose_team_read_fails(ValueError("row does not validate")).team("team-a", upsert=False)
+
+    assert read is TeamMissing.UNREADABLE
 
 
 @pytest.mark.asyncio
@@ -287,6 +315,32 @@ async def test_a_token_signed_by_another_key_is_denied_with_the_proxy_message() 
     assert outcome.denied
     with pytest.raises(Exception, match="Validation fails"):
         auth_denial.raise_denial(outcome)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "error_class", "message"),
+    [
+        ({"kid": "rotated-away"}, auth_denial.NoMatchingJWTPublicKeyError, "kid=rotated-away"),
+        (
+            {"kid": "k1", "typ": "oauth-id-jag+jwt"},
+            auth_denial.IdJagIsNotABearerTokenError,
+            "an ID-JAG is an authorization grant, not a bearer token",
+        ),
+    ],
+    ids=["unknown_kid", "id_jag_as_bearer"],
+)
+async def test_a_refused_jwt_is_raised_as_the_error_class_its_failure_row_records(
+    headers: dict[str, str], error_class: type[Exception], message: str
+) -> None:
+    token: Final = jwt.encode({"sub": "admin-1"}, SIGNING_KEY, algorithm="RS256", headers=headers)
+
+    outcome: Final = await _authorize(token, "/key/generate", UserApiKeyCache(), _Jwks())
+
+    assert outcome.denial is not None
+    error: Final = auth_denial.denial_error(outcome.denial)
+    assert type(error) is error_class
+    assert message in str(error)
 
 
 class _ScriptedHttp:
