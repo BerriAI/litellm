@@ -1615,6 +1615,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "supports_function_calling": True,
     },
     "claude-fable-5-2": {
+        "provider_specific_entry": {"us": 1.1, "fast": 2},
         "cache_creation_input_token_cost": 1.1e-05,
         "cache_creation_input_token_cost_above_1hr": 1.76e-05,
         "cache_read_input_token_cost": 2.2e-07,
