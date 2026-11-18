@@ -5327,12 +5327,9 @@ class _Driver:
         capacity: Final = capacity_of(deployment)
         if request_queue is None or capacity is None:
             return None
-        if (
-            self._plan.sync
-            or self._plan.kind != "chat"
-            or call.kwargs.get("stream")
-            or not self._core.queues_on(self._attempt_request(step))(deployment)
-        ):
+        if self._plan.sync or self._plan.kind != "chat" or call.kwargs.get("stream"):
+            return None
+        if not self._core.queues_on(self._attempt_request(step))(deployment):
             return None
         own_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
         admitted: Final = await request_queue.admit(capacity, call.model_name, partial(self._cooldown_left_s, own_id))
