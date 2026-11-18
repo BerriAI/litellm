@@ -95,6 +95,39 @@ def test_missing_credential_is_not_replaced_with_environment_credentials(client:
     assert response.status_code == 404, response.text
 
 
+@pytest.mark.parametrize("configured_base", (None, ""))
+def test_unresolved_saved_api_base_does_not_contact_the_default_endpoint(
+    client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch, configured_base: str | None
+) -> None:
+    variable: Final = "NIM_DISCOVERY_TEST_API_BASE"
+    if configured_base is None:
+        monkeypatch.delenv(variable, raising=False)
+    else:
+        monkeypatch.setenv(variable, configured_base)
+    monkeypatch.setenv("NVIDIA_NIM_API_BASE", "https://fallback.example/v1")
+    credential: Final = CredentialItem(
+        credential_name="nim-referenced-base",
+        credential_info={"custom_llm_provider": "nvidia_nim"},
+        credential_values={"api_key": "saved-key", "api_base": f"os.environ/{variable}"},
+    )
+    requests: Final[list[str]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, json={"data": [{"id": "fallback-model"}]})
+
+    async def connection() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    app.dependency_overrides[nim_http_client] = connection
+    with patch.object(litellm, "credential_list", [credential]):
+        response: Final = client.post("/credentials/nvidia_nim/models", json={"credential_name": credential.credential_name})
+
+    assert response.status_code == 200, response.text
+    assert requests == []
+    assert response.json() == {"status": "unavailable", "models": []}
+
+
 @pytest.mark.parametrize("listing", ({"data": []}, {"data": [{"id": 42}]}, {"data": None}))
 def test_empty_or_malformed_listing_allows_catalog_fallback(
     client: TestClient, app: FastAPI, listing: dict[str, object]

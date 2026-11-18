@@ -139,7 +139,10 @@ async def discover_nim_models(
             status_code=400, detail="Connection settings must use literal values, not secret references"
         )
     values: Final = credential.credential_values if credential is not None else {}
-    saved_api_base: Final = _resolved_secret(_text(values.get("api_base")))
+    stored_api_base: Final = _text(values.get("api_base"))
+    saved_api_base: Final = _resolved_secret(stored_api_base)
+    if stored_api_base is not None and not saved_api_base:
+        return NimModelDiscoveryResponse(status="unavailable")
     api_base: Final = (
         saved_api_base or submitted.api_base or (get_secret_str("NVIDIA_NIM_API_BASE") or _DEFAULT_API_BASE)
     )
