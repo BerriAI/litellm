@@ -21,6 +21,7 @@ mod rerank;
 pub mod row;
 pub mod schedule;
 mod search;
+mod session;
 mod speech;
 #[cfg(test)]
 mod testing;
