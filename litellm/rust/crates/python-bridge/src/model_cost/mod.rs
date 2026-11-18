@@ -332,6 +332,17 @@ impl NativeModelCostMap {
         cost::price_units(py, &*self.cost_snapshot(py)?, document, &tables, catalog)
     }
 
+    /// Prices many per-unit calls in one crossing, such as the lines of a batch output file. Each document names the
+    /// index of its row in `rows`, the row `get_model_info` found for it, and each row is lowered once
+    fn price_many(
+        &self,
+        py: Python<'_>,
+        documents: &Bound<'_, PyAny>,
+        rows: Vec<Bound<'_, PyMapping>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        cost::price_many(py, &*self.cost_snapshot(py)?, documents, &rows)
+    }
+
     /// Prices an agent call, an MCP tool call or a guardrail run from the facts in `document`, a receipt or why it
     /// is unpriced
     fn price_fee(&self, py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {

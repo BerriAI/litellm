@@ -352,7 +352,7 @@ fn candidates(
 }
 
 /// `data_residency` lowercased, as the uplift helpers compare it
-fn data_residency(written: Option<&str>) -> Option<DataResidency> {
+pub(super) fn data_residency(written: Option<&str>) -> Option<DataResidency> {
     match written?.to_lowercase().as_str() {
         "eu" => Some(DataResidency::Eu),
         "us" => Some(DataResidency::Us),
