@@ -11510,6 +11510,120 @@ class TestWifBoundaryReadsTheResultingDeployment:
                 )
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
+    @staticmethod
+    def _wif_team_admin_fixtures() -> tuple[UserAPIKeyAuth, MagicMock, MagicMock]:
+        """A caller who really does administer this deployment's team, so the generic team check
+        passes and nothing but the credential gate can refuse the write."""
+        team_id: Final = "wif-team"
+        team_admin: Final = UserAPIKeyAuth(
+            user_id="team_admin",
+            team_id=team_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        row: Final = MagicMock()
+        row.litellm_params = {
+            "model": "anthropic/claude-sonnet-4",
+            "anthropic_federation_rule_id": "fdrl_admin",
+            "anthropic_organization_id": "org-admin",
+        }
+        row.model_dump.return_value = {
+            "model_name": "claude",
+            "litellm_params": row.litellm_params,
+            "model_info": {"id": "m1", "team_id": team_id},
+        }
+        row.model_dump_json.return_value = "{}"
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=row)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=LiteLLM_TeamTable(
+                team_id=team_id,
+                team_alias=team_id,
+                members_with_roles=[Member(user_id="team_admin", role="admin")],
+            )
+        )
+        return team_admin, mock_prisma, row
+
+    async def _patch_as_team_admin(self, litellm_params: updateLiteLLMParams) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        team_admin, mock_prisma, _row = self._wif_team_admin_fixtures()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"registry.return_value.names.return_value": ["m1"]}),
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            await patch_model(
+                model_id="m1",
+                patch_data=updateDeployment(litellm_params=litellm_params),
+                user_api_key_dict=team_admin,
+            )
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_point_an_existing_wif_deployment_at_their_own_proxy(self):
+        """A named proxy decides which host receives the request while leaving the pinned api_base
+        alone, so without the gate the token is minted for the real host and handed to the proxy."""
+        with pytest.raises(Exception, match="Only proxy admins can change 'upstream_proxy'"):
+            await self._patch_as_team_admin(updateLiteLLMParams(upstream_proxy="http://attacker.example:3128"))
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_turn_off_tls_verification_on_an_existing_wif_deployment(self):
+        """Disabling verification is what turns a relay into a reader of the minted bearer token."""
+        with pytest.raises(Exception, match="Only proxy admins can change 'ssl_verify'"):
+            await self._patch_as_team_admin(updateLiteLLMParams.model_validate({"ssl_verify": False}))
+
+    @pytest.mark.asyncio
+    async def test_team_admin_can_still_pick_a_proxy_for_a_deployment_without_admin_owned_credentials(self):
+        """The gate protects admin-owned credentials, not the field: a team admin routing a model
+        they own with their own key keeps working, the same way changing its api_base does."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        team_admin, mock_prisma, existing_row = TestNonAdminCannotPersistWifFieldsOnModel._team_admin_patch_fixtures(
+            server_owned_oauth=False
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"registry.return_value.names.return_value": ["oauth-client-patch-1"]}),
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            result = await patch_model(
+                model_id="oauth-client-patch-1",
+                patch_data=updateDeployment(litellm_params=updateLiteLLMParams(upstream_proxy="http://egress.jp:3128")),
+                user_api_key_dict=team_admin,
+            )
+
+        assert result is existing_row
+        saved_params = json.loads(
+            mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"]
+        )
+        assert saved_params["upstream_proxy"] == "http://egress.jp:3128"
+
 
 class TestFederationGateScopesToWhatTheWriteTouches:
     """The gate reads what the write SETS, not only what the row stores. Refusing every write to a

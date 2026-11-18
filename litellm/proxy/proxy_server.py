@@ -960,6 +960,8 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.proxy.upstream_proxy_endpoints.endpoints import router as upstream_proxy_router
+from litellm.proxy.upstream_proxy_endpoints.store import sync_upstream_proxy_registry
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.cache_invalidation import CacheInvalidation, PythonCaches, connect_invalidation
 from litellm.redis.stores.connection import connect
@@ -969,8 +971,6 @@ from litellm.redis.stores.spend_counters import (
     is_rejected,
     is_unavailable,
 )
-from litellm.proxy.upstream_proxy_endpoints.endpoints import router as upstream_proxy_router
-from litellm.proxy.upstream_proxy_endpoints.store import sync_upstream_proxy_registry
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
 

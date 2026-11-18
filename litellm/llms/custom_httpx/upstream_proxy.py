@@ -118,6 +118,24 @@ def current_upstream_proxy() -> str | None:
 
 
 @contextmanager
+def applied_upstream_proxy(proxy_url: str | None) -> Generator[None]:
+    """Re-applies an already-resolved proxy around work the request deferred past its own scope.
+
+    A provider that hands back a stream whose HTTP call has not happened yet opens it while the
+    caller iterates, long after `upstream_proxy_scope` unwound. The wrapper captures the resolved
+    URL while it still has one and re-enters it here, so the deferred call egresses the same way.
+    """
+    if proxy_url is None:
+        yield
+        return
+    token: Final = _UPSTREAM_PROXY.set(proxy_url)
+    try:
+        yield
+    finally:
+        _UPSTREAM_PROXY.reset(token)
+
+
+@contextmanager
 def upstream_proxy_scope(
     configured: object,
     transport_honors_it: Callable[[], bool],
@@ -128,7 +146,7 @@ def upstream_proxy_scope(
         yield
         return
     if not isinstance(configured, str):
-        raise ValueError(f"{UPSTREAM_PROXY_PARAM} must be a string, got {type(configured).__name__}")
+        raise TypeError(f"{UPSTREAM_PROXY_PARAM} must be a string, got {type(configured).__name__}")
     if not transport_honors_it():
         raise ValueError(
             f"{UPSTREAM_PROXY_PARAM} only applies to async calls on the aiohttp transport, which this call does not use"

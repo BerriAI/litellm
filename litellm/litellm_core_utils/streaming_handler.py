@@ -61,6 +61,7 @@ from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, dro
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.base_model_iterator import UpstreamAbortError, upstream_abort_error
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.upstream_proxy import applied_upstream_proxy, current_upstream_proxy
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
@@ -581,6 +582,8 @@ class CustomStreamWrapper:
         self.model = model
         self.stored_finish_reason_indices: Final = stored_finish_reason_indices
         self.make_call = make_call
+        # Captured while the request scope still holds it: a lazy provider opens its stream later.
+        self._upstream_proxy: str | None = current_upstream_proxy()
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
         self.is_mock = is_mock
@@ -2784,7 +2787,8 @@ class CustomStreamWrapper:
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
             try:
-                self.completion_stream = self.make_call(client=litellm.module_level_client)
+                with applied_upstream_proxy(self._upstream_proxy):
+                    self.completion_stream = self.make_call(client=litellm.module_level_client)
             except (BaseLLMException, httpx.HTTPError) as e:
                 self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__iter__()
@@ -2795,7 +2799,8 @@ class CustomStreamWrapper:
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
             try:
-                self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+                with applied_upstream_proxy(self._upstream_proxy):
+                    self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
             except (BaseLLMException, httpx.HTTPError) as e:
                 self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__aiter__()
