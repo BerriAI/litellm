@@ -1632,12 +1632,9 @@ def generic_cost_per_token(
         prompt_tokens_details = parse_prompt_tokens_details(usage)
 
     reported_details: Final = usage.prompt_tokens_details
-    reports_pixel_counts: Final = reported_details is not None and (
-        reported_details.image_pixels is not None or reported_details.video_pixels is not None
-    )
-    input_pixels: Final = (
-        (reported_details.image_pixels or 0) + (reported_details.video_pixels or 0) if reported_details else 0
-    )
+    image_pixels: Final = _get_token_detail_value(reported_details, "image_pixels") if reported_details else None
+    video_pixels: Final = _get_token_detail_value(reported_details, "video_pixels") if reported_details else None
+    reports_pixel_counts: Final = image_pixels is not None or video_pixels is not None
     pixel_rate: Final = (
         get_cost_per_unit(resolved_model_info, "input_cost_per_pixel", None)
         if reports_pixel_counts and reported_details is not None and reported_details.text_tokens is not None
@@ -1710,7 +1707,7 @@ def generic_cost_per_token(
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
     if pixel_rate is not None:
-        prompt_cost += input_pixels * pixel_rate
+        prompt_cost += ((image_pixels or 0) + (video_pixels or 0)) * pixel_rate
 
     ## CALCULATE OUTPUT COST
     text_tokens = 0

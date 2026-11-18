@@ -2012,6 +2012,10 @@ class PromptTokensDetailsWrapper(
             del self.character_count
         if self.image_count is None:
             del self.image_count
+        if self.image_pixels is None:
+            del self.image_pixels
+        if self.video_pixels is None:
+            del self.video_pixels
         if self.video_length_seconds is None:
             del self.video_length_seconds
         if self.audio_length_seconds is None:
