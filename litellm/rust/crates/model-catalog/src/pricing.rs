@@ -503,3 +503,264 @@ mod tests {
         assert!(rows.row(&at).is_some());
     }
 }
+
+#[cfg(test)]
+mod batch_parity {
+    //! Parity with main's `batch_cost_calculator` over rows Model Catalog lowered. `batch_parity.json` was
+    //! captured once from main's Python: each case holds the deployment row main priced, the token counts
+    //! `parse_prompt_tokens_details` read off the line's usage, the residency and Vertex location, and main's
+    //! `(prompt, completion)`
+
+    use litellm_cost::query::{
+        AdjustmentPolicy, Basis, BatchLineQuery, BatchUsage, Candidate, DataResidency, Header,
+        PriceQuery, PriceSource, WritesByTtl,
+    };
+    use litellm_cost::receipt::PriceOutcome;
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::snapshot::SnapshotInputs;
+    use crate::store::Store;
+    use crate::test_support::{GENERATION, TestRows, bundled_rows, bundled_rules, names};
+
+    const FIXTURE: &str = include_str!("batch_parity.json");
+
+    fn object(row: Value) -> Fields {
+        let Value::Object(fields) = row else {
+            panic!("a row is an object")
+        };
+        fields
+    }
+
+    fn sides(row: Value, provider: &str, usage: BatchUsage, basis: Basis) -> (f64, f64) {
+        let snapshot: Snapshot<Store<TestRows>> = Snapshot::new(
+            GENERATION,
+            CostConfig::default(),
+            SnapshotInputs {
+                table: Store::new(bundled_rows()),
+                rules: Arc::new(bundled_rules()),
+                names: Arc::new(names(&[])),
+            },
+        );
+        let (rows, at) =
+            snapshot
+                .pricing_rows([], [])
+                .with_per_call("deployment", object(row), provider);
+        let query = PriceQuery::BatchLine(Box::new(BatchLineQuery {
+            header: Header {
+                candidates: vec![Candidate {
+                    model: "parity-model".into(),
+                    provider: provider.parse().expect("every provider parses"),
+                }],
+                source: PriceSource::Row {
+                    row: at,
+                    breakdown_by_name: false,
+                },
+                basis,
+                adjustments: AdjustmentPolicy::None,
+                reported: None,
+            },
+            usage,
+        }));
+        match litellm_cost::price(&rows, &query) {
+            PriceOutcome::Priced(receipt) => (receipt.prompt.get(), receipt.completion.get()),
+            PriceOutcome::Unpriced(unpriced) => panic!("unpriced: {unpriced:?}"),
+        }
+    }
+
+    fn basis(data_residency: Option<DataResidency>, vertex_location: Option<&str>) -> Basis {
+        Basis {
+            service_tier: Default::default(),
+            data_residency,
+            vertex_location: vertex_location.map(Into::into),
+            at: jiff::Timestamp::UNIX_EPOCH,
+        }
+    }
+
+    #[rstest]
+    #[case::batch_rates_only("batch_rates_only")]
+    #[case::half_of_online_rates("half_of_online_rates")]
+    #[case::half_price_with_cache_reads_and_writes("half_price_with_cache_reads_and_writes")]
+    #[case::half_price_without_a_write_rate(
+        "half_price_without_a_write_rate_bills_writes_at_half_input"
+    )]
+    #[case::half_price_cached_audio_and_image("half_price_cached_audio_and_image")]
+    #[case::batch_cache_read_and_writes("batch_cache_read_and_writes")]
+    #[case::batch_cache_read_online_fallback("batch_cache_read_falls_back_to_the_online_rate")]
+    #[case::batch_cached_as_text("batch_without_any_cache_read_rate_bills_cached_as_text")]
+    #[case::batch_modality_input_rates("batch_modality_input_rates")]
+    #[case::batch_modality_band_named_only_online("batch_modality_band_named_only_online")]
+    #[case::batch_modality_band_priced("batch_modality_band_priced")]
+    #[case::batch_cached_modalities("batch_cached_modalities")]
+    #[case::batch_cached_modalities_online("batch_cached_modalities_read_the_online_cache_rate")]
+    #[case::batch_bands_crossed("batch_bands_crossed")]
+    #[case::batch_band_floor_openai("batch_band_floor_is_out_for_openai")]
+    #[case::batch_band_floor_xai("batch_band_floor_is_in_for_xai")]
+    #[case::batch_cache_writes_by_ttl("batch_cache_writes_by_ttl")]
+    #[case::batch_cache_writes_only_by_ttl_rate("batch_cache_writes_only_by_ttl_rate")]
+    #[case::image_output_batch_rate("image_output_batch_rate")]
+    #[case::image_output_half_online_rate("image_output_half_online_rate")]
+    #[case::image_output_text_rate("image_output_defaults_to_the_text_rate")]
+    #[case::output_half_online("output_half_online_without_batch_output")]
+    #[case::eu_residency_uplift("eu_residency_uplift")]
+    #[case::fedramp_uplift("fedramp_uplift")]
+    #[case::vertex_regional_endpoint("vertex_regional_endpoint")]
+    #[case::vertex_global_endpoint("vertex_global_endpoint")]
+    #[case::residency_and_vertex("residency_and_vertex")]
+    #[case::string_rates("string_rates")]
+    #[case::no_rates("no_rates")]
+    fn a_batch_line_costs_what_main_charged(#[case] name: &str) {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        let case = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap_or_else(|| panic!("no fixture case {name}"));
+        let residency = serde_json::from_value::<Option<DataResidency>>(
+            case["data_residency"]
+                .as_str()
+                .map_or(Value::Null, |written| json!(written.to_lowercase())),
+        )
+        .unwrap();
+        let got = sides(
+            case["row"].clone(),
+            case["provider"].as_str().unwrap(),
+            serde_json::from_value(case["usage"].clone()).unwrap(),
+            basis(residency, case["vertex_location"].as_str()),
+        );
+        assert_eq!(
+            got,
+            (
+                case["expected"]["prompt"].as_f64().unwrap(),
+                case["expected"]["completion"].as_f64().unwrap()
+            )
+        );
+    }
+
+    fn line(prompt_tokens: u64, cache_hit_tokens: u64, cache_creation_tokens: u64) -> BatchUsage {
+        BatchUsage {
+            prompt_tokens,
+            completion_tokens: 1,
+            cache_hit_tokens,
+            cache_creation_tokens,
+            ..BatchUsage::default()
+        }
+    }
+
+    /// Ported from the `get_batch_cost_rates` tests: each batch rate reads its own band and falls back to its flat
+    /// rate
+    #[rstest]
+    #[case::string_rates_cross_their_band(
+        json!({"input_cost_per_token_batches": "1e-06", "output_cost_per_token_batches": "4e-06",
+               "input_cost_per_token_above_272k_tokens_batches": "2e-06",
+               "output_cost_per_token_above_272k_tokens_batches": "6e-06"}),
+        300_000, (300_000.0 * 2e-6, 6e-6)
+    )]
+    #[case::an_unparsable_band_reads_the_flat_rate(
+        json!({"input_cost_per_token_batches": 1e-6, "output_cost_per_token_batches": 4e-6,
+               "input_cost_per_token_above_272k_tokens_batches": "two",
+               "output_cost_per_token_above_272k_tokens_batches": "six"}),
+        300_000, (300_000.0 * 1e-6, 4e-6)
+    )]
+    #[case::each_side_crosses_its_own_band(
+        json!({"input_cost_per_token_batches": 1e-6, "input_cost_per_token_above_272k_tokens_batches": 2e-6,
+               "output_cost_per_token_batches": 4e-6, "output_cost_per_token_above_200k_tokens_batches": 5e-6}),
+        250_000, (250_000.0 * 1e-6, 5e-6)
+    )]
+    #[case::the_band_floor_is_not_crossed(
+        json!({"input_cost_per_token_batches": 1e-6, "input_cost_per_token_above_272k_tokens_batches": 2e-6,
+               "output_cost_per_token_batches": 4e-6, "output_cost_per_token_above_200k_tokens_batches": 5e-6}),
+        200_000, (200_000.0 * 1e-6, 4e-6)
+    )]
+    fn batch_token_rates_read_the_crossed_band(
+        #[case] row: Value,
+        #[case] prompt_tokens: u64,
+        #[case] expected: (f64, f64),
+    ) {
+        assert_eq!(
+            sides(row, "openai", line(prompt_tokens, 0, 0), basis(None, None)),
+            expected
+        );
+    }
+
+    /// Ported from the `get_batch_cost_rates` tests: cache reads and writes bill their batch band, and a row with no
+    /// batch cache write rate bills its writes as uncached input
+    #[rstest]
+    #[case::cache_read_band(
+        json!({"input_cost_per_token_batches": 1e-6, "cache_read_input_token_cost_batches": 1e-7,
+               "cache_read_input_token_cost_above_272k_tokens_batches": 2e-7}),
+        line(300_000, 100_000, 0), 200_000.0 * 1e-6 + 100_000.0 * 2e-7
+    )]
+    #[case::cache_write_band(
+        json!({"input_cost_per_token_batches": 1e-7, "input_cost_per_token_above_272k_tokens_batches": 2e-7,
+               "cache_creation_input_token_cost_batches": 1.25e-7,
+               "cache_creation_input_token_cost_above_272k_tokens_batches": 2.5e-7}),
+        line(300_000, 0, 100_000), 200_000.0 * 2e-7 + 100_000.0 * 2.5e-7
+    )]
+    #[case::the_cache_write_band_floor_is_not_crossed(
+        json!({"input_cost_per_token_batches": 1e-7, "input_cost_per_token_above_272k_tokens_batches": 2e-7,
+               "cache_creation_input_token_cost_batches": 1.25e-7,
+               "cache_creation_input_token_cost_above_272k_tokens_batches": 2.5e-7}),
+        line(272_000, 0, 100_000), 172_000.0 * 1e-7 + 100_000.0 * 1.25e-7
+    )]
+    #[case::cached_image_band(
+        json!({"input_cost_per_token_batches": 2.5e-6, "cache_read_input_image_token_cost": 2e-6,
+               "cache_read_input_image_token_cost_batches": 1e-6,
+               "cache_read_input_image_token_cost_above_272k_tokens_batches": 1.5e-6}),
+        BatchUsage { cached_image_tokens: 1_000, ..line(300_000, 1_000, 0) },
+        299_000.0 * 2.5e-6 + 1_000.0 * 1.5e-6
+    )]
+    #[case::no_batch_cache_write_rate_bills_writes_as_input(
+        json!({"input_cost_per_token_batches": 1e-7, "input_cost_per_token_above_272k_tokens_batches": 2e-7,
+               "cache_creation_input_token_cost": 2.5e-7,
+               "cache_creation_input_token_cost_above_272k_tokens": 5e-7}),
+        line(300_000, 0, 100_000), 300_000.0 * 2e-7
+    )]
+    fn batch_cache_rates_read_the_crossed_band(
+        #[case] row: Value,
+        #[case] usage: BatchUsage,
+        #[case] expected_prompt: f64,
+    ) {
+        assert_eq!(
+            sides(row, "openai", usage, basis(None, None)).0,
+            expected_prompt
+        );
+    }
+
+    /// Ported from the `get_batch_cost_rates` 12 hour write tests: 12 hour writes bill their batch rate at the band
+    /// the prompt crossed, and a row with no 12 hour batch rate bills them at the base batch write rate
+    #[rstest]
+    #[case::short_prompt(1_000, json!({"cache_creation_input_token_cost_above_12hr_batches": 2.5e-7,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": 5e-7}), 2.5e-7)]
+    #[case::crossed_band(300_000, json!({"cache_creation_input_token_cost_above_12hr_batches": 2.5e-7,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches": 5e-7}), 5e-7)]
+    #[case::no_12h_batch_rate(300_000, json!({"cache_creation_input_token_cost_above_12hr": 2.5e-7,
+        "cache_creation_input_token_cost_above_12hr_ultrafast": 5e-7}), 1.25e-7)]
+    fn twelve_hour_writes_read_their_batch_rate(
+        #[case] prompt_tokens: u64,
+        #[case] twelve_hours: Value,
+        #[case] expected_rate: f64,
+    ) {
+        let base = json!({"input_cost_per_token_batches": 1e-7, "cache_creation_input_token_cost_batches": 1.25e-7});
+        let row = Value::Object(
+            object(base)
+                .into_iter()
+                .chain(object(twelve_hours))
+                .collect(),
+        );
+        let usage = BatchUsage {
+            cache_creation_by_ttl: Some(WritesByTtl {
+                twelve_hours: Some(1_000),
+                ..WritesByTtl::default()
+            }),
+            ..line(prompt_tokens, 0, 1_000)
+        };
+        let uncached = (prompt_tokens - 1_000) as f64 * 1e-7;
+        assert_eq!(
+            sides(row, "openai", usage, basis(None, None)).0,
+            uncached + (0.0 * 1.25e-7 + 1_000.0 * expected_rate)
+        );
+    }
+}

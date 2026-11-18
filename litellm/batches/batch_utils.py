@@ -14,6 +14,12 @@ from litellm.litellm_core_utils import batch_utils as core_batch_utils
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+    BatchLineDocument,
+    ManyDocument,
+    price_many,
+    prompt_and_completion,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
@@ -200,6 +206,7 @@ class _BatchOutputLineStats:
     reasoning_tokens: int
     model: str | None
     usage: Usage | None
+    priced_line: BatchLineDocument | None = None
 
 
 def _classify_output_line_stats(
@@ -258,7 +265,7 @@ def _compute_output_line_stats(
     raw_model: Final = response_body.get("model")
     response_model: Final = raw_model if isinstance(raw_model, str) and raw_model else None
     completion_details: Final = usage.completion_tokens_details
-    line_prompt_cost, line_completion_cost = _output_line_cost_or_pending(
+    line_cost: Final = _output_line_cost_or_pending(
         response_body=response_body,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
@@ -267,7 +274,9 @@ def _compute_output_line_stats(
         model_info=model_info,
         vertex_location=vertex_location,
     )
+    line_prompt_cost, line_completion_cost = (0.0, 0.0) if isinstance(line_cost, Mapping) else line_cost
     return _BatchOutputLineStats(
+        priced_line=line_cost if isinstance(line_cost, Mapping) else None,
         prompt_cost=line_prompt_cost,
         completion_cost=line_completion_cost,
         prompt_tokens=usage.prompt_tokens,
@@ -304,7 +313,7 @@ def _output_line_cost_or_pending(
     response_model: str | None,
     model_info: ModelInfo | None,
     vertex_location: str | None,
-) -> tuple[float, float]:
+) -> tuple[float, float] | BatchLineDocument:
     try:
         return _output_line_cost(
             response_body, usage, custom_llm_provider, model_name, response_model, model_info, vertex_location
@@ -352,9 +361,10 @@ def _output_line_cost(
     response_model: str | None,
     model_info: ModelInfo | None,
     vertex_location: str | None = None,
-) -> tuple[float, float]:
-    """(prompt_cost, completion_cost) for one output line, priced at batch rates."""
-    from litellm.cost_calculator import batch_cost_calculator, ocr_batch_cost
+) -> tuple[float, float] | BatchLineDocument:
+    """(prompt_cost, completion_cost) of an OCR output line, or what prices a token line at batch rates beside the
+    file's other lines."""
+    from litellm.cost_calculator import batch_line_document, ocr_batch_cost
 
     cost_model: Final = (
         model_name if custom_llm_provider == "bedrock" and model_name else response_model or model_name or ""
@@ -367,13 +377,40 @@ def _output_line_cost(
             usage_info=ocr_usage,
             model_info=model_info,
         )
-    return batch_cost_calculator(
-        usage=usage,
-        model=cost_model,
-        custom_llm_provider=custom_llm_provider,
-        model_info=model_info,
-        vertex_location=vertex_location,
-    )
+    _, provider, _, _ = litellm.get_llm_provider(model=cost_model, custom_llm_provider=custom_llm_provider)
+    return batch_line_document(usage, cost_model, provider, None, vertex_location)
+
+
+def _priced_token_lines(
+    line_stats: tuple[_BatchOutputLineStats, ...], model_info: ModelInfo | None
+) -> tuple[_BatchOutputLineStats, ...]:
+    """Every token line priced in one crossing into the pricing core, each row looked up once per model."""
+    from litellm.cost_calculator import batch_line_model_info
+
+    pending: Final = tuple(stats.priced_line for stats in line_stats if stats.priced_line is not None)
+    if not pending:
+        return line_stats
+    named: Final = tuple(dict.fromkeys((line["model"], line["provider"]) for line in pending))
+    rows_by_name: Final = {name: batch_line_model_info(name[0], name[1], model_info) for name in named}
+    priced_names: Final = tuple(name for name in named if rows_by_name[name])
+    row_index: Final = {name: index for index, name in enumerate(priced_names)}
+    try:
+        outcomes: Final = price_many(
+            tuple(ManyDocument(**line, row=row_index.get((line["model"], line["provider"]))) for line in pending),
+            tuple(rows_by_name[name] or {} for name in priced_names),
+        )
+    except Exception:  # noqa: BLE001  # retain measured usage when the batch's pricing fails
+        verbose_logger.warning("Batch line pricing unavailable; retaining usage with the existing zero-cost fallback")
+        return tuple(dataclasses_replace(stats, priced_line=None) for stats in line_stats)
+    costs: Final = iter(tuple(prompt_and_completion(outcome) for outcome in outcomes))
+    return tuple(_with_line_cost(stats, costs) for stats in line_stats)
+
+
+def _with_line_cost(stats: _BatchOutputLineStats, costs: Iterator[tuple[float, float]]) -> _BatchOutputLineStats:
+    if stats.priced_line is None:
+        return stats
+    prompt_cost, completion_cost = next(costs)
+    return dataclasses_replace(stats, priced_line=None, prompt_cost=prompt_cost, completion_cost=completion_cost)
 
 
 def _aggregate_batch_cost_usage_models(
@@ -389,7 +426,9 @@ def _aggregate_batch_cost_usage_models(
     all_results: Final = tuple(
         _classify_output_line_stats(entries, custom_llm_provider, model_name, model_info, vertex_location)
     )
-    line_stats: Final = tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats))
+    line_stats: Final = _priced_token_lines(
+        tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats)), model_info
+    )
     failed_requests: Final = sum(1 for result in all_results if result is _LineOutcome.PROVIDER_FAILED)
     successful_requests: Final = len(all_results) - failed_requests
 
