@@ -1,0 +1,380 @@
+{
+ "source": "Captured once from main's Python (8388e4f60f, LITELLM_LOCAL_MODEL_COST_MAP=True). `row` holds the cost fields the calculator read, `expected` what main returned or the exception it raised",
+ "cases": [
+  {
+   "name": "pages",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": 10
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.04,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "pages_and_annotations",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": 10,
+    "pages_processed_annotation": 3
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.055,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "annotations_without_pages",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": null,
+    "pages_processed_annotation": 3
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.015,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "no_pages_on_page_priced_row",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": null
+   },
+   "batch": false,
+   "expected": {
+    "raises": "ValueError"
+   }
+  },
+  {
+   "name": "deployment_page_rate",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": {
+    "ocr_cost_per_page": 0.0101
+   },
+   "usage": {
+    "pages_processed": 7
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.0707,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "deployment_annotation_rate",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": {
+    "annotation_cost_per_page": 0.02
+   },
+   "usage": {
+    "pages_processed": 7,
+    "pages_processed_annotation": 2
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.068,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "annotations_at_the_page_rate",
+   "model": "azure_ai/mistral-document-ai-2512",
+   "provider": "azure_ai",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.003
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": 3,
+    "pages_processed_annotation": 2
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.015000000000000001,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "credits",
+   "model": "reducto/parse-v3",
+   "provider": "reducto",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_credit": 0.015
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": 4,
+    "credits": 12.5
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.1875,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "credit_priced_without_pages",
+   "model": "reducto/parse-v3",
+   "provider": "reducto",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_credit": 0.015
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": null
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "credit_priced_without_credits",
+   "model": "reducto/parse-v3",
+   "provider": "reducto",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_credit": 0.015
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": 4
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "unmapped",
+   "model": "unmapped-ocr",
+   "provider": "mistral",
+   "row": null,
+   "deployment": null,
+   "usage": {
+    "pages_processed": 4
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "unmapped_deployment_credits",
+   "model": "unmapped-ocr",
+   "provider": "mistral",
+   "row": null,
+   "deployment": {
+    "ocr_cost_per_credit": 0.3
+   },
+   "usage": {
+    "pages_processed": 4,
+    "credits": 1.75
+   },
+   "batch": false,
+   "expected": {
+    "prompt": 0.525,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "batch_rates",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": 10,
+    "pages_processed_annotation": 3
+   },
+   "batch": true,
+   "expected": {
+    "prompt": 0.0275,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "batch_online_rates",
+   "model": "azure_ai/mistral-document-ai-2512",
+   "provider": "azure_ai",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.003
+   },
+   "deployment": null,
+   "usage": {
+    "pages_processed": 3,
+    "pages_processed_annotation": 2
+   },
+   "batch": true,
+   "expected": {
+    "prompt": 0.015000000000000001,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "batch_deployment_online_page_rate",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": {
+    "ocr_cost_per_page": 0.0101
+   },
+   "usage": {
+    "pages_processed": 7,
+    "pages_processed_annotation": 5
+   },
+   "batch": true,
+   "expected": {
+    "prompt": 0.0832,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "batch_deployment_annotation_family",
+   "model": "mistral/mistral-ocr-latest",
+   "provider": "mistral",
+   "row": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "ocr_cost_per_page": 0.004,
+    "ocr_cost_per_page_batches": 0.002,
+    "annotation_cost_per_page": 0.005,
+    "annotation_cost_per_page_batches": 0.0025
+   },
+   "deployment": {
+    "annotation_cost_per_page_batches": 0.0011
+   },
+   "usage": {
+    "pages_processed": 7,
+    "pages_processed_annotation": 5
+   },
+   "batch": true,
+   "expected": {
+    "prompt": 0.0195,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "batch_unmapped_deployment_page_rate",
+   "model": "unmapped-ocr",
+   "provider": "mistral",
+   "row": null,
+   "deployment": {
+    "ocr_cost_per_page": 0.003
+   },
+   "usage": {
+    "pages_processed": 7,
+    "pages_processed_annotation": 5
+   },
+   "batch": true,
+   "expected": {
+    "prompt": 0.036000000000000004,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "batch_unmapped",
+   "model": "unmapped-ocr",
+   "provider": "mistral",
+   "row": null,
+   "deployment": null,
+   "usage": {
+    "pages_processed": 7
+   },
+   "batch": true,
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  }
+ ]
+}
