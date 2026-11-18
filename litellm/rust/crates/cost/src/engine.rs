@@ -1,11 +1,11 @@
 //! The query engine: `price` hands each `PriceQuery` to its kind's handler, the way router-core runs one step per
-//! module. A kind without a handler answers `NotPorted`, so its caller keeps pricing it the old way until it moves
+//! module. A case a handler does not price yet answers `NotPorted`, so its caller keeps pricing it the old way
 
 use crate::query::PriceQuery;
-use crate::receipt::{PriceOutcome, Unpriced};
+use crate::receipt::PriceOutcome;
 use crate::row::RowSource;
 use crate::{
-    a2a, batch, guardrail, image, mcp, ocr, rerank, search, speech, tokens, transcription,
+    a2a, batch, guardrail, image, mcp, ocr, rerank, search, session, speech, tokens, transcription,
     vector_store, video,
 };
 
@@ -24,7 +24,7 @@ pub fn price(source: &impl RowSource, query: &PriceQuery) -> PriceOutcome {
         PriceQuery::A2a(a2a) => a2a::price(source, a2a),
         PriceQuery::Mcp(mcp) => mcp::price(source, mcp),
         PriceQuery::BatchLine(line) => batch::price(source, line),
-        PriceQuery::Session(_) => Unpriced::NotPorted(query.kind()).into(),
+        PriceQuery::Session(session) => session::price(source, session),
     }
 }
 
@@ -45,16 +45,8 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::query::{Kind, Provider};
+    use crate::query::Provider;
     use crate::testing::{TestSource, text_row, tokens_query, usage};
-
-    #[rstest]
-    fn a_kind_without_a_handler_is_not_ported(#[values(Kind::Session)] kind: Kind) {
-        let header = tokens_query(Provider::Anthropic, "claude", usage(1, 1)).header;
-        let query = PriceQuery::Session(header);
-        let source = TestSource::with_row("claude", text_row(1.0, 1.0));
-        assert_eq!(price(&source, &query), Unpriced::NotPorted(kind).into());
-    }
 
     #[rstest]
     fn many_queries_are_priced_in_order_each_as_alone() {
