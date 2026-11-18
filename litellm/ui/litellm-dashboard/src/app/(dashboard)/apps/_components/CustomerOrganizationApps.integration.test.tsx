@@ -110,21 +110,24 @@ describe("customer app budgets", () => {
     render(<CustomerOrganizationApps organizationId="org-1" />);
     await screen.findByRole("button", { name: "Edit budget for chat" });
     const table = within(screen.getByRole("table", { name: "App budgets" }));
-    expect(table.getByText("$500.00")).toBeInTheDocument();
-    expect(table.getByText("Cumulative spend")).toBeInTheDocument();
-    const monthlyProgress = table.getByRole("progressbar", { name: "Monthly spend / limit" });
+    expect(table.queryByText("$500.00")).not.toBeInTheDocument();
+    expect(table.queryByRole("columnheader", { name: "Tracked spend (USD)" })).not.toBeInTheDocument();
+    expect(table.getByText("$7.00 of $100.00 used")).toBeInTheDocument();
+    const monthlyProgress = table.getByRole("progressbar", { name: "App budget used" });
     expect(Number(monthlyProgress.getAttribute("aria-valuenow"))).toBeCloseTo(7);
-    expect(table.getByText("$12.00 / $1,000.00")).toBeInTheDocument();
-    expect(table.getByText("$93.00 remains")).toBeInTheDocument();
+    expect(table.queryByText("$12.00 / $1,000.00")).not.toBeInTheDocument();
+    expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
+    expect(table.getByText("$93.00 remaining")).toBeInTheDocument();
   });
-  it("should display monthly and yearly group limits when no scalar budget is set", async () => {
+  it("should summarize the monthly group limit with additional limits in details", async () => {
     bound = true;
     assigned = true;
     render(<CustomerOrganizationApps organizationId="org-1" />);
     await screen.findByRole("button", { name: "Edit budget for chat" });
     const table = within(screen.getByRole("table", { name: "App budgets" }));
     expect(table.getByText("$100.00")).toBeInTheDocument();
-    expect(table.getByText("$1,000.00")).toBeInTheDocument();
+    expect(table.queryByText("$1,000.00")).not.toBeInTheDocument();
+    expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
     expect(table.queryByText("No spend limit")).not.toBeInTheDocument();
   });
   it("should route Add app budget to Gateway setup when the app definition is unset", async () => {

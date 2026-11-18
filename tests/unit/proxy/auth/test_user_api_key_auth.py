@@ -179,6 +179,89 @@ async def test_budget_denial_persists_the_hierarchy_used_by_the_common_resolver(
     assert identity.customer_hierarchy == resolved.value.customer_hierarchy
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("denied_scope", ("app_customer_org", "app_customer_member"))
+async def test_app_budget_denial_retains_trusted_app_identity_for_failure_callbacks(
+    monkeypatch: pytest.MonkeyPatch, denied_scope: str
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.management_helpers.apps import AppStore
+    from litellm.types.proxy.management_endpoints.apps import (
+        App,
+        AppCreate,
+        AppDefinition,
+        AppOrganizationPut,
+        AppResourceType,
+    )
+    from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+    from tests.unit.proxy.management_helpers.test_apps import AppDatabase, seed_resources
+
+    server: Final = litellm.proxy.proxy_server
+    database: Final = AppDatabase()
+    store: Final = AppStore(database)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    await database.litellm_customerorganizationtable.create({"customer_org_id": "org"})
+    app: Final = await store.create(AppCreate(resource_id="chat"), "admin")
+    assert isinstance(app, App)
+    await store.put_organization(
+        app.app_id,
+        "org",
+        AppOrganizationPut(
+            budget_override=Budget(max_budget=0) if denied_scope == "app_customer_org" else None,
+            customer_member_budget=Budget(max_budget=0) if denied_scope == "app_customer_member" else None,
+        ),
+        "admin",
+    )
+    hierarchy: Final = CustomerHierarchyAuth(
+        customer_org_id="org",
+        customer_member_id="member",
+        scopes=(CustomerScopeAuth(key="customer_org", entity_id="org", spend=4, max_budget=100),),
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=customer_member_cache_key("member"), value=hierarchy)
+    failure_hook: Final = AsyncMock(return_value=None)
+    common_checks: Final = AsyncMock()
+    monkeypatch.setattr(server, "prisma_client", MagicMock(db=database))
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "spend_counter_store", FakeSpendCounters().store())
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server.proxy_logging_obj, "post_call_failure_hook", failure_hook)
+    monkeypatch.setattr(auth_module, "run_centralized_common_checks", common_checks)
+    identity: Final = UserAPIKeyAuth(token="verified-customer-key", team_id="chat")
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": ((b"x-litellm-customer-member-id", b"member"),),
+        }
+    )
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            identity,
+            request,
+            {"model": "qa-model", "messages": []},
+            "/v1/chat/completions",
+            "verified-customer-key",
+        )
+    assert denied.value.code == "422"
+    common_checks.assert_not_awaited()
+    failure_hook.assert_awaited_once()
+    assert failure_hook.await_args is not None
+    callback_auth: Final = failure_hook.await_args.kwargs["user_api_key_dict"]
+    assert isinstance(callback_auth, UserAPIKeyAuth)
+    callback_hierarchy: Final = callback_auth.customer_hierarchy
+    assert callback_hierarchy is not None and callback_hierarchy.app_id == app.app_id
+    assert callback_hierarchy.customer_org_id == "org" and callback_hierarchy.customer_member_id == "member"
+    assert any(scope.key == denied_scope and scope.max_budget == 0 for scope in callback_hierarchy.scopes)
+    metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(callback_auth)
+    assert metadata.get("user_api_key_app_id") == app.app_id
+    assert all(row.model_dump().get("spend", 0) == 0 for row in database.litellm_appcustomerorgtable.rows.values())
+    assert all(row.model_dump().get("spend", 0) == 0 for row in database.litellm_appcustomermembertable.rows.values())
+
+
 class Request:
     def __init__(self, client_ip: Optional[str] = None, headers: Optional[dict] = None):
         self.client = MagicMock()
@@ -2672,11 +2755,13 @@ async def test_customer_hierarchy_survives_virtual_key_auth_without_legacy_end_u
         scopes=(CustomerScopeAuth(key="customer_member", entity_id="m1", rpm_limit=1),),
     )
     loader: Final = AsyncMock(return_value=hierarchy)
+    database: Final = MagicMock()
+    database.db.litellm_config.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(hierarchy_module, "get_customer_hierarchy", loader)
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(server, "prisma_client", database)
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
@@ -2718,11 +2803,13 @@ async def test_a_key_pinned_to_a_customer_org_only_serves_that_orgs_members(
         customer_org_id="o1",
         scopes=(CustomerScopeAuth(key="customer_member", entity_id="m1"),),
     )
+    database: Final = MagicMock()
+    database.db.litellm_config.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(hierarchy_module, "get_customer_hierarchy", AsyncMock(return_value=hierarchy))
     monkeypatch.setattr(server, "master_key", MASTER_KEY)
     monkeypatch.setattr(server, "general_settings", {})
     monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
-    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(server, "prisma_client", database)
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     request: Final = StarletteRequest(
