@@ -94,7 +94,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
-    generic_cost_per_token,
+    billed_usage,
     get_web_search_requests_from_usage,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
@@ -456,18 +456,13 @@ def _transcription_cost(
             model=model_without_prefix,
             provider=custom_llm_provider,
             seconds=duration,
-            tokens=True,
-        ),
-        catalog=declared if declared is not None else model_info,
-    )
-    if isinstance(outcome, NativeUnpriced) and outcome.reason == "not_ported":
-        return generic_cost_per_token(
-            model=model,
-            usage=usage,
-            custom_llm_provider=custom_llm_provider,
+            tokens=billed_usage(usage),
             service_tier=service_tier,
             data_residency=data_residency,
-        )
+        ),
+        (litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider),),
+        catalog=declared if declared is not None else model_info,
+    )
     return prompt_and_completion(outcome)
 
 
@@ -486,6 +481,9 @@ def _speech_cost(
     )
     if lyria_generation_cost is not None:
         return 0.0, lyria_generation_cost
+    catalog: Final = cached_get_model_info_helper(
+        model=model, custom_llm_provider=custom_llm_provider, preserve_unset_costs=True
+    )
     outcome: Final = price_units(
         SpeechDocument(
             kind="speech",
@@ -493,21 +491,15 @@ def _speech_cost(
             provider=custom_llm_provider,
             characters=prompt_characters,
             generations=None,
+            tokens=billed_usage(usage),
+            service_tier=service_tier,
+            data_residency=data_residency,
         ),
-        catalog=cached_get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider, preserve_unset_costs=True
-        ),
+        (litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider),),
+        catalog=catalog,
     )
     if isinstance(outcome, NativeReceipt):
         return outcome.prompt_cost, outcome.completion_cost
-    if outcome.reason == "not_ported":
-        return generic_cost_per_token(
-            model=model,
-            usage=usage,
-            custom_llm_provider=custom_llm_provider,
-            service_tier=service_tier,
-            data_residency=data_residency,
-        )
     if outcome.reason == "missing_usage":
         raise ValueError(
             f"prompt_characters must be provided for tts calls. prompt_characters={prompt_characters}, "

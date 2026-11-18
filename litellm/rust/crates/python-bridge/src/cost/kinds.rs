@@ -9,7 +9,7 @@ use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::query::{
     AdjustmentPolicy, Basis, BatchLineQuery, BatchUsage, Candidate, Header, ImageCalculator,
     ImageQuery, OcrQuery, PriceQuery, PriceSource, Provider, RerankQuery, SearchQuery, SpeechQuery,
-    TranscriptionQuery, VectorStoreSearchQuery, VideoQuery,
+    TokenBilled, TokenUsage, TranscriptionQuery, VectorStoreSearchQuery, VideoQuery,
 };
 use litellm_cost::receipt::{PriceOutcome, Unpriced};
 use litellm_cost::row::RowRef;
@@ -51,6 +51,7 @@ enum UnitsDocument {
         #[serde(default)]
         catalog_deferred: bool,
     },
+    /// `tables` holds the row `generic_cost_per_token` reads for `tokens`
     Speech {
         #[serde(flatten)]
         named: Named,
@@ -58,13 +59,16 @@ enum UnitsDocument {
         characters: Option<u64>,
         #[serde(default)]
         generations: Option<u64>,
+        #[serde(flatten)]
+        tokens: TokenFacts,
     },
+    /// `tables` holds the row `generic_cost_per_token` reads for `tokens`
     Transcription {
         #[serde(flatten)]
         named: Named,
         seconds: f64,
-        #[serde(default)]
-        tokens: bool,
+        #[serde(flatten)]
+        tokens: TokenFacts,
     },
     Image {
         #[serde(flatten)]
@@ -115,6 +119,16 @@ enum UnitsDocument {
         #[serde(default)]
         adjust: Option<AdjustFacts>,
     },
+}
+
+/// The token usage a speech or transcription response reported, and the tier and residency `generic_cost_per_token`
+/// bills it at
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct TokenFacts {
+    tokens: Option<TokenUsage>,
+    service_tier: Option<String>,
+    data_residency: Option<String>,
 }
 
 /// The discount and margin key of a call main adjusts
@@ -178,7 +192,7 @@ pub(crate) fn price_units(
             Ok((rows, given.into_iter().chain([at]).collect::<Vec<RowRef>>()))
         },
     )?;
-    let (rows_given, image_rows) = match &document {
+    let (rows_given, named_rows) = match &document {
         UnitsDocument::Video {
             deployment,
             requested_row,
@@ -191,13 +205,14 @@ pub(crate) fn price_units(
                 deployment_row.into_iter().chain(requested).collect(),
             )
         }
+        UnitsDocument::Speech { .. } | UnitsDocument::Transcription { .. } => (Vec::new(), given),
         _ => (given, Vec::new()),
     };
     let source = match rows_given.is_empty() {
         true => PriceSource::Catalog,
         false => PriceSource::Rows { rows: rows_given },
     };
-    let query = document.query(candidate, source, image_rows);
+    let query = document.query(candidate, source, named_rows);
     outcome(py, litellm_cost::price(&rows, &query))
 }
 
@@ -229,11 +244,13 @@ impl UnitsDocument {
         (candidate, provider)
     }
 
+    /// `named_rows` are the rows the kind names beyond its source: a video's input image rows, or the row a speech or
+    /// transcription call's tokens bill on
     fn query(
         self,
         candidate: Candidate,
         source: PriceSource,
-        image_rows: Vec<RowRef>,
+        named_rows: Vec<RowRef>,
     ) -> PriceQuery {
         let (data_residency, vertex_location) = match &self {
             Self::BatchLine {
@@ -247,13 +264,29 @@ impl UnitsDocument {
             Self::Image {
                 vertex_location, ..
             } => (None, vertex_location.clone()),
+            Self::Speech { tokens, .. } | Self::Transcription { tokens, .. } => (
+                super::query::data_residency(tokens.data_residency.as_deref()),
+                None,
+            ),
             _ => (None, None),
+        };
+        let service_tier = match &self {
+            Self::Speech { tokens, .. } | Self::Transcription { tokens, .. } => {
+                super::service_tier_named(tokens.service_tier.as_deref())
+            }
+            _ => Default::default(),
+        };
+        let billed = |tokens: TokenFacts| {
+            tokens
+                .tokens
+                .zip(named_rows.first().cloned())
+                .map(|(usage, row)| TokenBilled { row, usage })
         };
         let header = Header {
             candidates: vec![candidate],
             source,
             basis: Basis {
-                service_tier: Default::default(),
+                service_tier,
                 data_residency,
                 vertex_location,
                 at: jiff::Timestamp::now(),
@@ -305,18 +338,20 @@ impl UnitsDocument {
             Self::Speech {
                 characters,
                 generations,
+                tokens,
                 ..
             } => PriceQuery::Speech(Box::new(SpeechQuery {
                 header,
                 characters,
                 generations,
+                tokens: billed(tokens),
             })),
             Self::Transcription {
                 seconds, tokens, ..
             } => PriceQuery::Transcription(Box::new(TranscriptionQuery {
                 header,
                 seconds,
-                tokens,
+                tokens: billed(tokens),
             })),
             Self::Image {
                 calculator,
@@ -343,7 +378,7 @@ impl UnitsDocument {
                 resolution,
                 videos,
                 input_images,
-                input_image_rows: image_rows,
+                input_image_rows: named_rows,
             })),
             Self::Search {
                 queries,
