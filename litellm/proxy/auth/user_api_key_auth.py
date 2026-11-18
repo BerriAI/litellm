@@ -133,11 +133,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
-from litellm.proxy.auth.customer_provisioning import (
-    gated_registrars,
-    refuse_unknown_customer,
-    registration_refusal,
-)
+from litellm.proxy.auth.customer_provisioning import registration_refusal, resolve_registered_customer
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.impersonation import (
     IMPERSONATE_USER_HEADER,
@@ -3245,11 +3241,11 @@ async def _authorize_authenticated_request_checks(
             )
             try:
                 if customer_identity is not None and has_customer:
-                    refusal: Final = partial(registration_refusal, prisma_client, user_api_key_auth_obj)
-                    register_member, register_organization = gated_registrars(refusal)
                     with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                        try:
-                            hierarchy: Final = await resolve_customer_hierarchy(
+                        hierarchy: Final = await resolve_registered_customer(
+                            customer_identity,
+                            partial(registration_refusal, prisma_client, user_api_key_auth_obj),
+                            lambda register, register_organization: resolve_customer_hierarchy(
                                 identity=customer_identity,
                                 prisma_client=prisma_client,
                                 user_api_key_cache=user_api_key_cache,
@@ -3257,13 +3253,10 @@ async def _authorize_authenticated_request_checks(
                                 request_model=request_model,
                                 route=route,
                                 key_metadata=key_metadata,
-                                register=register_member,
+                                register=register,
                                 register_organization=register_organization,
-                            )
-                        except CustomerBudgetExceededError as error:
-                            await refuse_unknown_customer(customer_identity, error.customer_hierarchy, refusal)
-                            raise
-                    await refuse_unknown_customer(customer_identity, hierarchy, refusal)
+                            ),
+                        )
                     user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
                 if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):
                     app_hierarchy: Final = await resolve_app_hierarchy(
