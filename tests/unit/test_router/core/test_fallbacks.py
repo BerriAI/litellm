@@ -791,6 +791,28 @@ async def test_a_fallback_hop_carries_the_superseded_attempt_usage(make_core: Ma
     assert logging_obj.model_call_details["failed_attempts_usage"] == ((usage, 0.0),)
 
 
+@pytest.mark.asyncio
+async def test_the_superseded_attempt_usage_survives_a_hop_that_fails_before_opening(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    logging_obj: Final = request_logging()
+    usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
+
+    def failed_after_usage(**_: object) -> Exception:
+        logging_obj.model_call_details["combined_usage_object"] = usage
+        return server_error()
+
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}])
+    host.answer("openai/a", failed_after_usage)
+    host.answer("openai/b", server_error())
+
+    with pytest.raises(litellm.InternalServerError):
+        await complete(core, litellm_logging_obj=logging_obj)
+
+    assert host.deployments_called("acompletion") == ["a", "b"]
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((usage, 0.0),)
+
+
 # --- when no fallback runs -----------------------------------------------------------------------
 
 

@@ -24,6 +24,8 @@ from tests.unit.test_router.core.scripted_host import (
     rate_limit,
 )
 
+SHORTER = [{"role": "user", "content": "shorter"}]
+
 # --- validation of the configured chains ---------------------------------------------------------
 
 
@@ -212,6 +214,75 @@ async def test_a_dict_target_carrying_an_oidc_api_key_is_refused_and_the_primary
         "Fallback to {'model': 'b', 'api_key': 'oidc*********'} also failed: Rejected Request: api_key holds an "
         "oidc/ secret reference, which only a deployment or credential a proxy admin configures can carry."
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["anthropic_federation_workspace_id", "openai_identity_token_file", "anthropic_issuer_signing_key_ref"],
+)
+async def test_a_dict_target_carrying_a_federation_field_is_refused_before_any_other_target(
+    make_core: MakeCore, host: ScriptedHost, field: str
+) -> None:
+    """A dict target is merged into the call's kwargs, which beat the deployment's own params, so a
+    stored fallback could otherwise pick the workspace or token a federation exchange uses. The
+    refusal ends the walk: the fine target after it is never tried."""
+    core = build(make_core)
+    show_router_debug(host)
+    host.answer("openai/a", rate_limit())
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await complete(core, fallbacks=[{"a": [{"model": "b", field: "other"}, "c"]}])
+
+    assert host.deployments_called("acompletion") == ["a"]
+    assert f"also failed: Rejected Request: {field} is a server-owned workload identity federation" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_a_dict_target_naming_a_credential_that_holds_an_oidc_api_key_is_refused(
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-oidc",
+                credential_values={"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"},
+                credential_info={"custom_llm_provider": "openai"},
+            )
+        ],
+    )
+    core = build(make_core)
+    show_router_debug(host)
+    host.answer("openai/a", rate_limit())
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await complete(
+            core, fallbacks=[{"model": "b", "litellm_credential_name": "admin-oidc", "api_base": "https://x.example"}]
+        )
+
+    assert host.deployments_called("acompletion") == ["a"]
+    assert "oidc/" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_a_dict_target_with_a_request_override_runs_after_its_bare_name_failed(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    """Retrying a group with different request params is the documented use of a dict target, so it is
+    a distinct attempt from the bare name of that group."""
+    core = build(make_core)
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", lambda **request: None if request["messages"] == SHORTER else rate_limit())
+
+    response = await complete(core, fallbacks=[{"a": ["b", {"model": "b", "messages": SHORTER}]}])
+
+    assert host.deployments_called("acompletion") == ["a", "b", "b"]
+    assert host.calls_to("acompletion")[-1].kwargs["messages"] == SHORTER
+    assert headers(response)["x-litellm-model-group"] == "b"
 
 
 @pytest.mark.asyncio
