@@ -177,6 +177,7 @@ fn rowless<S: RowSource>(
         breakdown,
         parts: extras.parts,
         cache_savings: None,
+        reported: None,
         basis: query.header.basis.clone(),
         total: 0.0,
     };
@@ -266,6 +267,7 @@ fn attempt<S: RowSource>(
             &query.usage,
             breakdown::savings_uplift(row.adjustments(), basis),
         )),
+        reported: None,
         basis: basis.clone(),
         total: 0.0,
     };
@@ -1043,7 +1045,7 @@ mod tests {
         let reported = TokensQuery {
             header: crate::query::Header {
                 reported: Some(crate::query::ReportedCost {
-                    source: "usage.cost".into(),
+                    source: crate::query::ReportSource::UsageCost,
                     usd: 1.0,
                 }),
                 ..query.header.clone()
@@ -1116,7 +1118,7 @@ mod tests {
         TokensQuery {
             header: crate::query::Header {
                 reported: Some(crate::query::ReportedCost {
-                    source: "usage.cost".into(),
+                    source: crate::query::ReportSource::UsageCost,
                     usd,
                 }),
                 ..query.header

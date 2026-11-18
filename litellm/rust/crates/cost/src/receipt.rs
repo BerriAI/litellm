@@ -60,6 +60,8 @@ pub struct Receipt {
     /// Read discount minus write premium, main's `calculate_prompt_caching_savings`. `None` for custom pricing
     pub cache_savings: Option<f64>,
     pub basis: Basis,
+    /// A cost the provider reported, which stands for the priced lines as the cost before discount and margin
+    pub reported: Option<Usd>,
     /// The cost after discount and margin
     pub total: f64,
 }
@@ -122,7 +124,9 @@ impl Receipt {
 
     /// The cost before discount and margin, main's `original_cost`
     pub fn original(&self) -> f64 {
-        (self.token_subtotal() + self.tools + self.additional).get()
+        self.reported
+            .unwrap_or(self.token_subtotal() + self.tools + self.additional)
+            .get()
     }
 
     /// Applies the discount and margin `policy` asks for and settles the total. The discount is keyed on `model`
@@ -187,6 +191,7 @@ impl Receipt {
             breakdown: Breakdown::default(),
             parts: Vec::new(),
             cache_savings: None,
+            reported: None,
             basis: Basis {
                 service_tier: crate::price::ServiceTier::default(),
                 data_residency: None,

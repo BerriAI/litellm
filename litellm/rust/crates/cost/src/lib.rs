@@ -17,6 +17,7 @@ pub mod query;
 pub mod quote;
 pub mod rates;
 pub mod receipt;
+pub mod reported;
 mod rerank;
 pub mod row;
 pub mod schedule;
