@@ -5923,6 +5923,26 @@ def test_get_error_information_keeps_the_provider_error_code_of_a_mapped_rate_li
     assert error_information["error_provider_code"] == "insufficient_quota"
 
 
+@pytest.mark.parametrize("error_class", [litellm.BadRequestError, litellm.RateLimitError])
+def test_get_error_information_redacts_secrets_in_the_provider_error_code(
+    error_class: type[litellm.BadRequestError] | type[litellm.RateLimitError],
+):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    leaked_key: Final = "AKIAIOSFODNN7EXAMPLE"
+    error: Final = error_class(
+        message="rejected",
+        model="gpt-5.6",
+        llm_provider="openai",
+        body={"message": "rejected", "type": "invalid_request_error", "param": None, "code": f"bad_key_{leaked_key}"},
+    )
+    logged_provider_code: Final = StandardLoggingPayloadSetup.get_error_information(error)["error_provider_code"]
+
+    assert logged_provider_code is not None
+    assert logged_provider_code.startswith("bad_key_")
+    assert leaked_key not in logged_provider_code
+
+
 def test_get_error_information_logs_a_provider_error_code_when_no_http_status_is_known():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 

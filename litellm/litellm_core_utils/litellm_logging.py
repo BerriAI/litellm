@@ -7826,7 +7826,7 @@ def _provider_error_code(code: object) -> str | None:
     text: Final = str(code)
     if text in ("", "None") or _is_http_error_status(text):
         return None
-    return text
+    return redact_string(text)
 
 
 def _logged_provider_error_code(original_exception: Exception | None) -> str | None:
