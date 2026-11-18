@@ -1032,7 +1032,7 @@ class TestCodexModelSync:
         assert entry["supports_search_tool"] is False
 
     @staticmethod
-    def _served(*entries):
+    def _served(*entries: tuple[str, str, Sequence[Mapping[str, str]]]) -> _FakeResponse:
         return _FakeResponse(
             200,
             {
@@ -1044,11 +1044,11 @@ class TestCodexModelSync:
         )
 
     @staticmethod
-    def _deployments(*deployments):
+    def _deployments(*deployments: Mapping[str, object]) -> _FakeResponse:
         return _FakeResponse(200, {"data": list(deployments)})
 
     @staticmethod
-    def _deployment(model_name, model="openai/gpt-4o-mini", **model_info):
+    def _deployment(model_name: str, model: str = "openai/gpt-4o-mini", **model_info: object) -> dict[str, object]:
         return {"model_name": model_name, "litellm_params": {"model": model}, "model_info": model_info}
 
     @pytest.mark.parametrize(
