@@ -9,6 +9,7 @@ methods; richer repositories live in their own modules.
 
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
+from importlib import import_module
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
@@ -76,6 +78,24 @@ class PrismaTableRepository(Generic[RowT_co]):
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 
+class CustomerOrganizationRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerOrganizationTable"]):
+    table_name = "litellm_customerorganizationtable"
+
+
+class CustomerMemberRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerMemberTable"]):
+    table_name = "litellm_customermembertable"
+
+
+class CustomerTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_CustomerTeamTable"]):
+    table_name = "litellm_customerteamtable"
+
+
+class CustomerBudgetIncreaseRequestRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_CustomerBudgetIncreaseRequest"]
+):
+    table_name = "litellm_customerbudgetincreaserequest"
+
+
 class PolicyRepository(PrismaTableRepository["prisma_models.LiteLLM_PolicyTable"]):
     table_name = "litellm_policytable"
 
@@ -102,6 +122,10 @@ class ObjectPermissionRepository(PrismaTableRepository["prisma_models.LiteLLM_Ob
 
 class GuardrailsRepository(PrismaTableRepository["prisma_models.LiteLLM_GuardrailsTable"]):
     table_name = "litellm_guardrailstable"
+
+    async def find_active_guardrail_names(self, names: frozenset[str]) -> frozenset[str]:
+        rows: Final = await find_many_in(self.table, "guardrail_name", sorted(names), where={"status": "active"})
+        return frozenset(row.guardrail_name for row in rows)
 
 
 class MCPServerRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPServerTable"]):
@@ -240,8 +264,22 @@ class TeamMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_Team
     table_name = "litellm_teammembership"
 
 
+_END_USER_ID_ROWS: Final = TypeAdapter(list[dict[str, str]])
+_END_USER_QUERY: Final = TypeAdapter(str)
+
+
 class EndUserRepository(PrismaTableRepository["prisma_models.LiteLLM_EndUserTable"]):
     table_name = "litellm_endusertable"
+
+    async def find_restricted_ids(self, limit: int) -> tuple[str, ...]:
+        from litellm.proxy.db.db_span import db_span
+
+        database: Final = require_attributes(self._selected_database(), LedgerTransaction, "query_raw")
+        module: Final = import_module("litellm_proxy_extras.request_log_indexes")
+        query: Final = _END_USER_QUERY.validate_python(module.END_USER_RESTRICTED_QUERY)
+        async with db_span("find_many", "LiteLLM_EndUserTable"):
+            rows: Final = _END_USER_ID_ROWS.validate_python(await database.query_raw(query, limit))
+        return tuple(row["user_id"] for row in rows)
 
 
 class ManagedVectorStoresRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedVectorStoresTable"]):
@@ -264,16 +302,8 @@ class TagRepository(PrismaTableRepository["prisma_models.LiteLLM_TagTable"]):
     table_name = "litellm_tagtable"
 
 
-class ModelAccessGroupBudgetRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelAccessGroupBudgetTable"]):
-    table_name = "litellm_modelaccessgroupbudgettable"
-
-
 class InvitationLinkRepository(PrismaTableRepository["prisma_models.LiteLLM_InvitationLink"]):
     table_name = "litellm_invitationlink"
-
-
-class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKeyMapping"]):
-    table_name = "litellm_jwtkeymapping"
 
 
 class MemoryRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryTable"]):

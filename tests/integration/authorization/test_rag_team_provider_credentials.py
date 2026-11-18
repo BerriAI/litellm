@@ -2215,10 +2215,13 @@ def test_jwt_header_team_outside_a_claim_with_a_non_string_entry_is_denied_with_
     )
 
     assert response.status_code == 403, response.text
-    assert f"x-litellm-team-id '{header_team}' does not resolve to a team id or a unique team alias" in response.text, (
-        response.text
-    )
-    assert f"'{tenants.team_a}'" in response.text, response.text
+    message: Final = string_value(object_value(object_value(response.json())["error"])["message"])
+    opening, _, allowed = message.partition(" Allowed team ids: ")
+    assert opening == (
+        f"x-litellm-team-id '{header_team}' does not resolve to a team id or a unique team alias in your JWT's "
+        "allowed teams."
+    ), message
+    assert tenants.team_a in json.loads(allowed), message
     assert rag_rig.calls() == ()
 
 
