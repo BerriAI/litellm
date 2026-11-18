@@ -2849,8 +2849,18 @@ class ImageSVGUsage(BaseModel):
     model: str
     input_tokens: int
     output_tokens: int
-    reasoning_tokens: int
-    total_tokens: int
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+
+
+def _parse_image_svg_usage(value: object) -> ImageSVGUsage | None:
+    if value is None:
+        return None
+    try:
+        return ImageSVGUsage.model_validate(value)
+    except ValidationError:
+        verbose_logger.debug("Ignoring invalid SVG authoring usage in image response")
+        return None
 
 
 class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -2968,9 +2978,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-        svg_usage: Final = (
-            ImageSVGUsage.model_validate(kwargs["svg_usage"]) if kwargs.get("svg_usage") is not None else None
-        )
+        svg_usage: Final = _parse_image_svg_usage(kwargs.get("svg_usage"))
         super().__init__(created=created, data=_data, usage=_usage, svg_usage=svg_usage)
 
         self.background = kwargs.get("background", None)

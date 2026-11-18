@@ -339,6 +339,31 @@ def test_convert_to_image_response_preserves_typed_svg_usage(reuse_response: boo
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("svg_usage", [
+    {"input_tokens": 10, "output_tokens": 20},
+    {"model": "gpt-6.2-sol", "input_tokens": "invalid", "output_tokens": 20},
+])
+def test_malformed_svg_usage_keeps_image_response_intact(svg_usage: dict[str, object]) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
+        response_type="image_generation",
+    )
+    assert result.created == 1234567890
+    assert result.data[0].b64_json == "image"
+    assert result.svg_usage is None
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_svg_usage_defaults_optional_token_counts() -> None:
+    result: Final = ImageResponse(svg_usage={"model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20})
+    assert result.svg_usage is not None
+    assert result.svg_usage.model_dump() == {
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 0, "total_tokens": 0,
+    }
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_basic():
     # Test basic conversion with minimal input
     response_dict = {
