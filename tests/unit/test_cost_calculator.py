@@ -10622,6 +10622,193 @@ def test_deployment_flat_prices_override_public_rate_variants(pricing: str, monk
     assert cost == pytest.approx(200 * 0.001 + 20 * 0.002)
 
 
+@pytest.mark.parametrize("custom_pricing", (False, True))
+@pytest.mark.parametrize("requested_model", ("deepseek/owned-router-priority-prices", "owned-router-flat-price", None))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_router_flat_prices_do_not_inherit_public_priority_rates(
+    custom_pricing: bool, requested_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    public_model: Final = "deepseek/owned-router-priority-prices"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        public_model,
+        {
+            "input_cost_per_token": 0.005,
+            "output_cost_per_token": 0.008,
+            "input_cost_per_token_priority": 0.025,
+            "output_cost_per_token_priority": 0.04,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    )
+    deployment_id: Final = "owned-router-flat-price-deployment"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owned-router-flat-price",
+                "litellm_params": {"model": public_model, "api_key": "test-key"},
+                "model_info": {"id": deployment_id, "input_cost_per_token": 0.001},
+            }
+        ]
+    )
+    response: Final = ModelResponse(model=public_model, usage=Usage(prompt_tokens=200, completion_tokens=20))
+    try:
+        actual_cost: Final = completion_cost(
+            completion_response=response,
+            model=requested_model,
+            custom_llm_provider="openai",
+            router_model_id=deployment_id,
+            custom_pricing=custom_pricing,
+            service_tier="priority",
+        )
+    finally:
+        router.retire()
+    assert actual_cost == pytest.approx(200 * 0.001 + 20 * 0.04)
+
+
+@pytest.mark.parametrize("pricing", ("off_peak", "priority", "tiered", "reasoning", "long_context"))
+@pytest.mark.parametrize("custom_pricing", (False, True))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_partial_deployment_prices_preserve_unconfigured_public_variants(
+    pricing: str, custom_pricing: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm._internal_context import pinned_billing_time
+
+    public_model: Final = "deepseek/owned-partial-public-variants"
+    variant_output: Final = 0.04
+    public_info: Final = {
+        "input_cost_per_token": 0.005,
+        "output_cost_per_token": 0.008,
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+        **(
+            {"off_peak_pricing": {"hours_utc": "00:00-00:00", "output_cost_per_token": variant_output}}
+            if pricing == "off_peak"
+            else {"tiered_pricing": [{"range": [0, 1000], "output_cost_per_token": variant_output}]}
+            if pricing == "tiered"
+            else {"output_cost_per_reasoning_token": variant_output}
+            if pricing == "reasoning"
+            else {"output_cost_per_token_priority": variant_output}
+            if pricing == "priority"
+            else {"output_cost_per_token_above_100_tokens": variant_output}
+        ),
+    }
+    deployment_id: Final = "owned-partial-inherited-price-deployment"
+    monkeypatch.setitem(litellm.model_cost, public_model, public_info)
+    monkeypatch.setitem(litellm.model_cost, deployment_id, {**public_info, "base_model": public_model})
+    litellm.register_model({deployment_id: {"input_cost_per_token": 0.001, "litellm_provider": "deepseek"}})
+    response: Final = ModelResponse(
+        model=public_model,
+        usage=Usage(
+            prompt_tokens=200,
+            completion_tokens=20,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=5),
+        ),
+    )
+    with pinned_billing_time(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)):
+        actual_cost: Final = completion_cost(
+            completion_response=response,
+            model=public_model,
+            custom_llm_provider="openai",
+            router_model_id=deployment_id,
+            custom_pricing=custom_pricing,
+            service_tier="priority" if pricing == "priority" else None,
+        )
+    expected_output_cost: Final = 15 * 0.008 + 5 * variant_output if pricing == "reasoning" else 20 * variant_output
+    assert actual_cost == pytest.approx(200 * 0.001 + expected_output_cost)
+
+
+@pytest.mark.parametrize("call_type", ("speech", "aspeech", "transcription", "atranscription"))
+@pytest.mark.parametrize("zero_prices", (False, True))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_token_priced_audio_uses_resolved_deployment_prices(
+    call_type: str, zero_prices: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    speech: Final = call_type in ("speech", "aspeech")
+    mode: Final = "audio_speech" if speech else "audio_transcription"
+    public_model: Final = "openai/owned-token-priced-audio"
+    rates: Final = {
+        "input_cost_per_token": 0.003,
+        "output_cost_per_token": 0.004,
+        "input_cost_per_audio_token": 0.001,
+        "output_cost_per_audio_token": 0.002,
+    }
+    monkeypatch.setitem(
+        litellm.model_cost,
+        public_model,
+        {"mode": mode, "litellm_provider": "openai", **{name: rate * 10 for name, rate in rates.items()}},
+    )
+    deployment_id: Final = "owned-token-priced-audio-deployment"
+    litellm.register_model(
+        {
+            deployment_id: {
+                "mode": mode,
+                "litellm_provider": "deepseek",
+                **{name: 0.0 if zero_prices else rate for name, rate in rates.items()},
+            }
+        }
+    )
+    response: Final = (
+        HttpxBinaryResponseContent(
+            httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"}),
+            usage=Usage(
+                prompt_tokens=12,
+                completion_tokens=7,
+                total_tokens=19,
+                prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=10, text_tokens=2),
+                completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=5, text_tokens=2),
+            ),
+        )
+        if speech
+        else TranscriptionResponse(
+            text="hello",
+            usage={
+                "type": "tokens",
+                "input_tokens": 12,
+                "output_tokens": 7,
+                "total_tokens": 19,
+                "input_token_details": {"audio_tokens": 10, "text_tokens": 2},
+            },
+        )
+    )
+    expected: Final = 2 * 0.003 + 10 * 0.001 + (2 * 0.004 + 5 * 0.002 if speech else 7 * 0.004)
+    assert completion_cost(
+        completion_response=response,
+        model=public_model,
+        custom_llm_provider="openai",
+        call_type=call_type,
+        router_model_id=deployment_id,
+    ) == pytest.approx(0 if zero_prices else expected)
+
+
+@pytest.mark.parametrize("custom_pricing", (False, True))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_duration_only_off_peak_deployment_keeps_per_second_billing(custom_pricing: bool) -> None:
+    from litellm._internal_context import pinned_billing_time
+
+    deployment_id: Final = "owned-off-peak-duration-deployment"
+    litellm.register_model(
+        {
+            deployment_id: {
+                "input_cost_per_second": 0.005,
+                "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_second": 0.002},
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    with pinned_billing_time(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)):
+        cost: Final = completion_cost(
+            completion_response=ModelResponse(model=deployment_id, usage=Usage(prompt_tokens=20, completion_tokens=5)),
+            model=deployment_id,
+            custom_llm_provider="openai",
+            router_model_id=deployment_id,
+            custom_pricing=custom_pricing,
+            total_time=4000,
+        )
+    assert cost == pytest.approx(4 * 0.005)
+
+
 _CUSTOM_PRICING_MODEL: Final = "migration-custom-pricing-chat"
 _CUSTOM_PRICING_RATES: Final = MappingProxyType({"input_cost_per_token": 0.0000008, "output_cost_per_token": 0.0000032})
 _CUSTOM_PRICING_EXPECTED_COST: Final = 7 * 0.0000008 + 4 * 0.0000032
