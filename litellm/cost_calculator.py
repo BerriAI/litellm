@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     ModelFacts,
     OcrDocument,
     OtherClip,
+    PricedSides,
     PricedUsage,
     ReceiptFacts,
     ReportedCost,
@@ -74,6 +75,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     custom_receipt,
     part_costs,
     price,
+    price_reported,
     price_session,
     price_tools,
     price_units,
@@ -1770,18 +1772,19 @@ def _cost_map_priced_input_output(
         return 0.0, 0.0
 
 
-def split_reported_cost_by_cost_map_ratio(
-    reported_total: float,
+def reported_cost_receipt(
+    reported: ReportedCost,
     model: str | None,
     custom_llm_provider: str | None,
     usage: Usage | None,
     call_type: CallTypesLiteral | None,
     service_tier: str | None,
     data_residency: str | None,
-) -> tuple[float, float]:
-    """Apportions a provider-reported total between input and output in the ratio litellm's own cost map would
-    price the same usage, so a per-input-token model books the whole total on input. Unmapped or zero-priced
-    usage keeps the whole total on output."""
+    adjust: AdjustFacts | None = None,
+) -> NativeReceipt | None:
+    """``reported`` billed in Rust by its source's policy, its billed total split between input and output in the
+    ratio litellm's own cost map prices the same usage, so a per-input-token model books the whole total on input.
+    Unmapped or zero-priced usage keeps the whole total on output."""
     priced_input, priced_output = _cost_map_priced_input_output(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -1790,11 +1793,8 @@ def split_reported_cost_by_cost_map_ratio(
         service_tier=service_tier,
         data_residency=data_residency,
     )
-    priced_total: Final = priced_input + priced_output
-    if priced_total <= 0:
-        return 0.0, reported_total
-    input_cost: Final = reported_total * (priced_input / priced_total)
-    return input_cost, reported_total - input_cost
+    receipt: Final = price_reported(reported, PricedSides(prompt=priced_input, completion=priced_output), adjust)
+    return receipt if isinstance(receipt, NativeReceipt) else None
 
 
 def _adjusted_provider_billed_cost(
@@ -1809,32 +1809,34 @@ def _adjusted_provider_billed_cost(
     service_tier: str | None,
     data_residency: str | None,
 ) -> float:
-    adjusted: Final = adjusted_cost(reported_cost, custom_llm_provider, model, region_name)
-    input_cost, output_cost = split_reported_cost_by_cost_map_ratio(
-        reported_total=adjusted.cost,
+    receipt: Final = reported_cost_receipt(
+        ReportedCost(source="upstream_usage_cost", usd=reported_cost),
         model=model,
         custom_llm_provider=pricing_provider,
         usage=usage,
         call_type=call_type,
         service_tier=service_tier,
         data_residency=data_residency,
+        adjust=AdjustFacts(provider=custom_llm_provider, model=model, region=region_name),
     )
+    if receipt is None:
+        return reported_cost
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
-        prompt_tokens_cost_usd_dollar=input_cost,
-        completion_tokens_cost_usd_dollar=output_cost,
+        prompt_tokens_cost_usd_dollar=receipt.prompt_cost,
+        completion_tokens_cost_usd_dollar=receipt.completion_cost,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
-        total_cost_usd_dollar=adjusted.cost,
-        original_cost=reported_cost,
-        discount_percent=adjusted.discount_percent,
-        discount_amount=adjusted.discount_amount,
-        margin_percent=adjusted.margin_percent,
-        margin_fixed_amount=adjusted.margin_fixed_amount,
-        margin_total_amount=adjusted.margin_total_amount,
+        total_cost_usd_dollar=receipt.total,
+        original_cost=receipt.original_cost,
+        discount_percent=receipt.discount_percent,
+        discount_amount=receipt.discount_amount,
+        margin_percent=receipt.margin_percent,
+        margin_fixed_amount=receipt.margin_fixed_amount,
+        margin_total_amount=receipt.margin_total_amount,
         service_tier=service_tier,
         data_residency=data_residency,
     )
-    return adjusted.cost
+    return receipt.total
 
 
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -2759,8 +2761,8 @@ def response_cost_calculator(
                                 router_model_id=router_model_id,
                                 region_name=region_name,
                             )
-                            header_input_cost, header_output_cost = split_reported_cost_by_cost_map_ratio(
-                                reported_total=provider_response_cost,
+                            header_receipt: Final = reported_cost_receipt(
+                                ReportedCost(source="llm_provider-x-litellm-response-cost", usd=provider_response_cost),
                                 model=header_priced_model or model,
                                 custom_llm_provider=pricing_provider or custom_llm_provider,
                                 usage=get_usage_object(response_object),
@@ -2770,8 +2772,12 @@ def response_cost_calculator(
                             )
                             _store_cost_breakdown_in_logging_obj(
                                 litellm_logging_obj=litellm_logging_obj,
-                                prompt_tokens_cost_usd_dollar=header_input_cost,
-                                completion_tokens_cost_usd_dollar=header_output_cost,
+                                prompt_tokens_cost_usd_dollar=0.0
+                                if header_receipt is None
+                                else header_receipt.prompt_cost,
+                                completion_tokens_cost_usd_dollar=provider_response_cost
+                                if header_receipt is None
+                                else header_receipt.completion_cost,
                                 cost_for_built_in_tools_cost_usd_dollar=0.0,
                                 total_cost_usd_dollar=provider_response_cost,
                                 original_cost=provider_response_cost,
