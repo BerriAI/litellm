@@ -7,7 +7,7 @@ use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use super::{
-    context::{MessagesShapeOptions, MessagesTransformContext},
+    context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
     tools::ToolCustomField,
 };
 
@@ -49,6 +49,32 @@ pub trait BaseMessagesConfig: Sync {
         Ok(request)
     }
 
+    fn clamp_requested_effort(
+        &self,
+        request: MessagesRequest,
+        _capabilities: &MessagesModelCapabilities,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
+    }
+
+    fn native_output_fallback(
+        &self,
+        _request: &MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Option<MessagesTransformContext> {
+        None
+    }
+
+    fn retries_without_native_output(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _model: &str,
+    ) -> bool {
+        false
+    }
+
     fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
         ToolCustomField::Keep
     }
@@ -66,6 +92,21 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     fn secret_names(&self) -> &'static [&'static str];
+
+    /// Secrets read only on some paths, as Python's lazy `get_secret_str` calls are: resolved
+    /// just before `validate_environment`, and only when this call names them. `python_host` is
+    /// whether the route has a Python host for flows only Python runs.
+    fn deferred_secret_names(
+        &self,
+        _python_host: bool,
+        _headers: &Headers,
+        _api_key: Option<&str>,
+        _api_base: Option<&str>,
+        _litellm_params: &LitellmParams,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Shapes the forwarded headers and names the credential, the way Python's
     /// `validate_environment` does, without applying it: `resolve_auth` does that once
@@ -126,6 +167,18 @@ pub trait BaseMessagesConfig: Sync {
         _drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
+    }
+
+    /// The request steps Python runs once the final `anthropic-beta` header is known, which
+    /// read that header, must not change which betas the request asks for, or rewrite the
+    /// headers that go out with the body.
+    fn finalize_request(
+        &self,
+        request: MessagesRequest,
+        headers: Headers,
+        _context: &MessagesTransformContext,
+    ) -> Result<(MessagesRequest, Headers), Error> {
+        Ok((request, headers))
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
@@ -217,7 +270,7 @@ mod tests {
                 request.clone(),
                 MessagesShapeOptions {
                     reasoning_auto_summary,
-                    presanitized
+                    presanitized,
                 }
             ),
             Ok(request)

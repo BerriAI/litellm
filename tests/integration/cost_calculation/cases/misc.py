@@ -553,6 +553,30 @@ PERPLEXITY_SONAR_NEXT_NO_SEARCH: Final = CostTrackingTestCase(
     ),
 )
 
+PERPLEXITY_SONAR_NEXT_CACHED_PROMPT_NO_REPORTED_COST: Final = PERPLEXITY_SONAR_NEXT_NO_SEARCH.model_copy(
+    update={
+        "name": "perplexity-sonar-next-cached_prompt_no_reported_cost",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "chatcmpl-$REQUEST_ID",
+                "object": "chat.completion",
+                "model": "sonar-next",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"cached_tokens": 1200},
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0012914, input_cost=0.0008588, output_cost=0.0004326, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
 
 # deepseek/deepseek-v4-chat
 DEEPSEEK_DEEPSEEK_V4_CHAT_PROMPT_CACHE_HIT: Final = CostTrackingTestCase(
@@ -2130,6 +2154,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_PROVIDER_REPORTED_COST,
     OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_TOKEN_PRICED,
     PERPLEXITY_SONAR_NEXT_NO_SEARCH,
+    PERPLEXITY_SONAR_NEXT_CACHED_PROMPT_NO_REPORTED_COST,
     DEEPSEEK_DEEPSEEK_V4_CHAT_PROMPT_CACHE_HIT,
     DEEPSEEK_DEEPSEEK_V4_CHAT_NO_CACHE_FIELDS_BILLS_ZERO_CACHE,
     XAI_GROK_5_REASONING_FOLDED_INTO_COMPLETION,

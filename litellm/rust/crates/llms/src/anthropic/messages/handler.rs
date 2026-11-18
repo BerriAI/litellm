@@ -3,15 +3,17 @@ use litellm_llms_types::{
         AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
         ThinkingConfig, ThinkingDisplay,
     },
-    recognized::{Recognized, map_known_runs},
+    recognized::Recognized,
 };
 use serde_json::{Value, json};
 
 use crate::{
     Error,
     anthropic::common_utils::{
-        flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_provider_specific_fields,
+        flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
+        map_messages, sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
+        strip_empty_raw_content_blocks, strip_provider_specific_fields,
+        strip_raw_provider_specific_fields,
     },
     base_llm::messages::context::MessagesShapeOptions,
 };
@@ -20,12 +22,21 @@ pub fn shape_anthropic_messages_request(
     request: MessagesRequest,
     options: MessagesShapeOptions,
 ) -> Result<MessagesRequest, Error> {
+    let messages = if options.presanitized {
+        map_messages(
+            request.messages,
+            strip_provider_specific_fields,
+            strip_raw_provider_specific_fields,
+        )
+    } else {
+        map_messages(
+            request.messages,
+            sanitize_anthropic_messages,
+            sanitize_raw_anthropic_message,
+        )
+    };
     Ok(MessagesRequest {
-        messages: if options.presanitized {
-            map_known_runs(request.messages, strip_provider_specific_fields)
-        } else {
-            map_known_runs(request.messages, sanitize_anthropic_messages)
-        },
+        messages,
         params: MessagesOptionalParams {
             metadata: request
                 .params
@@ -47,6 +58,13 @@ fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(
         sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
     ))
+}
+
+fn sanitize_raw_anthropic_message(message: Value) -> Option<Value> {
+    strip_empty_raw_content_blocks(message)
+        .and_then(sanitize_raw_tool_use_ids)
+        .and_then(flatten_unencrypted_raw_web_search_results)
+        .and_then(strip_raw_provider_specific_fields)
 }
 
 fn validate_anthropic_api_metadata(metadata: &Value) -> Result<Value, Error> {
@@ -326,6 +344,49 @@ mod tests {
                 "safeguards": [{"type": "dangerous_tool_use"}]
             })
         );
+    }
+
+    #[rstest]
+    #[case::sanitized(
+        false,
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}
+            ]}
+        ])
+    )]
+    #[case::presanitized(
+        true,
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "user", "content": [{"type": "text", "text": 5}]},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": 5},
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}
+            ]}
+        ])
+    )]
+    fn shaping_rewrites_a_message_that_did_not_parse(
+        #[case] presanitized: bool,
+        #[case] expected: Value,
+    ) {
+        let shaped = shape_anthropic_messages_request(
+            request(json!({"model": "m", "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "user", "content": [{"type": "text", "text": 5}]},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": 5},
+                    {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}, "provider_specific_fields": {"x": 1}}
+                ]}
+            ]})),
+            MessagesShapeOptions {
+                reasoning_auto_summary: false,
+                presanitized,
+            },
+        )
+        .unwrap();
+        assert_eq!(serde_json::to_value(shaped).unwrap()["messages"], expected);
     }
 
     #[test]

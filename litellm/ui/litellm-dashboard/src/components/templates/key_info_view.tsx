@@ -10,6 +10,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
 import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -145,14 +146,14 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
-  const memberBudgetTeamIds = useMemo(
-    () =>
+  const memberBudgetUserIds = useMemo(
+    (): Record<string, string[]> =>
       currentKeyData?.max_budget === null && currentKeyData.team_id && currentKeyData.user_id
-        ? [currentKeyData.team_id]
-        : [],
+        ? { [currentKeyData.team_id]: [currentKeyData.user_id] }
+        : {},
     [currentKeyData],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetTeamIds);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
     null,
@@ -519,14 +520,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.timestamp", { date: dateStr, time: timeStr });
   };
 
-  const canModifyKey =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
-    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+  const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||

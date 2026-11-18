@@ -46,6 +46,11 @@ def merged(
 def kept(previous: dict[str, object] | None, registration: Mapping[str, object]) -> dict[str, object]:
     """The registration ``register_model(persist_across_reloads=True)`` keeps for a key: ``registration`` merged
     into the one kept before it."""
-    from litellm.utils import update_dictionary
+    from litellm.utils import base_fields_replaced_by, update_dictionary
 
-    return update_dictionary(dict(previous or {}), registration)
+    replaced: Final = base_fields_replaced_by(registration)
+    return {
+        name: value
+        for name, value in update_dictionary(dict(previous or {}), registration).items()
+        if name not in replaced
+    }

@@ -16,6 +16,30 @@ const buildModelLimitMap = (
 const buildMetadata = (entries: ProjectFormValues["metadata"]): Record<string, string> | undefined =>
   entries && Object.fromEntries(entries.flatMap((entry) => (entry.key ? [[entry.key, entry.value] as const] : [])));
 
+const withBatchEnqueuedTokenLimit = (
+  metadata: Record<string, string> | undefined,
+  batchEnqueuedTokenLimit: Record<string, number>,
+  clearsRemovedLimits: boolean,
+): Record<string, unknown> | undefined => {
+  if (Object.keys(batchEnqueuedTokenLimit).length > 0) {
+    return { ...metadata, model_batch_enqueued_token_limit: batchEnqueuedTokenLimit };
+  }
+  return clearsRemovedLimits ? { ...metadata } : metadata;
+};
+
+const BATCH_ENQUEUED_TOKEN_LIMIT_KEY = "model_batch_enqueued_token_limit";
+
+export const withStoredBatchEnqueuedTokenLimit = (
+  metadata: Record<string, unknown>,
+  storedMetadata: Record<string, unknown> | null,
+): Record<string, unknown> => {
+  const withoutLimit = Object.fromEntries(
+    Object.entries(metadata).filter(([key]) => key !== BATCH_ENQUEUED_TOKEN_LIMIT_KEY),
+  );
+  const storedLimit = storedMetadata?.[BATCH_ENQUEUED_TOKEN_LIMIT_KEY];
+  return storedLimit === undefined ? withoutLimit : { ...withoutLimit, [BATCH_ENQUEUED_TOKEN_LIMIT_KEY]: storedLimit };
+};
+
 const roundBudget = (value: number): number => {
   const rounded = Math.round(value * 100) / 100;
   return Number.isFinite(rounded) ? rounded : value;
@@ -27,8 +51,12 @@ const buildProjectApiParams = (values: ProjectFormValues, sendEmpty: boolean) =>
   const modelTpmLimit = buildModelLimitMap(limitEntries, (entry) => entry.tpm);
   const modelItpmLimit = buildModelLimitMap(limitEntries, (entry) => entry.itpm);
   const modelOtpmLimit = buildModelLimitMap(limitEntries, (entry) => entry.otpm);
-  const metadata = buildMetadata(values.metadata);
   const keepLimits = sendEmpty && values.modelLimits !== undefined;
+  const metadata = withBatchEnqueuedTokenLimit(
+    buildMetadata(values.metadata),
+    buildModelLimitMap(limitEntries, (entry) => entry.batchEnqueuedTokens),
+    keepLimits,
+  );
   const keep = (map: Record<string, number>) => keepLimits || Object.keys(map).length > 0;
   const guardrailsParam =
     values.guardrails !== undefined && (sendEmpty || values.guardrails.length > 0)

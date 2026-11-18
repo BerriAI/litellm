@@ -1,11 +1,16 @@
 import aiohttp as aiohttp_aiohttp_handler, asyncio, importlib, litellm
 import concurrent.futures
+import datetime
 import gc
 import socket
+import ssl
 import sys
 import struct
 import threading
 import weakref
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Final
 
 import aiohttp
@@ -14,6 +19,11 @@ import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 import pytest
+import uvloop
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
@@ -22,6 +32,7 @@ from litellm.llms.custom_httpx.aiohttp_transport import (
     LiteLLMAiohttpTransport,
 )
 from aiohttp import ClientSession
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -71,6 +82,7 @@ class MockAiohttpResponse:
         self.status = status
         self.headers = headers or {}
         self.closed = False
+        self.connection = None
         self.content = MockContent(
             content_chunks, exception_to_raise, exception_at_chunk
         )
@@ -1380,6 +1392,70 @@ async def test_a_collected_transport_closes_the_session_it_owns():
     assert session.closed, "the owned session outlived the transport that was collected before closing it"
 
 
+class _SelfReferencingHolder:
+    def __init__(self, transport: LiteLLMAiohttpTransport) -> None:
+        self.transport = transport
+        self.itself = self
+
+
+def _transport_handed_an_owned_session() -> LiteLLMAiohttpTransport:
+    return LiteLLMAiohttpTransport(client=aiohttp.ClientSession())
+
+
+def _transport_that_built_its_session_from_a_factory() -> LiteLLMAiohttpTransport:
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    transport.get_valid_client_session()
+    return transport
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "build_transport",
+    [_transport_handed_an_owned_session, _transport_that_built_its_session_from_a_factory],
+)
+async def test_a_transport_freed_by_the_cycle_collector_closes_its_session_without_an_unclosed_report(
+    build_transport: Callable[[], LiteLLMAiohttpTransport],
+):
+    """OpenAI SDK clients cache resource objects that point back at them, so an evicted client is cyclic garbage."""
+    loop: Final = asyncio.get_running_loop()
+    previous_handler: Final = loop.get_exception_handler()
+    reports: Final[list[object]] = []  # mutable-ok: collects exception handler reports
+    loop.set_exception_handler(lambda _loop, context: reports.append(context))
+    try:
+        holder = _SelfReferencingHolder(build_transport())
+        session = holder.transport.client
+        assert isinstance(session, aiohttp.ClientSession)
+        connector: Final = session.connector
+        assert connector is not None
+        del holder, session
+
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+        gc.collect()
+
+        assert reports == [], reports
+        assert connector.closed, "the session owned by the collected transport was never closed"
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_session_is_freed_while_its_transport_is_still_alive():
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    replaced = transport.get_valid_client_session()
+    await replaced.close()
+    current: Final = transport.get_valid_client_session()
+    replaced_ref: Final = weakref.ref(replaced)
+    del replaced
+    try:
+        gc.collect()
+
+        assert transport.client is current
+        assert replaced_ref() is None, "the transport kept a session it already replaced alive"
+    finally:
+        await current.close()
+
+
 @pytest.mark.asyncio
 async def test_a_collected_transport_leaves_a_shared_session_open():
     session = aiohttp.ClientSession()
@@ -1481,3 +1557,80 @@ async def test_a_stream_keeps_reading_after_the_client_that_opened_it_is_collect
         assert session.closed, "the owned session stayed open after its last stream finished"
     finally:
         await runner.cleanup()
+
+
+def _self_signed_server_context(directory: Path) -> ssl.SSLContext:
+    key: Final = ec.generate_private_key(ec.SECP256R1())
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
+        .not_valid_after(datetime.datetime(2027, 1, 1, tzinfo=datetime.timezone.utc))
+        .sign(key, hashes.SHA256())
+    )
+    cert_path: Final = directory / "cert.pem"
+    key_path: Final = directory / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    return context
+
+
+def _endless_body_handler(peer_dropped: threading.Event) -> type[BaseHTTPRequestHandler]:
+    chunk: Final = b"4000\r\n" + b"x" * 0x4000 + b"\r\n"
+
+    class EndlessBody(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            try:
+                while True:
+                    self.wfile.write(chunk)
+            except OSError:
+                peer_dropped.set()
+
+    return EndlessBody
+
+
+async def _close_by_ending_iteration(stream: AiohttpResponseStream) -> None:
+    chunks: Final = aiter(stream)
+    await anext(chunks)
+    await aclose_if_supported(chunks)
+
+
+async def _close_by_stream_aclose(stream: AiohttpResponseStream) -> None:
+    await anext(aiter(stream))
+    await stream.aclose()
+
+
+@pytest.mark.parametrize("close_stream", [_close_by_ending_iteration, _close_by_stream_aclose])
+def test_closing_a_tls_stream_mid_body_on_uvloop_drops_the_connection_at_once(
+    tmp_path: Path, close_stream: Callable[[AiohttpResponseStream], Awaitable[None]]
+) -> None:
+    peer_dropped: Final = threading.Event()
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _endless_body_handler(peer_dropped))
+    server.socket = _self_signed_server_context(tmp_path).wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    async def scenario() -> bool:
+        session: Final = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False))
+        try:
+            response: Final = await session.get(f"https://127.0.0.1:{server.server_port}/")
+            await close_stream(AiohttpResponseStream(response))
+            return await asyncio.to_thread(peer_dropped.wait, 5)
+        finally:
+            await session.close()
+
+    try:
+        assert uvloop.run(scenario()), "the closed stream kept reading the server's body"
+    finally:
+        server.shutdown()
+        server.server_close()
