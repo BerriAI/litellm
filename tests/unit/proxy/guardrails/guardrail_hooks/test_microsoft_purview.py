@@ -2805,6 +2805,46 @@ class TestRegistration:
         )
 
 
+def test_responses_input_scan_includes_the_arguments_of_a_replayed_claude_tool_search():
+    guardrail = _make_guardrail()
+    data = {
+        "model": "claude-sonnet-5-5",
+        "input": [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "type": "tool_search_call",
+                "id": "tsc_srvtoolu_01Search",
+                "call_id": "srvtoolu_01Search",
+                "arguments": {"pattern": "ssn 123-45-6789"},
+                "execution": "server",
+                "status": "completed",
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_01Search",
+                "call_id": "srvtoolu_01Search",
+                "tools": [{"type": "function", "name": "get_weather"}],
+                "status": "completed",
+            },
+            {
+                "type": "function_call",
+                "id": "fc_01Weather",
+                "call_id": "toolu_01Weather",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "14C"},
+        ],
+    }
+
+    scanned = guardrail._responses_api_input_to_str(data)
+
+    assert scanned is not None
+    assert "123-45-6789" in scanned
+    assert "Paris" in scanned
+
+
 @pytest.mark.parametrize("odata_type", [None, 7], ids=["null", "number"])
 def test_should_block_rejects_a_policy_action_whose_odata_type_is_not_text(odata_type: object) -> None:
     response: Final = {"policyActions": [{"@odata.type": odata_type, "restrictionAction": "block"}]}

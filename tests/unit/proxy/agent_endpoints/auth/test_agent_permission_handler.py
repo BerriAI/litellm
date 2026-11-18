@@ -1798,7 +1798,7 @@ async def test_personal_key_agent_billing_carries_team_rate_limits(
     from litellm.models.team_membership import LiteLLM_TeamMembership
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.auth import auth_checks
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3, run_scoped
     from litellm.proxy.utils import InternalUsageCache
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
@@ -1838,13 +1838,7 @@ async def test_personal_key_agent_billing_carries_team_rate_limits(
     assert (personal_key_owner_teams.team_id, personal_key_owner_teams.team_rpm_limit) == (None, None)
 
     limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
-    descriptors: Final = limiter.create_rate_limit_descriptors(
-        user_api_key_dict=billed,
-        data={},
-        rpm_limit_type=None,
-        tpm_limit_type=None,
-        model_has_failures=False,
-    )
+    descriptors: Final = (await run_scoped(limiter, billed, {}, {"kind": "request"}, {"kind": "build"})).descriptors
     team_limits: Final = tuple(
         (descriptor["key"], descriptor["value"], descriptor["rate_limit"]["requests_per_unit"])
         for descriptor in descriptors

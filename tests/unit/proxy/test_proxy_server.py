@@ -1163,6 +1163,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
+            litellm_logging_obj=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -2713,7 +2714,7 @@ async def test_proxy_server_prisma_setup_invalid_db(monkeypatch):
 
     Think 2-3 times before editing / deleting this test, it's important for PROD
     """
-    import httpx
+    from prisma.engine.errors import EngineConnectionError
 
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
@@ -2724,7 +2725,7 @@ async def test_proxy_server_prisma_setup_invalid_db(monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", invalid_db_url)
 
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(EngineConnectionError):
         await ProxyStartupEvent._setup_prisma_client(
             database_url=invalid_db_url,
             proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
@@ -3591,6 +3592,79 @@ def _receive_until_closed(websocket: WebSocketTestSession) -> None:
         websocket.receive_text()
 
 
+@pytest.mark.parametrize("alias", ("gpt-realtime", "voice"))
+@pytest.mark.parametrize("route", ("/v1/realtime", "/v1/realtime/translations", "/v1/live/sessions"))
+def test_realtime_websocket_team_alias_selects_restricted_deployment(
+    alias: str,
+    route: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import (
+        user_api_key_auth_live_websocket,
+        user_api_key_auth_realtime_websocket,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    provider_model: Final = "gpt-realtime"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "shared/realtime",
+                "litellm_params": {
+                    "model": provider_model,
+                    "custom_llm_provider": "openai",
+                    "api_key": "shared-key",
+                    "order": 0,
+                },
+                "model_info": {"id": "shared-deployment"},
+            },
+            {
+                "model_name": "restricted/realtime",
+                "litellm_params": {
+                    "model": provider_model,
+                    "custom_llm_provider": "openai",
+                    "api_key": "restricted-key",
+                    "order": 1,
+                },
+                "model_info": {"id": "restricted-deployment", "access_groups": ["Restricted"]},
+            },
+        ],
+        num_retries=0,
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-fixture-key",
+        team_id="alias-team",
+        models=["all-team-models"],
+        team_models=["Restricted"],
+        team_model_aliases={alias: "restricted/realtime"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_realtime_websocket, lambda: auth)
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_live_websocket, lambda: auth)
+
+    async def authorize_session_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+        return auth
+
+    _override_live_session_authorizer(monkeypatch, authorize_session_model)
+    connect: Final = MagicMock(side_effect=RuntimeError("upstream selected"))
+    monkeypatch.setattr("websockets.connect", connect)
+
+    is_live_session: Final = route == "/v1/live/sessions"
+    with TestClient(app).websocket_connect(route if is_live_session else f"{route}?model={alias}") as websocket:
+        if is_live_session:
+            websocket.send_json({"type": "session.start", "session": {"model": alias}})
+        with pytest.raises(WebSocketDisconnect):
+            _receive_until_closed(websocket)
+
+    connect.assert_called_once()
+    assert connect.call_args.kwargs["additional_headers"]["Authorization"] == "Bearer restricted-key"
+
+
 @pytest.mark.parametrize(
     ("litellm_params", "expected_upstream_url"),
     (
@@ -4167,6 +4241,67 @@ async def test_queue_request_labels_an_upstream_failure_a_server_error_not_an_au
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("500", "internal_server_error")
+
+
+@pytest.mark.asyncio
+async def test_queue_request_refuses_a_non_admin_s3_image_outside_the_allowed_buckets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import async_queue_request
+
+    body: Final = json.dumps(
+        {
+            "model": "nova-lite",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": "s3://another-teams-bucket/cat.png"}}],
+                }
+            ],
+        }
+    ).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/queue/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "nova-lite",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test", "mock_response": "ok"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", {"allowed_client_side_s3_buckets": ["media-bucket"]})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await async_queue_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.code == "403"
 
 
 _DEBUG_LOG_SENTINEL: Final = "sentinel-request-body-7f3a"

@@ -13,7 +13,7 @@ from socket import socket
 from typing import Final, Literal
 
 from pydantic import ConfigDict, ImportString, JsonValue, TypeAdapter, with_config
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from uvicorn import Config, Server
 from uvicorn import config as uvicorn_config
 from uvicorn.supervisors import ChangeReload, Multiprocess
@@ -42,6 +42,7 @@ class ServerOptions(TypedDict, total=False):
 @with_config(ConfigDict(extra="allow"))
 class ReloadOptions(ServerOptions):
     app: Required[ReadOnly[str]]
+    factory: NotRequired[ReadOnly[bool]]
     reload: ReadOnly[bool]
     reload_dirs: ReadOnly[tuple[str, ...]]
     reload_includes: ReadOnly[tuple[str, ...]]
@@ -92,7 +93,9 @@ def load_worker_app(import_path: str, worker_app_factory: bool) -> Callable[...,
 def pool_config(options: ReloadOptions, workers: int, worker_overrides: Mapping[str, object] | None = None) -> Config:
     overrides: Final = worker_overrides or {}
     worker_app: Final = TypeAdapter(str).validate_python(overrides.get("app", options["app"]))
-    worker_app_factory: Final = TypeAdapter(bool).validate_python(overrides.get("factory", False))
+    worker_app_factory: Final = TypeAdapter(bool).validate_python(
+        overrides.get("factory", options.get("factory", False))
+    )
     return Config(
         partial(load_worker_app, worker_app, worker_app_factory),
         factory=True,

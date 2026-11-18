@@ -5,12 +5,15 @@ caller to its groups' deployments) and, for a proxy admin, the model the request
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request, request_user_api_key_auth
+
+if TYPE_CHECKING:
+    from litellm.router_api import RouterRegistry
 
 _NAMES: Final = TypeAdapter(tuple[object, ...])
 
@@ -40,6 +43,22 @@ def caller_fields(request: Mapping[str, object]) -> Mapping[str, object]:
         **({"proxy_admin": True} if admin else {}),
         **({"admin_model": model} if isinstance(model, str) else {}),
     }
+
+
+def pinned_deployment_wildcard_grant(
+    name: object, allowed_models: object, team_id: str | None, registry: RouterRegistry
+) -> tuple[str, ...] | None:
+    granted: Final = _names(allowed_models)
+    if not isinstance(name, str) or not granted or name in granted or name in registry.index("model_name"):
+        return None
+    deployment: Final = registry.deployment(name)
+    if deployment is None:
+        return None
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+
+    access_groups: Final = registry.access_groups(model_name=deployment.model_name, team_id=team_id)
+    patterns: Final = tuple(model for model in granted if model not in access_groups)
+    return (*granted, name) if model_matches_any_wildcard_pattern_in_list(deployment.model_name, patterns) else None
 
 
 def _router_weights_error(raw: object) -> BaseException:
