@@ -2568,6 +2568,7 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
     ) -> None:
         """Export v3 rate-limit limits and window usage from mirrored logging headers."""
+        label_context: Final = PrometheusLabelFactoryContext(enum_values)
         descriptor_gauges: Final[
             tuple[
                 tuple[
@@ -2662,7 +2663,7 @@ class PrometheusLogger(CustomLogger):
         ) in descriptor_gauges:
             self._set_rate_limit_allowed_and_used_gauges(
                 standard_logging_payload=standard_logging_payload,
-                enum_values=enum_values,
+                label_context=label_context,
                 descriptor_key=descriptor_key,
                 header_rate_limit_type=header_rate_limit_type,
                 metric_name=metric_name,
@@ -2674,7 +2675,7 @@ class PrometheusLogger(CustomLogger):
     def _set_rate_limit_allowed_and_used_gauges(
         self,
         standard_logging_payload: StandardLoggingPayload,
-        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext,
         descriptor_key: Literal[
             "api_key",
             "team",
@@ -2696,12 +2697,11 @@ class PrometheusLogger(CustomLogger):
             standard_logging_payload=standard_logging_payload,
             header_name=f"x-ratelimit-{descriptor_key}-remaining-{header_rate_limit_type}",
         )
-        labelled_values: Final = replace(enum_values, rate_limit_type=rate_limit_type)
         labelnames: Final = self.get_labels_for_metric(metric_name)
-        labels: Final = prometheus_label_factory(
+        labels: Final = _prometheus_labels_from_context(
             supported_enum_labels=labelnames,
-            enum_values=labelled_values,
-            label_context=PrometheusLabelFactoryContext(labelled_values),
+            ctx=label_context,
+            rate_limit_type=rate_limit_type,
         )
         if limit is None or remaining is None:
             label_values: Final = tuple(labels.get(label) for label in labelnames)
@@ -5293,9 +5293,15 @@ def _label_source(enum_values: UserAPIKeyLabelValues) -> Mapping[str, object]:
 def _prometheus_labels_from_context(
     supported_enum_labels: list[str],
     ctx: PrometheusLabelFactoryContext,
+    *,
+    rate_limit_type: Literal["requests", "tokens", "input_tokens", "output_tokens"] | None = None,
 ) -> dict[str, str | None]:
     filtered_labels: Final[dict[str, str | None]] = {
-        label: ctx.sanitized_enum[label] for label in supported_enum_labels if label in ctx.sanitized_enum
+        label: rate_limit_type
+        if label == UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value and rate_limit_type is not None
+        else ctx.sanitized_enum[label]
+        for label in supported_enum_labels
+        if label in ctx.sanitized_enum
     }
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
