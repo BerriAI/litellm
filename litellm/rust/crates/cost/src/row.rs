@@ -71,6 +71,9 @@ pub struct RowFacts {
     /// How main's `float()` read `provider_specific_entry` for the speed and geo uplifts
     pub provider_entry: ProviderEntry,
     pub declared: Declared,
+    /// The row lists `tiered_pricing`, which main's search pricing reads ahead of a flat query rate as tiers by the
+    /// results the request asks for. Billing lowering leaves result tiers out
+    pub prices_by_results: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

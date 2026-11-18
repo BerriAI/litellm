@@ -6,7 +6,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - `engine.rs` hands each `PriceQuery` kind to its handler module. A kind or case without a handler answers `Unpriced::NotPorted`, and only then may the caller price it the old way
 - `tokens.rs` and `tokens/` port the token path of `completion_cost`: `rule.rs` for what each provider branch of `cost_per_token` adds, `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
-- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
+- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`, `search.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
   - Where main billed a call nothing on purpose (no row, no rate, no units) the core answers `Unpriced`, never 0.0, and the adapter maps it to each calculator's legacy return
 
 ## Parity fixtures
@@ -31,6 +31,8 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - An OCR annotation page with no annotation rate of its own bills at the page rate, also in a batch, where the page rate may come from the deployment while the catalog prices annotations (`ocr_cost`, `ocr_batch_cost`)
 - A Vertex AI Lyria generation bills the bundled cost map's rate when the live row has none, so a live table can never unprice it (`get_vertex_ai_lyria_generation_cost`, the adapter still passes both rows)
 - A speech or transcription call priced per token, and a transcription whose usage reports tokens on a row that declares token rates, are `NotPorted` and bill through main's generic token path, which bills a row's synthesized zero token rates
+- Parallel AI bills each result past the ten a request includes at a fixed rate kept in `search.rs`, since no cost map row lists `cost_per_additional_result` (`PARALLEL_AI_ADDITIONAL_RESULT_COST`)
+- A search row priced by `max_results_range` tiers falls back to the last tier when the requested results fall below the first range. A row listing any `tiered_pricing` answers `NotPorted`, even beside a flat query rate main never reads then, since billing lowering leaves result tiers out, and the adapter keeps main's tier pick
 
 ## Not copied from main
 
