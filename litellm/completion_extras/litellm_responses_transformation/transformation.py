@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.core_helpers import (
     iter_items,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
     whole_prompt_cache_breakpoint_or_none,
@@ -2291,7 +2292,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if index != -1:
             str_line = str_line[index + 5 :]
 
-        return self.chunk_parser(json.loads(str_line))
+        return self.chunk_parser(_DECODED_JSON.validate_python(json.loads(str_line)))
 
     @staticmethod
     def _sequential_tool_call_index(
@@ -2596,7 +2597,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ]
         )
 
-    def chunk_parser(self, chunk: dict[str, object]) -> "ModelResponseStream":
+    def chunk_parser(self, chunk: object) -> "ModelResponseStream":
         """
         Parse a Responses API streaming chunk and convert to OpenAI format.
 
@@ -2607,6 +2608,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
+        if not is_str_keyed_dict(chunk):
+            raise AttributeError(f"{type(chunk).__name__!r} object has no attribute 'get'", name="get", obj=chunk)
         self._remember_served_service_tier(chunk)
         reasoning_chunk: Final = (
             _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)

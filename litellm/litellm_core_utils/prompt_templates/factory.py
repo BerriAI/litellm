@@ -2266,10 +2266,12 @@ def convert_to_anthropic_tool_invoke(
             str,
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
         )
-        tool_input = parse_tool_call_arguments(
-            get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"),
-            tool_name=tool_name,
-            context="Anthropic tool invoke",
+        tool_input = _DECODED_JSON.validate_python(
+            parse_tool_call_arguments(
+                get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"),
+                tool_name=tool_name,
+                context="Anthropic tool invoke",
+            )
         )
 
         server_tool_result = (
@@ -2297,12 +2299,12 @@ def convert_to_anthropic_tool_invoke(
             )
         else:
             sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
-            _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
-                type="tool_use",
-                id=sanitized_tool_id,
-                name=tool_name,
-                input=tool_input,
-            )
+            _anthropic_tool_use_param = {
+                "type": "tool_use",
+                "id": sanitized_tool_id,
+                "name": tool_name,
+                "input": tool_input,
+            }
 
             _content_element = add_cache_control_to_content(
                 anthropic_content_element=_anthropic_tool_use_param,

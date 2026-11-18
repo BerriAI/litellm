@@ -145,7 +145,7 @@ class _SeedTotalsQuery(Protocol):
 
 
 class _ExistingKeysQuery(Protocol):
-    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]: ...
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _UpsertBatch(Protocol):
@@ -187,7 +187,14 @@ def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:
 
 
 def _existing_keys_query(prisma_client: "PrismaClient") -> _ExistingKeysQuery:
-    return prisma_client.db.query_raw
+    from litellm.proxy.utils import query_raw_rows
+
+    database: Final = prisma_client.db
+
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]:
+        return await query_raw_rows(database, query, *args)
+
+    return query_raw
 
 
 def _upsert_transaction(prisma_client: "PrismaClient") -> _UpsertTransactionManager:
@@ -295,7 +302,7 @@ async def _existing_primary_keys(
     prisma_client: "PrismaClient",
     transactions: tuple[WindowSpendTransaction, ...],
     query: _ExistingKeysQuery | None = None,
-) -> frozenset[tuple[str, str, str]]:
+) -> frozenset[tuple[object, object, object]]:
     async with db_span("select_window_spend_rows", "LiteLLM_BudgetWindowSpend"):
         rows: Final = await (query or _existing_keys_query(prisma_client))(
             _SELECT_EXISTING_ROWS_SQL,
@@ -309,7 +316,7 @@ async def _existing_primary_keys(
 async def _seed_base_for_missing_row(
     prisma_client: "PrismaClient",
     transaction: WindowSpendTransaction,
-    existing_primary_keys: frozenset[tuple[str, str, str]],
+    existing_primary_keys: frozenset[tuple[object, object, object]],
     spend_logs_aggregate: WindowSpendLogsAggregate,
     query: _SeedTotalsQuery | None = None,
 ) -> float:

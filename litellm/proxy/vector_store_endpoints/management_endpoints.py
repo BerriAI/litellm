@@ -588,26 +588,29 @@ async def get_vector_store_info(
                     )
 
                 vector_store_metadata: Final = vector_store.get("vector_store_metadata")
-                # Parse metadata if it's a JSON string
-                parsed_metadata: dict | None = None
-                if isinstance(vector_store_metadata, str):
-                    parsed_metadata = json.loads(vector_store_metadata)
-                elif isinstance(vector_store_metadata, dict):
-                    parsed_metadata = vector_store_metadata
+                parsed_metadata: Final = (
+                    _DECODED_JSON.validate_python(json.loads(vector_store_metadata))
+                    if isinstance(vector_store_metadata, str)
+                    else vector_store_metadata
+                    if isinstance(vector_store_metadata, dict)
+                    else None
+                )
 
-                vector_store_pydantic_obj: Final = LiteLLM_ManagedVectorStoresTable(
-                    vector_store_id=vector_store.get("vector_store_id") or "",
-                    custom_llm_provider=vector_store.get("custom_llm_provider") or "",
-                    vector_store_name=vector_store.get("vector_store_name") or None,
-                    vector_store_description=vector_store.get("vector_store_description") or None,
-                    vector_store_metadata=parsed_metadata,
-                    created_at=vector_store.get("created_at") or None,
-                    updated_at=vector_store.get("updated_at") or None,
-                    litellm_credential_name=vector_store.get("litellm_credential_name"),
-                    litellm_params=_redact_sensitive_litellm_params(vector_store.get("litellm_params")),
-                    team_id=vector_store.get("team_id") or None,
-                    user_id=vector_store.get("user_id") or None,
-                    is_config=vector_store.get("is_config", False),
+                vector_store_pydantic_obj: Final = LiteLLM_ManagedVectorStoresTable.model_validate(
+                    {
+                        "vector_store_id": vector_store.get("vector_store_id") or "",
+                        "custom_llm_provider": vector_store.get("custom_llm_provider") or "",
+                        "vector_store_name": vector_store.get("vector_store_name") or None,
+                        "vector_store_description": vector_store.get("vector_store_description") or None,
+                        "vector_store_metadata": parsed_metadata,
+                        "created_at": vector_store.get("created_at") or None,
+                        "updated_at": vector_store.get("updated_at") or None,
+                        "litellm_credential_name": vector_store.get("litellm_credential_name"),
+                        "litellm_params": _redact_sensitive_litellm_params(vector_store.get("litellm_params")),
+                        "team_id": vector_store.get("team_id") or None,
+                        "user_id": vector_store.get("user_id") or None,
+                        "is_config": vector_store.get("is_config", False),
+                    }
                 )
                 return {"vector_store": vector_store_pydantic_obj}
 

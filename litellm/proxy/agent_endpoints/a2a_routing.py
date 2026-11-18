@@ -28,6 +28,7 @@ from litellm.types.agents import AgentResponse
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_ROUTE_ENDPOINT: Final = TypeAdapter(object)
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
 _AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
 _CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
@@ -206,4 +207,7 @@ def _bridge_agent_request(
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
-    return getattr(litellm, route_type)(**request_data)
+    endpoint: Final = _ROUTE_ENDPOINT.validate_python(getattr(litellm, route_type))
+    if not callable(endpoint):
+        raise TypeError(f"'{type(endpoint).__name__}' object is not callable")
+    return endpoint(**request_data)

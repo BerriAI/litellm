@@ -11,6 +11,7 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
 from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -622,7 +623,7 @@ def process_embed_content_response(
     input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
-    response_json: dict,
+    response_json: object,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EmbeddingResponse:
     """
@@ -638,15 +639,17 @@ def process_embed_content_response(
     Returns:
         EmbeddingResponse with single embedding
     """
-    if "embedding" not in response_json:
+    if not json_contains(response_json, "embedding"):
         raise ValueError(f"embedContent response missing 'embedding' field: {response_json}")
 
-    embedding_data: Final = response_json["embedding"]
+    embedding_data: Final = subscript(response_json, "embedding")
 
-    openai_embedding: Final = Embedding(
-        embedding=embedding_data["values"],
-        index=0,
-        object="embedding",
+    openai_embedding: Final = Embedding.model_validate(
+        {
+            "embedding": subscript(embedding_data, "values"),
+            "index": 0,
+            "object": "embedding",
+        }
     )
 
     model_response.data = [openai_embedding]
@@ -654,7 +657,7 @@ def process_embed_content_response(
     model_response.usage = _usage_from_embed_content_response(
         input=input,
         model=model,
-        raw_usage_metadata=response_json.get("usageMetadata"),
+        raw_usage_metadata=decoded_json_object(response_json).get("usageMetadata"),
         resolved_files=resolved_files or {},
     )
 

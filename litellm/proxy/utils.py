@@ -55,7 +55,7 @@ from typing import (
 
 import anyio
 import httpx
-from typing_extensions import Never, NotRequired, ReadOnly, TypedDict
+from typing_extensions import Never, NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
@@ -390,7 +390,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
-    Span = _Span | object
+    Span = _Span
 else:
     Span = Any
 
@@ -410,6 +410,10 @@ class _TeamMemberRow(TypedDict):
 class _TeamMembershipRow(TypedDict):
     user_id: ReadOnly[str | None]
     team_members_with_roles: ReadOnly[Iterable[_TeamMemberRow] | None]
+
+
+class _DualCacheGetKwargs(TypedDict, total=False, extra_items=object):
+    parent_otel_span: ReadOnly[Span | None]
 
 
 class _ExpiresSlot(Protocol):
@@ -649,7 +653,7 @@ class InternalUsageCache:
         self,
         key: str,
         local_only: bool = False,
-        **kwargs: object,
+        **kwargs: Unpack[_DualCacheGetKwargs],
     ) -> object:
         return self.dual_cache.get_cache(
             key=key,

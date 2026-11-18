@@ -3492,7 +3492,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
         )
         if not isinstance(completion_response, dict):
-            _raise_for_non_object_body(completion_response)
+            raise_for_non_object_body(completion_response)
         model_response = self.transform_parsed_response(
             completion_response=completion_response,
             raw_response=raw_response,
@@ -3564,7 +3564,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-def _raise_for_non_object_body(completion_response: object) -> NoReturn:
+def raise_for_non_object_body(completion_response: object) -> NoReturn:
     _ = subscript(completion_response, "error" if json_contains(completion_response, "error") else "content")
     raise TypeError(f"expected a JSON object response body, got {type(completion_response).__name__}")
 

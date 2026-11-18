@@ -1155,6 +1155,10 @@ async def _verify_generic_sso_or_fall_back_to_id_token(
         )
 
 
+def _verified_generic_sso_tokens(generic_sso: _GenericSSOClient) -> tuple[str | None, SSOIdentityAssertion | None]:
+    return generic_sso.access_token, assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
+
+
 class _SSOUserAdmissionError(ProxyException):
     pass
 
@@ -1818,8 +1822,7 @@ async def get_generic_sso_response(
                 userinfo_endpoint=generic_userinfo_endpoint,
                 response_convertor=response_convertor,
             )
-            access_token_str = generic_sso.access_token
-            sso_assertion = assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
+            access_token_str, sso_assertion = _verified_generic_sso_tokens(generic_sso)
 
         access_token_payload = process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings

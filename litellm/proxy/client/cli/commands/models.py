@@ -13,7 +13,14 @@ import yaml
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    decoded_json_object,
+    iter_items,
+    json_contains,
+    require_attributes,
+    subscript,
+)
 
 # local imports
 from ... import Client
@@ -136,7 +143,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
     """List all available models"""
     client: Final = create_client(ctx)
     models_list: Final = client.models.list()
-    assert isinstance(models_list, list)
+    assert as_object_list(models_list) is not None
 
     if output_format == "json":
         rich.print_json(data=models_list)
@@ -150,17 +157,18 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
         table.add_column("Owned By", style="yellow")
 
         # Add rows
-        for model in models_list:
-            created = model.get("created")
+        for model in iter_items(models_list):
+            entry = decoded_json_object(model)
+            created = entry.get("created")
             # Convert string timestamp to integer if needed
             if isinstance(created, str) and created.isdigit():
                 created = int(created)
 
             table.add_row(
-                _str_field(model, "id", ""),
-                _str_field(model, "object", "model"),
+                _str_field(entry, "id", ""),
+                _str_field(entry, "object", "model"),
                 (format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created)),
-                _str_field(model, "owned_by", ""),
+                _str_field(entry, "owned_by", ""),
             )
 
         rich.print(table)
@@ -239,7 +247,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
     """Get detailed information about all models"""
     client: Final = create_client(ctx)
     models_info: Final = client.models.info()
-    assert isinstance(models_info, list)
+    assert as_object_list(models_info) is not None
 
     if output_format == "json":
         rich.print_json(data=models_info)
@@ -306,7 +314,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
                 click.echo(f"Warning: Unknown column '{col_name}'", err=True)
 
         # Add rows with only the requested columns
-        for model in models_info:
+        for model in iter_items(models_info):
             row_values = []
             for col_name in requested_columns:
                 if col_name in column_configs:

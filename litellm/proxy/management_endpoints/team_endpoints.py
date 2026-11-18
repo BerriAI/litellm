@@ -45,6 +45,7 @@ from litellm._uuid import uuid
 from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, subscript
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -2048,7 +2049,7 @@ async def new_team(
                 set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
-                    value=getattr(data, field),
+                    value=attribute_or_none(data, field),
                 )
 
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
@@ -2056,7 +2057,7 @@ async def new_team(
                 set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
-                    value=getattr(data, field),
+                    value=attribute_or_none(data, field),
                 )
 
         # If budget_duration is set, set `budget_reset_at`
@@ -3064,7 +3065,7 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
+            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, subscript(patch_fields, "metadata"))
 
         update_request: Final = UpdateTeamRequest.model_validate({"team_id": team_id, **patch_fields})
 

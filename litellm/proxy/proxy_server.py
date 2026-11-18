@@ -250,7 +250,7 @@ if TYPE_CHECKING:
     from litellm.proxy.hooks.mcp_semantic_filter.hook import SemanticToolFilterConfig
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
     OpenTelemetry = Any

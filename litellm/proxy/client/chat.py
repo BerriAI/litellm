@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator
-from typing import Any, Final
+from typing import Final
 
 import requests
 from pydantic import ConfigDict, TypeAdapter
@@ -133,7 +133,7 @@ class ChatClient:
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
         user: str | None = None,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> Iterator[object]:
         """
         Create a streaming chat completion.
 
@@ -195,7 +195,7 @@ class ChatClient:
                         if data_str.strip() == "[DONE]":
                             break
                         try:
-                            chunk = json.loads(data_str)
+                            chunk = _DECODED_JSON.validate_python(json.loads(data_str))
                         except json.JSONDecodeError:
                             continue
                         _raise_if_error_frame(chunk)

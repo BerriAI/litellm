@@ -19,7 +19,7 @@ from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import Buffer
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -345,7 +345,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             produced by the handler so transcription metadata is also available.
         """
         try:
-            payload: Final = raw_response.json()
+            payload: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as exc:
             raise SonioxException(
                 message=f"Failed to parse Soniox response: {exc}",
@@ -353,11 +353,14 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=getattr(raw_response, "headers", None),
             )
 
-        return self._build_response_from_payload(payload, model_response=model_response)
+        payload_fields: Final = as_str_mapping(payload)
+        return self._build_response_from_payload(
+            {} if payload_fields is None else payload_fields, model_response=model_response
+        )
 
     def _build_response_from_payload(
         self,
-        payload: dict[str, Any],
+        payload: Mapping[str, Any],
         model_response: TranscriptionResponse | None = None,
         response_format: str | None = None,
     ) -> TranscriptionResponse:

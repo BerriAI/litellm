@@ -30,7 +30,7 @@ from .redis_cache import RedisCache, RedisCircuitBreakerOpenError, log_redis_fai
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 

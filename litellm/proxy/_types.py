@@ -136,7 +136,7 @@ if TYPE_CHECKING:
     from litellm.repositories.database import Database
     from litellm.tracing import TraceReceiver
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 

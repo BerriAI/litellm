@@ -44,8 +44,10 @@ from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUn
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    attribute_or_none,
     process_response_headers,
     provider_reported_usage_cost,
+    require_attributes,
     set_response_cost_in_hidden_params,
     stamp_litellm_bill_on_usage,
 )
@@ -157,14 +159,6 @@ class _GetsLitellmParams(Protocol):
     def __call__(self, key: str, default: Mapping[str, object], /) -> LiteLLM_Params: ...
 
 
-class _UnmasksPiiText(Protocol):
-    def __call__(self, text: str, pii_tokens: Mapping[str, str]) -> str: ...
-
-
-class _ShouldStoreResultInCache(Protocol):
-    def __call__(self, *, original_function: Callable[..., object] | None, kwargs: Mapping[str, object]) -> bool: ...
-
-
 class _PostStreamingDeploymentHook(Protocol):
     def __call__(
         self,
@@ -188,6 +182,16 @@ _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
 _DECODED_JSON: Final = TypeAdapter(object)
 _HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+def _required_attribute(source: object, name: str) -> object:
+    return attribute_or_none(require_attributes(source, object, name), name)
+
+
+def _require_callable(value: object) -> Callable[..., object]:
+    if callable(value):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object is not callable")
 
 
 def _raise_missing_get(value: object) -> NoReturn:
@@ -886,12 +890,10 @@ class BaseResponsesAPIStreamingIterator:
         if preset_cache_key is not None:
             request_kwargs["cache_key"] = preset_cache_key
 
-        should_store_result_in_cache: Final[_ShouldStoreResultInCache] = getattr(
-            caching_handler, _SHOULD_STORE_RESULT_IN_CACHE_ATTR
-        )
-        if not should_store_result_in_cache(
-            original_function=getattr(caching_handler, "original_function", None),
-            kwargs=request_kwargs,
+        should_store_result_in_cache: Final = _required_attribute(caching_handler, _SHOULD_STORE_RESULT_IN_CACHE_ATTR)
+        original_function: Final = attribute_or_none(caching_handler, "original_function")
+        if not _require_callable(should_store_result_in_cache)(
+            original_function=original_function, kwargs=request_kwargs
         ):
             return
 
@@ -2298,7 +2300,7 @@ _PII_DELTA_EVENT_TYPES: Final = frozenset(
 )
 
 
-def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: _UnmasksPiiText) -> str:
+def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: object) -> str:
     """Put the original PII back into one client-bound event: ``response.completed`` output text, or a delta."""
     try:
         evt_obj: Final = _load_json_object(response_str)
@@ -2323,7 +2325,7 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
                     continue
                 text = content_block.get("text")
                 if isinstance(text, str):
-                    unmasked = unmask_pii_text(text, pii_tokens)
+                    unmasked = _require_callable(unmask_pii_text)(text, pii_tokens)
                     if unmasked != text:
                         content_block["text"] = unmasked
                         modified = True
@@ -2332,7 +2334,7 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
     if event_type in _PII_DELTA_EVENT_TYPES:
         delta: Final = evt_obj.get("delta")
         if isinstance(delta, str):
-            unmasked = unmask_pii_text(delta, pii_tokens)
+            unmasked = _require_callable(unmask_pii_text)(delta, pii_tokens)
             if unmasked != delta:
                 evt_obj["delta"] = unmasked
                 return json.dumps(evt_obj)
@@ -2982,7 +2984,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         cb: Final = self.guardrail_callbacks[0]
-        unmask_pii_text: Final[_UnmasksPiiText] = getattr(cb, _UNMASK_PII_TEXT_ATTR)
+        unmask_pii_text: Final = _required_attribute(cb, _UNMASK_PII_TEXT_ATTR)
         return _unmask_responses_event(response_str, pii_tokens, unmask_pii_text)
 
     async def _mask_response_completed(self, response_str: str) -> str:
@@ -3579,7 +3581,7 @@ class ManagedResponsesWebSocketHandler:
         """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""
         if not self._pii_tokens or not self.guardrail_callbacks:
             return serialized
-        unmask_pii_text: Final[_UnmasksPiiText] = getattr(self.guardrail_callbacks[0], _UNMASK_PII_TEXT_ATTR)
+        unmask_pii_text: Final = _required_attribute(self.guardrail_callbacks[0], _UNMASK_PII_TEXT_ATTR)
         return _unmask_responses_event(serialized, self._pii_tokens, unmask_pii_text)
 
     def _save_turn_history(

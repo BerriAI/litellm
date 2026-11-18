@@ -51,7 +51,12 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
-from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    attribute_or_none,
+    has_attributes,
+    require_attributes,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
@@ -1763,7 +1768,7 @@ async def _common_key_generation_helper(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
             delattr(data, field)
 
@@ -1772,7 +1777,7 @@ async def _common_key_generation_helper(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
             delattr(data, field)
 
@@ -3222,7 +3227,7 @@ async def prepare_key_update_data(
             set_object_metadata_field(
                 object_data=data,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
     for k, v in data_json.items():
         if k in LiteLLM_ManagementEndpoint_MetadataFields or k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:

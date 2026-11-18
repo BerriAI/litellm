@@ -660,11 +660,7 @@ class RealTimeStreaming:
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
-        if isinstance(message, dict):
-            # TypedDict union members do not narrow to plain dict for mypy.
-            message_obj: dict[str, Any] = cast(dict[str, Any], message)
-        else:
-            message_obj = cast(dict[str, Any], json.loads(message))
+        message_obj: Final = cast(dict[str, Any], message if isinstance(message, dict) else json.loads(message))
         self._collect_tool_calls_from_response_done(message_obj)
         if not self._should_store_message(message_obj):
             return

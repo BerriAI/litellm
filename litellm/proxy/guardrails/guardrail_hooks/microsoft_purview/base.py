@@ -3,11 +3,11 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import Buffer, NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import (
@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
     iter_items,
     json_contains,
+    subscript,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -44,6 +45,19 @@ _DECODED_JSON: Final = TypeAdapter(object)
 class GraphTokenResponse(TypedDict):
     access_token: str
     expires_in: NotRequired[int]
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _expires_in_seconds(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 def _policy_action_blocks(action: object) -> bool:
@@ -88,7 +102,7 @@ class PurviewGuardrailBase:
         self.user_id_field = user_id_field
 
         # Token cache: (access_token, expires_at_epoch)
-        self._token_cache: tuple[str, float] | None = None
+        self._token_cache: tuple[object, float] | None = None
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
         # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
@@ -113,7 +127,7 @@ class PurviewGuardrailBase:
     # OAuth2 token management
     # ------------------------------------------------------------------
 
-    async def _get_access_token(self) -> str:
+    async def _get_access_token(self) -> object:
         """Acquire or return cached OAuth2 token via client_credentials grant."""
         now: Final = time.time()
         with self._cache_lock:
@@ -134,9 +148,9 @@ class PurviewGuardrailBase:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        token_data: Final[GraphTokenResponse] = response.json()
-        access_token: Final = token_data["access_token"]
-        expires_in: Final = int(token_data.get("expires_in", 3599))
+        token_data: Final = _DECODED_JSON.validate_python(response.json())
+        access_token: Final = subscript(token_data, "access_token")
+        expires_in: Final = _expires_in_seconds(decoded_json_object(token_data).get("expires_in", 3599))
         # Recompute ``now`` after the await so the expiry reflects when the
         # token was actually received, not when the request started.
         with self._cache_lock:

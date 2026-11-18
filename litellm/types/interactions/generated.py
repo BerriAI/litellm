@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import builtins
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import AwareDatetime, Base64Str, Field, RootModel
 
@@ -1200,7 +1200,7 @@ class CancelInteractionResult(BaseLiteLLMOpenAIResponseObject):
 # Backwards compatibility aliases
 InteractionTool = Tool
 InteractionToolChoiceConfig: Final = ToolChoiceConfig
-InteractionsAPIOptionalRequestParams = dict[str, Any]
+InteractionsAPIOptionalRequestParams = dict[str, builtins.object]
 
 # Agent interaction execution environment
 InteractionEnvironment = str | dict[str, builtins.object]

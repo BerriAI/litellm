@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, ClassVar, Final, TypedDict
+from collections.abc import Mapping, Sequence, Sized
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol, SupportsIndex, SupportsInt, TypedDict, runtime_checkable
+
+from pydantic import TypeAdapter
+from typing_extensions import Buffer
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +30,7 @@ from litellm.constants import (
     S3_VECTORS_DEFAULT_DISTANCE_METRIC,
     S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.web_identity_session_policy import (
@@ -68,6 +72,40 @@ class S3VectorsQueryMatch(TypedDict, total=False):
 
 class S3VectorsQueryResponse(TypedDict, total=False):
     vectors: Sequence[S3VectorsQueryMatch]
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _configured_int(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
+
+
+def _configured_dimension(config: Mapping[str, object]) -> int | None:
+    if "dimension" in config:
+        return _configured_int(config["dimension"])
+    return None
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _lowered(value: object) -> str:
+    if isinstance(value, str):
+        return value.lower()
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'lower'", name="lower", obj=value)
 
 
 class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
@@ -167,10 +205,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         Returns None if dimension should be auto-detected.
         """
-        if "dimension" in self.vector_store_config:
-            configured_dimension: Final[int] = self.vector_store_config["dimension"]
-            return int(configured_dimension)
-        return None
+        return _configured_dimension(self.vector_store_config)
 
     async def _ensure_config_initialized(self):
         """Lazily initialize S3 Vectors infrastructure."""
@@ -498,9 +533,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         vector_store_id: Final = f"{self.vector_bucket_name}:{self.index_name}"
         return vector_store_id, filename
 
-    async def query_vector_store(
-        self, vector_store_id: str, query: str, top_k: int = 5
-    ) -> S3VectorsQueryResponse | None:
+    async def query_vector_store(self, vector_store_id: str, query: str, top_k: int = 5) -> Mapping[str, object] | None:
         """
         Query S3 Vectors using QueryVectors API.
 
@@ -541,16 +574,16 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             )
 
             if query_response.status_code == 200:
-                results: Final[S3VectorsQueryResponse] = query_response.json()
+                results: Final = decoded_json_object(_DECODED_JSON.validate_python(query_response.json()))
                 matches: Final = results.get("vectors")
-                verbose_logger.debug("Query returned %s results", len(results.get("vectors", [])))
+                verbose_logger.debug("Query returned %s results", _json_len(results.get("vectors", [])))
 
                 # Check if query terms appear in results
                 if matches:
-                    for result in matches:
-                        metadata = result.get("metadata", {})
-                        source_text = metadata.get("source_text", "")
-                        if query.lower() in source_text.lower():
+                    for result in iter_items(matches):
+                        metadata = decoded_json_object(result).get("metadata", {})
+                        source_text = decoded_json_object(metadata).get("source_text", "")
+                        if query.lower() in _lowered(source_text):
                             return results
 
                 # Return results even if exact match not found

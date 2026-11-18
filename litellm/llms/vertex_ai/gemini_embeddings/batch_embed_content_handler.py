@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -34,6 +35,9 @@ from .batch_embed_content_transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _GeminiFileResource(TypedDict, total=False):
@@ -278,7 +282,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 input=input,
                 model_response=model_response,
                 model=model,
-                response_json=_json_response,
+                response_json=_DECODED_JSON.validate_python(_json_response),
                 resolved_files=resolved_files,
             )
         else:
@@ -383,7 +387,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 input=input,
                 model_response=model_response,
                 model=model,
-                response_json=response.json(),
+                response_json=_DECODED_JSON.validate_python(response.json()),
                 resolved_files=resolved_files,
             )
         else:
