@@ -659,7 +659,7 @@ URL_ELICITATION: Final = {
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
-def test_auto_executed_tool_asking_for_url_elicitation_hands_the_model_the_flattened_error_text(
+def test_auto_executed_tool_asking_for_url_elicitation_hands_the_model_the_error_and_logs_a_failure(
     gateway: Gateway, surface: Surface
 ) -> None:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
@@ -689,8 +689,8 @@ def test_auto_executed_tool_asking_for_url_elicitation_hands_the_model_the_flatt
             return_last_on_timeout=True,
         )
         assert (rig.final_text(response.json()), [row["status"] for row in tool_rows]) == (
-            "MCPError: This request requires more information.",
-            ["success"],
+            "Error executing tool: This request requires more information.",
+            ["failure"],
         ), response.text
         assert len(_peer_add_calls(peer)) == 1
 
