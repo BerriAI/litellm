@@ -98,6 +98,56 @@ def test_tool_files_api_reference_is_nested_file_data(version):
     }
 
 
+@pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
+@pytest.mark.parametrize(
+    ("mime_type", "selection", "expected_selection"),
+    [
+        (
+            "application/pdf",
+            {"document_metadata": {"start_page": 3, "end_page": 4}},
+            {"document_metadata": {"startPage": 3, "endPage": 4}},
+        ),
+        (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            {"spreadsheet_metadata": {"sheet_index": 2}},
+            {"spreadsheet_metadata": {"sheetIndex": 2}},
+        ),
+    ],
+)
+def test_chat_tool_file_inspection_preserves_nested_selection(source, mime_type, selection, expected_selection):
+    if source == "inline":
+        file = {"file_data": f"data:{mime_type};base64,cGRm"}
+        expected_part = {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+    else:
+        uri = f"https://generativelanguage.googleapis.com/{source}/files/report"
+        file = {"file_id": uri}
+        expected_part = {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_media", "type": "function", "function": {"name": "get_media", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_media",
+            "content": [{"type": "file", "file": {**file, **selection, "format": mime_type}}],
+        },
+    ]
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result[-1]["parts"] == [
+        {
+            "function_response": {
+                "id": "call_media",
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [{**expected_part, **expected_selection}],
+            }
+        }
+    ]
+
+
 def _responses_tool_media_history(content: Mapping[str, object]) -> list[AllMessageValues]:
     output: Final = (
         LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
