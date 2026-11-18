@@ -11875,7 +11875,7 @@ _VIDEO_SPENDING_REQUESTS: Final = (
 async def _authenticate_video_request(
     key: UserAPIKeyAuth, api_key: str, method: str, route: str, request_data: dict[str, object]
 ) -> UserAPIKeyAuth:
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     await cache_key_object(
         hashed_token=key.token or "",
         user_api_key_obj=key,
