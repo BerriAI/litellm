@@ -128,15 +128,15 @@ from litellm.proxy.auth.auth_utils import (
     request_dispatched_to_provider_pass_through,
     route_in_additonal_public_routes,
 )
-from litellm.proxy.auth.customer_provisioning import (
-    gated_registrars,
-    refuse_unknown_customer,
-    registration_refusal,
-)
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
     customer_identity_from_request,
     resolve_customer_hierarchy,
+)
+from litellm.proxy.auth.customer_provisioning import (
+    gated_registrars,
+    refuse_unknown_customer,
+    registration_refusal,
 )
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.impersonation import (
