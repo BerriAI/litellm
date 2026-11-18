@@ -8186,22 +8186,59 @@ def test_transcription_cost_without_provider_seconds_bills_the_measured_length(
     assert cost == pytest.approx(0.01 * expected_seconds)
 
 
-def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("model", "duration", "billed_seconds"),
+    [
+        ("whisper-large-v3-turbo", 2.4, 10.0),
+        ("whisper-large-v3-turbo", 10.0, 10.0),
+        ("whisper-large-v3-turbo", 12.4, 12.4),
+        ("whisper-large-v3", 2.4, 10.0),
+        ("whisper-large-v3", None, 0.0),
+    ],
+)
+def test_groq_transcription_cost_applies_billed_duration_minimum(
+    monkeypatch: pytest.MonkeyPatch, model: str, duration: float | None, billed_seconds: float
+) -> None:
+    """Groq documents a 10-second minimum at https://console.groq.com/docs/speech-to-text (2026-11-18)."""
+    qualified_model: Final = f"groq/{model}"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        qualified_model,
+        {"input_cost_per_second": 0.01, "litellm_provider": "groq", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={"text": "Hello", **({"duration": duration} if duration is not None else {})},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": "groq"},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(completion_response=transcription, model=qualified_model, call_type="atranscription")
+
+    assert cost == pytest.approx(0.01 * billed_seconds)
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"), [("openai", "gpt-fake-transcribe"), ("groq", "whisper-large-v3-turbo")]
+)
+def test_custom_priced_transcription_deployment_bills_provider_seconds(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str
+) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "priced-deployment",
-        {"input_cost_per_second": 0.000075, "litellm_provider": "openai", "mode": "audio_transcription"},
+        {"input_cost_per_second": 0.000075, "litellm_provider": provider, "mode": "audio_transcription"},
     )
     transcription: Final = convert_to_model_response_object(
         response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 2}},
         model_response_object=TranscriptionResponse(),
-        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": "openai"},
+        hidden_params={"model": model, "custom_llm_provider": provider},
         response_type="audio_transcription",
     )
 
     cost: Final = completion_cost(
         completion_response=transcription,
-        model="openai/gpt-fake-transcribe",
+        model=f"{provider}/{model}",
         call_type="atranscription",
         custom_pricing=True,
         router_model_id="priced-deployment",
