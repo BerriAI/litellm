@@ -1382,11 +1382,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
+        continuation_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         continuation: Final = any(
             params.get("previous_response_id") or params.get("conversation")
             for params in (
-                optional_params,
-                as_str_mapping(optional_params.get("extra_body")) or {},
+                continuation_params,
+                as_str_mapping(continuation_params.get("extra_body")) or {},
                 litellm_params,
                 as_str_mapping(litellm_params.get("extra_body")) or {},
             )
