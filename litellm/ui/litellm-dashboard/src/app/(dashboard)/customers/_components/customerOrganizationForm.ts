@@ -14,6 +14,7 @@ export interface CustomerBudgetGroupFields {
 export interface CustomerOrganizationFields {
   name: string;
   customerOrgId: string;
+  budgetId: string;
   monthlyBudget: string;
   tpm: string;
   rpm: string;
@@ -24,6 +25,7 @@ export interface CustomerOrganizationFields {
 export const initialCustomerOrganizationFields = (): CustomerOrganizationFields => ({
   name: "",
   customerOrgId: "",
+  budgetId: "",
   monthlyBudget: "",
   tpm: "",
   rpm: "",
@@ -73,10 +75,11 @@ export type CustomerOrganizationFormError =
 export function validateCustomerBudgetGroups(
   fields: Pick<CustomerOrganizationFields, "groups" | "defaultGroupId">,
   existingGroupIds: readonly string[] = [],
+  requireDefault = true,
 ) {
   const missingDefault = !fields.defaultGroupId && !existingGroupIds.length;
   const invalidDefault = fields.defaultGroupId && !fields.groups.some((group) => group.id === fields.defaultGroupId);
-  if (missingDefault || invalidDefault) {
+  if (requireDefault && (missingDefault || invalidDefault)) {
     return { ok: false, error: "defaultRequired" } as const;
   }
   const names = fields.groups.map((group) => group.name.trim());
@@ -99,8 +102,8 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
   if (!fields.name.trim()) return { ok: false, error: "nameRequired" } as const;
   const validation = validateCustomerBudgetGroups(fields);
   if (!validation.ok) return validation;
-  if (!validAmount(fields.monthlyBudget)) return { ok: false, error: "invalidBudget" } as const;
-  if (!validRate(fields.tpm) || !validRate(fields.rpm)) {
+  if (!fields.budgetId && !validAmount(fields.monthlyBudget)) return { ok: false, error: "invalidBudget" } as const;
+  if (!fields.budgetId && (!validRate(fields.tpm) || !validRate(fields.rpm))) {
     return { ok: false, error: "invalidRateLimit" } as const;
   }
   const budget = optionalAmount(fields.monthlyBudget);
@@ -109,7 +112,8 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
   const body = {
     alias: fields.name.trim(),
     ...(fields.customerOrgId.trim() ? { customer_org_id: fields.customerOrgId.trim() } : {}),
-    ...(budget !== null || tpm !== null || rpm !== null
+    ...(fields.budgetId ? { budget_id: fields.budgetId } : {}),
+    ...(!fields.budgetId && (budget !== null || tpm !== null || rpm !== null)
       ? {
           budget: {
             ...(budget !== null ? { max_budget: budget, budget_duration: "1mo" } : {}),
