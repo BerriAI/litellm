@@ -444,14 +444,16 @@ class ChunkProcessor:
 
     @staticmethod
     def build_base_choice(index: int, chunks: Sequence["_BaseChunk"]) -> Choices:
+        choices: Final = tuple(chain.from_iterable(chunk.get("choices") or () for chunk in chunks))
+        provider_specific_fields: Final = _last_provider_specific_fields(choices)
         return Choices(
             index=index,
             finish_reason=ChunkProcessor._finish_reason_of_chunks(
                 chunks, unreported="tool_calls" if _carries_tool_calls(chunks) else "stop"
             ),
             message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
-            provider_specific_fields=None,
-            **_streamed_vllm_choice_fields(chain.from_iterable(chunk.get("choices") or () for chunk in chunks)),
+            provider_specific_fields=dict(provider_specific_fields) if provider_specific_fields is not None else None,
+            **_streamed_vllm_choice_fields(choices),
         )
 
     @staticmethod
@@ -495,6 +497,7 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
+        single_choice_fields: Final = _last_provider_specific_fields(_first_choices(chunks))
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -522,6 +525,9 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
+                            "provider_specific_fields": (
+                                dict(single_choice_fields) if single_choice_fields is not None else None
+                            ),
                             **_streamed_vllm_choice_fields(_first_choices(chunks)),
                         }
                     ]
@@ -1558,6 +1564,15 @@ def _streamed_vllm_choice_fields(choices: Iterable[object]) -> Mapping[str, obje
     )
     present_fields: Final = frozenset(chain.from_iterable(fields.keys() for fields in extras))
     return MappingProxyType({field: streamed_values[field] for field in VLLM_CHOICE_FIELDS if field in present_fields})
+
+
+def _last_provider_specific_fields(choices: Iterable[object]) -> Mapping[str, object] | None:
+    carried: Final = tuple(
+        fields
+        for choice in choices
+        if (fields := object_mapping(_choice_extras(choice).get("provider_specific_fields")))
+    )
+    return carried[-1] if carried else None
 
 
 def _delta_reasoning_items(delta: object) -> Sequence[object]:

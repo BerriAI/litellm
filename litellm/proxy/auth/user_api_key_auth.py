@@ -125,7 +125,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
-    customer_identity_from_headers,
+    customer_identity_from_request,
     resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.host import identity as auth_identity
@@ -183,6 +183,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     pre_call_served_model,
     request_served_model,
 )
+from litellm.proxy.request_auth_context import REQUEST_AUTH
 from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_committed_budget_spend,
     carry_team_and_user_budget_state,
@@ -3194,6 +3195,7 @@ async def _authorize_authenticated_request_checks(
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
         from litellm.proxy.proxy_server import (
             general_settings,
+            litellm_jwtauth,
             llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
             llm_router,
             prisma_client,
@@ -3201,8 +3203,10 @@ async def _authorize_authenticated_request_checks(
             user_model,
         )
 
-        customer_identity: Final = customer_identity_from_headers(
-            safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+        customer_identity: Final = customer_identity_from_request(
+            safe_get_request_headers(request),  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+            user_api_key_auth_obj.jwt_claims,
+            litellm_jwtauth,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         if customer_identity is not None and not RustAuth.is_public_route(route, core.proxy_settings()):
@@ -3513,6 +3517,8 @@ async def user_api_key_auth(
         model=request_data.get("model") if isinstance(request_data, dict) else None,
     )
     user_api_key_auth_obj.request_route = normalize_request_route(route)
+    # Bound once for the request task, like the identity above, so V2 callbacks' hooks can read it.
+    REQUEST_AUTH.set(user_api_key_auth_obj)
 
     if body_parse_exception is not None:
         await _record_unparsable_body_failure(

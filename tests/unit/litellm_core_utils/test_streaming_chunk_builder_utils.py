@@ -2985,3 +2985,120 @@ def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_wi
         model="my-gpt-6", messages=messages
     )
     assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)
+
+
+def _google_reason_stream(final_choice_fields: Mapping[str, object]) -> tuple[ModelResponseStream, ...]:
+    return (
+        ModelResponseStream(
+            id="chatcmpl-google-reason",
+            created=1,
+            model="gemini-3.8-flash",
+            choices=[StreamingChoices(index=0, delta=Delta(content="Waves fold ", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-google-reason",
+            created=2,
+            model="gemini-3.8-flash",
+            choices=[StreamingChoices(index=0, delta=Delta(content="silver light."))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-google-reason",
+            created=3,
+            model="gemini-3.8-flash",
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="content_filter", **final_choice_fields)],
+        ),
+    )
+
+
+def _as_received(chunks: Sequence[ModelResponseStream], over_http: bool) -> tuple[object, ...]:
+    return tuple(chunk.model_dump(exclude_none=True) if over_http else chunk for chunk in chunks)
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+@pytest.mark.parametrize(
+    "reason_fields",
+    [
+        pytest.param({"native_finish_reason": "SAFETY"}, id="finish_reason"),
+        pytest.param({"block_reason": "PROHIBITED_CONTENT"}, id="block_reason"),
+    ],
+)
+def test_stream_chunk_builder_keeps_the_final_choices_provider_specific_fields(
+    over_http: bool, reason_fields: Mapping[str, str]
+) -> None:
+    chunks: Final = _as_received(_google_reason_stream({"provider_specific_fields": dict(reason_fields)}), over_http)
+
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.content == "Waves fold silver light."
+    assert response.choices[0].finish_reason == "content_filter"
+    assert getattr(response.choices[0], "provider_specific_fields", None) == reason_fields
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+def test_stream_chunk_builder_adds_no_choice_provider_specific_fields_when_no_chunk_carries_them(
+    over_http: bool,
+) -> None:
+    response: Final = stream_chunk_builder(chunks=list(_as_received(_google_reason_stream({}), over_http)))
+
+    assert response is not None
+    assert response.choices[0].message.content == "Waves fold silver light."
+    assert response.choices[0].finish_reason == "content_filter"
+    assert getattr(response.choices[0], "provider_specific_fields", None) is None
+
+
+_TWO_CHOICE_REASON_FIELDS: Final[Mapping[int, Mapping[str, str]]] = {
+    0: {"native_finish_reason": "STOP"},
+    1: {"native_finish_reason": "SAFETY"},
+}
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+def test_stream_chunk_builder_keeps_each_choices_own_provider_specific_fields(over_http: bool) -> None:
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id="chatcmpl-two-reasons",
+            created=1,
+            model="gemini-3.8-flash",
+            choices=[
+                StreamingChoices(
+                    index=index,
+                    delta=Delta(content=f"choice {index}"),
+                    finish_reason="stop" if index == 0 else "content_filter",
+                    provider_specific_fields=dict(fields),
+                )
+            ],
+        )
+        for index, fields in _TWO_CHOICE_REASON_FIELDS.items()
+    )
+
+    response: Final = stream_chunk_builder(chunks=list(_as_received(chunks, over_http)))
+
+    assert response is not None
+    assert {
+        choice.index: getattr(choice, "provider_specific_fields", None) for choice in response.choices
+    } == _TWO_CHOICE_REASON_FIELDS
+
+
+@pytest.mark.parametrize("over_http", [False, True], ids=["chunk_objects", "chunk_dicts"])
+def test_stream_chunk_builder_keeps_the_last_chunks_provider_specific_fields(over_http: bool) -> None:
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-later-reason",
+            created=1,
+            model="gemini-3.8-flash",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Waves fold ", role="assistant"),
+                    provider_specific_fields={"native_finish_reason": "CONTINUATION"},
+                )
+            ],
+        ),
+        *_google_reason_stream({"provider_specific_fields": {"native_finish_reason": "SAFETY"}})[1:],
+    )
+
+    response: Final = stream_chunk_builder(chunks=list(_as_received(chunks, over_http)))
+
+    assert response is not None
+    assert getattr(response.choices[0], "provider_specific_fields", None) == {"native_finish_reason": "SAFETY"}

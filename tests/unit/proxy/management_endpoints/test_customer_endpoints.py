@@ -241,6 +241,28 @@ def test_info_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response_json["error"]["code"] == "404"
 
 
+@pytest.mark.parametrize("path", ["/customer/info", "/end_user/info"])
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.ORG_ADMIN, LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+def test_info_customer_refuses_a_caller_who_is_not_a_proxy_admin(
+    mock_prisma_client: MagicMock, path: str, user_role: LitellmUserRoles
+) -> None:
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="another-customer", alias="private alias", blocked=False)
+    )
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="caller", user_role=user_role)
+    try:
+        response: Final = client.get(path, params={"end_user_id": "another-customer"})
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 401, response.text
+    assert "private alias" not in response.text, response.text
+
+
 def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     """
     Test that delete_end_user raises a 404 ProxyException when user_ids do not exist.
