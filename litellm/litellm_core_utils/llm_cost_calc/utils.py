@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
+from typing import Final, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import Buffer, ReadOnly
@@ -25,7 +25,6 @@ from litellm.types.utils import (
     DataResidency,
     ImageResponse,
     ModelInfo,
-    ModelInfoBase,
     PassthroughCallTypes,
     PromptTokensDetailsWrapper,
     ServiceTier,
@@ -184,23 +183,6 @@ def get_billable_input_tokens(usage: Usage) -> int:
     """
     details: Final = parse_prompt_tokens_details(usage)
     return usage.prompt_tokens - details["cache_hit_tokens"]
-
-
-def select_cost_metric_for_model(
-    model_info: ModelInfoBase,
-) -> Literal["cost_per_character", "cost_per_token"]:
-    """
-    Select 'cost_per_character' if model_info has 'input_cost_per_character'
-    Select 'cost_per_token' if model_info has 'input_cost_per_token'
-    """
-    if model_info.get("input_cost_per_character") is not None:
-        return "cost_per_character"
-    elif model_info.get("input_cost_per_token") is not None:
-        return "cost_per_token"
-    else:
-        raise ValueError(
-            f"Model {model_info['key']} does not have 'input_cost_per_character' or 'input_cost_per_token'"
-        )
 
 
 def generic_cost_per_character(

@@ -143,24 +143,28 @@ def _vertex_ai_lyria_model_key(model: str) -> str:
     return model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
 
 
-def _vertex_ai_lyria_generation_cost(model_info: VertexAILyriaModelInfo | None) -> float | None:
-    return None if model_info is None else model_info.get("output_cost_per_image")
-
-
 def get_vertex_ai_lyria_model_info(model: str) -> VertexAILyriaModelInfo | None:
     model_key: Final = _vertex_ai_lyria_model_key(model)
     runtime_model_info: Final = _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
     return runtime_model_info or _bundled_vertex_ai_lyria_model_infos().get(model_key)
 
 
-def get_vertex_ai_lyria_generation_cost(model: str) -> float | None:
+def get_vertex_ai_lyria_generation_cost(model: str, generations: int = 1) -> float | None:
+    """The cost of ``generations`` Lyria generations, ``None`` when neither the runtime nor the bundled row prices
+    one."""
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import SpeechDocument, price_units
+    from litellm.rust_bridge._native import NativeReceipt
+
     model_key: Final = _vertex_ai_lyria_model_key(model)
-    runtime_cost: Final = _vertex_ai_lyria_generation_cost(
-        _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    rows: Final = (
+        _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key)),
+        _bundled_vertex_ai_lyria_model_infos().get(model_key),
     )
-    if runtime_cost is not None:
-        return runtime_cost
-    return _vertex_ai_lyria_generation_cost(_bundled_vertex_ai_lyria_model_infos().get(model_key))
+    outcome: Final = price_units(
+        SpeechDocument(kind="speech", model=model_key, provider="vertex_ai", characters=None, generations=generations),
+        tuple(row for row in rows if row is not None),
+    )
+    return outcome.completion_cost if isinstance(outcome, NativeReceipt) else None
 
 
 class VertexAIError(BaseLLMException):

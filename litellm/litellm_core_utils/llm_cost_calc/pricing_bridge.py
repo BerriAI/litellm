@@ -103,7 +103,23 @@ class OcrDocument(TypedDict):
     catalog_deferred: ReadOnly[bool]
 
 
-UnitsDocument = RerankDocument | VectorStoreSearchDocument | OcrDocument
+class SpeechDocument(TypedDict):
+    kind: ReadOnly[Literal["speech"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+    characters: ReadOnly[int | None]
+    generations: ReadOnly[int | None]
+
+
+class TranscriptionDocument(TypedDict):
+    kind: ReadOnly[Literal["transcription"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+    seconds: ReadOnly[float]
+    tokens: ReadOnly[bool]
+
+
+UnitsDocument = RerankDocument | VectorStoreSearchDocument | OcrDocument | SpeechDocument | TranscriptionDocument
 
 
 @dataclass(frozen=True, slots=True)
