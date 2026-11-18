@@ -34,7 +34,7 @@ def client(
 
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
     http, _ = client()
-    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None}
+    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None, "auto_create_customers_without_app": True}
     assert http.get("/management/v1/apps/resources").json() == []
     preview: Final = http.get("/management/v1/apps/resources", params={"resource_type": "team"})
     assert preview.status_code == 200 and len(preview.json()) == 2

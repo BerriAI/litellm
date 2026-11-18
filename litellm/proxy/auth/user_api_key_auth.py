@@ -128,6 +128,11 @@ from litellm.proxy.auth.auth_utils import (
     request_dispatched_to_provider_pass_through,
     route_in_additonal_public_routes,
 )
+from litellm.proxy.auth.customer_provisioning import (
+    gated_registrars,
+    refuse_unknown_customer,
+    registration_refusal,
+)
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
     customer_identity_from_request,
@@ -3217,6 +3222,8 @@ async def _authorize_authenticated_request_checks(
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         if customer_identity is not None and not RustAuth.is_public_route(route, core.proxy_settings()):
+            refusal: Final = partial(registration_refusal, prisma_client, user_api_key_cache, user_api_key_auth_obj)
+            register_member, register_organization = gated_registrars(refusal)
             with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
                 try:
                     hierarchy: Final = await resolve_customer_hierarchy(
@@ -3235,10 +3242,13 @@ async def _authorize_authenticated_request_checks(
                         key_metadata=_KEY_METADATA_ADAPTER.validate_python(
                             user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
                         ),
+                        register=register_member,
+                        register_organization=register_organization,
                     )
                 except CustomerBudgetExceededError as error:
                     user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
                     raise
+                await refuse_unknown_customer(customer_identity, hierarchy, refusal)
                 user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
 
         app_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(

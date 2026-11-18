@@ -28381,6 +28381,11 @@ export interface components {
             alias: string;
             /** App Id */
             app_id: string;
+            /**
+             * Auto Create Customers
+             * @default true
+             */
+            auto_create_customers: boolean;
             budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
@@ -28421,6 +28426,11 @@ export interface components {
         };
         /** AppCreate */
         AppCreate: {
+            /**
+             * Auto Create Customers
+             * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
+             */
+            auto_create_customers?: boolean | null;
             budget?: components["schemas"]["Budget"] | null;
             default_customer_member_budget?: components["schemas"]["Budget"] | null;
             /** Default Tier Budget Id */
@@ -28431,6 +28441,12 @@ export interface components {
         };
         /** AppDefinition */
         AppDefinition: {
+            /**
+             * Auto Create Customers Without App
+             * @description Whether a request that belongs to no app may register a customer organization or member the proxy has never seen. When false, such a request is refused with 403.
+             * @default true
+             */
+            auto_create_customers_without_app: boolean;
             resource_type?: components["schemas"]["AppResourceType"] | null;
         };
         /** AppDurationLimit */
@@ -28511,6 +28527,11 @@ export interface components {
         };
         /** AppPatch */
         AppPatch: {
+            /**
+             * Auto Create Customers
+             * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
+             */
+            auto_create_customers?: boolean | null;
             budget?: components["schemas"]["Budget"] | null;
             default_customer_member_budget?: components["schemas"]["Budget"] | null;
             /** Default Tier Budget Id */

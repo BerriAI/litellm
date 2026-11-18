@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -99,6 +100,7 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
   const [budget, setBudget] = useState(() => appBudgetFields(app?.budget));
   const [member, setMember] = useState(() => appBudgetFields(app?.default_customer_member_budget));
   const [profile, setProfile] = useState(app?.default_tier_budget_id ?? "");
+  const [autoCreate, setAutoCreate] = useState(app?.auto_create_customers ?? true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -118,6 +120,7 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
         budget: appBudget.value,
         default_customer_member_budget: memberBudget.value,
         default_tier_budget_id: profile || null,
+        auto_create_customers: autoCreate,
       };
       if (app)
         await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body });
@@ -152,6 +155,13 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
       <div className="grid gap-6 lg:grid-cols-2">
         <AppBudgetEditor title={t("apps.appBudget")} id="app-budget" fields={budget} onChange={setBudget} />
         <AppBudgetEditor title={t("apps.memberDefault")} id="app-member" fields={member} onChange={setMember} />
+      </div>
+      <div className="space-y-1.5 border-t pt-4">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <Checkbox checked={autoCreate} onCheckedChange={(checked) => setAutoCreate(checked === true)} />
+          {t("apps.autoCreateCustomers")}
+        </label>
+        <p className="text-xs text-muted-foreground">{t("apps.autoCreateCustomersHint")}</p>
       </div>
       {error && (
         <p role="alert" className="text-sm text-destructive">
