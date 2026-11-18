@@ -2,7 +2,10 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
+
+from pydantic import JsonValue
 
 from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
@@ -7576,6 +7579,422 @@ CLAUDE_SONNET_5_SLASH_ALIAS_STREAM: Final = CLAUDE_SONNET_5_STREAM.model_copy(
     update={"name": "claude-sonnet-5-slash_alias_stream", "alias": "anthropic/claude-sonnet-5-$MARKER"}
 )
 
+_PROVIDER_CACHEABLE_PROMPT_5M: Final = (
+    "The pricing harness keeps one stable instruction block so the provider can cache it. " * 220
+)
+_PROVIDER_CACHEABLE_PROMPT_1H: Final = (
+    "The pricing harness keeps one stable one hour instruction block so the provider can cache it. " * 220
+)
+
+
+def _prompt_cache_request(prompt: str, cache_control: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "model": "$MODEL",
+        "messages": [
+            {"role": "system", "content": [{"type": "text", "text": prompt, "cache_control": dict(cache_control)}]},
+            {"role": "user", "content": "Reply with OK."},
+        ],
+        "stream": False,
+    }
+
+
+_PROMPT_CACHE_5M_REQUEST: Final = _prompt_cache_request(_PROVIDER_CACHEABLE_PROMPT_5M, {"type": "ephemeral"})
+_PROMPT_CACHE_1H_REQUEST: Final = _prompt_cache_request(
+    _PROVIDER_CACHEABLE_PROMPT_1H, {"type": "ephemeral", "ttl": "1h"}
+)
+_THINKING_ADAPTIVE_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "messages": [
+        {
+            "role": "user",
+            "content": (
+                "A farmer has chickens, cows and spiders with 30 heads and 122 legs in total, and twice as many "
+                "chickens as spiders. How many cows are there? Answer with the number only."
+            ),
+        }
+    ],
+    "stream": False,
+    "thinking": {"type": "adaptive"},
+}
+
+
+def _with_real_usage(
+    base: CostTrackingTestCase,
+    shape: str,
+    request: Mapping[str, JsonValue],
+    usage: Mapping[str, JsonValue],
+    expected: ExactExpected,
+) -> CostTrackingTestCase:
+    response: Final = cast(JsonResponse, base.response)
+    scripted_usage: Final = cast(dict[str, JsonValue], response.body["usage"])
+    return base.model_copy(
+        update={
+            "name": f"{base.model}-{shape}",
+            "request": dict(request),
+            "response": response.model_copy(update={"body": {**response.body, "usage": {**scripted_usage, **usage}}}),
+            "expected": expected,
+        }
+    )
+
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.007602925,
+        input_cost=0.007580925,
+        output_cost=2.2e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.007566625,
+    ),
+)
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.00064163,
+        input_cost=0.00061963,
+        output_cost=2.2e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_read_cost=0.00060533,
+    ),
+)
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 40,
+        "output_tokens_details": {"thinking_tokens": 36},
+    },
+    ExactExpected(
+        spend=0.0137929,
+        input_cost=0.0135729,
+        output_cost=0.00022,
+        prompt_tokens=6176,
+        completion_tokens=40,
+        cache_creation_cost=0.0135586,
+    ),
+)
+CLAUDE_HAIKU_5_5_THINKING_ADAPTIVE: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_THINKING,
+    "thinking_adaptive",
+    _THINKING_ADAPTIVE_REQUEST,
+    {
+        "input_tokens": 66,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 887,
+        "output_tokens_details": {"thinking_tokens": 857},
+    },
+    ExactExpected(spend=0.0049511, input_cost=7.26e-05, output_cost=0.0048785, prompt_tokens=66, completion_tokens=887),
+)
+CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.022825275,
+        input_cost=0.022742775,
+        output_cost=8.25e-05,
+        prompt_tokens=5516,
+        completion_tokens=5,
+        cache_creation_cost=0.022699875,
+    ),
+)
+CLAUDE_SONNET_5_5_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_SONNET_5_5_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.00194139,
+        input_cost=0.00185889,
+        output_cost=8.25e-05,
+        prompt_tokens=5516,
+        completion_tokens=5,
+        cache_read_cost=0.00181599,
+    ),
+)
+CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0408012,
+        input_cost=0.0407187,
+        output_cost=8.25e-05,
+        prompt_tokens=6176,
+        completion_tokens=5,
+        cache_creation_cost=0.0406758,
+    ),
+)
+CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.027647,
+        input_cost=0.027567,
+        output_cost=8e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.027515,
+    ),
+)
+CLAUDE_OPUS_5_5_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0012326,
+        input_cost=0.0011526,
+        output_cost=8e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_read_cost=0.0011006,
+    ),
+)
+CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.049436,
+        input_cost=0.049356,
+        output_cost=8e-05,
+        prompt_tokens=6176,
+        completion_tokens=4,
+        cache_creation_cost=0.049304,
+    ),
+)
+CLAUDE_OPUS_5_5_THINKING_ADAPTIVE: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_THINKING,
+    "thinking_adaptive",
+    _THINKING_ADAPTIVE_REQUEST,
+    {
+        "input_tokens": 66,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 503,
+        "output_tokens_details": {"thinking_tokens": 356},
+    },
+    ExactExpected(spend=0.010324, input_cost=0.000264, output_cost=0.01006, prompt_tokens=66, completion_tokens=503),
+)
+CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.110588,
+        input_cost=0.110268,
+        output_cost=0.00032,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.11006,
+    ),
+)
+CLAUDE_FABLE_5_1_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_FABLE_5_1_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0094128,
+        input_cost=0.0090128,
+        output_cost=0.0004,
+        prompt_tokens=5516,
+        completion_tokens=5,
+        cache_read_cost=0.0088048,
+    ),
+)
+CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.197744,
+        input_cost=0.197424,
+        output_cost=0.00032,
+        prompt_tokens=6176,
+        completion_tokens=4,
+        cache_creation_cost=0.197216,
+    ),
+)
+CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0608234,
+        input_cost=0.0606474,
+        output_cost=0.000176,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.060533,
+    ),
+)
+CLAUDE_FABLE_5_2_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.00150106,
+        input_cost=0.00132506,
+        output_cost=0.000176,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_read_cost=0.00121066,
+    ),
+)
+CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.1087592,
+        input_cost=0.1085832,
+        output_cost=0.000176,
+        prompt_tokens=6176,
+        completion_tokens=4,
+        cache_creation_cost=0.1084688,
+    ),
+)
+CLAUDE_FABLE_5_2_THINKING_ADAPTIVE: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_THINKING,
+    "thinking_adaptive",
+    _THINKING_ADAPTIVE_REQUEST,
+    {
+        "input_tokens": 66,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 721,
+        "output_tokens_details": {"thinking_tokens": 541},
+    },
+    ExactExpected(spend=0.0323048, input_cost=0.0005808, output_cost=0.031724, prompt_tokens=66, completion_tokens=721),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_SONNET_5_GENERALIZED_ALIAS,
     CLAUDE_SONNET_5_GENERALIZED_ALIAS_STREAM,
@@ -7725,6 +8144,79 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_OPUS_5_5_THINKING,
     CLAUDE_OPUS_5_5_UPSTREAM_404_ZERO_SPEND,
     CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_READ,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_HAIKU_5_5_THINKING_ADAPTIVE,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_READ,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_READ,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_THINKING_ADAPTIVE,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_THINKING_ADAPTIVE,
+)
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_STREAM,
+    CLAUDE_HAIKU_5_5_TOOL_CALL,
+    CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_SONNET_5_5_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_STREAM,
+    CLAUDE_SONNET_5_5_TOOL_CALL,
+    CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_OPUS_5_5_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_STREAM,
+    CLAUDE_OPUS_5_5_TOOL_CALL,
+    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_STREAM,
+    CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_FABLE_5_2_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_STREAM,
+    CLAUDE_FABLE_5_2_TOOL_CALL,
+    CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_READ,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_HAIKU_5_5_THINKING_ADAPTIVE,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_READ,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_READ,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_THINKING_ADAPTIVE,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_THINKING_ADAPTIVE,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (

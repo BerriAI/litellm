@@ -203,14 +203,7 @@ describe("CustomerHierarchySettings", () => {
       />,
     );
     expect(
-      screen.getByText(
-        "Blank limits inherit from the selected budget template. Without a template, blank limits add no restriction. Zero is a valid limit.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "An active override changes only the fields you set. Other limits continue to come from the selected budget template.",
-      ),
+      screen.getByText("Blank limits inherit from the budget template. Without a template, blank means no limit."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Leave a limit blank for no limit. Zero is a valid limit.")).not.toBeInTheDocument();
   });
@@ -385,7 +378,7 @@ describe("CustomerHierarchySettings", () => {
         />
       </CustomersLayout>,
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent("Free customer portal limit reached");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Customer Management free tier limit reached");
     fireEvent.click(screen.getByRole("button", { name: "Delete customer member" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete customer member" });
     fireEvent.change(within(dialog).getByPlaceholderText("member-1"), { target: { value: "member-1" } });

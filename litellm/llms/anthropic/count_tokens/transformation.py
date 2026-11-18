@@ -395,13 +395,14 @@ def anthropic_fields_for_chat_tool_use(
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
     lifts_system: Final = messages_are_converse_turns and any(map(_is_system_role, messages))
-    if (
+    counts_untranslated: Final = (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(partial(_needs_chat_translation, translate_contentless_turns), messages))
         and (messages_are_converse_turns or not _counts_blank_text_as_chat_sends_it(messages))
         and not (lifts_system and all(map(_is_system_role, messages)))
-    ):
+    )
+    if counts_untranslated:
         return _fields_with_system_lifted(messages, system, tools) if lifts_system else None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)
     if untranslatable is not None:

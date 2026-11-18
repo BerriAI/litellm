@@ -368,7 +368,7 @@ pub struct AttemptError {
     /// so the core records nothing.
     pub recorded: bool,
     /// The exception names its provider (`llm_provider` is set), which marks a provider's own
-    /// 400 for `fallback_on_unsupported_params`.
+    /// bad request for `fallback_on_unsupported_params`.
     pub names_provider: bool,
     /// An agentic follow-up call failed after the first call was served
     /// (`is_agentic_followup_failure`): never retried, since a retry reruns every paid round. The
@@ -422,6 +422,13 @@ impl AttemptError {
     /// `isinstance(error, <class named name>)`.
     pub fn is_a(&self, name: &str) -> bool {
         self.class_names().contains(&name)
+    }
+
+    /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, and a
+    /// request alone over every deployment's tpm limit (`RequestOverDeploymentTpmError`) stays
+    /// over it. Its fallbacks still run.
+    pub fn ends_retries(&self) -> bool {
+        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError")
     }
 
     #[must_use]

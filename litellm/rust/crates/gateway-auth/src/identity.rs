@@ -1,7 +1,5 @@
 use std::{sync::Arc, time::SystemTime};
 
-use sha2::{Digest, Sha256};
-
 use crate::authorization::Permissions;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,7 +39,6 @@ impl Principal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthenticationMethod {
     MasterKey,
-    Session,
     External(String),
 }
 
@@ -99,23 +96,6 @@ impl AuthenticatedCaller {
     }
     pub fn restrictions(&self) -> &Permissions {
         &self.restrictions
-    }
-
-    pub fn session_owner(&self) -> String {
-        let fields = [
-            self.verified_principal.authority(),
-            self.verified_principal.subject(),
-            self.principal.authority(),
-            self.principal.subject(),
-            self.authentication.verifier.as_str(),
-            self.authentication.credential_id.as_str(),
-        ];
-        let digest = fields.into_iter().fold(Sha256::new(), |mut digest, field| {
-            digest.update((field.len() as u64).to_be_bytes());
-            digest.update(field.as_bytes());
-            digest
-        });
-        format!("{:x}", digest.finalize())
     }
 }
 

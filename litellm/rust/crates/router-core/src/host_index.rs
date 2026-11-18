@@ -14,6 +14,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use litellm_python_compat::{json::type_name, truthy::json_truthy};
+
 /// One wildcard pattern router (`PatternMatchRouter`): regex to the deployments it routes to,
 /// most specific pattern first.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -184,8 +186,8 @@ impl HostIndexes {
         }
         // `_update_team_model_index`: a truthy team id and public name.
         if let (Some(team_id), Some(public)) = (team_id, public)
-            && truthy(team_id)
-            && truthy(public)
+            && json_truthy(team_id)
+            && json_truthy(public)
         {
             let (team, public) = (python_str(team_id), python_str(public));
             if !self.team_public_model_names.contains(&public) {
@@ -412,14 +414,14 @@ impl PatternRouter {
 }
 
 /// `_cache_flags_left_to_the_catalog`: the `model_info` flags a wildcard deployment does not speak
-/// for on the models it matches. An azure_ai wildcard's `supports_prompt_cache_breakpoint` does.
+/// for on the models it matches. An azure_ai wildcard's OpenAI prompt cache breakpoint flags do.
 /// `inferred_provider` names `azure_ai` only for a model carrying that prefix.
 pub(crate) fn cache_flags_left_to_the_catalog(
     params: &Map<String, Value>,
 ) -> &'static [&'static str] {
     let provider = params
         .get("custom_llm_provider")
-        .filter(|provider| truthy(provider))
+        .filter(|provider| json_truthy(provider))
         .and_then(Value::as_str)
         .or_else(|| {
             params
@@ -433,6 +435,8 @@ pub(crate) fn cache_flags_left_to_the_catalog(
     } else {
         &[
             "supports_prompt_cache_breakpoint",
+            "supports_openai_prompt_cache_breakpoint",
+            "supports_bedrock_converse_cache_point",
             "supports_prompt_caching",
         ]
     }
@@ -549,18 +553,6 @@ fn push_position(held: &mut Value, position: &Value) {
     }
 }
 
-/// Python's truthiness for a JSON value.
-pub(crate) fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64() != Some(0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(items) => !items.is_empty(),
-    }
-}
-
 /// Python's `str()` for an id or team id.
 pub(crate) fn python_str(value: &Value) -> String {
     match value {
@@ -569,18 +561,6 @@ pub(crate) fn python_str(value: &Value) -> String {
         Value::Bool(false) => "False".to_owned(),
         Value::Null => "None".to_owned(),
         other => other.to_string(),
-    }
-}
-
-fn type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
     }
 }
 
@@ -689,11 +669,23 @@ mod tests {
     )]
     #[case::azure_ai_keeps_the_breakpoint_flag(
         json!({"model": "azure_ai/*"}),
-        json!({"id": "w", "keep": 1, "supports_prompt_cache_breakpoint": true}),
+        json!({
+            "id": "w",
+            "keep": 1,
+            "supports_prompt_cache_breakpoint": true,
+            "supports_openai_prompt_cache_breakpoint": true,
+            "supports_bedrock_converse_cache_point": true,
+        }),
     )]
     #[case::azure_ai_named_by_custom_llm_provider(
         json!({"model": "*", "custom_llm_provider": "azure_ai"}),
-        json!({"id": "w", "keep": 1, "supports_prompt_cache_breakpoint": true}),
+        json!({
+            "id": "w",
+            "keep": 1,
+            "supports_prompt_cache_breakpoint": true,
+            "supports_openai_prompt_cache_breakpoint": true,
+            "supports_bedrock_converse_cache_point": true,
+        }),
     )]
     #[case::a_fixed_model_speaks_for_itself(
         json!({"model": "openai/gpt-4o"}),
@@ -701,6 +693,8 @@ mod tests {
             "id": "w",
             "keep": 1,
             "supports_prompt_cache_breakpoint": true,
+            "supports_openai_prompt_cache_breakpoint": true,
+            "supports_bedrock_converse_cache_point": true,
             "supports_prompt_caching": true,
         }),
     )]
@@ -717,6 +711,8 @@ mod tests {
                     "id": "w",
                     "keep": 1,
                     "supports_prompt_cache_breakpoint": true,
+                    "supports_openai_prompt_cache_breakpoint": true,
+                    "supports_bedrock_converse_cache_point": true,
                     "supports_prompt_caching": true,
                 },
             }),

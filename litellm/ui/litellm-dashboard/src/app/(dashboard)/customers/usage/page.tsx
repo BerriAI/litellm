@@ -5,10 +5,9 @@ import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overv
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { uiHref } from "@/utils/uiHref";
 import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
-import CustomerHierarchyNavigation, { customerHierarchyHref } from "../_components/CustomerHierarchyNavigation";
+import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
 import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
@@ -27,6 +26,7 @@ const TOP_DIMENSION_LABELS = {
 
 export default function CustomerHierarchyUsagePage() {
   const { t } = useTranslation();
+  const { customerHierarchyHref, customersHref } = useCustomerHierarchyLinks();
   const {
     params,
     scope,
@@ -57,7 +57,7 @@ export default function CustomerHierarchyUsagePage() {
       <div className="px-8 py-12">
         <h1 className="text-xl font-semibold">{t("customerPortal.analytics.title")}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{t("customerPortal.analytics.selectOrganization")}</p>
-        <a className="mt-5 inline-block text-sm font-medium text-primary hover:underline" href={uiHref("customers")}>
+        <a className="mt-5 inline-block text-sm font-medium text-primary hover:underline" href={customersHref}>
           {t("customerPortal.analytics.backToCustomers")}
         </a>
       </div>
@@ -65,7 +65,7 @@ export default function CustomerHierarchyUsagePage() {
 
   return (
     <main
-      className="mx-auto w-full max-w-[1600px] space-y-7 px-5 py-6 sm:px-8"
+      className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6"
       aria-label={t("customerPortal.analytics.title")}
     >
       <CustomerUsageHeader
@@ -137,7 +137,6 @@ export default function CustomerHierarchyUsagePage() {
               {t("customerPortal.analytics.allOrganizationUsage")}
             </Button>
           )}
-          <p className="text-[11px] leading-5 text-muted-foreground">{t("customerPortal.analytics.freshness")}</p>
         </>
       )}
     </main>
