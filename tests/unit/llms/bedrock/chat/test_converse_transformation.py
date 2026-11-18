@@ -5699,6 +5699,8 @@ def test_openai_gpt_native_json_schema_sets_text_format_strict(set_native_struct
     ("model", "base_model", "expected_text"),
     [
         ("team-model", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("openai-team-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("amazon-prod-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
         ("team-model", "bedrock/us.anthropic.claude-sonnet-4-6", None),
         ("us.amazon.nova-2-lite-v1:0", "bedrock/global.openai.gpt-6-luna", None),
     ],

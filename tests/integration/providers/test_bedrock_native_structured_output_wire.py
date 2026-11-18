@@ -1404,15 +1404,16 @@ def _custom_named_profile_deployment(
     )
 
 
+@pytest.mark.parametrize("name_prefix", ["team-luna", "openai-team-luna"])
 @pytest.mark.parametrize("base_model_source", ["litellm_params", "model_info"])
 @pytest.mark.parametrize("endpoint", ["chat", "responses"])
 def test_a_custom_named_gpt_deployment_behind_a_profile_sends_text_format_strict(
-    gateway: Gateway, endpoint: str, base_model_source: str
+    gateway: Gateway, endpoint: str, base_model_source: str, name_prefix: str
 ) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
         model: Final = _custom_named_profile_deployment(
-            scenario, wire, f"team-luna-{marker_hex}", _GPT_BASE_MODEL, base_model_source
+            scenario, wire, f"{name_prefix}-{marker_hex}", _GPT_BASE_MODEL, base_model_source
         )
         assert _structured_answer(gateway, endpoint, model, marker) == _payload(marker_hex)
         request, body = _one_call(wire, marker_hex)
