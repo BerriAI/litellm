@@ -249,3 +249,168 @@ async def test_config_only_same_provider_search_resolution(
         assert isinstance(getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None), VectorStorePassthroughPlan) == (
             expected == "plan"
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation,provider,method,endpoint,expected",
+    [
+        ("milvus", "milvus", "POST", "v2/vectordb/entities/search", "plan"),
+        ("milvus", "milvus", "POST", "v2/vectordb/entities/insert", "none"),
+        ("opensearch", "opensearch", "GET", "alias/_search", "plan"),
+        ("opensearch", "opensearch", "POST", "alias/_bulk", "none"),
+        (
+            "vertex_ai",
+            "vertex_ai/search_api",
+            "POST",
+            "v1/projects/project/locations/global/collections/default_collection/dataStores/store/servingConfigs/default:search",
+            "plan",
+        ),
+        (
+            "vertex_ai",
+            "vertex_ai",
+            "POST",
+            "v1/projects/project/locations/global/collections/default_collection/dataStores/store/servingConfigs/default:search",
+            "error",
+        ),
+        (
+            "vertex_ai",
+            "vertex_ai/search_api",
+            "POST",
+            "v1/projects/project/locations/global/collections/default_collection/engines/engine/servingConfigs/default:search",
+            "none",
+        ),
+    ],
+)
+async def test_native_plan_only_accepts_search_with_compatible_api(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: NativeSearchOperation,
+    provider: str,
+    method: str,
+    endpoint: str,
+    expected: str,
+) -> None:
+    primary: Final = LiteLLM_ManagedVectorStore(
+        is_config=True,
+        vector_store_id="primary",
+        custom_llm_provider=provider,
+        litellm_params={"fallbacks": ["backup"]},
+    )
+    backup: Final = LiteLLM_ManagedVectorStore(is_config=True, vector_store_id="backup", custom_llm_provider=provider)
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry([primary, backup]))
+    request: Final = Request({"type": "http", "method": method, "path": "/" + endpoint, "headers": []})
+    if expected == "error":
+        with pytest.raises(HTTPException, match="search_api data stores"):
+            await set_passthrough_fallback_plan(
+                request,
+                primary,
+                UserAPIKeyAuth(user_role="proxy_admin"),
+                operation=operation,
+                endpoint=endpoint,
+                primary_resource_id="physical-index",
+            )
+    else:
+        await set_passthrough_fallback_plan(
+            request,
+            primary,
+            UserAPIKeyAuth(user_role="proxy_admin"),
+            operation=operation,
+            endpoint=endpoint,
+            primary_resource_id="physical-index",
+        )
+        assert isinstance(getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None), VectorStorePassthroughPlan) == (
+            expected == "plan"
+        )
+
+
+@pytest.mark.asyncio
+async def test_config_store_without_fallbacks_keeps_ordinary_sender() -> None:
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/azure/indexes/index/docs/search", "headers": []}
+    )
+    await set_passthrough_fallback_plan(
+        request,
+        LiteLLM_ManagedVectorStore(is_config=True, vector_store_id="ordinary", custom_llm_provider="azure_ai"),
+        UserAPIKeyAuth(user_role="proxy_admin"),
+        operation="azure_ai",
+        endpoint="indexes/index/docs/search",
+        primary_resource_id="index",
+    )
+    assert not hasattr(request.state, PASSTHROUGH_FALLBACK_STATE)
+
+
+@pytest.mark.asyncio
+async def test_mid_body_disconnect_closes_primary_and_sends_modified_body_to_backup() -> None:
+    from collections.abc import AsyncIterator
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+
+    class DroppedBody(httpx.AsyncByteStream):
+        closed: bool = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'{"value":['
+            raise httpx.RemoteProtocolError("connection dropped mid-response")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    dropped: Final = DroppedBody()
+    observed: Final[list[httpx.Request]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        if request.url.host == "primary.example":
+            return httpx.Response(200, stream=dropped)
+        return httpx.Response(200, json={"value": ["backup result"]})
+
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/azure/indexes/stream-docs/docs/search", "headers": []}
+    )
+    setattr(request.state, PASSTHROUGH_FALLBACK_STATE, plan_for("azure_ai", "indexes/stream-docs/docs/search"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        response: Final = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+            request=request,
+            async_client=client,
+            url=httpx.URL("https://primary.example/indexes/stream-docs/docs/search"),
+            headers={},
+            _parsed_body={"search": "changed by hook"},
+        )
+    assert response.json() == {"value": ["backup result"]}
+    assert response.headers["x-litellm-vector-store-id"] == "backup"
+    assert dropped.closed
+    assert [json.loads(item.content) for item in observed] == [{"search": "changed by hook"}] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["credentials", "foreign_index"])
+async def test_invalid_target_preparation_is_terminal_without_sending(invalid: str) -> None:
+    observed: Final[list[httpx.Request]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200)
+
+    original: Final = plan_for("azure_ai" if invalid == "credentials" else "opensearch", "index/_search")
+    primary: Final = original.fallback_plan.targets[0]
+    plan: Final = replace(
+        original,
+        fallback_plan=replace(
+            original.fallback_plan,
+            targets=(
+                replace(primary, params={key: value for key, value in primary.params.items() if key != "api_key"}),
+                original.fallback_plan.targets[1],
+            ),
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        with pytest.raises((ValueError, HTTPException)):
+            await send_with_vector_store_fallbacks(
+                client,
+                client.build_request(
+                    "POST",
+                    "https://primary.example/index/_search",
+                    json={"query": {"terms": {"user": {"index": "foreign", "id": "1", "path": "user"}}}},
+                ),
+                plan,
+            )
+    assert observed == []

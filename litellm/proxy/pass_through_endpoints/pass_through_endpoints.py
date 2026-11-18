@@ -2833,7 +2833,10 @@ def create_pass_through_route(
             elif isinstance(custom_body_data, dict):
                 final_custom_body = custom_body_data
 
-            is_stream: Final = bool(is_streaming_request or stream)
+            native_plan: Final[object] = getattr(request.state, PASSTHROUGH_FALLBACK_STATE, None)
+            is_stream: Final = bool(is_streaming_request or stream) and not isinstance(
+                native_plan, VectorStorePassthroughPlan
+            )
 
             async def _relay() -> Response:
                 try:

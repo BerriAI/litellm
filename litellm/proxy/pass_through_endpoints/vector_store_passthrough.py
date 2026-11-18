@@ -197,12 +197,12 @@ async def send_with_vector_store_fallbacks(
             return Failed(target, HTTPException(prepared.status_code, prepared.message), False)
         try:
             response: Final = await client.send(prepared, stream=True, follow_redirects=False)
-            if response.is_success:
-                return Served(target, response)
             try:
                 await response.aread()
             finally:
                 await response.aclose()
+            if response.is_success:
+                return Served(target, response)
             return Failed(target, None, classify_status(response.status_code), response)
         except Exception as error:  # noqa: BLE001  # classify provider transport failures for the shared executor
             return classify_error(target, error)

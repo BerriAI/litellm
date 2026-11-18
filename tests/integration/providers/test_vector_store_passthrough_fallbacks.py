@@ -1,15 +1,16 @@
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
 import pytest
 import yaml
+from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, gateway_from_environment
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Wire, wire_server
+from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 PROVIDERS: Final = ("azure_ai", "milvus", "opensearch")
 
@@ -18,7 +19,7 @@ PROVIDERS: Final = ("azure_ai", "milvus", "opensearch")
 def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Wire]]:
     directory: Final = tmp_path_factory.mktemp("native-search-fallbacks")
 
-    def upstream(request):
+    def upstream(request: Request) -> Reply:
         primary: Final = "/primary/" in request.target or b"all-fail" in request.body
         return Reply(status=503 if primary else 200, body=b'{"native_results":["document"]}')
 
@@ -28,7 +29,7 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
                 "POST",
                 "/v1/indexes",
                 {
-                    "index_name": f"fallback-{provider}",
+                    "index_name": f"stream-fallback-{provider}",
                     "litellm_params": {
                         "vector_store_name": f"primary-{provider}",
                         "vector_store_index": "physical-index",
@@ -108,19 +109,19 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     [
         (
             "azure_ai",
-            "/azure/indexes/fallback-azure_ai/docs/search?api-version=2024-07-01",
+            "/azure/indexes/stream-fallback-azure_ai/docs/search?api-version=2024-07-01",
             {"search": "hello"},
-            "/indexes/fallback-azure_ai/docs/search?api-version=2024-07-01",
+            "/indexes/stream-fallback-azure_ai/docs/search?api-version=2024-07-01",
         ),
         (
             "milvus",
             "/milvus/v2/vectordb/entities/search",
-            {"collectionName": "fallback-milvus", "data": [[1.0, 0.0]]},
+            {"collectionName": "stream-fallback-milvus", "data": [[1.0, 0.0]]},
             "/v2/vectordb/entities/search",
         ),
         (
             "opensearch",
-            "/opensearch/fallback-opensearch/_search?size=3",
+            "/opensearch/stream-fallback-opensearch/_search?size=3",
             {"query": {"match_all": {}}},
             "/physical-index/_search?size=3",
         ),
@@ -130,7 +131,7 @@ def test_native_search_reuses_alias_and_returns_backup_body(
     native_search_gateway: tuple[Gateway, Wire],
     provider: str,
     path: str,
-    body,
+    body: Mapping[str, JsonValue],
     upstream_path: str,
 ) -> None:
     gateway, wire = native_search_gateway
@@ -156,7 +157,7 @@ def test_native_write_does_not_fail_over(native_search_gateway: tuple[Gateway, W
     gateway, wire = native_search_gateway
     wire.drain()
     response: Final = gateway.request(
-        "POST", "/milvus/v2/vectordb/entities/insert", {"collectionName": "fallback-milvus", "data": [{"id": 1}]}
+        "POST", "/milvus/v2/vectordb/entities/insert", {"collectionName": "stream-fallback-milvus", "data": [{"id": 1}]}
     )
     assert response.status_code == 503, response.text
     assert [request.target for request in wire.drain()] == ["/primary/v2/vectordb/entities/insert"]
@@ -192,7 +193,7 @@ def test_all_cooled_native_stores_return_retry_after_without_upstream_calls(
     native_search_gateway: tuple[Gateway, Wire],
 ) -> None:
     gateway, wire = native_search_gateway
-    path: Final = "/azure/indexes/fallback-azure_ai/docs/search"
+    path: Final = "/azure/indexes/stream-fallback-azure_ai/docs/search"
     first: Final = gateway.request("POST", path, {"search": "all-fail"})
     assert first.status_code == 503, first.text
     wire.drain()
