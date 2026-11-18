@@ -66843,7 +66843,6 @@
         "supports_speed": true
     },
     "claude-mythos-preview": {
-        "deprecation_date": "2026-06-09",
         "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -73877,6 +73876,22 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "source": "https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20'usgovvirginia'%20and%20contains(productName,'OpenAI')"
+    },
+    "azure/us-gov/gpt-4o-mini": {
+        "cache_read_input_token_cost": 1.04e-07,
+        "input_cost_per_token": 2.07e-07,
+        "output_cost_per_token": 8.25e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20'usgovvirginia'%20and%20contains(meterName,'gpt%204o%20mini')"
     },
     "azure/us-gov/gpt-5.6-luna": {
         "cache_creation_input_token_cost": 3.4375e-07,
