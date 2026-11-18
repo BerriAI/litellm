@@ -32,6 +32,8 @@ import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
+from litellm.proxy.db.connection_budget import RUST_READER_CONNECTIONS_ENV_VAR, RUST_WRITER_CONNECTIONS_ENV_VAR
+from litellm.proxy.db.db_url_settings import PRISMA_APPLICATION_NAME
 from litellm.proxy.proxy_cli import CliDependencies, ProxyInitializationHelpers, run_server
 from litellm.proxy.rust_forward.server import Listener, Server
 from litellm.proxy.server_listener import AssignedPort, InheritedFd
@@ -1035,7 +1037,8 @@ class TestProxyInitializationHelpers:
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_append_query_params.assert_called()
             appended_params = mock_append_query_params.call_args.args[1]
-            assert appended_params["connection_limit"] == 5
+            # The writer's limit of 5 is split, 2 of them going to the Rust pool beside Prisma
+            assert appended_params["connection_limit"] == 3
             assert appended_params["pool_timeout"] == expected_timeout
 
     def test_build_db_connection_url_params_defaults(self):
@@ -2373,7 +2376,9 @@ class TestQueryEngineReaperWiring:
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "NUM_WORKERS")}
+        clean_env: Final = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "NUM_WORKERS")
+        }
         if env:
             clean_env.update(env)
         with (
@@ -3471,7 +3476,13 @@ class TestPostgresStatementTimeoutOptions:
         return _run_server_and_capture_urls(config_path, database_url=database_url)["DATABASE_URL"]
 
 
-_CAPTURED_DB_ENV_VARS = ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA")
+_CAPTURED_DB_ENV_VARS = (
+    "DATABASE_URL",
+    "DIRECT_URL",
+    "DATABASE_URL_READ_REPLICA",
+    RUST_WRITER_CONNECTIONS_ENV_VAR,
+    RUST_READER_CONNECTIONS_ENV_VAR,
+)
 
 
 def _run_server_and_capture_urls(
@@ -3522,46 +3533,51 @@ _CAPTURED_URLS: Final = TypeAdapter(dict[str, str])
 
 
 @pytest.mark.parametrize(
-    "general_settings, database_url, expected_limit, expected_name",
+    "general_settings, database_url, expected_limit, expected_name, configured_limit, expected_rust",
     [
-        pytest.param({}, "postgresql://t:t@localhost:5432/t", "10", None, id="default_limit"),
+        pytest.param(
+            {}, "postgresql://t:t@localhost:5432/t", "8", PRISMA_APPLICATION_NAME, "10", "2", id="default_limit"
+        ),
         pytest.param(
             {"database_connection_pool_limit": 30},
             "postgresql://t:t@localhost:5432/t?application_name=ops",
-            "30",
+            "28",
             "ops",
+            "30",
+            "2",
             id="configured_limit_and_operator_name",
         ),
         pytest.param(
             {"database_extra_connection_params": {"connection_limit": 5}},
             "postgresql://t:t@localhost:5432/t",
+            "3",
+            PRISMA_APPLICATION_NAME,
             "5",
-            None,
+            "2",
             id="extra_params_limit",
         ),
         pytest.param(
-            {"database_connection_pool_limit": 0},
+            {"database_connection_pool_limit": 2},
             "postgresql://t:t@localhost:5432/t",
-            "0",
-            None,
-            id="zero_limit_prisma_accepts",
-        ),
-        pytest.param(
-            {"database_extra_connection_params": {"connection_limit": "abc"}},
-            "postgresql://t:t@localhost:5432/t",
-            "abc",
-            None,
-            id="non_integer_limit_left_to_prisma",
+            "1",
+            PRISMA_APPLICATION_NAME,
+            "2",
+            "1",
+            id="two_connections_split_one_each",
         ),
     ],
 )
-def test_prisma_keeps_the_whole_connection_limit_and_its_name(
+def test_prisma_writer_gives_the_rust_pool_its_share_and_keeps_its_name(
     tmp_path: Path,
     general_settings: dict[str, object],
     database_url: str,
     expected_limit: str,
     expected_name: str | None,
+    configured_limit: str,
+    expected_rust: str,
 ) -> None:
+    """The writer limit loses the Rust pool's share, which the worker reads back, and gets Prisma's
+    application_name unless the operator named it. DIRECT_URL (migrations) keeps the whole configured limit."""
     config_path: Final = tmp_path / "config.yaml"
     config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
 
@@ -3577,7 +3593,31 @@ def test_prisma_keeps_the_whole_connection_limit_and_its_name(
         [expected_limit],
         None if expected_name is None else [expected_name],
     )
-    assert direct["connection_limit"] == [expected_limit]
+    assert direct["connection_limit"] == [configured_limit]
+    assert captured[RUST_WRITER_CONNECTIONS_ENV_VAR] == expected_rust
+    assert RUST_READER_CONNECTIONS_ENV_VAR not in captured
+
+
+@pytest.mark.parametrize(
+    "general_settings",
+    [
+        pytest.param({"database_connection_pool_limit": 1}, id="single_connection"),
+        pytest.param({"database_connection_pool_limit": 0}, id="zero"),
+        pytest.param({"database_extra_connection_params": {"connection_limit": "abc"}}, id="not_a_number"),
+        pytest.param({"database_connection_pool_limit": 10.5}, id="fraction"),
+    ],
+)
+def test_a_writer_limit_with_no_room_for_the_rust_pool_refuses_to_start(
+    tmp_path: Path, general_settings: dict[str, object], capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+
+    with pytest.raises(SystemExit) as exit_info:
+        _run_server_and_capture_urls(str(config_path))
+
+    assert exit_info.value.code == 1
+    assert "DATABASE_URL connection_limit" in capsys.readouterr().err
 
 
 class TestReadReplicaConnectionParams:
@@ -3613,8 +3653,9 @@ class TestReadReplicaConnectionParams:
         )
 
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
-        assert query["connection_limit"] == ["3"]
-        assert "application_name" not in query
+        # The configured 3 less the Rust reader pool's 2
+        assert query["connection_limit"] == ["1"]
+        assert query["application_name"] == [PRISMA_APPLICATION_NAME]
         assert query["pool_timeout"] == ["20"]
         assert query["connect_timeout"] == ["15"]
         assert query["socket_timeout"] == ["120"]
@@ -3646,25 +3687,42 @@ class TestReadReplicaConnectionParams:
         )
 
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
-        assert query["connection_limit"] == ["50"]
+        # The pinned 50 is the reader's whole budget, which the Rust reader pool's 2 come out of
+        assert query["connection_limit"] == ["48"]
         assert query["pool_timeout"] == ["20"]
 
-    @pytest.mark.parametrize("pinned_limit", ["0", "abc"])
-    def test_replica_limit_that_is_not_a_positive_integer_is_left_to_prisma(
-        self, tmp_path: Path, pinned_limit: str
+    @pytest.mark.parametrize("pinned_limit", ["1", "0", "abc"])
+    def test_a_replica_limit_with_no_room_for_the_rust_pool_refuses_to_start(
+        self, tmp_path: Path, pinned_limit: str, capsys: pytest.CaptureFixture[str]
     ) -> None:
         config_path: Final = tmp_path / "config.yaml"
         config_path.write_text(yaml.dump({"model_list": [], "general_settings": {}}))
 
-        captured: Final = _CAPTURED_URLS.validate_python(
+        with pytest.raises(SystemExit) as exit_info:
             _run_server_and_capture_urls(
                 str(config_path),
                 read_replica_url=f"postgresql://t:t@reader:5432/t?connection_limit={pinned_limit}",
             )
+
+        assert exit_info.value.code == 1
+        assert f"DATABASE_URL_READ_REPLICA connection_limit '{pinned_limit}'" in capsys.readouterr().err
+
+    def test_writer_and_reader_each_give_their_own_rust_pool_its_share(self, tmp_path: Path) -> None:
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 10}})
         )
 
-        query: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
-        assert query["connection_limit"] == [pinned_limit]
+        captured: Final = _CAPTURED_URLS.validate_python(
+            _run_server_and_capture_urls(
+                str(config_path), read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=2"
+            )
+        )
+
+        writer: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        reader: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert (writer["connection_limit"], captured[RUST_WRITER_CONNECTIONS_ENV_VAR]) == (["8"], "2")
+        assert (reader["connection_limit"], captured[RUST_READER_CONNECTIONS_ENV_VAR]) == (["1"], "1")
 
     def test_connection_budget_line_counts_the_limits_the_final_urls_carry(
         self,
@@ -3682,8 +3740,26 @@ class TestReadReplicaConnectionParams:
         )
 
         assert (
-            "1 worker(s) x (writer connection_limit 3 + reader connection_limit 50) = up to 53 connections"
-            in capsys.readouterr().out
+            "1 worker(s) x (writer connection_limit 1 + rust writer pool 2 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 53 connections" in capsys.readouterr().out
+        )
+
+    def test_connection_budget_line_counts_each_pool_its_own_rust_share(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 2}}))
+
+        _run_server_and_capture_urls(
+            str(config_path),
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+
+        assert (
+            "1 worker(s) x (writer connection_limit 1 + rust writer pool 1 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 52 connections" in capsys.readouterr().out
         )
 
     def test_connection_budget_line_counts_one_worker_under_hypercorn(
@@ -3701,7 +3777,10 @@ class TestReadReplicaConnectionParams:
             extra_args=("--run_hypercorn", "--num_workers", "4"),
         )
 
-        assert "1 worker(s) x writer connection_limit 3 = up to 3 connections" in capsys.readouterr().out
+        assert (
+            "1 worker(s) x (writer connection_limit 1 + rust writer pool 2) = up to 3 connections"
+            in capsys.readouterr().out
+        )
 
     def test_extra_connection_params_never_carry_a_schema_override_to_the_reader(self, tmp_path):
         """database_extra_connection_params is an untyped passthrough, so it can carry a
@@ -3735,7 +3814,7 @@ class TestReadReplicaConnectionParams:
         assert writer_query["schema"] == ["writer_schema"]
 
         reader_query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
-        assert reader_query["connection_limit"] == ["3"]
+        assert reader_query["connection_limit"] == ["1"]
         assert reader_query["socket_timeout"] == ["90"]
         assert "options" not in reader_query
         assert "schema" not in reader_query
@@ -4810,7 +4889,9 @@ def test_control_plane_rejects_a_lone_tls_file() -> None:
     assert result.exit_code == 2 and "both" in result.output
 
 
-def test_control_plane_migration_job_needs_only_its_own_database_and_never_starts_prisma_or_server(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_control_plane_migration_job_needs_only_its_own_database_and_never_starts_prisma_or_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy.control_plane.store.migrate import migrate_from_environment
 
     monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://dedicated/control")

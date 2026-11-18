@@ -682,7 +682,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
+from litellm.proxy.db.connection_budget import rust_connections
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -1628,11 +1628,13 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
+    connections: Final = rust_connections(os.environ)
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
         os.environ.get("DATABASE_URL_READ_REPLICA") or None,
-        RUST_RESERVED_CONNECTIONS,
+        writer_connections=connections.writer,
+        reader_connections=connections.reader,
     )
     resources.push_async_callback(database.aclose)
     return database

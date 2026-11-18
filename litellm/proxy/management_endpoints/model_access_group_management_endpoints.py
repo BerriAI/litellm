@@ -48,8 +48,8 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.model_access_group_budget_repository import ModelAccessGroupBudgetRepository
 from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.table_repositories import ModelAccessGroupBudgetRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AccessGroupBudget,
     AccessGroupBudgetRequest,
