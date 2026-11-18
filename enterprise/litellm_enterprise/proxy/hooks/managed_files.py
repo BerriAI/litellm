@@ -44,7 +44,7 @@ from litellm.constants import (
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -223,6 +223,19 @@ def _chat_message_file_id(part: object, role: str) -> str | None:
     if isinstance(file_data, str) and file_data.startswith(GEMINI_FILES_API_URI_PREFIXES):
         return file_data
     return None
+
+
+def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
+    images: Final = as_object_list(value)
+    if images is None:
+        return
+    for image in images:
+        if (fields := as_str_mapping(image)) is None:
+            continue
+        if (image_url := as_str_mapping(fields.get("image_url"))) is None:
+            continue
+        if isinstance((url := image_url.get("url")), str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
+            yield url
 
 
 def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
@@ -1744,7 +1757,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         for message in messages:
             if (fields := as_str_mapping(message)) is None:
                 continue
-            if not isinstance((role := fields.get("role")), str) or role not in ("user", "tool", "function"):
+            if not isinstance((role := fields.get("role")), str):
+                continue
+            if role == "assistant":
+                yield from _gemini_assistant_image_file_ids(fields.get("images"))
+                continue
+            if role not in ("user", "tool", "function"):
                 continue
             if not _is_object_iterable(content := fields.get("content")) or isinstance(content, (str, Mapping)):
                 continue
