@@ -2366,7 +2366,11 @@ def client(original_function):
                 kwargs=kwargs,
                 call_type=call_type,
             ):
-                if kwargs.get("complete_response") is True and not isinstance(result, Awaitable):
+                if (
+                    "complete_response" in kwargs
+                    and kwargs["complete_response"] is True
+                    and not isinstance(result, Awaitable)
+                ):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
@@ -2805,18 +2809,17 @@ def client(original_function):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-                    if (
-                        isinstance(result, CustomStreamWrapper)
+                    bedrock_stream: Final = (
+                        result
+                        if isinstance(result, CustomStreamWrapper)
                         and result.custom_llm_provider == LlmProviders.BEDROCK.value
-                    ):
-                        async for _ in result:
+                        else None
+                    )
+                    if bedrock_stream is not None:
+                        async for _ in bedrock_stream:
                             pass
-                        return litellm.stream_chunk_builder(result.chunks, messages=kwargs.get("messages", None))
-
-                    chunks: Final = []
-                    for idx, chunk in enumerate(result):
-                        chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    assembly_chunks: Final = bedrock_stream.chunks if bedrock_stream is not None else list(result)
+                    return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
                 else:
                     if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
                         from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
