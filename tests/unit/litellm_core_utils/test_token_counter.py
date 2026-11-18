@@ -392,9 +392,7 @@ def test_token_counter_legacy_function_call_counts_arguments():
     MESSAGES_TEXT,
 )
 def test_token_counter_textonly(message_count_pair):
-    counted_tokens = token_counter(
-        model="gpt-35-turbo", messages=[message_count_pair["message"]]
-    )
+    counted_tokens = token_counter(model="gpt-35-turbo", messages=[message_count_pair["message"]])
     assert counted_tokens == message_count_pair["count"]
 
 
@@ -418,9 +416,7 @@ def test_token_counter_count_response_tokens(message_count_pair):
     MESSAGES_WITH_IMAGES,
 )
 def test_token_counter_with_images(message_count_pair):
-    counted_tokens = token_counter(
-        model="gpt-4o", messages=[message_count_pair["message"]]
-    )
+    counted_tokens = token_counter(model="gpt-4o", messages=[message_count_pair["message"]])
     assert counted_tokens == message_count_pair["count"]
 
 
@@ -443,18 +439,16 @@ def test_token_counter_with_tools(message_count_pair):
             pass  # expected
         else:
             tolerated_diff = message_count_pair["count-tolerate"] - expected_tokens
-            assert (
-                actual_diff <= tolerated_diff
-            ), f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            assert actual_diff <= tolerated_diff, (
+                f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by {tolerated_diff} in the over-counting direction."
+            )
             if actual_diff != tolerated_diff:
                 raise NeedsToleranceUpdateError(
                     f"SOMETHING BROKEN GOT FIXED! THIS is good! Adjust 'count-tolerate' from {message_count_pair['count-tolerate']} to {counted_tokens}"
                 )
 
     else:
-        assert (
-            expected_tokens == counted_tokens
-        ), f"Expected {expected_tokens} tokens, got {counted_tokens}."
+        assert expected_tokens == counted_tokens, f"Expected {expected_tokens} tokens, got {counted_tokens}."
 
 
 def test_token_counter_counts_gemini_function_declarations():
@@ -534,7 +528,9 @@ def test_token_counter_skips_non_mapping_tools():
     [({"type": "array"}, {"type": "array", "items": {}}), (True, {})],
     ids=["array_without_items", "boolean_subschema"],
 )
-def test_token_counter_counts_json_schema_shorthands_like_their_explicit_form(shorthand: object, explicit: object) -> None:
+def test_token_counter_counts_json_schema_shorthands_like_their_explicit_form(
+    shorthand: object, explicit: object
+) -> None:
     assert _count_with_property_schema(shorthand) == _count_with_property_schema(explicit)
 
 
@@ -563,7 +559,9 @@ def _count_with_property_schema(property_schema: object) -> int:
             "parameters": {"type": "object", "properties": {"paths": property_schema}},
         },
     }
-    return token_counter_new(model="gpt-4o", messages=[{"role": "user", "content": "Read the config files"}], tools=[tool])
+    return token_counter_new(
+        model="gpt-4o", messages=[{"role": "user", "content": "Read the config files"}], tools=[tool]
+    )
 
 
 _WEATHER_FUNCTION: Final = {
@@ -855,9 +853,7 @@ def test_token_counter_counts_anthropic_tool_choices_like_openai_choices(
 
     assert token_counter_new(
         model="gpt-4", messages=messages, tools=tools, tool_choice=tool_choice
-    ) == token_counter_new(
-        model="gpt-4", messages=messages, tools=tools, tool_choice=expected_tool_choice
-    )
+    ) == token_counter_new(model="gpt-4", messages=messages, tools=tools, tool_choice=expected_tool_choice)
 
 
 @pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
@@ -964,9 +960,7 @@ def test_load_test_token_counter(model):
         ("gpt-3.5-turbo", "gpt-3.5-turbo", 4000, 5000, 4096),  # model max output = 4096
     ],
 )
-def test_get_modified_max_tokens(
-    model, base_model, input_tokens, user_max_tokens, expected_value
-):
+def test_get_modified_max_tokens(model, base_model, input_tokens, user_max_tokens, expected_value):
     """
     - Test when max_output is not known => expect user_max_tokens
     - Test when max_output == max_input,
@@ -999,9 +993,7 @@ def test_get_modified_max_tokens(
     if expected_value is None:
         assert calculated_value is None
     else:
-        assert (
-            calculated_value == expected_value
-        ), "Got={}, Expected={}, Params={}".format(
+        assert calculated_value == expected_value, "Got={}, Expected={}, Params={}".format(
             calculated_value, expected_value, args
         )
 
@@ -1150,9 +1142,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("command-r-v1")
 
         # Verify the attempt to load Cohere tokenizer
-        mock_from_pretrained.assert_called_once_with(
-            "Xenova/c4ai-command-r-v01-tokenizer"
-        )
+        mock_from_pretrained.assert_called_once_with("Xenova/c4ai-command-r-v01-tokenizer")
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
@@ -1185,9 +1175,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("llama-2-7b")
 
         # Verify the attempt to load Llama-2 tokenizer
-        mock_from_pretrained.assert_called_once_with(
-            "hf-internal-testing/llama-tokenizer"
-        )
+        mock_from_pretrained.assert_called_once_with("hf-internal-testing/llama-tokenizer")
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
@@ -1206,9 +1194,7 @@ class TestTokenizerSelection(unittest.TestCase):
             monkeypatch.undo()
 
     @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
-    def test_failed_huggingface_tokenizer_download_is_not_retried_on_every_count(
-        self, mock_from_pretrained: MagicMock
-    ):
+    def test_failed_huggingface_tokenizer_download_is_not_retried_on_every_count(self, mock_from_pretrained: MagicMock):
         _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
         try:
             mock_from_pretrained.side_effect = RuntimeError("HF unavailable")
@@ -1497,8 +1483,10 @@ def test_retry_after_the_window_runs_in_the_background_while_every_count_answers
         downloads_while_retry_runs: Final = from_pretrained.call_count
         retry_released.set()
         retried: Final = _eventually(
-            lambda: _return_huggingface_tokenizer(model, outcomes)
-            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+            lambda: (
+                _return_huggingface_tokenizer(model, outcomes)
+                == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+            )
         )
     assert all(
         isinstance(count, _HuggingFaceTokenizerLoadFailure)
@@ -1546,8 +1534,10 @@ def test_download_from_before_the_first_failure_ending_during_a_retry_leaves_it_
         downloads_while_retry_runs: Final = from_pretrained.call_count
         retry_released.set()
         retried: Final = _eventually(
-            lambda: _return_huggingface_tokenizer(model, outcomes)
-            == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+            lambda: (
+                _return_huggingface_tokenizer(model, outcomes)
+                == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
+            )
         )
     assert isinstance(early, _HuggingFaceTokenizerLoadFailure)
     assert all(isinstance(count, _HuggingFaceTokenizerLoadFailure) for count in counts_while_retry_runs)
@@ -1750,9 +1740,7 @@ def test_token_counter_with_anthropic_tool_use():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + "I'll check" text + "get_weather" name + input dict
-    assert (
-        tokens > 15
-    ), f"Expected reasonable token count for message with tool_use, got {tokens}"
+    assert tokens > 15, f"Expected reasonable token count for message with tool_use, got {tokens}"
 
 
 def test_token_counter_with_anthropic_tool_result():
@@ -1791,9 +1779,7 @@ def test_token_counter_with_anthropic_tool_result():
 
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
-    assert (
-        tokens > 25
-    ), f"Expected reasonable token count for conversation with tool_result, got {tokens}"
+    assert tokens > 25, f"Expected reasonable token count for conversation with tool_result, got {tokens}"
 
 
 def test_token_counter_with_nested_tool_result():
@@ -1827,9 +1813,7 @@ def test_token_counter_with_nested_tool_result():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count both nested text blocks
-    assert (
-        tokens > 15
-    ), f"Expected reasonable token count for nested tool_result, got {tokens}"
+    assert tokens > 15, f"Expected reasonable token count for nested tool_result, got {tokens}"
 
 
 def test_token_counter_tool_use_and_result_combined():
@@ -1892,9 +1876,7 @@ def test_token_counter_tool_use_and_result_combined():
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count all text, tool names, inputs, and results
-    assert (
-        tokens > 60
-    ), f"Expected substantial token count for full tool conversation, got {tokens}"
+    assert tokens > 60, f"Expected substantial token count for full tool conversation, got {tokens}"
 
 
 def test_token_counter_with_image_url():
@@ -1945,12 +1927,8 @@ def test_token_counter_with_image_url():
         }
     ]
 
-    tokens_str = token_counter(
-        model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True
-    )
-    assert (
-        tokens_str > 0
-    ), f"Expected positive token count for string image_url, got {tokens_str}"
+    tokens_str = token_counter(model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True)
+    assert tokens_str > 0, f"Expected positive token count for string image_url, got {tokens_str}"
 
     # Test invalid detail value raises error
     messages_invalid = [
@@ -1971,9 +1949,7 @@ def test_token_counter_with_image_url():
     with pytest.raises(ValueError, match="Invalid detail value") as exc_info:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
     e = exc_info.value
-    assert "Invalid detail value" in str(
-        e
-    ), f"Expected detail validation error, got: {e}"
+    assert "Invalid detail value" in str(e), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
@@ -2013,15 +1989,11 @@ def test_token_counter_with_thinking_content():
         {"role": "user", "content": [{"type": "text", "text": "Thanks"}]},
     ]
 
-    tokens = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
-    )
+    tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + thinking text + response text + "Thanks"
     # The thinking text alone is ~30 tokens, plus other content should be > 50 total
-    assert (
-        tokens > 50
-    ), f"Expected substantial token count for message with thinking, got {tokens}"
+    assert tokens > 50, f"Expected substantial token count for message with thinking, got {tokens}"
 
     # Test that thinking block without 'thinking' field doesn't crash (edge case)
     messages_no_thinking = [
@@ -2038,16 +2010,10 @@ def test_token_counter_with_thinking_content():
         }
     ]
 
-    tokens_no_thinking = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking
-    )
-    assert (
-        tokens_no_thinking > 0
-    ), f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
+    tokens_no_thinking = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking)
+    assert tokens_no_thinking > 0, f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
     # Should only count "Response" and message overhead
-    assert (
-        tokens_no_thinking < 15
-    ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+    assert tokens_no_thinking < 15, f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
 
 def test_token_counter_with_redacted_thinking_content():
@@ -2184,7 +2150,9 @@ def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
     ]
 
     assert _count_content_list(charges_for_empty_text, empty_blocks, False, None) == 0
-    assert _count_content_list(charges_for_empty_text, [{"type": "thinking", "thinking": "two words"}], False, None) == 3
+    assert (
+        _count_content_list(charges_for_empty_text, [{"type": "thinking", "thinking": "two words"}], False, None) == 3
+    )
 
 
 def test_token_counter_with_tool_reference_block():
@@ -2209,9 +2177,7 @@ def test_token_counter_with_tool_reference_block():
     ]
 
     # Must not raise, and must produce a positive token count.
-    tokens = token_counter_new(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
-    )
+    tokens = token_counter_new(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
 
     # A tool_reference with no/empty tool_name must also be handled gracefully.
@@ -2221,9 +2187,7 @@ def test_token_counter_with_tool_reference_block():
             "content": [{"type": "tool_reference", "tool_name": ""}],
         }
     ]
-    tokens_empty = token_counter_new(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty
-    )
+    tokens_empty = token_counter_new(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty)
     assert tokens_empty >= 0
 
 
@@ -2394,9 +2358,7 @@ def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
         messages=messages,
         use_default_image_token_count=True,
     )
-    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, (
-        f"Expected the image block to contribute tokens, got {tokens}"
-    )
+    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, f"Expected the image block to contribute tokens, got {tokens}"
 
 
 def test_anthropic_image_block_matches_equivalent_image_url():
@@ -2428,12 +2390,8 @@ def test_anthropic_image_block_matches_equivalent_image_url():
         }
     ]
 
-    anthropic_tokens = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages
-    )
-    openai_tokens = token_counter(
-        model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
-    )
+    anthropic_tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages)
+    openai_tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages)
     assert anthropic_tokens == openai_tokens
 
 
@@ -2491,9 +2449,7 @@ def test_anthropic_image_block_with_empty_base64_data():
 
     tokens = _count_content_list(
         count_function=len,
-        content_list=[
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}
-        ],
+        content_list=[{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}],
         use_default_image_token_count=False,
         default_token_count=None,
     )
@@ -2849,7 +2805,10 @@ def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
     assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
 
     readable: Final = _pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",))
-    readable_file: Final = {"type": "file", "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + readable}}
+    readable_file: Final = {
+        "type": "file",
+        "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + readable},
+    }
     readable_document: Final = {"type": "document", "title": "report.pdf", "source": _pdf_source(readable)}
     assert _count_user_content([prompt, readable_file]) == _count_user_content([prompt, readable_document])
     assert _count_user_content([prompt, readable_file]) > _count_user_content([prompt, inline_file])
@@ -2863,9 +2822,7 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, by_id]) == _count_user_content([prompt])
 
     named = {"type": "file", "file": {"file_id": "file-abc123", "filename": "report.pdf"}}
-    assert _count_user_content([prompt, named]) == _count_user_content(
-        [prompt, {"type": "text", "text": "report.pdf"}]
-    )
+    assert _count_user_content([prompt, named]) == _count_user_content([prompt, {"type": "text", "text": "report.pdf"}])
 
 
 def _pdf_base64(
@@ -2929,13 +2886,18 @@ def test_base64_pdf_document_counts_every_page_text_and_rendering():
     first: Final = "Revenue grew eleven percent while churn fell to two percent."
     second: Final = "Headcount is flat and the office lease was renewed for three years."
     base: Final = _count_user_content([prompt])
-    blank_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+    blank_page: Final = (
+        _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+    )
 
     assert blank_page > 0
     assert _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first, second)))}]) == (
-        _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}]) + 2 * blank_page
+        _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}])
+        + 2 * blank_page
     )
-    one_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    one_page: Final = (
+        _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    )
     twelve_pages: Final = (
         _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,) * 12))}]) - base
     )
@@ -2943,7 +2905,9 @@ def test_base64_pdf_document_counts_every_page_text_and_rendering():
     assert twelve_pages == 12 * one_page
 
 
-@pytest.mark.parametrize("fields", [{}, {"title": "Q3 board packet", "context": "Shared by finance"}], ids=["bare", "described"])
+@pytest.mark.parametrize(
+    "fields", [{}, {"title": "Q3 board packet", "context": "Shared by finance"}], ids=["bare", "described"]
+)
 def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[str, str]):
     """Anthropic rasterizes each PDF page within its image limits (1568 px long edge, 1.15 MP) and bills
     width * height / 750 tokens for it: https://platform.claude.com/docs/en/build-with-claude/pdf-support and
@@ -3162,15 +3126,18 @@ def test_openai_model_finds_an_image_a_shared_form_without_resources_draws_from_
         _ONE_PIXEL_IMAGE,
     )
 
-    assert _pdf_cost(
-        model,
-        _pdf_base64(
-            ("",),
-            xobjects=parents_and_child,
-            drawing=drawing,
-            page_resources="<< /XObject << /A 6 0 R /B 8 0 R >> >>",
-        ),
-    ) == _rendered_page_cost()
+    assert (
+        _pdf_cost(
+            model,
+            _pdf_base64(
+                ("",),
+                xobjects=parents_and_child,
+                drawing=drawing,
+                page_resources="<< /XObject << /A 6 0 R /B 8 0 R >> >>",
+            ),
+        )
+        == _rendered_page_cost()
+    )
 
 
 @pytest.mark.parametrize(
@@ -3194,15 +3161,18 @@ def test_openai_model_finds_an_image_drawn_by_an_escaped_name(escaped_name: str)
     decodes it, so an image drawn under such a name still prices the page as rendered."""
     model: Final = "gpt-4o"
 
-    assert _pdf_cost(
-        model,
-        _pdf_base64(
-            ("",),
-            xobjects=(_ONE_PIXEL_IMAGE,),
-            drawing=f" {escaped_name} Do".encode(),
-            page_resources=f"<< /XObject << {escaped_name} 6 0 R >> >>",
-        ),
-    ) == _rendered_page_cost()
+    assert (
+        _pdf_cost(
+            model,
+            _pdf_base64(
+                ("",),
+                xobjects=(_ONE_PIXEL_IMAGE,),
+                drawing=f" {escaped_name} Do".encode(),
+                page_resources=f"<< /XObject << {escaped_name} 6 0 R >> >>",
+            ),
+        )
+        == _rendered_page_cost()
+    )
 
 
 @pytest.mark.parametrize(("parent_count", "draws_too_many"), [(1, False), (2, True)])
@@ -3235,9 +3205,7 @@ def test_openai_model_prices_a_page_whose_forms_draw_too_many_xobjects_as_render
 
     assert _pdf_cost(
         model,
-        _pdf_base64(
-            (_REVENUE_LINE,), xobjects=(*parents, child), drawing=page_drawing, page_resources=page_resources
-        ),
+        _pdf_base64((_REVENUE_LINE,), xobjects=(*parents, child), drawing=page_drawing, page_resources=page_resources),
     ) == _text_cost(model, _REVENUE_LINE) + (_rendered_page_cost() if draws_too_many else 13)
 
 
@@ -3272,9 +3240,7 @@ def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deploym
     )
 
 
-@pytest.mark.parametrize(
-    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat"]
-)
+@pytest.mark.parametrize("model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat"])
 def test_azure_openai_models_only_azure_lists_get_openai_pricing_and_o200k(model: str):
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
     assert token_counter_new(model=model, text=_NON_LATIN_SAMPLE) == len(
@@ -3373,7 +3339,9 @@ def test_messages_reach_token_count_prices_pdf_pages_like_token_counter():
 
 
 def _png_data_url(width: int, height: int) -> str:
-    ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    ihdr = (
+        b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    )
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
 
 
@@ -3442,7 +3410,9 @@ def test_low_and_default_image_counts_skip_inline_decoding() -> None:
     decode.assert_not_called()
 
 
-@pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])
+@pytest.mark.parametrize(
+    ("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)]
+)
 def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int, height: int) -> None:
     assert calculate_img_tokens(_png_data_url(width, height), mode="high") <= high_detail_image_token_upper_bound()
 
@@ -3585,9 +3555,9 @@ def test_image_estimate_bounds_header_decoding_for_large_inline_payloads() -> No
 def test_custom_openai_tokenizer_without_a_model_counts_with_the_default_encoding() -> None:
     sample: Final = "A custom tokenizer passed with no model still counts."
 
-    assert litellm.token_counter(model=None, custom_tokenizer=litellm.utils.select_tokenizer("gpt-4o"), text=sample) == (
-        len(tiktoken.get_encoding("cl100k_base").encode(sample))
-    )
+    assert litellm.token_counter(
+        model=None, custom_tokenizer=litellm.utils.select_tokenizer("gpt-4o"), text=sample
+    ) == (len(tiktoken.get_encoding("cl100k_base").encode(sample)))
 
 
 def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
@@ -3601,7 +3571,9 @@ def test_empty_custom_tokenizer_uses_model_tokenizer() -> None:
 def _threshold_test_messages(turns: int) -> list[dict]:
     messages: list[dict] = [{"role": "system", "content": "You are a terse assistant. " * 20}]
     for index in range(turns):
-        messages.append({"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"})
+        messages.append(
+            {"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"}
+        )
         messages.append(
             {
                 "role": "assistant",
@@ -3688,7 +3660,9 @@ _ANTHROPIC_SHAPE_MESSAGES: Final = [
     },
     {
         "role": "user",
-        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "file body line\n" * 40}]}],
+        "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "file body line\n" * 40}]}
+        ],
     },
     {"role": "assistant", "content": [{"type": "text", "text": "Here is what the file does. " * 20}]},
 ]
@@ -3877,7 +3851,9 @@ def test_token_counter_keeps_cl100k_for_non_openai_models_and_variants_of_cl100k
 def test_openai_model_check_holds_while_openai_models_are_registered_concurrently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, "azure/azure-only-chat-model", {"litellm_provider": "azure", "mode": "chat"})
+    monkeypatch.setitem(
+        litellm.model_cost, "azure/azure-only-chat-model", {"litellm_provider": "azure", "mode": "chat"}
+    )
     registered: Final = tuple(f"concurrently-registered-model-{index}" for index in range(200))
     checked: Final = threading.Semaphore(0)
 
@@ -4008,3 +3984,91 @@ def test_custom_tokenizer_counts_are_not_memoized():
 
     assert counts == (len(_MEMOIZED_TEXT), len(_MEMOIZED_TEXT))
     assert encoder.calls == 2
+
+
+@pytest.mark.parametrize("block_type", ("mcp_tool_result", "tool_result"))
+def test_token_counter_anthropic_tool_result_dict_text(block_type: str) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    block: Final[Mapping[str, object]] = {
+        "type": block_type,
+        "tool_use_id": "call_1",
+        "content": {"type": "text", "text": "Success response data"},
+    }
+    assert _count_content_list(len, [block], False, None) == len("Success response data")
+
+
+@pytest.mark.parametrize("block_type", ("mcp_tool_result", "tool_result"))
+def test_token_counter_anthropic_tool_result_dict_image(block_type: str) -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    image_data: Final = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    block: Final[Mapping[str, object]] = {
+        "type": block_type,
+        "tool_use_id": "call_1",
+        "content": {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": image_data,
+            },
+        },
+    }
+    tokens: Final = _count_content_list(len, [block], True, None)
+    assert tokens > 0
+
+
+def test_token_counter_anthropic_tool_result_dict_arbitrary_fallback() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    arbitrary_payload: Final[Mapping[str, object]] = {"key": "value", "count": 42}
+    block: Final[Mapping[str, object]] = {
+        "type": "tool_result",
+        "tool_use_id": "call_1",
+        "content": arbitrary_payload,
+    }
+    assert _count_content_list(len, [block], False, None) == len(str(arbitrary_payload))
+
+
+def test_token_counter_anthropic_tool_result_dict_full_message_flow() -> None:
+    from litellm import token_counter
+
+    messages: Final = [
+        {"role": "user", "content": "Fetch data with MCP"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "mcp_tool_use",
+                    "id": "mcp_1",
+                    "name": "fetch",
+                    "input": {"url": "https://api.example.com"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "mcp_tool_result",
+                    "tool_use_id": "mcp_1",
+                    "content": {"type": "text", "text": "Success response data"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_1",
+                    "content": {"type": "text", "text": "Hello world from tool"},
+                }
+            ],
+        },
+    ]
+    tokens: Final = token_counter(model="claude-3-5-sonnet-20241022", messages=messages)
+    assert tokens > 0
