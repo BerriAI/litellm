@@ -22,6 +22,7 @@ from pydantic import JsonValue
 
 GROUP_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:Group"
 PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+ERROR_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
 SEED_USERS_SQL: Final = """
 INSERT INTO "LiteLLM_UserTable" (user_id, user_role, teams, models)
 SELECT %s || '-' || lpad(n::text, 3, '0'), 'internal_user', '{}'::text[], '{}'::text[]
@@ -98,6 +99,13 @@ def add_to_group(candidate: Gateway, team: str, users: Sequence[str]) -> httpx.R
 
 def body(response: httpx.Response) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(response.content)
+
+
+def error_detail(response: httpx.Response) -> str:
+    error: Final = body(response)
+    assert error["schemas"] == [ERROR_SCHEMA], response.text
+    assert error["status"] == str(response.status_code), response.text
+    return string_value(error["detail"])
 
 
 def member_ids(group: Mapping[str, JsonValue]) -> frozenset[str]:

@@ -9,6 +9,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 REASONING_ITEM_ID_PREFIX: Final = "rs_"
+WRAPPED_ENCRYPTED_CONTENT_PREFIX: Final = "litellm_enc:"
 _JSON_LIST: Final = TypeAdapter(list[object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
@@ -96,16 +97,35 @@ def is_minted_reasoning_item_id(item_id: object) -> bool:
     return parsed.version == 4 and str(parsed) == suffix
 
 
-def is_litellm_minted_reasoning_item(item: object) -> bool:
+def _reasoning_fields(item: object) -> Mapping[str, object] | None:
     try:
         fields: Final = _JSON_OBJECT.validate_python(
             item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else item
         )
     except ValidationError:
-        return False
-    if fields.get("type") != "reasoning":
-        return False
+        return None
+    return fields if fields.get("type") == "reasoning" else None
+
+
+def _is_minted(fields: Mapping[str, object]) -> bool:
     return (
         is_minted_reasoning_item_id(fields.get("id"))
         or decode_thinking_blocks(fields.get("encrypted_content")) is not None
+    )
+
+
+def is_litellm_minted_reasoning_item(item: object) -> bool:
+    fields: Final = _reasoning_fields(item)
+    return fields is not None and _is_minted(fields)
+
+
+def is_other_provider_reasoning_item(item: object) -> bool:
+    fields: Final = _reasoning_fields(item)
+    if fields is None:
+        return False
+    encrypted_content: Final = fields.get("encrypted_content")
+    return (
+        _is_minted(fields)
+        or bool(fields.get("content"))
+        or (isinstance(encrypted_content, str) and encrypted_content.startswith(WRAPPED_ENCRYPTED_CONTENT_PREFIX))
     )
