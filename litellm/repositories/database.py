@@ -8,15 +8,15 @@ from typing import TYPE_CHECKING, Final
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import proxy_service_logging
 from litellm.proxy.db.native_database import (
-    NativeEndpointSettings,
     ServiceLoggingEvents,
     TokenRotation,
+    client_identity,
     keep_token_fresh,
     reader_token_rotation,
-    resolve_native_endpoint,
     writer_token_rotation,
 )
-from litellm.rust_bridge._native import NativeDatabase, NativeDatabaseFailure
+from litellm.repositories import rust_database
+from litellm.rust_bridge._native import DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -29,15 +29,6 @@ def _token_refresh(
         return ()
     current: Final = urllib.parse.unquote(urllib.parse.urlsplit(url).password or "")
     return (asyncio.create_task(keep_token_fresh(install, rotation, current)),)
-
-
-def _log_ignored_options(env_var: str, settings: NativeEndpointSettings) -> None:
-    if settings.ignored_options:
-        verbose_proxy_logger.error(
-            "Native database pool cannot send the %s options %s; only -c name=value settings carry over",
-            env_var,
-            settings.ignored_options,
-        )
 
 
 async def _warn_if_unreachable(native: NativeDatabase) -> None:
@@ -60,34 +51,44 @@ class Database:
 
     @classmethod
     async def open(
-        cls, prisma: "PrismaClient", writer_url: str, reader_url: str | None, native_connections: int
+        cls,
+        prisma: "PrismaClient",
+        writer_url: str,
+        reader_url: str | None,
+        *,
+        writer_connections: int,
+        reader_connections: int,
     ) -> "Database":
-        if native_connections == 0:
+        if writer_connections == 0:
             return cls(prisma=prisma, native=None)
         try:
-            writer: Final = await resolve_native_endpoint(writer_url, native_connections)
+            writer: Final = await DatabaseEndpoint.resolve(
+                writer_url, writer_connections, client_identity=client_identity(writer_url)
+            )
             reader: Final = (
-                None if reader_url is None else await resolve_native_endpoint(reader_url, native_connections)
+                None
+                if reader_url is None or reader_connections == 0
+                else await DatabaseEndpoint.resolve(
+                    reader_url, reader_connections, replica=True, client_identity=client_identity(reader_url)
+                )
             )
             native: Final = await NativeDatabase.connect(
                 ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=proxy_service_logging),
-                writer.endpoint,
-                None if reader is None else reader.endpoint,
+                writer,
+                reader,
             )
         except BaseException:
             await prisma.aclose()
             raise
-        _log_ignored_options("DATABASE_URL", writer)
-        if reader is not None:
-            _log_ignored_options("DATABASE_URL_READ_REPLICA", reader)
         writer_refresh: Final = _token_refresh(
             native.set_writer_password, writer_token_rotation(writer_url), writer_url
         )
         reader_refresh: Final = (
             ()
-            if reader_url is None
+            if reader is None or reader_url is None
             else _token_refresh(native.set_reader_password, reader_token_rotation(reader_url), reader_url)
         )
+        rust_database.install(native)
         return cls(
             prisma=prisma,
             native=native,
@@ -104,6 +105,7 @@ class Database:
             await self.prisma.aclose()
         finally:
             if self.native is not None:
+                rust_database.clear(self.native)
                 await self.native.close()
 
 

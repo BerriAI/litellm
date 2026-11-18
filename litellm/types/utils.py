@@ -1907,6 +1907,15 @@ class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_12h_input_tokens: int | None = None
 
 
+def _nested_cache_creation_token_details(nested: object) -> CacheCreationTokenDetails | None:
+    if not isinstance(nested, Mapping):
+        return None
+    try:
+        return CacheCreationTokenDetails.model_validate(nested)
+    except ValidationError:
+        return None
+
+
 class PromptTokensDetailsWrapper(
     SafeAttributeModel, PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
@@ -1991,6 +2000,8 @@ class PromptTokensDetailsWrapper(
                 )
             )
         )
+        if self.cache_creation_token_details is None and extra_fields is not None:
+            self.cache_creation_token_details = _nested_cache_creation_token_details(extra_fields.get("cache_creation"))
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -2832,12 +2843,35 @@ class ImageObject(OpenAIImage):
             return self.dict()
 
 
+class ImageSVGUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
+def _parse_image_svg_usage(value: object) -> ImageSVGUsage | None:
+    if value is None:
+        return None
+    try:
+        return ImageSVGUsage.model_validate(value)
+    except ValidationError:
+        verbose_logger.debug("Ignoring invalid SVG authoring usage in image response")
+        return None
+
+
 class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     image_tokens: int
     """The number of image tokens in the input prompt."""
 
     text_tokens: int
     """The number of text tokens in the input prompt."""
+
+    cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
 
 
 class ImageUsage(BaseLiteLLMOpenAIResponseObject):
@@ -2859,6 +2893,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    svg_usage: ImageSVGUsage | None = None
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2946,7 +2981,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-        super().__init__(created=created, data=_data, usage=_usage)
+        svg_usage: Final = _parse_image_svg_usage(kwargs.get("svg_usage"))
+        super().__init__(created=created, data=_data, usage=_usage, svg_usage=svg_usage)
 
         self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
@@ -3137,6 +3173,8 @@ class AdapterCompletionStreamWrapper:
 
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
     user_api_key_spend: float | None
@@ -3867,6 +3905,8 @@ class CostBreakdown(TypedDict, total=False):
     from ``optional_params``, which no log record carries.
     """
 
+    customer_margin_percent: ReadOnly[float]
+    customer_margin_amount: ReadOnly[float]
     service_tier: str | None
     data_residency: str | None
     vertex_location: ReadOnly[str | None]
@@ -3949,7 +3989,8 @@ class StandardBatchLineItem(TypedDict):
 
 class StandardBatchLineItemsPayload(TypedDict):
     """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
-    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines.
+    """
 
     batch_id: ReadOnly[str]
     finished_at: ReadOnly[int]
@@ -4747,6 +4788,7 @@ class LlmProviders(str, Enum):
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
+    VISPARK = "vispark"
     MORPH = "morph"
     OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"
@@ -4854,6 +4896,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

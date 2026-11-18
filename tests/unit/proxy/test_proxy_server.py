@@ -10,6 +10,7 @@ from unittest import mock
 from dotenv import load_dotenv
 
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.fake_config_table import section_locked_transactions
 
 import litellm.proxy
@@ -53,6 +54,7 @@ from litellm.proxy.proxy_server import (  # Replace with the actual module where
     save_worker_config,
 )
 from litellm.proxy.utils import ProxyLogging
+
 
 @pytest.fixture
 def admin_mcp_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
@@ -267,8 +269,6 @@ async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_comm
 
 
 token = MASTER_KEY
-
-
 
 
 @pytest.mark.asyncio
@@ -811,7 +811,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
 
     request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
@@ -854,7 +854,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
     with patch.object(
@@ -1220,7 +1220,6 @@ def test_health(client_no_auth):
 # test_add_new_model()
 
 
-
 class MyCustomHandler(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
@@ -1461,6 +1460,8 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from tests.unit.proxy.management_endpoints.test_key_generate_prisma import prisma_client
+
+
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()
@@ -2451,7 +2452,7 @@ async def test_model_info_alias_without_prisma(hidden):
 
     assert alias_found is (not hidden)
 
-    
+
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
@@ -2954,7 +2955,8 @@ async def test_run_direct_health_check_with_instrumentation_accepts_filter_only(
 @pytest.mark.asyncio
 async def test_run_direct_health_check_drops_only_the_rejected_kwarg(monkeypatch):
     """A callee that predates `router` must still get the skip-disabled filter: dropping the
-    rejected argument alongside working ones would probe deployments the operator opted out."""
+    rejected argument alongside working ones would probe deployments the operator opted out.
+    """
     import litellm.proxy.proxy_server as proxy_server
 
     seen: list[tuple[dict[str, str] | None, bool]] = []
@@ -3671,7 +3673,10 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(
     ("litellm_params", "expected_upstream_url"),
     (
         pytest.param(
-            {"model": "openai/gateway-transcribe", "api_base": "https://gateway.example/v1"},
+            {
+                "model": "openai/gateway-transcribe",
+                "api_base": "https://gateway.example/v1",
+            },
             "wss://gateway.example/v1/realtime?model=gateway-transcribe&intent=transcription",
             id="gateway",
         ),
@@ -3681,7 +3686,10 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(
             id="xai",
         ),
         pytest.param(
-            {"model": "openai/gpt-live-transcribe", "api_base": "https://api.openai.com/v1"},
+            {
+                "model": "openai/gpt-live-transcribe",
+                "api_base": "https://api.openai.com/v1",
+            },
             "wss://api.openai.com/v1/realtime?intent=transcription",
             id="openai",
         ),
@@ -3783,7 +3791,10 @@ def test_live_session_invalid_start_is_rejected_without_routing(
 
 @pytest.mark.parametrize(
     ("denial_type", "expected_code"),
-    (("user_model_access_denied", "model_not_allowed"), ("budget_exceeded", "session_not_allowed")),
+    (
+        ("user_model_access_denied", "model_not_allowed"),
+        ("budget_exceeded", "session_not_allowed"),
+    ),
 )
 def test_live_session_frame_authorization_denial_closes_with_policy_code(
     client_no_auth: TestClient,
@@ -4332,7 +4343,11 @@ class _MessageCollector(logging.Handler):
                 "tools": [
                     {
                         "type": "function",
-                        "function": {"name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS},
+                        "function": {
+                            "name": "shell",
+                            "description": _LONG_PROMPT,
+                            "parameters": _TOOL_PARAMETERS,
+                        },
                     }
                 ],
             },
@@ -4341,8 +4356,18 @@ class _MessageCollector(logging.Handler):
                 "object": "chat.completion",
                 "created": 1,
                 "model": "gpt-3.5-turbo",
-                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "hi"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
             },
         ),
         (
@@ -4353,7 +4378,12 @@ class _MessageCollector(logging.Handler):
                 "instructions": _LONG_PROMPT,
                 "input": "hi",
                 "tools": [
-                    {"type": "function", "name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS}
+                    {
+                        "type": "function",
+                        "name": "shell",
+                        "description": _LONG_PROMPT,
+                        "parameters": _TOOL_PARAMETERS,
+                    }
                 ],
             },
             {
@@ -4436,13 +4466,6 @@ async def test_shutdown_waits_for_enqueue_producers_before_stopping_worker() -> 
         assert worker.pending_count == 0
     finally:
         await worker.stop(discard_pending=True)
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -4528,3 +4551,50 @@ def test_background_response_settings_refresh_and_respect_config(
     assert proxy_server.polling_via_cache_enabled == (["openai"] if config_owned else False)
     assert proxy_server.native_background_mode == (["config-native"] if config_owned else [])
     assert proxy_server.polling_cache_ttl == (900 if config_owned else 3600)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "started_at,window_start",
+    (
+        ("2026-10-31T23:59:59+00:00", "2026-10-01T00:00:00+00:00"),
+        ("2026-11-01T00:00:01+00:00", "2026-11-01T00:00:00+00:00"),
+        ("2026-10-31T23:59:59", "2026-10-01T00:00:00+00:00"),
+        ("2026-11-01T00:00:01", "2026-11-01T00:00:00+00:00"),
+    ),
+)
+async def test_customer_and_app_accounting_use_the_requests_original_budget_window(
+    started_at: str, window_start: str
+) -> None:
+    from datetime import datetime
+
+    from litellm.proxy import proxy_server
+    from litellm.types.proxy.auth.customer_hierarchy import (
+        AppDurationLimit,
+        CustomerHierarchyIds,
+        CustomerScopeAuth,
+    )
+
+    reset_at: Final = datetime.fromisoformat("2026-11-01T00:00:00+00:00")
+    counters: Final = await proxy_server.customer_accounting_counters(
+        CustomerHierarchyIds(customer_org_id="customer", app_id="app"),
+        (
+            CustomerScopeAuth(
+                key="customer_org",
+                entity_id="customer",
+                budget_limits=(AppDurationLimit(budget_duration="1mo", max_budget=100, reset_at=reset_at),),
+            ),
+            CustomerScopeAuth(
+                key="app_customer_org",
+                entity_id="app:customer",
+                budget_limits=(AppDurationLimit(budget_duration="1mo", max_budget=10, reset_at=reset_at),),
+            ),
+        ),
+        started_at=datetime.fromisoformat(started_at),
+    )
+    assert len(counters) == 2
+    assert {counter.entity_type for counter in counters} == {
+        "customer_org",
+        "app_customer_org",
+    }
+    assert {counter.window_start for counter in counters} == {datetime.fromisoformat(window_start)}

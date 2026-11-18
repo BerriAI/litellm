@@ -44,6 +44,7 @@ from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, res
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     TeamNotFoundError,
+    TeamReadFailed,
     can_team_access_model,
     delete_cache_key_object,
     get_default_end_user_budget,
@@ -58,6 +59,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object_by_alias,
     get_user_object,
     get_user_role,
+    read_team,
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_object_prefetch import prefetch_identity_keys
@@ -98,6 +100,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
@@ -249,8 +252,6 @@ class PythonAuthHost:
             load_team=get_team_object,
             load_membership=get_team_membership,
         )
-
-    # Key path
 
     async def validated_end_user_id(self, end_user_id: str) -> str | None:
         return await resolve_and_validate_end_user_id(
@@ -471,8 +472,6 @@ class PythonAuthHost:
             litellm_proxy_admin_name=self.litellm_proxy_admin_name,
         )
 
-    # JWT path
-
     # TODO: the JWT IO is answered here until the bridge answers it natively, with `HttpClientPool` for the
     # fetches and `redis-store` for the JWT keyspaces
 
@@ -546,7 +545,7 @@ class PythonAuthHost:
         self, team_id: str, *, upsert: bool = False, check_db_only: bool = False
     ) -> FoundTeam | TeamMissing:
         try:
-            team: Final = await get_team_object(
+            read: Final = await read_team(
                 team_id=team_id,
                 prisma_client=self.prisma_client,
                 user_api_key_cache=self.user_api_key_cache,
@@ -557,9 +556,11 @@ class PythonAuthHost:
             )
         except TeamNotFoundError:
             return TeamMissing.ABSENT
-        except HTTPException:
-            return TeamMissing.UNREADABLE
-        return team_facts(team)
+        if not isinstance(read, TeamReadFailed):
+            return team_facts(read)
+        if PrismaDBExceptionHandler.is_database_connection_error(read.error):
+            raise read.error
+        return TeamMissing.UNREADABLE
 
     async def team(self, team_id: str, upsert: bool) -> FoundTeam | TeamMissing:
         return await self._team(team_id, upsert=upsert)

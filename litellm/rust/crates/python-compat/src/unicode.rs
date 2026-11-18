@@ -18,3 +18,8 @@ pub fn isspace(c: char) -> bool {
             | '\u{3000}'
     )
 }
+
+/// Whether `text.encode("latin-1")` succeeds: every character is below U+0100.
+pub fn is_latin1(text: &str) -> bool {
+    text.chars().all(|character| u32::from(character) < 0x100)
+}

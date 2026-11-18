@@ -4017,6 +4017,12 @@
               "title": "Total Compression Savings Spend",
               "type": "number"
             },
+            "total_customer_margin_spend": {
+              "default": 0.0,
+              "description": "Surcharge in USD added to requests made for a customer, already included in total_spend",
+              "title": "Total Customer Margin Spend",
+              "type": "number"
+            },
             "total_failed_requests": {
               "default": 0,
               "title": "Total Failed Requests",
@@ -4924,6 +4930,12 @@
             "compression_savings_spend": {
               "default": 0.0,
               "title": "Compression Savings Spend",
+              "type": "number"
+            },
+            "customer_margin_spend": {
+              "default": 0.0,
+              "description": "Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend",
+              "title": "Customer Margin Spend",
               "type": "number"
             },
             "failed_requests": {
@@ -10825,6 +10837,145 @@
       }
     }
   },
+  "cursor_cli_passthrough": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/cursor-cli/{endpoint}": {
+        "post": {
+          "description": "Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header \"x-litellm-api-key: Bearer YOUR_KEY\"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Keys bound to LiteLLM agents are unsupported. Model restrictions, token limits, spend budgets and content guardrails are unsupported. Configured moderation, content guardrails or policy-engine rules disable this relay, even when not selected by this request. Request limits count RPCs, not agent sessions. Allow overlapping stream and append calls. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.",
+          "operationId": "cursor_cli_passthrough_cursor_cli__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "agent.v1.AgentService/RunSSE",
+                  "aiserver.v1.BidiService/BidiAppend"
+                ],
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/connect+proto": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "application/proto": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                },
+                "application/proto": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Unchanged native Cursor response bytes, including streamed agent events"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cursor Cli Passthrough",
+          "tags": [
+            "cursor_cli_passthrough"
+          ]
+        }
+      }
+    }
+  },
   "decisions": {
     "components": {
       "schemas": {
@@ -11391,12 +11542,39 @@
           "title": "OpenAIChoiceProbability",
           "type": "object"
         },
+        "OpenAIDecisionCacheWriteTokensDetails": {
+          "additionalProperties": true,
+          "properties": {
+            "ttl_12h_tokens": {
+              "default": 0,
+              "title": "Ttl 12H Tokens",
+              "type": "integer"
+            },
+            "ttl_30m_tokens": {
+              "default": 0,
+              "title": "Ttl 30M Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "OpenAIDecisionCacheWriteTokensDetails",
+          "type": "object"
+        },
         "OpenAIDecisionInputTokensDetails": {
           "properties": {
             "cache_write_tokens": {
               "default": 0,
               "title": "Cache Write Tokens",
               "type": "integer"
+            },
+            "cache_write_tokens_details": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OpenAIDecisionCacheWriteTokensDetails"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "cached_tokens": {
               "default": 0,
@@ -11811,6 +11989,39 @@
                                         {
                                           "additionalProperties": false,
                                           "properties": {
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "text": {
                                               "title": "Text",
                                               "type": "string"
@@ -11846,6 +12057,39 @@
                                               "title": "Image Url",
                                               "type": "string"
                                             },
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "type": {
                                               "const": "input_image",
                                               "title": "Type",
@@ -11867,8 +12111,12 @@
                                 "title": "Content"
                               },
                               "role": {
-                                "const": "user",
                                 "default": "user",
+                                "enum": [
+                                  "user",
+                                  "developer",
+                                  "system"
+                                ],
                                 "title": "Role",
                                 "type": "string"
                               },
@@ -11888,13 +12136,61 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
                       "title": "Input"
                     },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
                       "type": "string"
+                    },
+                    "prompt_cache_key": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers",
+                      "title": "Prompt Cache Key"
+                    },
+                    "prompt_cache_options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "mode": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Mode"
+                            },
+                            "ttl": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Ttl"
+                            }
+                          },
+                          "title": "OpenAIDecisionPromptCacheOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "questions": {
                       "description": "Predicate, choice and score questions. Answers come back in the same order",
@@ -13217,6 +13513,39 @@
                                         {
                                           "additionalProperties": false,
                                           "properties": {
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "text": {
                                               "title": "Text",
                                               "type": "string"
@@ -13252,6 +13581,39 @@
                                               "title": "Image Url",
                                               "type": "string"
                                             },
+                                            "prompt_cache_breakpoint": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "properties": {
+                                                    "mode": {
+                                                      "const": "explicit",
+                                                      "title": "Mode",
+                                                      "type": "string"
+                                                    },
+                                                    "ttl": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ],
+                                                      "title": "Ttl"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "mode"
+                                                  ],
+                                                  "title": "OpenAIDecisionPromptCacheBreakpoint",
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "type": {
                                               "const": "input_image",
                                               "title": "Type",
@@ -13273,8 +13635,12 @@
                                 "title": "Content"
                               },
                               "role": {
-                                "const": "user",
                                 "default": "user",
+                                "enum": [
+                                  "user",
+                                  "developer",
+                                  "system"
+                                ],
                                 "title": "Role",
                                 "type": "string"
                               },
@@ -13294,13 +13660,61 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
                       "title": "Input"
                     },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
                       "type": "string"
+                    },
+                    "prompt_cache_key": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers",
+                      "title": "Prompt Cache Key"
+                    },
+                    "prompt_cache_options": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "mode": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Mode"
+                            },
+                            "ttl": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "title": "Ttl"
+                            }
+                          },
+                          "title": "OpenAIDecisionPromptCacheOptions",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "questions": {
                       "description": "Predicate, choice and score questions. Answers come back in the same order",
@@ -16214,6 +16628,22 @@
               "title": "Guardrail Name",
               "type": "string"
             },
+            "images": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.",
+              "title": "Images"
+            },
             "input_type": {
               "default": "request",
               "title": "Input Type",
@@ -16262,13 +16692,13 @@
               "default": "standard"
             },
             "text": {
+              "default": "",
               "title": "Text",
               "type": "string"
             }
           },
           "required": [
-            "guardrail_name",
-            "text"
+            "guardrail_name"
           ],
           "title": "ApplyGuardrailRequest",
           "type": "object"

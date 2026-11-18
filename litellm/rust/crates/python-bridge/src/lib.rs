@@ -2,9 +2,11 @@ mod auth;
 mod budgets;
 mod cache;
 mod callable;
+mod callbacks_model_capacity;
 mod coercion;
 mod credentials;
 mod db;
+mod db_repository;
 mod diagnostics;
 mod errors;
 mod execution;
@@ -13,6 +15,7 @@ mod logger;
 mod marshal;
 mod model_cost;
 mod model_registry;
+mod parallel_request_limiter;
 mod preflight;
 mod python_settings;
 mod redis;
@@ -46,7 +49,13 @@ mod _native {
     #[pymodule_export]
     use crate::budgets::budget_check_decision;
     #[pymodule_export]
-    use crate::db::{NativeDatabase, NativeDatabaseFailure};
+    use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
+    #[pymodule_export]
+    use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
+    #[pymodule_export]
+    use crate::db_repository::{
+        RustJwtKeyMappingRepository, RustKeyRepository, RustModelAccessGroupRepository,
+    };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -66,6 +75,10 @@ mod _native {
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::parallel_request_limiter::{
+        NativeParallelRequestLimiter, NativeParallelRequestLimiterState,
+    };
     #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
@@ -193,6 +206,8 @@ mod tests {
                 "GuardedReply",
                 "GaugesAcquired",
                 "GaugeOverLimit",
+                "NativeParallelRequestLimiter",
+                "NativeParallelRequestLimiterState",
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
@@ -206,8 +221,12 @@ mod tests {
                 "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
+                "DatabaseEndpoint",
                 "NativeDatabase",
                 "NativeDatabaseFailure",
+                "RustKeyRepository",
+                "RustJwtKeyMappingRepository",
+                "RustModelAccessGroupRepository",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
@@ -232,6 +251,8 @@ mod tests {
                 "unsupported_tls_settings",
                 "NativeBudgets",
                 "budget_check_decision",
+                "NativeModelCapacity",
+                "NativeModelCapacityState",
                 "NativeS3Log",
                 "auth_allowed_routes_grant",
                 "auth_first_denied_route",

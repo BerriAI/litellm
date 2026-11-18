@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
+use litellm_python_compat::unicode::isspace;
 use serde_json::Value;
 
 /// A claim counts as set unless it is null, false, zero, or an empty string, array or object.
@@ -93,8 +94,9 @@ pub(crate) fn is_separator(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
+/// `text.strip()`.
 pub(crate) fn trim(text: &str) -> &str {
-    text.trim_matches(is_separator)
+    text.trim_matches(isspace)
 }
 
 #[cfg(test)]
