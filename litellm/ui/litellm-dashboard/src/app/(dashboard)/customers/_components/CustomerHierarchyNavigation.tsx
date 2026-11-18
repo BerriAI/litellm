@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { createSerializer, parseAsString, useQueryStates, type inferParserType } from "nuqs";
+import { createParser, createSerializer, parseAsString, useQueryStates, type inferParserType } from "nuqs";
 import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import type { CustomerUsageScope } from "./customerUsageApi";
@@ -14,11 +14,18 @@ const LABELS = {
   settings: "customerPortal.hierarchy.settings",
 } as const;
 
+export const customerAppParsers = {
+  app_id: createParser({
+    parse: (value) => (value.length > 0 && !value.includes(",") ? value : null),
+    serialize: (value: string) => value,
+  }),
+};
+const hierarchyFilters = { ...customerUsageDateParsers, ...customerAppParsers };
 const hierarchyParsers = {
   org: parseAsString,
   team: parseAsString,
   member: parseAsString,
-  ...customerUsageDateParsers,
+  ...hierarchyFilters,
 };
 const hierarchyHref = createSerializer(hierarchyParsers);
 const listHref = createSerializer(customerUsageDateParsers);
@@ -26,13 +33,13 @@ const listHref = createSerializer(customerUsageDateParsers);
 export function customerHierarchyHref(
   page: "usage" | "manage",
   scope: CustomerUsageScope,
-  dates: Partial<inferParserType<typeof customerUsageDateParsers>> = {},
+  dates: Partial<inferParserType<typeof hierarchyFilters>> = {},
 ): string {
   return hierarchyHref(uiHref(`customers/${page}`), { ...scope, ...dates });
 }
 
 export function useCustomerHierarchyLinks() {
-  const [dates] = useQueryStates(customerUsageDateParsers);
+  const [dates] = useQueryStates(hierarchyFilters);
   return {
     customerHierarchyHref: (page: "usage" | "manage", scope: CustomerUsageScope) =>
       customerHierarchyHref(page, scope, dates),

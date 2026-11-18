@@ -736,6 +736,10 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
             "/management/v1/customer_organizations",
+            "/management/v1/apps",
+            "/management/v1/apps/{app_id}",
+            "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}",
+            "/management/v1/apps/{app_id}/customer_members/{customer_member_id}",
             "/management/v1/customer_organizations/daily/activity/aggregated",
             "/management/v1/customer_organizations/{customer_org_id}",
             "/management/v1/customer_organizations/daily/activity",
@@ -2956,6 +2960,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: list[UserHeaderMapping] | None = None
+    customer_org_alias_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
+    customer_member_id_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
     supported_db_objects: list[SupportedDBObjectType] | None = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
@@ -3920,6 +3940,8 @@ class SpendLogsRouterMetadata(TypedDict):
 
 class SpendLogsMetadata(TypedDict):
     user_api_key_customer_org_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_id: ReadOnly[NotRequired[str | None]]
     user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
@@ -4715,7 +4737,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # `x-litellm-timeout`/`x-litellm-stream-timeout` headers, or a `timeout`/`request_timeout`/
     # `stream_timeout` field in the request body) rather than deployment config, so a
     # deliberately tiny value isn't treated as a deployment health signal (see
-    # cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    # router_rust.surface.health.RustHealthCallbacks.blocked_failure_exempt).
     client_side_timeout: bool
     keepalive_seconds: float | None
 
@@ -5031,6 +5053,9 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     virtual_key_claim_field: str | None = Field(
         default=None,
         description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
@@ -5148,6 +5173,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: list[str] | None = None
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     agent_id_jwt_field: str | None = Field(
         default=None,
         description=(
@@ -5436,6 +5464,7 @@ class BaseDailySpendTransaction(TypedDict):
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float
@@ -5472,6 +5501,7 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyCustomerMemberSpendTransaction(BaseDailySpendTransaction):
+    app_id: ReadOnly[NotRequired[str]]
     customer_member_id: ReadOnly[str]
     customer_team_id: ReadOnly[str]
     customer_org_id: ReadOnly[str]
@@ -5496,6 +5526,9 @@ class DBSpendUpdateTransactions(TypedDict):
     customer_org_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_team_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
     customer_member_list_transactions: ReadOnly[dict[str, float] | None]  # mutable-ok: aggregated like siblings
+    app_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_customer_org_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
+    app_customer_member_list_transactions: ReadOnly[NotRequired[dict[str, float] | None]]  # mutable-ok: rollups
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from hashlib import sha256
+from itertools import count
 from pathlib import Path
 from typing import Final, Literal
 
@@ -17,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import JsonValue
 from redis import Redis
 
+from litellm.proxy.db.connection_budget import MIN_CONNECTION_LIMIT, ConnectionBudget
 from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.database_relay import held_statement_relay
@@ -41,10 +43,12 @@ def _config(
     map_existing_key: bool = True,
     user_id_upsert: bool = False,
     issuers: tuple[dict[str, JsonValue], ...] = (),
+    pool_limit: int | None = None,
 ) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["general_settings"] = {
         **config["general_settings"],
+        **({"database_connection_pool_limit": pool_limit} if pool_limit is not None else {}),
         "enable_jwt_auth": True,
         "litellm_jwtauth": {
             "user_id_jwt_field": "sub",
@@ -277,6 +281,9 @@ def test_concurrent_first_jwt_calls_both_succeed_on_one_surviving_mapped_key(
     gateway: Gateway, tmp_path: Path, behavior: Literal["auto_register", "link_only"]
 ) -> None:
     writer_url: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL") or os.environ["DATABASE_URL"]
+    pool_limit: Final = next(
+        total for total in count(MIN_CONNECTION_LIMIT) if ConnectionBudget.split(total).python == 2
+    )
     with (
         _issuer() as (private_key, jwks_url),
         gateway.scenario() as scenario,
@@ -297,7 +304,7 @@ def test_concurrent_first_jwt_calls_both_succeed_on_one_surviving_mapped_key(
                 gateway,
                 tmp_path,
                 overrides,
-                config=_config(tmp_path, "sub", behavior=behavior, map_existing_key=False),
+                config=_config(tmp_path, "sub", behavior=behavior, map_existing_key=False, pool_limit=pool_limit),
             ) as candidate,
             ThreadPoolExecutor(max_workers=1) as pool,
         ):

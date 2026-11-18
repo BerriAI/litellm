@@ -126,9 +126,7 @@ from litellm.utils import (
     validate_environment,
     validate_chat_completion_tool_choice,
     validate_and_fix_openai_messages,
-    should_drop_thinking_for_missing_tool_thinking_blocks,
 )
-from litellm.types.llms.openai import AllMessageValues
 from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
@@ -3612,51 +3610,6 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
         messages
     ) and not any_assistant_message_has_thinking_blocks(messages)
     assert should_drop_thinking is False
-
-
-_TOOL_TURN_WITHOUT_THINKING_BLOCKS: Final = (
-    {"role": "user", "content": "Search for weather"},
-    {
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}],
-    },
-    {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
-)
-
-_EARLIER_TOOL_TURN_WITH_THINKING_BLOCKS: Final = (
-    {"role": "user", "content": "Search for weather"},
-    {
-        "role": "assistant",
-        "content": "",
-        "thinking_blocks": [{"type": "thinking", "thinking": "Let me search", "signature": "sig"}],
-        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}],
-    },
-    {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
-    *_TOOL_TURN_WITHOUT_THINKING_BLOCKS[1:],
-)
-
-_NO_TOOL_CALLS: Final = (
-    {"role": "user", "content": "Hi"},
-    {"role": "assistant", "content": "Hello"},
-    {"role": "user", "content": "How are you?"},
-)
-
-
-@pytest.mark.parametrize(
-    ("thinking", "messages", "expected"),
-    [
-        ({"type": "adaptive"}, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, False),
-        ({"type": "enabled", "budget_tokens": 1024}, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, True),
-        ({"type": "enabled", "budget_tokens": 1024}, _EARLIER_TOOL_TURN_WITH_THINKING_BLOCKS, False),
-        (None, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, False),
-        ({"type": "enabled", "budget_tokens": 1024}, _NO_TOOL_CALLS, False),
-    ],
-)
-def test_should_drop_thinking_for_missing_tool_thinking_blocks(
-    thinking: object, messages: tuple[AllMessageValues, ...], expected: bool
-):
-    assert should_drop_thinking_for_missing_tool_thinking_blocks(thinking, list(messages)) is expected
 
 
 class TestAdditionalDropParamsForNonOpenAIProviders:

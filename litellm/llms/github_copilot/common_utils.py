@@ -22,6 +22,18 @@ VSCODE_CHAT_INTEGRATION_ID: Final = "vscode-chat"
 COPILOT_CLI_INTEGRATION_ID: Final = "copilot-developer-cli"
 
 
+def custom_github_app_hint() -> str | None:
+    """Explain the GitHub App permission a custom Copilot sign-in app needs, or None for the default app."""
+    if os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID) in ("", DEFAULT_GITHUB_CLIENT_ID):
+        return None
+    return (
+        "LiteLLM signs in to GitHub Copilot with a custom GitHub App (GITHUB_COPILOT_CLIENT_ID). Check that the "
+        "app's 'Copilot Requests' permission is set to 'Read-only' and that the app's installation accepted it: "
+        "open https://github.com/settings/apps (or your organization's Settings > Developer settings > GitHub Apps), "
+        "select the app, then Permissions & events > Organization permissions > Copilot Requests."
+    )
+
+
 class GithubCopilotError(BaseLLMException):
     def __init__(
         self,

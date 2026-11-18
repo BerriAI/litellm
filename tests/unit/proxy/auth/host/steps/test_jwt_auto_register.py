@@ -5,14 +5,18 @@ from typing import Final
 import pytest
 
 from litellm.proxy.auth.host.steps.jwt_auto_register import create_key_mapping
+from tests.unit.proxy.rust_auth_stores import FakeJwtKeyMappingStore, JwtMapping, RustAuthStores
 
 CLAIM: Final = ("email", "dev@example.com")
 
 
 @dataclass
 class _MappingTable:
-    """The `LiteLLM_JWTKeyMapping` table, unique on issuer, claim name and claim value like the schema."""
+    """The `LiteLLM_JWTKeyMapping` table, unique on issuer, claim name and claim value like the schema.
 
+    Its rows are what the Rust JWT key mapping store reads back, so each created row is mirrored there."""
+
+    store: FakeJwtKeyMappingStore = field(default_factory=FakeJwtKeyMappingStore)
     rows: list[dict[str, object]] = field(default_factory=list)  # mutable-ok: the table's stored rows
     failure: Exception | None = None
 
@@ -23,10 +27,14 @@ class _MappingTable:
         if any((row["jwt_issuer"], row["jwt_claim_name"], row["jwt_claim_value"]) == scope for row in self.rows):
             raise Exception("Unique constraint failed on the fields: (`jwt_issuer`,`jwt_claim_name`,`jwt_claim_value`)")
         self.rows.append({**data, "is_active": True})
-
-    async def find_first(self, where: dict[str, object]) -> SimpleNamespace | None:
-        match: Final = next((row for row in self.rows if all(row[k] == v for k, v in where.items())), None)
-        return None if match is None else SimpleNamespace(token=match["token"])
+        self.store.mappings.append(
+            JwtMapping(
+                jwt_claim_name=str(data["jwt_claim_name"]),
+                jwt_claim_value=str(data["jwt_claim_value"]),
+                token=str(data["token"]),
+                jwt_issuer=str(data["jwt_issuer"]),
+            )
+        )
 
 
 @dataclass
@@ -66,14 +74,17 @@ async def test_a_claim_is_mapped_to_the_key_it_was_given() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_request_that_loses_the_race_returns_the_winners_key_and_keeps_its_own() -> None:
-    mappings: Final = _MappingTable()
+async def test_a_request_that_loses_the_race_returns_the_winners_key_and_keeps_its_own(
+    rust_auth_stores: RustAuthStores,
+) -> None:
+    mappings: Final = _MappingTable(store=rust_auth_stores.jwt_key_mapping)
     keys: Final = _KeyTable()
     _ = await _map(_prisma(mappings, keys), "hash-winner")
 
     assert await _map(_prisma(mappings, keys), "hash-loser") == ("hash-winner", True)
     assert keys.deleted == []
     assert [row["token"] for row in mappings.rows] == ["hash-winner"]
+    assert rust_auth_stores.jwt_key_mapping.lookups == [(*CLAIM, None)]
 
 
 @pytest.mark.asyncio

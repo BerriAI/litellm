@@ -37,6 +37,7 @@ from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.router_api import RoutingContext
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import get_available_models_for_user
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 _TEAMS: Final[Mapping[str, LiteLLM_TeamTableCachedObj]] = {
     UI_TEAM_ID: LiteLLM_TeamTableCachedObj(team_id=UI_TEAM_ID, models=[]),
@@ -377,7 +378,7 @@ async def test_dashboard_lists_and_calls_own_and_team_models(
     expected: set[str],
 ) -> None:
     monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", flag)
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     owner: Final = LiteLLM_UserTable(user_id="u1", models=own_models, teams=owner_teams)
     token: Final = UserAPIKeyAuth(
         token="dashboard-key",
@@ -508,7 +509,7 @@ async def test_dashboard_lists_and_calls_team_access_group_models(
     teams: None,
 ) -> None:
     monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", False)
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(auth_checks, "get_models_from_access_groups", AsyncMock(return_value=["gpt-b"]))
     owner: Final = LiteLLM_UserTable(user_id="u1", models=["no-default-models"], teams=["team-group"])
     token: Final = UserAPIKeyAuth(
@@ -632,7 +633,7 @@ def _billing_database(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable)
     cache.set_cache(owner.user_id, owner, model_type=LiteLLM_UserTable)
     for team in _TEAMS.values():
         cache.set_cache(f"team_id:{team.team_id}", team, model_type=LiteLLM_TeamTableCachedObj)
-    database: Final = MagicMock()
+    database: Final = prisma_with_empty_config()
     database.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
 
     async def team_row(where: Mapping[str, object], **_: object) -> LiteLLM_TeamTableCachedObj | None:

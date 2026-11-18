@@ -13,10 +13,16 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import get_key_object, get_team_object
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_get_key_object_loads_object_permission():
+async def test_get_key_object_loads_object_permission(rust_auth_stores: RustAuthStores):
     """
     Test that get_key_object automatically loads object_permission when object_permission_id exists.
     """
@@ -25,15 +31,12 @@ async def test_get_key_object_loads_object_permission():
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)  # Not in cache
 
-    # Mock the DB response with object_permission_id but no object_permission
-    mock_token_data = MagicMock()
-    mock_token_data.model_dump.return_value = {
+    rust_auth_stores.key.rows["test_token_hash"] = {
         "token": "test_token_hash",
         "user_id": "test_user",
         "object_permission_id": "test_perm_id",
         "object_permission": None,
     }
-    mock_prisma_client.get_data = AsyncMock(return_value=mock_token_data)
 
     # Mock the object_permission that should be loaded
     mock_object_permission = LiteLLM_ObjectPermissionTable(
@@ -68,8 +71,9 @@ async def test_get_key_object_loads_object_permission():
         assert result.object_permission.mcp_servers == ["server1", "server2"]
 
 
+
 @pytest.mark.asyncio
-async def test_get_key_object_no_permission_id():
+async def test_get_key_object_no_permission_id(rust_auth_stores: RustAuthStores):
     """
     Test that get_key_object works correctly when no object_permission_id exists.
     """
@@ -78,15 +82,12 @@ async def test_get_key_object_no_permission_id():
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)  # Not in cache
 
-    # Mock the DB response without object_permission_id
-    mock_token_data = MagicMock()
-    mock_token_data.model_dump.return_value = {
+    rust_auth_stores.key.rows["test_token_hash"] = {
         "token": "test_token_hash",
         "user_id": "test_user",
         "object_permission_id": None,
         "object_permission": None,
     }
-    mock_prisma_client.get_data = AsyncMock(return_value=mock_token_data)
 
     # Mock proxy_logging_obj to handle async service hooks
     mock_proxy_logging_obj = MagicMock()
