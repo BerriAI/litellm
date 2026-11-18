@@ -581,6 +581,30 @@ def test_hashicorp_vault_path_component_traversal_raises(
         manager.get_url("valid-secret", **{param_name: traversal})
 
 
+def test_hashicorp_get_url_url_encodes_delimiters(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: Final = _build_manager(monkeypatch, {})
+    url_victim: Final = manager.get_url("victim")
+    url_victim_fragment: Final = manager.get_url("victim#x")
+    url_victim_query: Final = manager.get_url("victim?param=1")
+
+    assert url_victim == f"{VAULT_ADDR}/v1/secret/data/victim"
+    assert url_victim_fragment == f"{VAULT_ADDR}/v1/secret/data/victim%23x"
+    assert url_victim_query == f"{VAULT_ADDR}/v1/secret/data/victim%3Fparam%3D1"
+    assert url_victim != url_victim_fragment
+    assert url_victim != url_victim_query
+
+
+def test_hashicorp_get_url_url_encodes_path_components(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: Final = _build_manager(monkeypatch, {})
+    url: Final = manager.get_url(
+        secret_name="key#1",
+        namespace="ns#admin",
+        mount_name="mount?kv",
+        path_prefix="teams/team#a",
+    )
+    assert url == f"{VAULT_ADDR}/v1/ns%23admin/mount%3Fkv/data/teams/team%23a/key%231"
+
+
 with Path(__file__).with_name("hashicorp_vault_parity.json").open() as parity_file:
     PARITY_CASES: Final = json.load(parity_file)
 
