@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from redis.exceptions import RedisError
@@ -270,6 +270,8 @@ class PromptCacheAlertLogger(CustomLogger):
     Redis client is unavailable, may have been what ended a streak, so before anything else reaches Redis the lost
     evidence's deployment is reset as of that request's end. A reset older than a proof's lifetime can no longer
     matter and is dropped."""
+
+    reads_original_response: ClassVar[bool] = True
 
     def __init__(
         self,

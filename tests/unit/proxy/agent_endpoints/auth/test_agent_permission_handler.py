@@ -22,6 +22,12 @@ from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     accessible_agents,
 )
 from litellm.types.agents import AgentCaller
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
+
+
+def _key_row(auth: UserAPIKeyAuth) -> dict[str, object]:
+    """The combined_view row the key store answers with for ``auth``."""
+    return auth.model_dump(exclude_none=True)
 
 
 def _registry_with(*agent_names: str) -> AgentRegistry:
@@ -1062,22 +1068,25 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
     )
     client: Final = MagicMock()
     client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
-    client.get_data = AsyncMock(return_value=warm)
+    keys: Final = install_rust_auth_stores(monkeypatch).key
+    keys.rows["a" * 64] = _key_row(warm)
     client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
     cache: Final = UserApiKeyCache()
     cache.set_cache("a" * 64, warm)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await AgentRequestHandler.is_agent_allowed("target", warm) is True
-    client.get_data.return_value = warm.model_copy(
-        update={
-            "object_permission": None,
-            "object_permission_id": "replacement" if change == "permission_reference" else "grant",
-            "access_group_ids": [],
-            "team_id": "new-team" if change == "team" else None,
-            "blocked": change == "blocked",
-            "expires": "2000-01-01T00:00:00+00:00" if change == "expired" else None,
-        }
+    keys.rows["a" * 64] = _key_row(
+        warm.model_copy(
+            update={
+                "object_permission": None,
+                "object_permission_id": "replacement" if change == "permission_reference" else "grant",
+                "access_group_ids": [],
+                "team_id": "new-team" if change == "team" else None,
+                "blocked": change == "blocked",
+                "expires": "2000-01-01T00:00:00+00:00" if change == "expired" else None,
+            }
+        )
     )
     client.writer_db.litellm_objectpermissiontable.find_unique.return_value = permission.model_copy(
         update={"agents": []}
@@ -1103,9 +1112,9 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
 
         monkeypatch.setattr(auth_checks, "get_agent_ids_from_access_groups", AsyncMock(return_value=["target"]))
     if change == "deleted":
-        client.get_data.return_value = None
+        del keys.rows["a" * 64]
     if change == "outage":
-        client.get_data.side_effect = RuntimeError("writer unavailable")
+        keys.rows["a" * 64] = RuntimeError("writer unavailable")
     if change in ("blocked", "expired", "deleted", "outage"):
         with pytest.raises((HTTPException, RuntimeError)):
             await AgentRequestHandler.is_agent_allowed("target", warm)
@@ -1176,7 +1185,8 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
         ),
     )
     database: Final = MagicMock()
-    database.get_data = AsyncMock(return_value=persisted)
+    keys: Final = install_rust_auth_stores(monkeypatch).key
+    keys.rows["a" * 64] = _key_row(persisted)
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
     database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
         side_effect=lambda where: permission if where["object_permission_id"] == "key-grant" else team.object_permission
@@ -1193,7 +1203,7 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
     assert await AgentRequestHandler.is_agent_allowed("target", auth) is (
         permitted and ceiling != "group-without-grant"
     )
-    database.get_data.assert_awaited_once()
+    assert len(keys.lookups) == 1
     assert auth.agent_caller == (AgentCaller(team_id="caller-team") if ceiling == "caller-team" else None)
 
 

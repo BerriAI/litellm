@@ -42,8 +42,11 @@ class DailyActivityScope:
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
     team_ids: tuple[str, ...] | None = None
+    app_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.app_id is not None and self.table is not DailyActivityTable.CUSTOMER_MEMBER:
+            raise ValueError("App filtering is supported only on customer hierarchy activity")
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
 
@@ -147,6 +150,7 @@ class RollupMetricsRow:
     gateway_injected_caching_savings_spend: float | None
     autorouter_savings_spend: float | None
     guardrail_spend: float | None = field(default=None, kw_only=True)
+    customer_margin_spend: float | None = field(default=None, kw_only=True)
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
@@ -223,6 +227,7 @@ class DailyActivityRow(Protocol):
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
     guardrail_spend: float
+    customer_margin_spend: float
     spend: float
     api_requests: int
     successful_requests: int

@@ -51,6 +51,7 @@ from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.utils import hash_token
 from litellm.types.agents import AgentResponse
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 _RUN: Final = "agent.v1.AgentService/RunSSE"
 _APPEND: Final = "aiserver.v1.BidiService/BidiAppend"
@@ -157,7 +158,7 @@ def test_normalized_gateway_bearers_never_reach_cursor(
     credential: str,
     template: str,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
         key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
     )
@@ -175,7 +176,7 @@ def test_normalized_gateway_bearers_never_reach_cursor(
 def test_normalized_copied_gateway_secret_is_removed_without_changing_cursor_credentials(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, credential: str
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
         key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
     )
@@ -200,7 +201,7 @@ def test_effective_tag_token_caps_cannot_be_bypassed_by_opaque_requests(
     source: str,
     tpm_limit: int | None,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     key: Final = MASTER_KEY if source == "master-header" else "sk-cursor-tagged-key"
     tag: Final = "cursor-budget-tag"
     proxy_server.user_api_key_cache.set_cache(
@@ -245,7 +246,7 @@ def test_effective_tag_token_caps_cannot_be_bypassed_by_opaque_requests(
 def test_opaque_tag_lookup_distinguishes_absent_tags_from_unverifiable_limits(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, lookup: str
 ) -> None:
-    database: Final = MagicMock()
+    database: Final = prisma_with_empty_config()
     database.db.litellm_tagtable.find_many = AsyncMock(
         return_value=[], side_effect=ConnectionError("tag database unavailable") if lookup == "error" else None
     )
@@ -286,7 +287,7 @@ def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
     monkeypatch.delenv("JWT_ISSUER", raising=False)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.setattr(proxy_server, "premium_user", True)
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(
         proxy_server,
         "general_settings",
@@ -350,7 +351,7 @@ def test_unenforceable_or_disallowed_key_policies_fail_closed(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, controls: dict[str, object]
 ) -> None:
     key: Final = "sk-cursor-restricted-test"
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
         key=hash_token(key), value=UserAPIKeyAuth.model_validate({"token": hash_token(key), **controls})
     )
@@ -374,7 +375,7 @@ def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
     spend: int,
 ) -> None:
     key: Final = "sk-cursor-spend-capped"
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
         key=hash_token(key),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), budget_field: limit, "spend": spend}),
@@ -389,7 +390,7 @@ def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
 
 @pytest.fixture
 def member_gateway(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tuple[str, MagicMock]:
-    database: Final = MagicMock()
+    database: Final = prisma_with_empty_config()
     database.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     cache: Final = UserApiKeyCache()
@@ -508,7 +509,7 @@ def test_agent_bound_keys_cannot_bypass_opaque_model_scopes(
     registry: Final = agent_registry.AgentRegistry()
     registry.register_agent(agent)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
-    database: Final = MagicMock()
+    database: Final = prisma_with_empty_config()
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     proxy_server.user_api_key_cache.set_cache(
@@ -697,7 +698,7 @@ async def test_parallel_request_limit_counts_overlapping_agent_rpcs(
     monkeypatch.setattr(litellm, "callbacks", [limiter])
     monkeypatch.setattr(litellm, "_async_success_callback", [limiter])
     monkeypatch.setattr(litellm, "_async_failure_callback", [limiter])
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
         key=hash_token(key),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": limit}),
@@ -840,7 +841,7 @@ async def test_cancelled_session_releases_parallel_request_slot(
     monkeypatch.setattr(litellm, "callbacks", [limiter, recorder])
     monkeypatch.setattr(litellm, "_async_success_callback", [limiter, recorder])
     monkeypatch.setattr(litellm, "_async_failure_callback", [limiter, recorder])
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
         key=hash_token(key),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": 1}),

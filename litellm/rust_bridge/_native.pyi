@@ -610,8 +610,6 @@ class _KeyFacts(Protocol):
     @property
     def project_id(self) -> str | None: ...
     @property
-    def end_user_id(self) -> str | None: ...
-    @property
     def last_refreshed_at(self) -> float | None: ...
 
 class _TeamFacts(Protocol):
@@ -715,6 +713,12 @@ class RustClaimIdentity:
 
 @final
 class RustMappedClaims:
+    @property
+    def customer_org_alias(self) -> str | None: ...
+    @property
+    def customer_member_id(self) -> str | None: ...
+    @property
+    def customer_team_id(self) -> str | None: ...
     @property
     def user_id(self) -> str | None: ...
     @property
@@ -1071,6 +1075,27 @@ class RustDenial:
         def __new__(cls, team_id: str) -> RustDenial.TeamNotFound: ...
         @property
         def team_id(self) -> str: ...
+
+    @final
+    class KeyNotFound(RustDenial):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        def __new__(cls, hash: str) -> RustDenial.KeyNotFound: ...
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class NoMatchingJwtPublicKey(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.NoMatchingJwtPublicKey: ...
+        @property
+        def message(self) -> str: ...
+
+    @final
+    class IdJagNotBearer(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.IdJagNotBearer: ...
+        @property
+        def message(self) -> str: ...
 
 @final
 class RustAuthOutcome:
@@ -1844,6 +1869,25 @@ class NativeDatabase:
     def close(self) -> Future[None]: ...
 
 @final
+class RustKeyRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyRepository: ...
+    def find(self, token: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustJwtKeyMappingRepository:
+    def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
+    def mapped_token(
+        self, jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None
+    ) -> Future[str | None]: ...
+    def mapped_claims(self, tokens: Sequence[str]) -> Future[list[tuple[str, str, str]]]: ...
+
+@final
+class RustModelAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustModelAccessGroupRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def budgets(self, names: Sequence[str]) -> Future[list[tuple[str, float, float | None, bool]]]: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -2136,9 +2180,12 @@ __all__ = [
     "RustClaimIdentity",
     "RustDenial",
     "RustIdentity",
+    "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyRepository",
     "RustMappedClaims",
+    "RustModelAccessGroupRepository",
     "RustPlan",
     "RustTeamGrant",
     "RustUpstreamError",
