@@ -153,14 +153,18 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                         autoFocus
                       />
                       <span className="text-muted-foreground">%</span>
-                      <span className="text-muted-foreground">+</span>
-                      <span className="text-muted-foreground">$</span>
-                      <Input
-                        value={editFixedAmount}
-                        onChange={(e) => setEditFixedAmount(e.target.value)}
-                        placeholder="0.001"
-                        className="w-24"
-                      />
+                      {row.provider !== "customer" && (
+                        <>
+                          <span className="text-muted-foreground">+</span>
+                          <span className="text-muted-foreground">$</span>
+                          <Input
+                            value={editFixedAmount}
+                            onChange={(e) => setEditFixedAmount(e.target.value)}
+                            placeholder="0.001"
+                            className="w-24"
+                          />
+                        </>
+                      )}
                     </div>
                     <Button
                       variant="ghost"

@@ -82,10 +82,12 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
           const errorMessage =
             errorData.detail?.error || errorData.detail || t("costTracking.marginConfig.toasts.updateFailedFallback");
           toast.fromError(errorMessage);
+          await fetchMarginConfig();
         }
       } catch (error) {
         console.error("Error updating margin config:", error);
         toast.fromError(t("costTracking.marginConfig.toasts.updateFailed"));
+        await fetchMarginConfig();
       }
     },
     [accessToken, fetchMarginConfig, t],
