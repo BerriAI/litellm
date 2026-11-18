@@ -1,14 +1,21 @@
 use std::{
+    future::pending,
+    io,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
 use litellm_circuit_breaker::{Breaker, Config, Failure};
 use sqlx::{PgPool, Postgres, pool::PoolConnection};
+use tokio::net::TcpStream;
 
 use crate::{Endpoint, Error};
 
 const RECOVERY: Duration = Duration::from_secs(30);
+/// How long an acquire runs before it checks that the server accepts connections at all. sqlx retries a
+/// refused connection until the acquire timeout, Prisma's `pool_timeout` (60s by default), while Prisma
+/// fails it at once, so without this check a stopped database stalls every lookup instead of failing it.
+const REFUSAL_CHECK_AFTER: Duration = Duration::from_millis(100);
 
 type Connection = PoolConnection<Postgres>;
 
@@ -34,6 +41,7 @@ struct Side {
     pool: PgPool,
     breaker: Breaker,
     recycled: Arc<Recycled>,
+    address: Option<(String, u16)>,
 }
 
 impl Side {
@@ -52,6 +60,10 @@ impl Side {
         Ok(Self {
             pool,
             recycled,
+            address: endpoint
+                .socket
+                .is_none()
+                .then(|| (endpoint.host.clone(), endpoint.port)),
             breaker: Breaker::new(
                 Config {
                     failure_threshold: 1,
@@ -65,7 +77,7 @@ impl Side {
 
     async fn acquire_unless_skipped(&self) -> Option<Connection> {
         let admission = self.breaker.admit(Instant::now()).ok()?;
-        match self.pool.acquire().await {
+        match self.acquire_unless_refused().await {
             Ok(connection) => {
                 admission.succeeded();
                 Some(connection)
@@ -78,11 +90,35 @@ impl Side {
     }
 
     async fn acquire(&self) -> Result<Connection, Error> {
-        let result = self.pool.acquire().await;
+        let result = self.acquire_unless_refused().await;
         if result.is_err() {
             self.breaker.failed(Failure::Hard, Instant::now());
         }
         Ok(result?)
+    }
+
+    async fn acquire_unless_refused(&self) -> Result<Connection, sqlx::Error> {
+        tokio::select! {
+            biased;
+            acquired = self.pool.acquire() => acquired,
+            refused = self.refused() => Err(sqlx::Error::Io(refused)),
+        }
+    }
+
+    /// The error of a server that refuses connections, or never for one that accepts them or listens on a
+    /// socket file.
+    async fn refused(&self) -> io::Error {
+        let Some((host, port)) = &self.address else {
+            return pending().await;
+        };
+        tokio::time::sleep(REFUSAL_CHECK_AFTER).await;
+        match TcpStream::connect((host.as_str(), *port)).await {
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => error,
+            probe => {
+                drop(probe);
+                pending().await
+            }
+        }
     }
 }
 
@@ -169,7 +205,7 @@ mod tests {
     use sqlx::{Connection as _, PgConnection};
 
     use super::{Pools, Recycled};
-    use crate::{Endpoint, Error, ErrorKind, PoolLimits, test_support::database_endpoint};
+    use crate::{Endpoint, Error, ErrorKind, PoolLimits, SslMode, test_support::database_endpoint};
 
     #[rstest]
     #[case::never_recycled(None, 5, false)]
@@ -414,6 +450,43 @@ mod tests {
         let pools = Pools::new(&writer, Some(&read_only(&writer)))?;
 
         assert!(!is_read_only(&mut *pools.writer_only().await?).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_refusing_server_fails_the_acquire_long_before_its_timeout()
+    -> Result<(), Box<dyn StdError>> {
+        let refusing = Endpoint {
+            host: "127.0.0.1".to_owned(),
+            port: 1,
+            socket: None,
+            username: "litellm".to_owned(),
+            password: None,
+            database: "proxy".to_owned(),
+            ssl_mode: SslMode::Disable,
+            ssl_root_cert: None,
+            ssl_client: None,
+            application_name: None,
+            options: Vec::new(),
+            statement_cache_capacity: 0,
+            pool: PoolLimits {
+                max_connections: 1,
+                acquire_timeout_seconds: Some(60.0),
+                idle_timeout_seconds: None,
+                socket_timeout_seconds: None,
+            },
+        };
+        let pools = Pools::new(&refusing, None)?;
+        let started = Instant::now();
+
+        let error = pools
+            .writer_only()
+            .await
+            .err()
+            .ok_or("a refusing server handed out a connection")?;
+
+        assert_eq!(error.kind(), ErrorKind::Unreachable);
+        assert!(started.elapsed() < Duration::from_secs(5));
         Ok(())
     }
 
