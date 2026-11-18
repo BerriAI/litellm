@@ -227,7 +227,7 @@ def _expected_cost(
     )
 
 
-def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_read():
+def test_coralbricks_chat_completion_cost_includes_cache_write_and_cached_read():
     rates: Final = _coralbricks_rates()
     with respx.mock() as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
@@ -276,7 +276,7 @@ def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_r
     )
 
 
-def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
+def test_coralbricks_responses_cost_includes_cache_write_and_cached_read():
     rates: Final = _coralbricks_rates()
     with respx.mock() as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/responses").respond(
@@ -328,7 +328,7 @@ def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
 
 
 @pytest.mark.asyncio
-async def test_coralbricks_anthropic_messages_cost_includes_cache_write_and_free_cached_read(
+async def test_coralbricks_anthropic_messages_cost_includes_cache_write_and_cached_read(
     monkeypatch: pytest.MonkeyPatch,
 ):
     rates: Final = _coralbricks_rates()
@@ -443,10 +443,7 @@ def _billed_chat_cost(model_id: str) -> float:
 
 @pytest.mark.parametrize(
     ("deprecated_slug", "current_slug"),
-    (
-        ("deepseek-v4.1-flash-fast-fp4", "deepseek-v4.1-flash-fast"),
-        ("deepseek-v4.1-flash", "deepseek-v4.1-flash-fast"),
-    ),
+    (("deepseek-v4.1-flash-fast-fp4", "deepseek-v4.1-flash-fast"),),
 )
 def test_coralbricks_deprecated_slug_bills_like_its_current_slug(deprecated_slug: str, current_slug: str):
     current_cost: Final = _billed_chat_cost(current_slug)
@@ -454,7 +451,30 @@ def test_coralbricks_deprecated_slug_bills_like_its_current_slug(deprecated_slug
     assert _billed_chat_cost(deprecated_slug) == pytest.approx(current_cost)
 
 
-def test_coralbricks_streaming_chat_cost_includes_cache_write_and_free_cached_read():
+# USD per million tokens: (input, cached input, output), from https://www.coralbricks.ai/pricing
+PUBLISHED_RATES: Final = {
+    "coralbricks/deepseek-v4.1-flash-fast": (0.45, 0.009, 1.80),
+    "coralbricks/deepseek-v4.1-flash-fast-fp4": (0.45, 0.009, 1.80),
+    "coralbricks/deepseek-v4.1-flash": (0.19, 0.008, 0.60),
+    "coralbricks/deepseek-v4.1-flash-value": (0.005, 0.003, 0.57),
+}
+
+
+def test_coralbricks_cost_map_lists_only_served_models_at_published_rates():
+    rows: Final = {key: row for key, row in litellm.model_cost.items() if key.startswith("coralbricks/")}
+    assert set(rows) == set(PUBLISHED_RATES)
+    for key, (input_rate, cached_rate, output_rate) in PUBLISHED_RATES.items():
+        row = rows[key]
+        assert row["input_cost_per_token"] * 1e6 == pytest.approx(input_rate), key
+        assert row["cache_read_input_token_cost"] * 1e6 == pytest.approx(cached_rate), key
+        assert row["output_cost_per_token"] * 1e6 == pytest.approx(output_rate), key
+        # A cache write carries no surcharge: written tokens cost the input rate.
+        assert row["cache_creation_input_token_cost"] == row["input_cost_per_token"], key
+        assert row["max_input_tokens"] == 1_048_576, key
+        assert row["max_output_tokens"] == 393_216, key
+
+
+def test_coralbricks_streaming_chat_cost_includes_cache_write_and_cached_read():
     rates: Final = _coralbricks_rates()
     usage_chunk: Final = {
         "id": "chatcmpl_coralbricks",
