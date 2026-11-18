@@ -30,6 +30,10 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     drops_explicit_reasoning_effort,
     model_group_from_metadata,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import (
+    explicit_effort_fits_thinking_budget,
+    reasoning_effort_from_thinking_silently,
+)
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
@@ -332,6 +336,10 @@ def _deployment_output_config(
     drop_params: bool,
 ) -> AnthropicOutputConfig | None:
     if output_config is None or thinking is None or thinking.get("type") != "enabled":
+        return output_config
+    if not explicit_effort_fits_thinking_budget(
+        output_config.get("effort"), reasoning_effort_from_thinking_silently(thinking, drop_params=True)
+    ):
         return output_config
     if not _drops_explicit_effort(
         output_config, model=model, forwarded_kwargs=forwarded_kwargs, drop_params=drop_params

@@ -1,6 +1,7 @@
 import reprlib
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import TypeAdapter
@@ -14,6 +15,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.reasoning_effort_strength import REASONING_EFFORT_STRENGTH_ORDER
 
 OpenAIStyleReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
@@ -112,6 +114,21 @@ def reasoning_effort_from_thinking_silently(
 ) -> OpenAIStyleReasoningEffort | None:
     effort: Final = _effort_or_dropped_budget(thinking, drop_params=drop_params)
     return None if isinstance(effort, DroppedThinkingBudget) else effort
+
+
+_EFFORT_RANK_UNDER_A_BUDGET: Final = MappingProxyType(
+    {level: rank for rank, level in enumerate(("none", *REASONING_EFFORT_STRENGTH_ORDER))}
+)
+
+
+def explicit_effort_fits_thinking_budget(explicit_effort: object, budget_effort: str | None) -> bool:
+    explicit_rank: Final = (
+        _EFFORT_RANK_UNDER_A_BUDGET.get(explicit_effort) if isinstance(explicit_effort, str) else None
+    )
+    if explicit_rank is None:
+        return True
+    budget_rank: Final = _EFFORT_RANK_UNDER_A_BUDGET.get(budget_effort) if budget_effort is not None else None
+    return budget_rank is not None and explicit_rank <= budget_rank
 
 
 def non_numeric_thinking_budget_error(budget: object) -> UnsupportedParamsError:

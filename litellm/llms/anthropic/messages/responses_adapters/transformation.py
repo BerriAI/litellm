@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
+    explicit_effort_fits_thinking_budget,
     reasoning_effort_from_thinking,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_parts
@@ -81,7 +82,9 @@ def _reasoning_effort(
             return explicit_effort or "medium"
         case "enabled":
             budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
-            return explicit_effort or budget_effort
+            if explicit_effort and explicit_effort_fits_thinking_budget(explicit_effort, budget_effort):
+                return explicit_effort
+            return budget_effort
         case _:
             return None
 
@@ -570,10 +573,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
 
-        An explicit ``output_config.effort`` wins on both thinking types. Without
-        one, ``thinking.budget_tokens`` is bucketed via the shared
-        ``reasoning_effort_from_thinking_budget`` thresholds, and adaptive
-        thinking defaults to medium.
+        An explicit ``output_config.effort`` wins on adaptive thinking, and beside
+        ``thinking.budget_tokens`` only when it is at or below the budget's effort,
+        which the shared ``reasoning_effort_from_thinking_budget`` thresholds give.
+        Adaptive thinking defaults to medium.
         """
         if not isinstance(thinking, dict):
             return None

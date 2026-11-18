@@ -6443,6 +6443,7 @@ async def _chat_adapter_effort_sent(
     monkeypatch: pytest.MonkeyPatch,
     target: _ChatAdapterTarget,
     model_info: Mapping[str, object] | None,
+    thinking: Mapping[str, object] = _CHAT_ADAPTER_BUDGET,
     **params: object,
 ) -> object:
     monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", target.chat_completions_url)
@@ -6456,7 +6457,7 @@ async def _chat_adapter_effort_sent(
         messages=[{"role": "user", "content": "hello"}],
         model=_CHAT_ADAPTER_ALIAS,
         max_tokens=4096,
-        thinking=_CHAT_ADAPTER_BUDGET,
+        thinking=dict(thinking),
         **target.request_params,
         **params,
     )
@@ -6528,6 +6529,8 @@ async def test_an_effort_the_target_drops_beside_a_thinking_budget_sends_the_bud
     assert "gpt-5.6" in warnings[0]
 
 
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("effort", ["low", "turbo"])
 @pytest.mark.parametrize(
     "model, custom_llm_provider, sent",
     [
@@ -6537,7 +6540,7 @@ async def test_an_effort_the_target_drops_beside_a_thinking_budget_sends_the_bud
     ],
 )
 def test_claude_and_bedrock_targets_keep_the_thinking_budget_beside_an_explicit_effort(
-    model: str, custom_llm_provider: str, sent: Mapping[str, object]
+    model: str, custom_llm_provider: str, sent: Mapping[str, object], effort: str, drop_params: bool
 ) -> None:
     translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         {
@@ -6545,9 +6548,10 @@ def test_claude_and_bedrock_targets_keep_the_thinking_budget_beside_an_explicit_
             "messages": [{"role": "user", "content": "hello"}],
             "max_tokens": 4096,
             "thinking": _CHAT_ADAPTER_BUDGET,
-            "output_config": {"effort": "low"},
+            "output_config": {"effort": effort},
         },
         custom_llm_provider=custom_llm_provider,
+        drop_params=drop_params,
     )
 
     assert {key: translated.get(key) for key in ("reasoning_effort", "thinking")} == {
@@ -6692,6 +6696,28 @@ def test_an_openai_reasoning_model_outside_the_gpt_series_sends_the_explicit_eff
     assert translated.get("reasoning_effort") == "low"
 
 
+def test_an_openai_reasoning_deployment_sends_the_explicit_effort_on_the_responses_route_whatever_its_chat_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, "house-reasoner", {"litellm_provider": "openai", "mode": "chat", "supports_reasoning": True}
+    )
+
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        {
+            "model": "openai/house-reasoner",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 4096,
+            "thinking": _CHAT_ADAPTER_BUDGET,
+            "output_config": {"effort": "low"},
+        },
+        custom_llm_provider="openai",
+        drop_params=True,
+    )
+
+    assert translated.get("reasoning_effort") == "low"
+
+
 _AZURE_GPT_REASONING_DEPLOYMENT: Final = "azure/gpt-5.6"
 _PROD_REASONER_BASE_MODEL: Final = "azure/gpt-5"
 _PROD_REASONER_PARAMS: Final = MappingProxyType(
@@ -6726,55 +6752,204 @@ _PROD_REASONER_DEPLOYMENTS: Final = (
 )
 
 
+_AZURE_O3_CHAT_COMPLETIONS: Final = _ChatAdapterTarget(
+    model="azure/o3",
+    litellm_params=MappingProxyType({"model": "azure/o3", "api_base": _CHAT_BRIDGE_API_BASE, "api_key": "fake-key"}),
+    url=r".*tool-result-text\.openai\.azure\.com/openai/deployments/o3/chat/completions.*",
+    reply=_CHAT_BRIDGE_REPLY,
+    request_params=MappingProxyType({}),
+    chat_completions_url=False,
+    sent_effort=_chat_completions_effort,
+)
+_MALFORMED_CHAT_ADAPTER_BUDGET: Final = {"type": "enabled", "budget_tokens": "abc"}
+_MALFORMED_BUDGET_TARGETS: Final = (
+    pytest.param(_OPENAI_WITH_STOP_SEQUENCES, id="openai-stop-sequences"),
+    pytest.param(_AZURE_CHAT_COMPLETIONS, id="azure-chat-completions"),
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_chat_bridge_httpx")
-async def test_max_beside_a_thinking_budget_sends_the_budget_effort_on_azure_chat_completions_under_drop_params(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("effort", ["high", "max"])
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_an_effort_above_the_thinking_budget_sends_what_the_budget_alone_sends_on_the_chat_adapter(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: _ChatAdapterTarget,
+    effort: str,
+    drop_params: bool,
 ) -> None:
-    _with_effort_flags(monkeypatch, _AZURE_GPT_REASONING_DEPLOYMENT, supports_max_reasoning_effort=True)
+    _with_effort_flags(monkeypatch, target.model, supports_max_reasoning_effort=True)
     budget_effort: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, _AZURE_CHAT_COMPLETIONS, None, drop_params=True
+        respx_mock, monkeypatch, target, None, drop_params=drop_params
     )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         sent: Final = await _chat_adapter_effort_sent(
-            respx_mock, monkeypatch, _AZURE_CHAT_COMPLETIONS, None, output_config={"effort": "max"}, drop_params=True
+            respx_mock, monkeypatch, target, None, output_config={"effort": effort}, drop_params=drop_params
         )
 
-    warnings: Final = _chat_adapter_drop_warnings(caplog)
     assert budget_effort is not None
     assert sent == budget_effort
-    assert len(warnings) == 1
-    assert warnings[0].startswith("Dropping output_config.effort='max' ")
+    assert _chat_adapter_drop_warnings(caplog) == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_chat_bridge_httpx")
-async def test_max_beside_a_thinking_budget_still_goes_out_on_azure_chat_completions_without_drop_params(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _with_effort_flags(monkeypatch, _AZURE_GPT_REASONING_DEPLOYMENT, supports_max_reasoning_effort=True)
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, _AZURE_CHAT_COMPLETIONS, None, output_config={"effort": "max"}, drop_params=False
-    )
-
-    assert sent == "max"
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("target", [_CHAT_ADAPTER_TARGETS[0], _CHAT_ADAPTER_TARGETS[1]])
-async def test_max_beside_a_thinking_budget_still_wins_on_the_responses_route_under_drop_params(
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_an_effort_above_the_budget_effort_sends_what_the_budget_alone_sends_when_the_deployment_rounds_it_up(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget
 ) -> None:
-    _with_effort_flags(monkeypatch, target.model, supports_max_reasoning_effort=True)
-
-    sent: Final = await _chat_adapter_effort_sent(
-        respx_mock, monkeypatch, target, None, output_config={"effort": "max"}, drop_params=True
+    _with_effort_flags(
+        monkeypatch, target.model, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False
+    )
+    minimal_budget: Final = {"type": "enabled", "budget_tokens": 512}
+    budget_effort: Final = await _chat_adapter_effort_sent(
+        respx_mock, monkeypatch, target, None, thinking=minimal_budget
     )
 
-    assert sent == "max"
+    sent: Final = await _chat_adapter_effort_sent(
+        respx_mock, monkeypatch, target, None, thinking=minimal_budget, output_config={"effort": "low"}
+    )
+
+    assert budget_effort is not None
+    assert sent == budget_effort
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("target", _CHAT_ADAPTER_TARGETS)
+async def test_an_effort_equal_to_the_budget_effort_that_the_target_refuses_is_dropped_with_a_warning(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: _ChatAdapterTarget,
+) -> None:
+    _with_effort_flags(monkeypatch, target.model, supports_low_reasoning_effort=False)
+    low_budget: Final = {"type": "enabled", "budget_tokens": 1024}
+    budget_effort: Final = await _chat_adapter_effort_sent(
+        respx_mock, monkeypatch, target, None, thinking=low_budget, drop_params=True
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = await _chat_adapter_effort_sent(
+            respx_mock,
+            monkeypatch,
+            target,
+            None,
+            thinking=low_budget,
+            output_config={"effort": "low"},
+            drop_params=True,
+        )
+
+    dropped_explicit_effort: Final = [
+        warning
+        for warning in _chat_adapter_drop_warnings(caplog)
+        if warning.startswith("Dropping output_config.effort='low' ")
+    ]
+    assert sent == budget_effort
+    assert len(dropped_explicit_effort) == 1
+
+
+async def _chat_adapter_budget_error(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, **params: object
+) -> str:
+    with pytest.raises(litellm.UnsupportedParamsError, match="budget_tokens") as raised:
+        await _chat_adapter_effort_sent(
+            respx_mock, monkeypatch, target, None, thinking=_MALFORMED_CHAT_ADAPTER_BUDGET, **params
+        )
+    return str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("effort", ["low", "turbo"])
+@pytest.mark.parametrize("target", _MALFORMED_BUDGET_TARGETS)
+async def test_a_malformed_budget_beside_an_explicit_effort_raises_what_the_budget_alone_raises_on_the_chat_adapter(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, target: _ChatAdapterTarget, effort: str
+) -> None:
+    _with_effort_flags(monkeypatch, target.model)
+    budget_error: Final = await _chat_adapter_budget_error(respx_mock, monkeypatch, target, drop_params=False)
+
+    explicit_error: Final = await _chat_adapter_budget_error(
+        respx_mock, monkeypatch, target, output_config={"effort": effort}, drop_params=False
+    )
+
+    assert explicit_error == budget_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("effort", ["low", "none"])
+@pytest.mark.parametrize("target", _MALFORMED_BUDGET_TARGETS)
+async def test_a_malformed_budget_beside_an_explicit_effort_sends_what_the_budget_alone_sends_on_the_chat_adapter(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    target: _ChatAdapterTarget,
+    effort: str,
+) -> None:
+    _with_effort_flags(monkeypatch, target.model)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        budget_effort: Final = await _chat_adapter_effort_sent(
+            respx_mock, monkeypatch, target, None, thinking=_MALFORMED_CHAT_ADAPTER_BUDGET, drop_params=True
+        )
+    budget_warnings: Final = _chat_adapter_drop_warnings(caplog)
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = await _chat_adapter_effort_sent(
+            respx_mock,
+            monkeypatch,
+            target,
+            None,
+            thinking=_MALFORMED_CHAT_ADAPTER_BUDGET,
+            output_config={"effort": effort},
+            drop_params=True,
+        )
+
+    assert sent == budget_effort
+    assert len(budget_warnings) == 1
+    assert budget_warnings[0].startswith("Dropping thinking.budget_tokens")
+    assert _chat_adapter_drop_warnings(caplog) == budget_warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+async def test_an_azure_o_series_deployment_sends_an_explicit_effort_at_or_below_the_thinking_budget(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop_params: bool
+) -> None:
+    sent: Final = await _chat_adapter_effort_sent(
+        respx_mock,
+        monkeypatch,
+        _AZURE_O3_CHAT_COMPLETIONS,
+        None,
+        output_config={"effort": "low"},
+        drop_params=drop_params,
+    )
+
+    assert sent == "low"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_an_azure_o_series_deployment_sends_what_the_budget_alone_sends_beside_a_higher_explicit_effort(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 1024}
+    budget_effort: Final = await _chat_adapter_effort_sent(
+        respx_mock, monkeypatch, _AZURE_O3_CHAT_COMPLETIONS, None, thinking=budget
+    )
+
+    sent: Final = await _chat_adapter_effort_sent(
+        respx_mock, monkeypatch, _AZURE_O3_CHAT_COMPLETIONS, None, thinking=budget, output_config={"effort": "high"}
+    )
+
+    assert budget_effort is not None
+    assert sent == budget_effort
 
 
 @pytest.mark.asyncio

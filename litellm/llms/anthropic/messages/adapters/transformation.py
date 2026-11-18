@@ -2,6 +2,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
@@ -173,6 +174,7 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     anthropic_image_source_to_openai_url,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
+    explicit_effort_fits_thinking_budget,
     reasoning_effort_from_thinking,
     reasoning_effort_from_thinking_silently,
 )
@@ -259,7 +261,6 @@ from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
-    from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
@@ -312,21 +313,15 @@ def openai_thinking_routes_to_responses(
     return model_info.get("supports_reasoning") is not False
 
 
-@dataclass(frozen=True, slots=True)
-class _GptReasoningChatGate:
-    config: "OpenAIGPT5Config"
-    model: str
-
-    def refuses(self, level: str) -> bool:
-        return level in self.config.ROUTE_SPECIFIC_REASONING_EFFORTS or self.config.refuses_reasoning_effort_level(
-            self.model, level
-        )
+def _refuses_no_level(level: str) -> bool:
+    return False
 
 
-def _gpt_reasoning_chat_gate(
+def _reasoning_chat_gate(
     model: str, custom_llm_provider: str | None, base_model: str | None
-) -> _GptReasoningChatGate | None:
+) -> Callable[[str], bool] | None:
     from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+    from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
     from litellm.utils import ProviderConfigManager
 
     provider: Final = custom_llm_provider if custom_llm_provider is not None else _inferred_provider(model)
@@ -337,13 +332,17 @@ def _gpt_reasoning_chat_gate(
     config: Final = ProviderConfigManager.get_provider_chat_config(
         model=deployment_model, provider=llm_provider, base_model=base_model
     )
-    if not isinstance(config, OpenAIGPT5Config):
-        return None
-    gated_model: Final = (base_model or deployment_model) if config.LOOKS_UP_BASE_MODEL else deployment_model
-    return _GptReasoningChatGate(config=config, model=gated_model)
+    match config:
+        case OpenAIGPT5Config():
+            gated_model: Final = (base_model or deployment_model) if config.LOOKS_UP_BASE_MODEL else deployment_model
+            return partial(config.refuses_reasoning_effort_level, gated_model)
+        case OpenAIOSeriesConfig():
+            return _refuses_no_level
+        case _:
+            return None
 
 
-def _gpt_reasoning_effort_gate(
+def _reasoning_effort_gate(
     thinking: Mapping[str, object],
     *,
     model: str,
@@ -360,12 +359,12 @@ def _gpt_reasoning_effort_gate(
 
         return responses_refuses
 
-    chat_gate: Final = _gpt_reasoning_chat_gate(model, custom_llm_provider, base_model)
+    chat_gate: Final = _reasoning_chat_gate(model, custom_llm_provider, base_model)
     if chat_gate is None:
         return None
 
     def chat_refuses(level: str) -> bool:
-        return chat_gate.refuses(
+        return chat_gate(
             normalize_reasoning_effort_value(
                 level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
             )
@@ -1362,11 +1361,22 @@ class LiteLLMAnthropicMessagesAdapter:
 
         explicit_effort: Final = output_config.get("effort") if isinstance(output_config, dict) else None
         thinking_config: Final = cast(AnthropicThinkingParam, thinking)
+        budget_effort: Final = (
+            None
+            if is_claude_target
+            else self.translate_anthropic_thinking_to_reasoning_effort(
+                thinking_config,
+                model=model,
+                drop_params=drop_params,
+                report_reasoning_drops=report_reasoning_drops,
+            )
+        )
         declared_effort: Final = (
             explicit_effort
             if self._explicit_effort_applies(
                 thinking_config,
                 explicit_effort,
+                budget_effort=budget_effort,
                 model=model,
                 is_claude_target=is_claude_target,
                 custom_llm_provider=custom_llm_provider,
@@ -1381,12 +1391,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if is_claude_target and not declared_effort:
             return
 
-        reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
-            thinking_config,
-            model=model,
-            drop_params=drop_params,
-            report_reasoning_drops=report_reasoning_drops,
-        )
+        reasoning_effort: Final = declared_effort or budget_effort
         if not reasoning_effort:
             return
 
@@ -1403,6 +1408,7 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking: Mapping[str, object],
         explicit_effort: object,
         *,
+        budget_effort: str | None,
         model: str,
         is_claude_target: bool,
         custom_llm_provider: str | None,
@@ -1415,13 +1421,17 @@ class LiteLLMAnthropicMessagesAdapter:
         match thinking.get("type"):
             case "adaptive":
                 return True
-            case "enabled" if not is_claude_target and (
-                target_refuses_level := _gpt_reasoning_effort_gate(
-                    thinking,
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    base_model=base_model,
-                    deployment_model_info=deployment_model_info,
+            case "enabled" if (
+                not is_claude_target
+                and explicit_effort_fits_thinking_budget(explicit_effort, budget_effort)
+                and (
+                    target_refuses_level := _reasoning_effort_gate(
+                        thinking,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        base_model=base_model,
+                        deployment_model_info=deployment_model_info,
+                    )
                 )
             ):
                 return not drops_explicit_reasoning_effort(

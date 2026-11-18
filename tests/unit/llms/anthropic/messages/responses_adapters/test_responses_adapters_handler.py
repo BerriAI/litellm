@@ -1125,7 +1125,6 @@ async def _bridged_reasoning_sent(
         (DECLARING_LOW_AND_HIGH, 2048, "low"),
         (DECLARING_LOW_AND_HIGH, 16384, "low"),
         (None, 2048, "low"),
-        (None, 1024, "high"),
     ],
 )
 async def test_explicit_output_config_effort_wins_over_a_thinking_budget_on_the_responses_bridge(
@@ -1375,19 +1374,126 @@ async def test_a_default_effort_beside_a_thinking_budget_leaves_the_effort_to_th
 
 
 @pytest.mark.asyncio
-async def test_an_explicit_effort_still_applies_beside_a_thinking_budget_drop_params_drops(
+async def test_an_effort_above_the_budget_effort_sends_what_the_budget_alone_sends_when_the_deployment_rounds_it_up(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _with_effort_flags(monkeypatch, supports_minimal_reasoning_effort=False, supports_low_reasoning_effort=False)
+    minimal_budget: Final = {"type": "enabled", "budget_tokens": 512}
+    budget_only: Final = await _bridged_reasoning_sent(respx_mock, monkeypatch, None, thinking=minimal_budget)
+
     sent: Final = await _bridged_reasoning_sent(
-        respx_mock,
-        monkeypatch,
-        None,
-        thinking={"type": "enabled", "budget_tokens": "lots"},
-        output_config={"effort": "high"},
-        drop_params=True,
+        respx_mock, monkeypatch, None, thinking=minimal_budget, output_config={"effort": "low"}
     )
 
-    assert sent == {"effort": "high"}
+    assert budget_only is not None
+    assert sent == budget_only
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_effort_off_row")
+async def test_an_effort_equal_to_the_budget_effort_that_the_target_refuses_is_dropped_with_a_warning(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    low_budget: Final = {"type": "enabled", "budget_tokens": 1024}
+    budget_only: Final = await _bridged_reasoning_sent(
+        respx_mock, monkeypatch, None, thinking=low_budget, drop_params=True
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = await _bridged_reasoning_sent(
+            respx_mock, monkeypatch, None, thinking=low_budget, output_config={"effort": "low"}, drop_params=True
+        )
+
+    dropped_explicit_effort: Final = [
+        warning for warning in _drop_warnings(caplog) if warning.startswith("Dropping output_config.effort='low' ")
+    ]
+    assert sent == budget_only
+    assert len(dropped_explicit_effort) == 1
+
+
+MALFORMED_BUDGET: Final = {"type": "enabled", "budget_tokens": "lots"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ["low", "none"])
+async def test_a_malformed_budget_beside_an_explicit_effort_sends_what_the_budget_alone_sends_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, effort: str
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        budget_only: Final = await _bridged_reasoning_sent(
+            respx_mock, monkeypatch, None, thinking=MALFORMED_BUDGET, drop_params=True
+        )
+    budget_warnings: Final = _drop_warnings(caplog)
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = await _bridged_reasoning_sent(
+            respx_mock, monkeypatch, None, thinking=MALFORMED_BUDGET, output_config={"effort": effort}, drop_params=True
+        )
+
+    assert sent == budget_only
+    assert len(budget_warnings) == 1
+    assert budget_warnings[0].startswith("Dropping thinking.budget_tokens")
+    assert _drop_warnings(caplog) == budget_warnings
+
+
+async def _bridged_budget_error(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, **params: object) -> str:
+    with pytest.raises(litellm.UnsupportedParamsError, match="budget_tokens") as raised:
+        await _bridged_reasoning_sent(respx_mock, monkeypatch, None, thinking=MALFORMED_BUDGET, **params)
+    return str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ["low", "turbo"])
+async def test_a_malformed_budget_beside_an_explicit_effort_raises_what_the_budget_alone_raises(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, effort: str
+) -> None:
+    budget_error: Final = await _bridged_budget_error(respx_mock, monkeypatch, drop_params=False)
+
+    explicit_error: Final = await _bridged_budget_error(
+        respx_mock, monkeypatch, output_config={"effort": effort}, drop_params=False
+    )
+
+    assert explicit_error == budget_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True], ids=["no_drop_params", "drop_params"])
+@pytest.mark.parametrize(
+    "budget_tokens, effort, row",
+    [
+        (2048, "high", {}),
+        (1024, "high", {}),
+        (2048, "max", {"supports_max_reasoning_effort": True}),
+        (16384, "max", {"supports_max_reasoning_effort": True}),
+        (2048, "xhigh", {"supports_xhigh_reasoning_effort": False}),
+        (2048, "high", {"supports_high_reasoning_effort": False}),
+    ],
+)
+async def test_an_effort_above_the_thinking_budget_sends_what_the_budget_alone_sends_on_the_responses_bridge(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    budget_tokens: int,
+    effort: str,
+    row: Mapping[str, object],
+    drop_params: bool,
+) -> None:
+    _with_effort_flags(monkeypatch)
+    monkeypatch.setitem(litellm.model_cost, BRIDGED_MODEL, {**litellm.model_cost[BRIDGED_MODEL], **row})
+    thinking: Final = {"type": "enabled", "budget_tokens": budget_tokens}
+    budget_only: Final = await _bridged_reasoning_sent(
+        respx_mock, monkeypatch, None, thinking=thinking, drop_params=drop_params
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = await _bridged_reasoning_sent(
+            respx_mock, monkeypatch, None, thinking=thinking, output_config={"effort": effort}, drop_params=drop_params
+        )
+
+    assert budget_only is not None
+    assert sent == budget_only
+    assert _drop_warnings(caplog) == []
 
 
 @pytest.mark.asyncio
