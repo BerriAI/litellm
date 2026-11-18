@@ -1,7 +1,7 @@
 //! A live table for snapshot tests: the bundled document as Python serves it, plus rows a test registers
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -122,6 +122,6 @@ pub(crate) fn names(providers: &[&str]) -> KnownNames {
             .iter()
             .map(|provider| (*provider).to_owned())
             .collect(),
-        renamed_models: HashSet::new(),
+        ..KnownNames::default()
     }
 }

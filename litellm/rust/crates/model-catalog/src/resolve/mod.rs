@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::{Catalog, wire::Fields};
 
-const BACKFILL_MODES: [&str; 2] = ["chat", "responses"];
+pub(crate) const BACKFILL_MODES: [&str; 2] = ["chat", "responses"];
 
 /// The seven names main's `get_model_info` tries, built by `Candidates::potential` and walked in `in_lookup_order`
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

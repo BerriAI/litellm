@@ -60,16 +60,35 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 
 `resolve/` turns a call into the rows main tries, in main's order. Each file is a port of named Python functions and says which
 
-- `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
+- `names.rs` builds the seven names `get_model_info` tries (`Candidates::resolved`): a known provider's
+  (`Candidates::potential`), or for a call with none the split and provider the host's `get_llm_provider` infers.
+  Fireworks AI's own cost key (`resolve_fireworks_resource_name`) is ported here
 - `bedrock.rs` reads Bedrock model id spellings. `litellm-llms` re-exports it, so the routes and the lookups share one copy
 - `image.rs` is `Snapshot::fal_sized_row`, fal's `fal_ai/{quality}/{W}-x-{H}/{model}` row nearest an image's pixels (`_keyed_rows`, `_keyed_cost_per_image`), read through `LiveTable::keys_with` in row order. `fal_parity.json` is main's fal.ai `cost_calculator` and `fal_ai_passthrough_cost` answer for each case, captured once, and the `fal_parity` tests pick and price each case over the bundled rows
-- `cost.rs` is `Snapshot::candidates`, the `/v1/messages` Claude providers only (`CostProvider`). Any call main would price by another path is `AfterRows::Deferred` with its `Deferral`, so Python keeps pricing it. Rows before a deferral are still tried first, because main tries them first
-- `cost_candidates.json` is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
+- `cost.rs` is the one copy of `completion_cost`'s candidate rule for every provider
+  - `Snapshot::cost_candidates` is the names main's loop walks and the provider each is paired with, in main's order
+    (`select_model_name_for_cost_calc`, the base model and Model Router provider overrides, `_bedrock_pricing_info`,
+    `_priced_candidates_before_unpriced_rules`)
+  - `Snapshot::candidates` is the rows the loop prices them with (`cost_per_token`'s key normalisation in
+    `priced_names` and each provider branch's `get_model_info` walk, renames, capability rules and `fill_missing`
+    rates included), with the row each candidate's stored breakdown reads. A walk stops at
+    `AfterRows::Deferred` where main's loop runs code only Python has: a provider whose branch finds its own row
+    (`PYTHON_ROW_PROVIDERS`), a provider that serves its own row and may reach it per lookup (`SERVED_PROVIDERS`),
+    a model name main prices another way (Model Router, Together AI categories, Replicate run time), a Bedrock
+    registration merged over an inference profile, or a loop with no provider, which main infers per candidate.
+    Python then walks the same names itself
+  - `Snapshot::priced_row` is the row `cost_per_token` prices one named model with, for every provider whose branch
+    does not find its own row
+  - `NameHost` is the whole host interface: `get_llm_provider` and the row a serving provider's `get_model_info`
+    answers. `TableOnly` answers neither, for a caller whose calls always name a table provider
+- `cost_candidates.json` is main's billed row for each `/v1/messages` case, captured once from `completion_cost` with `NativePrices` spied. `cost_walk.json` is main's walk for realistic calls across providers, captured once from main's `completion_cost` with its loop's locals and `get_model_info_helper` spied: the names, the candidate that priced and the keys it looked up, plus `get_llm_provider`'s answer for each name. Recapture either when main's selection changes on purpose, never to make a Rust change pass
 
 `snapshot.rs` is one call's view of a host's live table, keyed on `Generation` (main's `ModelCostVersion` plus the version of the host's installed `fallback_generalizations` rules, whose contents the host hands in with the table) and on `CostConfig`, the discount and margin config the host read on this call, compared by value since main reads those dicts live and callers both replace and edit them in place. Never key on an object's address the snapshot does not hold, since Python reuses addresses. `Snapshots` hands out one snapshot per generation and config and shares a row cache across generations, keyed by row object identity, so a row no write replaced is lowered once. A host that edits a row object in place calls `Snapshots::forget_rows`. The snapshot reads rows live from the host table, it never copies the table
 
 - `TableRow` and `LiveTable` are the whole host interface: exact key, folded key through the store, and a row object with its fields and `registered_fields`
-- `KnownNames` is the two lists only Python has, every provider name and the model names `get_model_info` renames
+- `KnownNames` is the lists only Python has: every provider name, the names `get_model_info` renames (Azure
+  deployment names for every provider, Vertex AI Llama, Mistral and AI21 names for Vertex AI) and the Replicate
+  models `completion_cost` bills by run time
 
 `pricing.rs` is the glue `litellm-cost` prices through. `Snapshot::pricing_rows` fetches the rows one query may read (each candidate under the model name main priced it with, plus rows by key) into `PricingRows`, the core's `RowSource`, and `with_per_call` adds a row the caller passed for that call alone. `LoweredRow` is the core's `LoweredRow`, and its `RowFacts` (mode, max tokens, how main's `float()` reads `provider_specific_entry`, the raw keys the auth checks read, whether `guardrail_cost_per_unit` validates as main's guardrail pricing) are read off the fields when the row is lowered
 - `tokens_parity.json` is main's `cost_per_token` answer for each provider branch, captured once with the row each branch looked up. The `tokens_parity` tests in `pricing.rs` lower each row and price it through the core. Recapture it only when main's token pricing changes on purpose
@@ -82,12 +101,21 @@ Each line is main's behavior kept on purpose. Fixing one is a separate behavior 
 
 - A deployment's price lives in at least seven places that disagree (`costmap/family_config.md` I1 to I7). Only the row the router registered under the deployment id, as stored, is exposed (`RowProvenance::Registered`, I3). Chat bills a direction the deployment did not declare at 0, while batch, the failure estimate and the model group display carry the published rate (I4, `deployment_pricing_model_info` in `litellm_logging.py`) and `per_call_model_info` (I7, `per_call_pricing.py`) rebuilds the row from the catalog whenever any per-call price is set. The I4 and I7 views land with their first callers
 - A served model wins over a dated or `@version` request row: Vertex `claude-opus-4-5@20251101` bills `vertex_ai/claude-opus-4-5` when the response names `claude-opus-4-5-20251101` (`_served_or_priced_requested_model`, `cost_calculator.py`)
-- A model only a capability rule knows bills from the rule, which prices nothing, so main charges 0 (`get_model_info_helper` generalization). Here it is `Deferral::Generalization`
+- A model only a capability rule knows bills from the rule, which prices nothing, so main charges 0 (`get_model_info_helper` generalization)
+- An unpriced rule's candidate moves behind every other candidate, while a name that is a key under another provider's row raises instead of resolving from a rule (`_priced_candidates_before_unpriced_rules`, `_get_model_info_from_generalization`)
+- A Bedrock call bills every Bedrock candidate with the row a `register_model` price landed on for the request model, whatever name the candidate is (`_bedrock_pricing_info`)
+- A served model the response's hidden `provider_response_model` names is priced ahead of the request's own row, and a hidden `model` stands in for a response that names none (`select_model_name_for_cost_calc`)
+- The provider the loop prices with is the one the response's hidden params name once the loop reads them, so a call routed as one provider and answered as another prices under the answering provider (`completion_cost`)
 - A Bedrock Mantle row without token or tier prices bills 0 instead of trying the next candidate (the `else` branch of `cost_per_token`)
 - `stripped_model_name` keeps a Mantle region path, `us-gov-west-1/anthropic.claude-x` (`get_potential_model_names`)
 - An edit of a row object in place is never seen until the host forgets rows. Main sees it after the next version move, and only where its own caches reread (`VersionCached`)
 - A region path is any `<letters-digits-dashes>/` segment (`is_bedrock_region`), where Python checks a fixed region list (`get_all_bedrock_regions`)
 - A geo or speed multiplier below 1 is dropped, since `Multiplier` refuses it, where Python applies any number
+
+Not copied
+
+- Any `cache_*cost*` field a `register_model` call wrote on a Bedrock row counts as a price, where main counts the cache fields `/model/info` derives (`is_server_derived_pricing_key`), which are every such field the cost map declares
+- Only the rates a `fill_missing` rule adds are merged into a row Rust prices, since nothing else it fills changes a price
 
 ## Prices
 

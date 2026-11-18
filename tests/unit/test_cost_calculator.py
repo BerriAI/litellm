@@ -12513,66 +12513,44 @@ def _claude_response(
     return response
 
 
-def _rust_priced(
-    response: ModelResponse,
-    tools_params: StandardBuiltInToolsParams | None = None,
-    reported_cost_applies: bool = False,
-) -> float | None:
-    from litellm.cost_calculator import rust_priced_cost
-
-    return rust_priced_cost(
+def _claude_cost(response: ModelResponse, tools_params: StandardBuiltInToolsParams | None = None) -> float:
+    return completion_cost(
         completion_response=response,
         model="claude-opus-5-5",
-        call_type="completion",
         custom_llm_provider="anthropic",
-        usage=response.usage,
-        region_name=None,
-        base_model=None,
-        custom_pricing=None,
-        router_model_id=None,
-        invoked_model_id=None,
-        service_tier=None,
-        data_residency=None,
-        vertex_location=None,
         standard_built_in_tools_params=tools_params,
-        litellm_logging_obj=None,
-        reported_cost_applies=reported_cost_applies,
     )
 
 
-def test_rust_prices_the_plain_claude_call_the_deferral_cases_vary(local_model_cost_map: None) -> None:
-    priced: Final = _rust_priced(_claude_response())
-
-    assert priced is not None and priced > 0
-
-
 @pytest.mark.parametrize(
-    ("response", "tools_params", "reported_cost_applies"),
+    ("response", "tools_params"),
     [
-        pytest.param(
-            _claude_response(hidden_params={"custom_llm_provider": "bedrock"}), None, False, id="hidden-provider"
-        ),
         pytest.param(
             _claude_response(annotations=[{"type": "url_citation", "url_citation": {"url": "https://example.com"}}]),
             None,
-            False,
             id="url-citation",
         ),
         pytest.param(
             _claude_response(prompt_details=PromptTokensDetailsWrapper(web_search_requests=1)),
             None,
-            False,
             id="prompt-details-web-search",
         ),
-        pytest.param(_claude_response(), {"file_search": {"type": "file_search"}}, False, id="file-search-tool"),
-        pytest.param(_claude_response(hidden_params={"model": "azure-model-router"}), None, False, id="model-router"),
-        pytest.param(_claude_response(hidden_params={"upstream_usage_cost": 0.5}), None, True, id="provider-billed"),
+        pytest.param(_claude_response(), {"file_search": {"type": "file_search"}}, id="file-search-tool"),
+        pytest.param(_claude_response(hidden_params={"model": "azure-model-router"}), None, id="model-router"),
     ],
 )
-def test_completion_cost_leaves_to_python_a_claude_call_main_prices_another_way(
-    local_model_cost_map: None,
-    response: ModelResponse,
-    tools_params: StandardBuiltInToolsParams | None,
-    reported_cost_applies: bool,
+def test_completion_cost_bills_a_claude_call_its_tokens_alone_when_main_added_no_fee(
+    local_model_cost_map: None, response: ModelResponse, tools_params: StandardBuiltInToolsParams | None
 ) -> None:
-    assert _rust_priced(response, tools_params, reported_cost_applies) is None
+    assert _claude_cost(response, tools_params) == _claude_cost(_claude_response())
+
+
+def test_completion_cost_bills_the_upstream_cost_a_claude_call_reports(local_model_cost_map: None) -> None:
+    assert _claude_cost(_claude_response(hidden_params={"upstream_usage_cost": 0.5})) == 0.5
+
+
+def test_completion_cost_reports_an_unmapped_model_under_the_provider_the_response_names(
+    local_model_cost_map: None,
+) -> None:
+    with pytest.raises(litellm.exceptions.ModelNotMappedError):
+        _claude_cost(_claude_response(hidden_params={"custom_llm_provider": "bedrock"}))

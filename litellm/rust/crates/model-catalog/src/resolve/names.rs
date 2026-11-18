@@ -3,15 +3,85 @@
 
 use litellm_auth_aws::is_bedrock_region;
 
-use super::Candidates;
 use super::bedrock::{
     bedrock_base_model, bedrock_model_name_from_arn, split_bedrock_region_path,
     strip_bedrock_routing_prefix,
 };
+use super::{Candidates, NameHost};
 
 const MANTLE: &str = "bedrock_mantle";
 
+/// Fireworks AI router names that bill under `accounts/fireworks/routers/` (`ROUTER_SHORT_NAMES`)
+const FIREWORKS_ROUTERS: [&str; 3] = ["firerouter", "auto", "auto-instant"];
+
 impl Candidates {
+    /// Main's seven names for `model` and the provider `get_model_info` looks them up under
+    /// (`get_potential_model_names`). A call that names no provider takes the one `get_llm_provider` infers
+    pub fn resolved(
+        model: &str,
+        provider: Option<&str>,
+        host: &dyn NameHost,
+    ) -> (Self, Option<String>) {
+        let names = match provider {
+            Some(provider) => Self::potential(model, provider),
+            None => Self::inferred(model, host),
+        };
+        let provider = provider
+            .map(str::to_owned)
+            .or_else(|| host.infer(model).map(|found| found.provider));
+        let cost_key = provider.as_deref().and_then(|provider| {
+            provider_cost_key(names.split_model.as_deref().unwrap_or(model), provider)
+        });
+        let names = match cost_key {
+            Some(key) => Self {
+                provider_prefixed_model_name: Some(key),
+                ..names
+            },
+            None => names,
+        };
+        (names, provider)
+    }
+
+    /// The names for a model with no provider: the provider and split model `get_llm_provider` infers, every other
+    /// name the model itself
+    fn inferred(model: &str, host: &dyn NameHost) -> Self {
+        let inferred = host.infer(model);
+        let provider = inferred
+            .as_ref()
+            .map(|found| found.provider.clone())
+            .unwrap_or_default();
+        let split = inferred.map_or_else(|| model.to_owned(), |found| found.model);
+        let split = match provider.as_str() {
+            "bedrock" | "bedrock_converse" => bedrock_split(&split).to_owned(),
+            _ => split,
+        };
+        let stripped = strip_model_name(model, &provider);
+        let is_mantle = provider == MANTLE;
+        let region_free_split = if is_mantle {
+            without_mantle_region(&split)
+        } else {
+            &split
+        };
+        Self {
+            combined_model_name: Some(model.to_owned()),
+            model: model.to_owned(),
+            region_free_combined_model_name: Some(match is_mantle {
+                true => format!("{MANTLE}/{region_free_split}"),
+                false => model.to_owned(),
+            }),
+            combined_stripped_model_name: Some(match is_mantle {
+                true => format!(
+                    "{MANTLE}/{}",
+                    strip_model_name(region_free_split, &provider)
+                ),
+                false => stripped.clone(),
+            }),
+            split_model: Some(region_free_split.to_owned()),
+            stripped_model_name: Some(stripped),
+            provider_prefixed_model_name: Some(model.to_owned()),
+        }
+    }
+
     /// Main's seven names for `model` called through `provider`, for a provider with no model cost key of its own
     pub fn potential(model: &str, provider: &str) -> Self {
         let prefix = format!("{provider}/");
@@ -31,14 +101,7 @@ impl Candidates {
                 ),
             };
         let split_model = match provider {
-            "bedrock" | "bedrock_converse" => {
-                let region_free = split_bedrock_region_path(split_model).1;
-                if region_free.starts_with("arn:") {
-                    bedrock_model_name_from_arn(region_free)
-                } else {
-                    strip_bedrock_routing_prefix(split_model)
-                }
-            }
+            "bedrock" | "bedrock_converse" => bedrock_split(split_model),
             _ => split_model,
         };
         let is_mantle = provider == MANTLE;
@@ -81,6 +144,42 @@ impl Candidates {
         ]
         .into_iter()
         .flatten()
+    }
+}
+
+/// The key a provider's model info config maps `model` to (`get_model_cost_key`), which only Fireworks AI overrides
+/// (`resolve_fireworks_resource_name`)
+fn provider_cost_key(model: &str, provider: &str) -> Option<String> {
+    if provider != "fireworks_ai" {
+        return None;
+    }
+    let stripped = model.strip_prefix("fireworks_ai/").unwrap_or(model);
+    let resource = if stripped.starts_with("accounts/")
+        || stripped.starts_with("FW-")
+        || stripped.contains('#')
+    {
+        stripped.to_owned()
+    } else if stripped.starts_with("routers/") || stripped.starts_with("models/") {
+        format!("accounts/fireworks/{stripped}")
+    } else if stripped.ends_with("-fast")
+        || FIREWORKS_ROUTERS.contains(&stripped)
+        || stripped.starts_with("firerouter/")
+    {
+        format!("accounts/fireworks/routers/{stripped}")
+    } else {
+        format!("accounts/fireworks/models/{stripped}")
+    };
+    Some(format!("fireworks_ai/{resource}"))
+}
+
+/// The Bedrock model id `get_potential_model_names` looks up: an ARN's model name, else the id without its routing
+/// prefix
+fn bedrock_split(model: &str) -> &str {
+    let region_free = split_bedrock_region_path(model).1;
+    if region_free.starts_with("arn:") {
+        bedrock_model_name_from_arn(region_free)
+    } else {
+        strip_bedrock_routing_prefix(model)
     }
 }
 
