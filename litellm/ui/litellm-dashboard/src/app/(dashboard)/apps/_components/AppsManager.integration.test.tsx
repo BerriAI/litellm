@@ -148,6 +148,21 @@ describe("Gateway app definition", () => {
     });
   });
 
+  it.each(["1001", "-1"])("should refuse a surcharge of %s percent with a message and send nothing", async (value) => {
+    const user = userEvent.setup();
+    definition = { resource_type: "team" };
+    render(<AppsManager />);
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Surcharge on customer requests (%)" }), {
+      target: { value },
+    });
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Enter a surcharge between 0 and 1000 percent, or leave it empty.",
+    );
+    expect(requests.some((request) => request.method === "POST")).toBe(false);
+  });
+
   it("should save the no-app customer creation switch without changing the app definition", async () => {
     const user = userEvent.setup();
     definition = { resource_type: "team" };
