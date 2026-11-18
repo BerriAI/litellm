@@ -50,6 +50,8 @@ pub trait LiveTable {
     fn contains(&self, key: &str) -> bool;
     fn find_key(&self, name: &str) -> Option<String>;
     fn row(&self, key: &str) -> Option<Self::Row>;
+    /// Every key that starts with `prefix` and ends with `suffix`, in row order
+    fn keys_with(&self, prefix: &str, suffix: &str) -> Vec<String>;
 }
 
 impl<R> LiveTable for Store<R>
@@ -70,6 +72,16 @@ where
     fn row(&self, key: &str) -> Option<Self::Row> {
         self.get(key).map(std::borrow::Cow::into_owned)
     }
+
+    fn keys_with(&self, prefix: &str, suffix: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        self.rows().scan(&mut |key, _| {
+            if key.starts_with(prefix) && key.ends_with(suffix) {
+                keys.push(key.to_owned());
+            }
+        });
+        keys
+    }
 }
 
 impl<T: LiveTable> LiveTable for Arc<T> {
@@ -85,6 +97,10 @@ impl<T: LiveTable> LiveTable for Arc<T> {
 
     fn row(&self, key: &str) -> Option<Self::Row> {
         (**self).row(key)
+    }
+
+    fn keys_with(&self, prefix: &str, suffix: &str) -> Vec<String> {
+        (**self).keys_with(prefix, suffix)
     }
 }
 
@@ -437,6 +453,16 @@ mod tests {
 
         fn row(&self, key: &str) -> Option<EditableRow> {
             self.0.read().unwrap().get(key).cloned()
+        }
+
+        fn keys_with(&self, prefix: &str, suffix: &str) -> Vec<String> {
+            self.0
+                .read()
+                .unwrap()
+                .keys()
+                .filter(|key| key.starts_with(prefix) && key.ends_with(suffix))
+                .cloned()
+                .collect()
         }
     }
 
