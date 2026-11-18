@@ -59251,6 +59251,11 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.659574468e-07,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high"
+        ],
         "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -59294,6 +59299,11 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 4.148936170e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -59315,6 +59325,11 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 4.787234043e-07,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "source": "https://www.sarvam.ai/token-factory/pricing",
         "supports_audio_input": false,
         "supports_function_calling": true,

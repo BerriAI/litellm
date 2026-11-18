@@ -10,6 +10,8 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry, SimpleProviderConfig
+from litellm.router_utils.reasoning_effort_capability import REASONING_EFFORT_STRENGTH_ORDER
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 SARVAM_MODELS: Final = (
@@ -21,6 +23,12 @@ SARVAM_MODELS: Final = (
     "sarvam/deepseekv4.1-flash-1017",
     "sarvam/deepseekv4.1-flash-1017-interactive",
 )
+
+
+def _sarvam_config() -> SimpleProviderConfig:
+    config: Final = JSONProviderRegistry.get("sarvam")
+    assert config is not None
+    return config
 
 
 def _chat_response() -> dict[str, object]:
@@ -151,17 +159,37 @@ def test_sarvam_v1_models_receive_text_content_lists_as_strings(model: str) -> N
             messages=[
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}],
+                    "content": [
+                        {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": "Answer in English."},
+                    ],
                 },
-                {"role": "user", "content": [{"type": "text", "text": "Say "}, {"type": "text", "text": "hello"}]},
+                {"role": "user", "content": [{"type": "text", "text": "Say"}, {"type": "text", "text": "hello"}]},
             ],
             api_key="sarvam-test-key",
         )
 
     assert json.loads(route.calls.last.request.content)["messages"] == [
-        {"role": "system", "content": "Be terse."},
-        {"role": "user", "content": "Say hello"},
+        {"role": "system", "content": "Be terse.\nAnswer in English."},
+        {"role": "user", "content": "Say\nhello"},
     ]
+
+
+@pytest.mark.parametrize("model", ["sarvam-105b", "sarvam-105b-conversations"])
+def test_sarvam_v1_models_send_lists_with_images_unchanged(model: str) -> None:
+    content: Final = [
+        {"type": "text", "text": "Describe this"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+    ]
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.sarvam.ai/v1/chat/completions").respond(200, json=_chat_response())
+        litellm.completion(
+            model=f"sarvam/{model}",
+            messages=[{"role": "user", "content": content}],
+            api_key="sarvam-test-key",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
 
 
 def test_sarvam_v2_models_keep_content_lists() -> None:
@@ -179,18 +207,45 @@ def test_sarvam_v2_models_keep_content_lists() -> None:
     ]
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_sarvam_forwards_reasoning_effort_without_allowed_openai_params() -> None:
+def _sent_body(model: str, **params: object) -> dict[str, object]:
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.sarvam.ai/v2/chat/completions").respond(200, json=_chat_response())
+        route: Final = upstream.post(f"{_sarvam_config().default_base_url(model)}/chat/completions").respond(
+            200, json=_chat_response()
+        )
         litellm.completion(
-            model="sarvam/gemma4",
+            model=f"sarvam/{model}",
             messages=[{"role": "user", "content": "Is 221 a prime number?"}],
             api_key="sarvam-test-key",
-            reasoning_effort="low",
+            **params,
         )
+    return json.loads(route.calls.last.request.content)
 
-    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "low"
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("effort", ["none", *REASONING_EFFORT_STRENGTH_ORDER])
+def test_sarvam_forwards_reasoning_effort_without_allowed_openai_params(effort: str) -> None:
+    assert _sent_body("gemma4", reasoning_effort=effort)["reasoning_effort"] == effort
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["sarvam-105b", "glm5.3", "glm5.3-flash"])
+@pytest.mark.parametrize("effort", REASONING_EFFORT_STRENGTH_ORDER)
+def test_sarvam_sends_only_a_declared_reasoning_effort_at_least_as_strong(model: str, effort: str) -> None:
+    declared: Final = litellm.model_cost[f"sarvam/{model}"]["reasoning_effort_levels"]
+    strongest: Final = max(REASONING_EFFORT_STRENGTH_ORDER.index(level) for level in declared)
+    sent: Final = _sent_body(model, reasoning_effort=effort)["reasoning_effort"]
+
+    assert sent in declared
+    assert effort not in declared or sent == effort
+    assert REASONING_EFFORT_STRENGTH_ORDER.index(sent) >= min(REASONING_EFFORT_STRENGTH_ORDER.index(effort), strongest)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(("drop_params", "expected"), [(True, None), (False, "none")])
+def test_sarvam_105b_drops_reasoning_off_only_under_drop_params(drop_params: bool, expected: str | None) -> None:
+    assert (
+        _sent_body("sarvam-105b", reasoning_effort="none", drop_params=drop_params).get("reasoning_effort") == expected
+    )
 
 
 def test_sarvam_responses_request_is_bridged_to_chat_completions() -> None:
