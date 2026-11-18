@@ -68,7 +68,10 @@ impl SpendCounters {
             SpendCounter::Committed(_)
             | SpendCounter::CustomerOrg(_)
             | SpendCounter::CustomerTeam(_)
-            | SpendCounter::CustomerMember(_) => default_ttl.max(Duration::from_millis(
+            | SpendCounter::CustomerMember(_)
+            | SpendCounter::App(_)
+            | SpendCounter::AppCustomerOrg(_)
+            | SpendCounter::AppCustomerMember(_) => default_ttl.max(Duration::from_millis(
                 self.committed_ttl_millis.load(Ordering::Relaxed),
             )),
             _ => default_ttl,
@@ -424,6 +427,9 @@ mod tests {
     #[case::organization(SpendCounter::CustomerOrg("tenant:lifetime".into()))]
     #[case::team(SpendCounter::CustomerTeam("team:lifetime".into()))]
     #[case::member(SpendCounter::CustomerMember("member:lifetime".into()))]
+    #[case::app(SpendCounter::App("app:lifetime".into()))]
+    #[case::app_organization(SpendCounter::AppCustomerOrg("app:org:lifetime".into()))]
+    #[case::app_member(SpendCounter::AppCustomerMember("app:member:lifetime".into()))]
     fn customer_counters_outlive_the_pending_database_flush(#[case] counter: SpendCounter) {
         let store = SpendCounters::new(None);
         store.set_committed_ttl(Duration::from_secs(120));

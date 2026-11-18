@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -167,26 +167,14 @@ function useOrganizationApps(organizationId: string) {
     queryFn: () => loadAppResources(resourceType!),
     enabled: resourceType !== null,
   });
-  const aliases = useMemo(
-    () =>
-      new Map(
-        (resources.data ?? []).flatMap((resource) =>
-          resource.app_id ? [[resource.app_id, resource.alias] as const] : [],
-        ),
-      ),
-    [resources.data],
-  );
   const rows = (apps.data ?? []).flatMap((app, index) => {
     const association = associations[index];
-    return association?.data
-      ? [{ app: { ...app, alias: aliases.get(app.app_id) ?? app.alias }, row: association.data }]
-      : [];
+    return association?.data ? [{ app, row: association.data }] : [];
   });
-  const loadingAssociations = apps.isPending || resources.isPending || associations.some((query) => query.isPending);
+  const loadingAssociations = apps.isPending || associations.some((query) => query.isPending);
   const loading = definition.isPending || (resourceType !== null && loadingAssociations);
   const failedAssociation = associations.find((query) => query.isError);
-  const catalogError = definition.error ?? resources.error;
-  const error = catalogError ?? apps.error ?? failedAssociation?.error;
+  const error = definition.error ?? apps.error ?? failedAssociation?.error;
   const noRows = resourceType !== null && rows.length === 0;
   const ready = !loading && !error;
   const setupNeeded = Boolean(definition.data) && resourceType === null;

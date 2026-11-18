@@ -120,7 +120,6 @@ const gatewayApps = [
   { ...audit, app_id: "app-search", resource_type: "team", resource_id: "gateway-search", alias: "search" },
 ];
 let appsEnabled = false;
-let opaqueAppAliases = false;
 const appForRecord = (record: (typeof records)[number]) => (record.key === "hash-b" ? "app-search" : "app-chat");
 const fetchMock = vi.fn<typeof fetch>();
 const json = (body: unknown, status = 200) =>
@@ -156,12 +155,7 @@ const activityUrl = (resource: string, id: string, endDate = "2026-11-03") => {
 const serve = (input: Parameters<typeof fetch>[0]): Response => {
   const url = requestUrl(input);
   if (url.pathname === "/management/v1/apps/definition") return json({ resource_type: appsEnabled ? "team" : null });
-  if (url.pathname === "/management/v1/apps")
-    return json(
-      appsEnabled
-        ? gatewayApps.map((app) => (opaqueAppAliases ? { ...app, alias: `team:${app.resource_id}` } : app))
-        : [],
-    );
+  if (url.pathname === "/management/v1/apps") return json(appsEnabled ? gatewayApps : []);
   if (url.pathname === "/management/v1/apps/resources")
     return json([
       ...gatewayApps.map((app) => ({
@@ -238,7 +232,6 @@ const serve = (input: Parameters<typeof fetch>[0]): Response => {
 describe("CustomerHierarchyUsagePage", () => {
   beforeEach(() => {
     appsEnabled = false;
-    opaqueAppAliases = false;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-11-13T12:00:00Z"));
     testQueryClient.clear();
@@ -271,7 +264,6 @@ describe("CustomerHierarchyUsagePage", () => {
 
   it("should filter the usage graph by app while retaining the global customer budget and date range", async () => {
     appsEnabled = true;
-    opaqueAppAliases = true;
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl, onUrlUpdate });
@@ -299,6 +291,32 @@ describe("CustomerHierarchyUsagePage", () => {
     );
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "App" }), "All apps");
     await waitFor(() => expect(tableRows("Models")).toHaveLength(2));
+  });
+
+  it("should retain the global budget while an app filter error can be retried", async () => {
+    appsEnabled = true;
+    let unavailable = true;
+    fetchMock.mockImplementation((input) =>
+      Promise.resolve(
+        requestUrl(input).pathname === "/management/v1/apps" && unavailable
+          ? json({ detail: "App list unavailable" }, 503)
+          : serve(input),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
+    const chart = within(await screen.findByRole("region", { name: "Usage over time" }));
+    expect(await chart.findByRole("alert")).toHaveTextContent("App list unavailable");
+    expect(
+      within(screen.getByRole("region", { name: "Current budget" })).getByText("$40.00 / $100.00"),
+    ).toBeInTheDocument();
+    unavailable = false;
+    await user.click(chart.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(chart.queryByRole("alert")).not.toBeInTheDocument());
+    await chooseSelectOption(user, chart.getByRole("combobox", { name: "App" }), "search");
+    await waitFor(() =>
+      expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("app_id")).toBe("app-search"),
+    );
   });
 
   it.each([

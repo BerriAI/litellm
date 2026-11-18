@@ -18,7 +18,6 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     OrganizationRegistrar,
 )
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerRequestIdentity
@@ -30,13 +29,11 @@ if TYPE_CHECKING:
 RegistrationRefusal: TypeAlias = Callable[[], Awaitable[str | None]]
 
 
-async def registration_refusal(
-    prisma_client: "PrismaClient | None", cache: UserApiKeyCache, authenticated: UserAPIKeyAuth
-) -> str | None:
+async def registration_refusal(prisma_client: "PrismaClient | None", authenticated: UserAPIKeyAuth) -> str | None:
     """Why this request may not register a new customer, or None when it may."""
     if prisma_client is None:
         return None
-    store: Final = AppStore(prisma_client.db, cache=cache)
+    store: Final = AppStore(prisma_client.db)
     definition: Final = await store.definition()
     resource_id: Final = (
         await authenticated_resource_id(store, definition.resource_type, authenticated)

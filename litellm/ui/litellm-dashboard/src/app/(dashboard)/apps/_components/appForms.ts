@@ -1,9 +1,5 @@
 import type { components } from "@/lib/http/schema";
-import {
-  budgetFields,
-  parseBudget,
-  type CustomerHierarchyFields,
-} from "../../customers/_components/customerHierarchyForms";
+import { budgetFields, parseBudget, type BudgetFields } from "../../customers/_components/customerHierarchyForms";
 
 export type App = components["schemas"]["App"];
 export type Budget = components["schemas"]["Budget"];
@@ -13,7 +9,8 @@ export type AppResourceType = components["schemas"]["AppResourceType"];
 export type AppResource = components["schemas"]["AppResource"];
 type BudgetWindow = NonNullable<Budget["budget_limits"]>[number];
 
-export interface AppBudgetFields extends CustomerHierarchyFields {
+export interface AppBudgetFields extends BudgetFields {
+  budgetEnabled: boolean;
   budgetWindows: { budget: BudgetWindow; maxBudget: string }[];
 }
 
@@ -24,9 +21,6 @@ export const APP_RESOURCE_LABELS = {
 } as const satisfies Record<AppResourceType, string>;
 
 export const appBudgetFields = (budget?: Budget | null): AppBudgetFields => ({
-  alias: "",
-  templateId: "",
-  overrideExpiry: "",
   budgetEnabled: budget != null,
   ...budgetFields(budget),
   budgetWindows: (budget?.budget_limits ?? []).map((window) => ({

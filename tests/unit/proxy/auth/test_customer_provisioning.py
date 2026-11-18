@@ -11,7 +11,6 @@ from litellm.proxy.auth.customer_provisioning import (
     registration_refusal,
     unknown_customer_header,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerRequestIdentity
@@ -48,7 +47,7 @@ async def _refusal(
     app: Final = await store.create(AppCreate(resource_id="chat", auto_create_customers=app_may_create), "admin")
     assert not isinstance(app, AppFailure)
     connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
-    return await registration_refusal(connection, UserApiKeyCache(), authenticated)
+    return await registration_refusal(connection, authenticated)
 
 
 @pytest.mark.asyncio
@@ -76,7 +75,7 @@ async def test_a_request_may_register_customers_only_when_its_app_or_the_no_app_
 async def test_a_request_may_register_customers_when_no_app_definition_was_ever_chosen() -> None:
     connection: Final = cast("PrismaClient", SimpleNamespace(db=AppDatabase()))  # cast-ok: in-memory Prisma edge
 
-    assert await registration_refusal(connection, UserApiKeyCache(), UserAPIKeyAuth(team_id="chat")) is None
+    assert await registration_refusal(connection, UserAPIKeyAuth(team_id="chat")) is None
 
 
 @pytest.mark.asyncio

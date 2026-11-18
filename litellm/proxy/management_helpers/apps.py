@@ -10,9 +10,8 @@ from typing import (
 )
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchyStore,
@@ -74,6 +73,7 @@ class _ResourceRecord(BaseModel):
 
 
 _DEFINITION_PARAM: Final = "customer_app_definition"
+_PARENT_ORG_ID: Final = TypeAdapter(str)
 AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember)
 
 
@@ -144,7 +144,6 @@ class AppStore:
         self,
         db: object,
         now: datetime | None = None,
-        cache: UserApiKeyCache | None = None,
     ) -> None:
         self.db: Final = cast("Prisma", db)  # cast-ok: Prisma wrappers share the generated client API
         self.now: Final = now or datetime.now(timezone.utc)
@@ -474,12 +473,11 @@ class AppStore:
         )
         return updated
 
-    async def delete(self, app_id: str) -> None | AppFailure:
-        app: Final = await self.writable(app_id)
-        if isinstance(app, AppFailure):
-            return app
-        await self.apps.delete(where={"app_id": app_id})
-        return None
+    async def find_organization(self, app: App, customer_org_id: str) -> AppOrganization | None:
+        row: Final = await self.organizations.find_unique(
+            where={"app_id_customer_org_id": {"app_id": app.app_id, "customer_org_id": customer_org_id}},
+        )
+        return await self.organization_response(app, row) if row is not None else None
 
     async def organization(self, app: App, customer_org_id: str) -> AppOrganization:
         identity: Final = {"app_id": app.app_id, "customer_org_id": customer_org_id}
@@ -574,14 +572,21 @@ class AppStore:
             )
         )
         member: Final = AppMember.model_validate(row.model_dump())
+        return await self.member_response(app, member, org)
+
+    async def member_response(self, app: App, member: AppMember, organization: AppOrganization | None) -> AppMember:
+        inherited: Final = (
+            organization.effective_customer_member_budget
+            if organization is not None
+            else app.default_customer_member_budget
+        )
+        organization_default_id: Final = organization.customer_member_budget_id if organization is not None else None
         return member.model_copy(
             update={
                 "effective_budget": (
-                    await self.budget(member.budget_override_id)
-                    if member.budget_override_id is not None
-                    else org.effective_customer_member_budget
+                    await self.budget(member.budget_override_id) if member.budget_override_id is not None else inherited
                 ),
-                "budget_source": self.member_budget_source(member, app, org.customer_member_budget_id),
+                "budget_source": self.member_budget_source(member, app, organization_default_id),
             }
         )
 
@@ -602,22 +607,8 @@ class AppStore:
         customer: Final = await self.customers.members.find_unique(where={"customer_member_id": customer_member_id})
         if customer is None:
             return AppFailure(404, "Customer member not found.")
-        parent: Final = customer.model_dump().get("parent_org_id")
-        if not isinstance(parent, str):
-            return AppFailure(404, "Customer organization not found.")
-        organization: Final = await self.organizations.find_unique(
-            where={"app_id_customer_org_id": {"app_id": app_id, "customer_org_id": parent}},
-        )
-        inherited: Final = (
-            (await self.organization_response(app, organization)).effective_customer_member_budget
-            if organization is not None
-            else app.default_customer_member_budget
-        )
-        organization_default_id: Final = (
-            AppOrganization.model_validate(organization.model_dump()).customer_member_budget_id
-            if organization is not None
-            else None
-        )
+        parent: Final = _PARENT_ORG_ID.validate_python(customer.model_dump()["parent_org_id"])
+        organization: Final = await self.find_organization(app, parent)
         row: Final = await self.members.find_unique(
             where={
                 "app_id_customer_member_id": {
@@ -631,14 +622,7 @@ class AppStore:
             if row is not None
             else AppMember(app_id=app_id, customer_member_id=customer_member_id)
         )
-        return member.model_copy(
-            update={
-                "effective_budget": (
-                    await self.budget(member.budget_override_id) if member.budget_override_id is not None else inherited
-                ),
-                "budget_source": self.member_budget_source(member, app, organization_default_id),
-            }
-        )
+        return await self.member_response(app, member, organization)
 
     async def put_member(
         self,
@@ -653,9 +637,7 @@ class AppStore:
         customer: Final = await self.customers.members.find_unique(where={"customer_member_id": customer_member_id})
         if customer is None:
             return AppFailure(404, "Customer member not found.")
-        parent: Final = customer.model_dump().get("parent_org_id")
-        if not isinstance(parent, str):
-            return AppFailure(404, "Customer organization not found.")
+        parent: Final = _PARENT_ORG_ID.validate_python(customer.model_dump()["parent_org_id"])
         identity: Final = {"app_id": app_id, "customer_member_id": customer_member_id}
         previous: Final = await self.members.find_unique(where={"app_id_customer_member_id": identity})
         current: Final = AppMember.model_validate(previous.model_dump()) if previous is not None else None

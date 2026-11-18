@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Annotated, Final, TypeAlias, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_endpoints.management_v1.customers import (
@@ -33,12 +33,11 @@ def resolve(result: T | AppFailure) -> T:
     return result
 
 
-async def get_app_store(request: Request) -> AsyncIterator[AppStore]:
+async def get_app_store() -> AsyncIterator[AppStore]:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        resolve(AppFailure(503, "Database unavailable."))
-        return
+        raise HTTPException(503, "Database unavailable.")
     async with prisma_client.db.tx() as db:
         yield AppStore(db)
 
@@ -101,12 +100,6 @@ async def patch_app(app_id: str, data: AppPatch, store: Store, actor: Actor) -> 
     return await store.with_budget_usage(resolve(await store.patch(app_id, data, actor)))
 
 
-@router.delete("/{app_id}", status_code=204)
-async def delete_app(app_id: str, store: Store) -> Response:
-    resolve(await store.delete(app_id))
-    return Response(status_code=204)
-
-
 @router.put("/{app_id}/customer_organizations/{customer_org_id}", response_model=AppOrganization)
 async def put_app_organization(
     app_id: str,
@@ -121,35 +114,10 @@ async def put_app_organization(
 @router.get("/{app_id}/customer_organizations/{customer_org_id}", response_model=AppOrganization)
 async def get_app_organization(app_id: str, customer_org_id: str, store: Store) -> AppOrganization:
     app: Final = resolve(await store.get(app_id))
-    row: Final = await store.organizations.find_unique(
-        where={
-            "app_id_customer_org_id": {
-                "app_id": app_id,
-                "customer_org_id": customer_org_id,
-            }
-        },
-    )
-    if row is None:
+    organization: Final = await store.find_organization(app, customer_org_id)
+    if organization is None:
         return resolve(AppFailure(404, "App customer organization not found."))
-    return await store.with_budget_usage(await store.organization_response(app, row))
-
-
-@router.get("/{app_id}/customer_organizations", response_model=tuple[AppOrganization, ...])
-async def list_app_organizations(
-    app_id: str,
-    store: Store,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> tuple[AppOrganization, ...]:
-    app: Final = resolve(await store.get(app_id))
-    rows: Final = await store.organizations.find_many(
-        where={"app_id": app_id},
-        skip=offset,
-        take=limit,
-        order={"customer_org_id": "asc"},
-    )
-    organizations: Final = await asyncio.gather(*(store.organization_response(app, row) for row in rows))
-    return tuple(await asyncio.gather(*(store.with_budget_usage(organization) for organization in organizations)))
+    return await store.with_budget_usage(organization)
 
 
 @router.put("/{app_id}/customer_members/{customer_member_id}", response_model=AppMember)
