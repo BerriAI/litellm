@@ -27,17 +27,14 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.served_output_texts import (
-    PRESERVE_SERVED_OUTPUT_TEXTS_KEY,
-    SERVED_OUTPUT_TEXTS_KEY,
-    record_logged_response_override,
-    record_logged_stream_chunks_override,
-    served_output_texts,
-    served_stream_output_texts,
+    clear_served_output_sanitizer,
+    register_served_output_sanitizer,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponseStream
 
-_TOKEN_LITERAL_RE: Final = re.compile(r"\[([A-Z_]+)_TOKEN_([a-zA-Z0-9_-]+)\]")
+_SUPPORTED_ENTITY_ALT: Final = "API_SECRET|CREDIT_CARD|EMAIL|IBAN|IPV4|PHONE|SSN"
+_TOKEN_LITERAL_RE: Final = re.compile(rf"\[({_SUPPORTED_ENTITY_ALT})_TOKEN_(\d{{1,18}})\]")
 _NON_CALLER_ROLES: Final = frozenset({"system", "developer"})
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
 _JSON_ENCODED_STRING_KEYS: Final = frozenset({"arguments"})
@@ -256,7 +253,7 @@ class ZTDSGuardrail(CustomGuardrail):
     """
 
     use_native_lifecycle_hooks: ClassVar[bool] = True
-    TOKEN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\[[A-Z_]+_TOKEN_[a-zA-Z0-9_-]+\]")
+    TOKEN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(rf"\[(?:{_SUPPORTED_ENTITY_ALT})_TOKEN_\d{{1,18}}\]")
     _MAX_ACTIVE_SESSIONS: ClassVar[int] = 4096
 
     # Disjoint boundary anchors keep JWT, API secret, and email scans strictly O(N) on repeated prefixes.
@@ -943,6 +940,22 @@ class ZTDSGuardrail(CustomGuardrail):
             parts = content_dict.get("parts") if content_dict is not None else attribute_or_none(cand_content, "parts")
             self._restore_parts_sequence(parts, session_id)
 
+    def _caller_restoration_pairs(self, session_id: str) -> tuple[tuple[str, str], ...]:
+        token_map: Final = self._session_maps.get(session_id)
+        if not token_map:
+            return ()
+        caller_tokens: Final = self._caller_tokens.get(session_id, frozenset[str]())
+        return tuple((cleartext, tok) for tok, cleartext in token_map.items() if tok in caller_tokens)
+
+    def _register_logging_sanitizer(self, logging_obj: object, session_id: str) -> None:
+        if not self.reverse_on_output or logging_obj is None:
+            return
+        pairs: Final = self._caller_restoration_pairs(session_id)
+        if not pairs:
+            return
+        model_call_details: Final = _as_str_dict(attribute_or_none(logging_obj, "model_call_details"))
+        register_served_output_sanitizer(logging_obj, model_call_details, pairs, session_id)
+
     def _sync_logging_object_pre_call(self, logging_obj: object, session_id: str) -> None:
         if logging_obj is None:
             return
@@ -955,51 +968,17 @@ class ZTDSGuardrail(CustomGuardrail):
             if callable(update_fn):
                 _ = update_fn(sanitized_messages)
         model_call_details: Final = _as_str_dict(attribute_or_none(logging_obj, "model_call_details"))
-        if model_call_details is None:
-            return
-        for field_key in ("input", "messages", "prompt"):
-            raw_field = model_call_details.get(field_key)
-            if raw_field is not None:
-                model_call_details[field_key] = self._sanitize_payload_node(
-                    raw_field, session_id, is_caller_visible=True, parent_key=field_key
-                )
-        lp_dict: Final = _as_str_dict(model_call_details.get("litellm_params"))
-        if lp_dict is not None:
-            self._sanitize_caller_metadata(lp_dict, session_id)
-        if self.reverse_on_output:
-            model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
-
-    def _lock_tokenized_logging_output(self, logging_obj: object, tokenized_response: object) -> None:
-        record_logged_response_override(logging_obj, tokenized_response)
-        model_call_details: Final = _as_str_dict(attribute_or_none(logging_obj, "model_call_details"))
-        if model_call_details is None:
-            return
-        tokenized_texts: Final = served_output_texts(tokenized_response)
-        if tokenized_texts is not None:
-            model_call_details[SERVED_OUTPUT_TEXTS_KEY] = tokenized_texts
-        else:
-            model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
-        model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
-
-    def _arm_stream_logging_lock(self, request_data: Mapping[str, object]) -> None:
-        model_call_details: Final = _as_str_dict(
-            attribute_or_none(request_data.get("litellm_logging_obj"), "model_call_details")
-        )
         if model_call_details is not None:
-            model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
-
-    def _lock_tokenized_stream_logging(self, logging_obj: object, tokenized_chunks: Sequence[object]) -> None:
-        chunk_tuple: Final = tuple(tokenized_chunks)
-        record_logged_stream_chunks_override(logging_obj, chunk_tuple)
-        model_call_details: Final = _as_str_dict(attribute_or_none(logging_obj, "model_call_details"))
-        if model_call_details is None:
-            return
-        tokenized_texts: Final = served_stream_output_texts(chunk_tuple)
-        if tokenized_texts is not None:
-            model_call_details[SERVED_OUTPUT_TEXTS_KEY] = tokenized_texts
-        else:
-            model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
-        model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
+            for field_key in ("input", "messages", "prompt"):
+                raw_field = model_call_details.get(field_key)
+                if raw_field is not None:
+                    model_call_details[field_key] = self._sanitize_payload_node(
+                        raw_field, session_id, is_caller_visible=True, parent_key=field_key
+                    )
+            lp_dict: Final = _as_str_dict(model_call_details.get("litellm_params"))
+            if lp_dict is not None:
+                self._sanitize_caller_metadata(lp_dict, session_id)
+        self._register_logging_sanitizer(logging_obj, session_id)
 
     def _restore_stream_chunk(self, chunk: object, session_id: str) -> object:
         caller_chunk: Final = copy.deepcopy(chunk)
@@ -1037,7 +1016,7 @@ class ZTDSGuardrail(CustomGuardrail):
 
         try:
             if self.reverse_on_output:
-                self._lock_tokenized_logging_output(data.get("litellm_logging_obj"), response)
+                self._register_logging_sanitizer(data.get("litellm_logging_obj"), session_id)
                 caller_response: Final = copy.deepcopy(response)
                 response_dict: Final = _as_dict(caller_response)
                 if response_dict is not None:
@@ -1061,6 +1040,7 @@ class ZTDSGuardrail(CustomGuardrail):
         traceback_str: str | None = None,
     ) -> None:
         """Zeroizes volatile session state when upstream calls fail."""
+        clear_served_output_sanitizer(request_data.get("litellm_logging_obj"))
         session_id: Final = self._extract_session_id(request_data)
         if session_id is not None:
             self.zeroize_session(session_id)
@@ -1073,6 +1053,7 @@ class ZTDSGuardrail(CustomGuardrail):
         end_time: object,
     ) -> None:
         """Defense-in-depth session cleanup on success logging completion."""
+        clear_served_output_sanitizer(kwargs.get("litellm_logging_obj"))
         session_id: Final = self._extract_session_id(kwargs)
         if session_id is not None:
             self.zeroize_session(session_id)
@@ -1085,6 +1066,7 @@ class ZTDSGuardrail(CustomGuardrail):
         end_time: object,
     ) -> None:
         """Defense-in-depth session cleanup on failure logging completion."""
+        clear_served_output_sanitizer(kwargs.get("litellm_logging_obj"))
         session_id: Final = self._extract_session_id(kwargs)
         if session_id is not None:
             self.zeroize_session(session_id)
@@ -1098,19 +1080,17 @@ class ZTDSGuardrail(CustomGuardrail):
         """Restores caller-visible tokens across stream chunks and zeroizes session on exit."""
         session_id: Final = self._extract_session_id(request_data)
         should_restore: Final = session_id is not None and self.reverse_on_output
-        tokenized_chunks: Final[list[object]] = []  # mutable-ok: retain pre-restoration stream chunks for logging
-        if should_restore:
-            self._arm_stream_logging_lock(request_data)
+        if should_restore and session_id is not None:
+            self._register_logging_sanitizer(request_data.get("litellm_logging_obj"), session_id)
         try:
             async for chunk in response:
                 if should_restore and session_id is not None:
-                    tokenized_chunks.append(chunk)
                     yield self._restore_stream_chunk(chunk, session_id)  # pyright: ignore[reportReturnType]  # yields ModelResponseStream or test/dict chunk wrapper
                 else:
                     yield chunk  # pyright: ignore[reportReturnType]  # yields ModelResponseStream or test/dict chunk wrapper
         finally:
-            if should_restore:
-                self._lock_tokenized_stream_logging(request_data.get("litellm_logging_obj"), tokenized_chunks)
+            if should_restore and session_id is not None:
+                self._register_logging_sanitizer(request_data.get("litellm_logging_obj"), session_id)
             if session_id is not None:
                 self.zeroize_session(session_id)
 

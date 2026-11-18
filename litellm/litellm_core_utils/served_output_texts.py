@@ -3,10 +3,12 @@ post-call guardrail rewrote rather than the provider response the proxy assemble
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -14,14 +16,47 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 
 SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
-PRESERVE_SERVED_OUTPUT_TEXTS_KEY: Final = "preserve_served_output_texts"
+_SERVED_OUTPUT_SANITIZER_KEY: Final = "_served_output_sanitizer_id"
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
 _TEXTS: Final = TypeAdapter(tuple[str | None, ...])
-_MISSING: Final = object()
-_RESPONSE_OVERRIDES: Final = WeakKeyDictionary[object, object]()
-_STREAM_CHUNKS_OVERRIDES: Final = WeakKeyDictionary[object, tuple[object, ...]]()
+
+
+class _OutputLogSanitizer:
+    def __init__(self, pairs: Sequence[tuple[str, str]]) -> None:
+        mapping: Final[dict[str, str]] = {}  # mutable-ok: build deduplicated cleartext-to-surrogate map locally
+        for cleartext, token in pairs:
+            if not cleartext or cleartext == token:
+                continue
+            for variant in (
+                cleartext,
+                json.dumps(cleartext)[1:-1],
+                json.dumps(cleartext, ensure_ascii=False)[1:-1],
+            ):
+                if variant and variant != token:
+                    mapping[variant] = token
+        self._mapping: dict[str, str] = mapping  # mutable-ok: cleared on logging completion zeroization
+        self._pattern: re.Pattern[str] | None = None
+
+    def sanitize_text(self, text: str) -> str:
+        if not text or not self._mapping:
+            return text
+        pattern = self._pattern  # rebind-ok: lazily compiled single-pass alternation
+        if pattern is None:
+            ordered_keys: Final = sorted(self._mapping.keys(), key=len, reverse=True)
+            pattern = re.compile("|".join(re.escape(key) for key in ordered_keys))  # rebind-ok: cache compiled pattern
+            self._pattern = pattern
+        mapping: Final = self._mapping
+        return pattern.sub(lambda m: mapping.get(m.group(0), m.group(0)), text)
+
+    def clear(self) -> None:
+        self._mapping.clear()
+        self._pattern = None
+
+
+_LOGGING_SANITIZERS: Final = WeakKeyDictionary[object, _OutputLogSanitizer]()
+_DETAILS_SANITIZERS: Final = WeakValueDictionary[str, _OutputLogSanitizer]()
 
 ServedTexts = tuple[str | None, ...]
 
@@ -168,50 +203,57 @@ def _indexed_texts_by_choice(indexed_texts: Sequence[tuple[int, str | None]]) ->
     return texts if any(text is not None for text in texts) else None
 
 
+def register_served_output_sanitizer(
+    logging_obj: object,
+    model_call_details: dict[str, object] | None,  # mutable-ok: stamps sanitizer id on Logging.model_call_details
+    pairs: Sequence[tuple[str, str]],
+    sanitizer_id: str,
+) -> None:
+    if logging_obj is None or not pairs:
+        return
+    sanitizer: Final = _OutputLogSanitizer(pairs)
+    try:
+        _LOGGING_SANITIZERS[logging_obj] = sanitizer
+    except TypeError:
+        return
+    _DETAILS_SANITIZERS[sanitizer_id] = sanitizer
+    if model_call_details is not None:
+        model_call_details[_SERVED_OUTPUT_SANITIZER_KEY] = sanitizer_id  # rebind-ok: bind sanitizer id to call details
+
+
+def clear_served_output_sanitizer(logging_obj: object) -> None:
+    if logging_obj is None:
+        return
+    try:
+        sanitizer: Final = _LOGGING_SANITIZERS.pop(logging_obj, None)
+    except TypeError:
+        return
+    if sanitizer is not None:
+        sanitizer.clear()
+
+
+def sanitize_logged_output_str(request_data: Mapping[str, object], rendered: str | None) -> str | None:
+    if rendered is None:
+        return None
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if logging_obj is None:
+        return rendered
+    try:
+        sanitizer: Final = _LOGGING_SANITIZERS.get(logging_obj)
+    except TypeError:
+        return rendered
+    return sanitizer.sanitize_text(rendered) if sanitizer is not None else rendered
+
+
 def record_served_output_texts(model_call_details: dict[str, object], texts: ServedTexts | None) -> None:
-    if texts is None or model_call_details.get(PRESERVE_SERVED_OUTPUT_TEXTS_KEY) is True:
+    if texts is None:
         return
-    model_call_details[SERVED_OUTPUT_TEXTS_KEY] = texts  # rebind-ok: model_call_details is the shared kwargs bag
-
-
-def record_logged_response_override(logging_obj: object, response: object) -> None:
-    if logging_obj is None:
-        return
-    try:
-        _RESPONSE_OVERRIDES[logging_obj] = response
-    except TypeError:
-        return
-
-
-def logged_response(request_data: Mapping[str, object], response: object) -> object:
-    logging_obj: Final = request_data.get("litellm_logging_obj")
-    if logging_obj is None:
-        return response
-    try:
-        override: Final = _RESPONSE_OVERRIDES.get(logging_obj, _MISSING)
-    except TypeError:
-        return response
-    return response if override is _MISSING else override
-
-
-def record_logged_stream_chunks_override(logging_obj: object, chunks: Sequence[object]) -> None:
-    if logging_obj is None:
-        return
-    try:
-        _STREAM_CHUNKS_OVERRIDES[logging_obj] = tuple(chunks)
-    except TypeError:
-        return
-
-
-def logged_stream_chunks(request_data: Mapping[str, object], relayed: Sequence[object]) -> Sequence[object]:
-    logging_obj: Final = request_data.get("litellm_logging_obj")
-    if logging_obj is None:
-        return relayed
-    try:
-        override: Final = _STREAM_CHUNKS_OVERRIDES.get(logging_obj)
-    except TypeError:
-        return relayed
-    return relayed if override is None else override
+    sanitizer_id: Final = model_call_details.get(_SERVED_OUTPUT_SANITIZER_KEY)
+    sanitizer: Final = _DETAILS_SANITIZERS.get(sanitizer_id) if isinstance(sanitizer_id, str) else None
+    recorded: Final = (
+        tuple(sanitizer.sanitize_text(t) if t is not None else None for t in texts) if sanitizer is not None else texts
+    )
+    model_call_details[SERVED_OUTPUT_TEXTS_KEY] = recorded  # rebind-ok: model_call_details is the shared kwargs bag
 
 
 def overlay_served_output_texts(

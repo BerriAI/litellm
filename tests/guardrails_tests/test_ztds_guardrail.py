@@ -21,9 +21,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
-    logged_response,
-    logged_stream_chunks,
     record_served_output_texts,
+    sanitize_logged_output_str,
     served_output_texts,
     served_stream_output_texts,
 )
@@ -282,6 +281,21 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
 
         self.assertLess(elapsed, 0.25, f"ReDoS regression detected: execution took {elapsed:.4f}s")
         self.assertEqual(sanitized, payload)
+
+        self.guardrail._session_maps[session_id] = {"[EMAIL_TOKEN_1]": "a@b.com"}
+        self.guardrail._caller_tokens[session_id] = {"[EMAIL_TOKEN_1]"}
+        for adv in (
+            "[" + "A_TOKEN_" * 8000 + "!",
+            "[EMAIL_TOKEN_" * 8000 + "!",
+            "[EMAIL_TOKEN_123456789012345678!" * 4000,
+        ):
+            start = time.perf_counter()
+            sanitized_adv, _ = self.guardrail.sanitize_text(adv, session_id)
+            restored_adv = self.guardrail.restore_text(adv, session_id)
+            tok_elapsed = time.perf_counter() - start
+            self.assertLess(tok_elapsed, 0.15, f"Surrogate ReDoS detected: {tok_elapsed:.4f}s")
+            self.assertEqual(sanitized_adv, adv)
+            self.assertEqual(restored_adv, adv)
 
     def test_modern_openai_project_keys(self) -> None:
         """Verify detection and sanitization of modern OpenAI sk-proj- and hyphenated API tokens."""
@@ -1011,16 +1025,39 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[EMAIL_TOKEN_", str(logging_obj.model_call_details.get("input")))
 
         provider_resp: Final = ModelResponse(
-            choices=[{"index": 0, "message": {"role": "assistant", "content": "Sent to [EMAIL_TOKEN_1]"}}]
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Sent to [EMAIL_TOKEN_1]; model leaked 123-45-6789",
+                    },
+                }
+            ]
         )
         caller_resp: Final = await self.guardrail.async_post_call_success_hook(req, {}, provider_resp)
         self.assertIsInstance(caller_resp, ModelResponse)
         assert isinstance(caller_resp, ModelResponse)
-        self.assertEqual(caller_resp.choices[0].message.content, "Sent to alice@corp.com")
+        self.assertEqual(caller_resp.choices[0].message.content, "Sent to alice@corp.com; model leaked 123-45-6789")
 
-        # Simulate common_request_processing.py recording served_output_texts after post_call_success_hook
-        record_served_output_texts(logging_obj.model_call_details, served_output_texts(caller_resp))
-        self.assertEqual(logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY), ("Sent to [EMAIL_TOKEN_1]",))
+        # Simulate a subsequent post-call output masker (e.g. Presidio) redacting model-generated PII
+        post_mask_resp: Final = ModelResponse(
+            choices=[
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": str(caller_resp.choices[0].message.content).replace("123-45-6789", "<US_SSN>"),
+                    },
+                }
+            ]
+        )
+        # Simulate common_request_processing.py recording served_output_texts after the full post_call chain
+        record_served_output_texts(logging_obj.model_call_details, served_output_texts(post_mask_resp))
+        self.assertEqual(
+            logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY),
+            ("Sent to [EMAIL_TOKEN_1]; model leaked <US_SSN>",),
+        )
 
         logged_final: Final = StandardLoggingPayloadSetup.get_final_response_obj(
             provider_resp.model_dump(),
@@ -1028,10 +1065,22 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             logging_obj.model_call_details,
         )
         self.assertNotIn("alice@corp.com", str(logged_final))
+        self.assertNotIn("123-45-6789", str(logged_final))
         self.assertIn("[EMAIL_TOKEN_1]", str(logged_final))
-        langfuse_logged_resp: Final = logged_response(req, caller_resp)
-        self.assertNotIn("alice@corp.com", str(langfuse_logged_resp))
-        self.assertIn("[EMAIL_TOKEN_1]", str(langfuse_logged_resp))
+        self.assertIn("<US_SSN>", str(logged_final))
+
+        langfuse_logged_str: Final = sanitize_logged_output_str(
+            req, json.dumps({"content": post_mask_resp.choices[0].message.content})
+        )
+        self.assertIsNotNone(langfuse_logged_str)
+        assert langfuse_logged_str is not None
+        self.assertNotIn("alice@corp.com", langfuse_logged_str)
+        self.assertNotIn("123-45-6789", langfuse_logged_str)
+        self.assertIn("[EMAIL_TOKEN_1]", langfuse_logged_str)
+        self.assertIn("<US_SSN>", langfuse_logged_str)
+
+        await self.guardrail.async_log_success_event({"litellm_logging_obj": logging_obj}, post_mask_resp, None, None)
+        self.assertEqual(sanitize_logged_output_str(req, "alice@corp.com"), "alice@corp.com")
 
         raw_stream_msgs: Final[list[dict[str, object]]] = [  # mutable-ok: mutable streaming message fixture
             {"role": "user", "content": "Contact bob@corp.com"}
@@ -1087,9 +1136,11 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("bob@corp.com", str(logged_stream_final))
         self.assertIn("[EMAIL_TOKEN_1]", str(logged_stream_final))
 
-        langfuse_logged_chunks: Final = logged_stream_chunks(stream_req, served_chunks)
-        self.assertNotIn("bob@corp.com", str(langfuse_logged_chunks))
-        self.assertIn("[EMAIL_TOKEN_1]", str(langfuse_logged_chunks))
+        langfuse_logged_stream: Final = sanitize_logged_output_str(stream_req, caller_text)
+        self.assertIsNotNone(langfuse_logged_stream)
+        assert langfuse_logged_stream is not None
+        self.assertNotIn("bob@corp.com", langfuse_logged_stream)
+        self.assertIn("[EMAIL_TOKEN_1]", langfuse_logged_stream)
 
         untrusted_logging_obj: Final = Logging(
             model="gpt-4o-mini",
@@ -1105,15 +1156,13 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             "_litellm_logged_stream_chunks_override": (),
             "litellm_logging_obj": untrusted_logging_obj,
         }
-        self.assertIs(logged_response(untrusted_req, caller_resp), caller_resp)
-        self.assertIs(logged_stream_chunks(untrusted_req, served_chunks), served_chunks)
+        self.assertEqual(sanitize_logged_output_str(untrusted_req, "real output"), "real output")
 
         spoofed_dict_req: Final[dict[str, object]] = {  # mutable-ok: non-Logging dict fixture
             "_litellm_logged_response_override": None,
             "litellm_logging_obj": {"spoof": True},
         }
-        self.assertIs(logged_response(spoofed_dict_req, caller_resp), caller_resp)
-        self.assertIs(logged_stream_chunks(spoofed_dict_req, served_chunks), served_chunks)
+        self.assertEqual(sanitize_logged_output_str(spoofed_dict_req, "real output"), "real output")
 
 
 if __name__ == "__main__":
