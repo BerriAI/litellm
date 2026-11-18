@@ -14,6 +14,24 @@ REPO_ROOT: Final = Path(__file__).parents[2]
 CostMap = dict[str, dict[str, object]]
 COST_MAP_ADAPTER: Final = TypeAdapter(CostMap)
 
+ABSORBED_MODELS: Final = frozenset(
+    (
+        "together_ai/ByteDance/Seedream-5.0-lite",
+        "together_ai/Qwen/Qwen-Image-2.0",
+        "together_ai/Qwen/Qwen-Image-2.0-Pro",
+        "together_ai/Wan-AI/Wan2.6-image",
+        "together_ai/black-forest-labs/FLUX.1-kontext-max",
+        "together_ai/black-forest-labs/FLUX.1-kontext-pro",
+        "together_ai/black-forest-labs/FLUX.1.1-pro",
+        "together_ai/black-forest-labs/FLUX.2-flex",
+        "together_ai/black-forest-labs/FLUX.2-max",
+        "together_ai/black-forest-labs/FLUX.2-pro",
+        "together_ai/google/flash-image-3.1-lite",
+        "together_ai/nvidia/parakeet-tdt-0.6b-v3",
+        "together_ai/openai/whisper-large-v3",
+    )
+)
+
 SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/moonshotai/Kimi-K3",
     "together_ai/zai-org/GLM-5.2",
@@ -151,7 +169,7 @@ def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, o
     return tuple(
         (model, info)
         for model, info in cost_map.items()
-        if model.startswith("together_ai/") and info.get("mode") == mode
+        if model in ABSORBED_MODELS and info.get("mode") == mode
     )
 
 

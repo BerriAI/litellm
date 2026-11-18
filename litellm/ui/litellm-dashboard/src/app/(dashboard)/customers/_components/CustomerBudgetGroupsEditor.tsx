@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { v4 as uuidv4 } from "uuid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
@@ -49,13 +50,18 @@ export default function CustomerBudgetGroupsEditor({
   defaultGroupId,
   onChange,
   disabled = false,
+  showHeading = true,
+  memberGroups = true,
 }: {
   groups: CustomerBudgetGroupFields[];
   defaultGroupId: string;
   onChange: (groups: CustomerBudgetGroupFields[], defaultGroupId: string) => void;
   disabled?: boolean;
+  showHeading?: boolean;
+  memberGroups?: boolean;
 }) {
   const { t } = useTranslation();
+  const columns = memberGroups ? "sm:grid-cols-[1.3fr_1fr_1fr_3rem_2rem]" : "sm:grid-cols-[1.3fr_1fr_1fr_2rem]";
   const updateGroup = (id: string, patch: Partial<Omit<CustomerBudgetGroupFields, "id">>) =>
     onChange(
       groups.map((group) => (group.id === id ? { ...group, ...patch } : group)),
@@ -63,46 +69,49 @@ export default function CustomerBudgetGroupsEditor({
     );
   const removeGroup = (id: string) => {
     const remaining = groups.filter((group) => group.id !== id);
-    onChange(remaining, defaultGroupId === id ? remaining[0]?.id ?? "" : defaultGroupId);
+    onChange(remaining, memberGroups && defaultGroupId === id ? remaining[0]?.id ?? "" : defaultGroupId);
   };
   const addGroup = () => {
     const group: CustomerBudgetGroupFields = {
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       name: "",
       monthlyBudget: "",
       yearlyBudget: "",
       capPolicy: defaultCustomerCapPolicy,
     };
-    onChange([...groups, group], groups.length ? defaultGroupId : group.id);
+    onChange([...groups, group], memberGroups && !groups.length ? group.id : defaultGroupId);
   };
   return (
-    <section className="space-y-3 border-t pt-5" aria-labelledby="cc-groups-title">
+    <section
+      className={showHeading ? "space-y-3 border-t pt-5" : "space-y-3"}
+      aria-label={t(memberGroups ? "customerPortal.createDialog.groups" : "customerPortal.organizationGroups.title")}
+    >
       <div>
-        <h3 id="cc-groups-title" className="font-medium">
-          {t("customerPortal.createDialog.groups")}
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">{t("customerPortal.createDialog.groupsHelp")}</p>
+        {showHeading && <h3 className="font-medium">{t("customerPortal.createDialog.groups")}</h3>}
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(memberGroups ? "customerPortal.createDialog.groupsHelp" : "customerPortal.organizationGroups.help")}
+        </p>
       </div>
-      <div
-        className="hidden grid-cols-[1.3fr_1fr_1fr_3rem_2rem] gap-3 px-2 text-xs text-muted-foreground sm:grid"
-        aria-hidden="true"
-      >
+      <div className={`hidden gap-3 px-2 text-xs text-muted-foreground sm:grid ${columns}`} aria-hidden="true">
         <span>{t("customerPortal.createDialog.groupName")}</span>
         <span>{t("customerPortal.createDialog.monthly")}</span>
         <span>{t("customerPortal.createDialog.yearly")}</span>
-        <span>{t("customerPortal.createDialog.default")}</span>
+        {memberGroups && <span>{t("customerPortal.createDialog.default")}</span>}
       </div>
       <RadioGroup
+        role={memberGroups ? "radiogroup" : "group"}
         value={defaultGroupId}
         onValueChange={(value) => onChange(groups, String(value))}
-        aria-label={t("customerPortal.createDialog.defaultGroup")}
+        aria-label={t(
+          memberGroups ? "customerPortal.createDialog.defaultGroup" : "customerPortal.organizationGroups.title",
+        )}
         disabled={disabled}
         className="gap-1"
       >
         {groups.map((group, index) => (
           <div
             key={group.id}
-            className={`grid grid-cols-2 items-center gap-3 rounded-md p-2 sm:grid-cols-[1.3fr_1fr_1fr_3rem_2rem] ${group.id === defaultGroupId ? "bg-muted/60" : ""}`}
+            className={`grid grid-cols-2 items-center gap-3 rounded-md p-2 ${columns} ${memberGroups && group.id === defaultGroupId ? "bg-muted/60" : ""}`}
           >
             <div className="col-span-2 min-w-0 space-y-1.5 sm:col-span-1">
               <Label htmlFor={`cc-group-${group.id}`} className="sm:sr-only">
@@ -128,7 +137,7 @@ export default function CustomerBudgetGroupsEditor({
                 />
               </div>
             ))}
-            <div className="col-span-2 min-w-0 space-y-1.5 sm:col-span-3 sm:row-start-2">
+            <div hidden={!memberGroups} className="col-span-2 min-w-0 space-y-1.5 sm:col-span-3 sm:row-start-2">
               <Label htmlFor={`cc-cap-${group.id}`}>{t("customerPortal.budgetGroups.atCap")}</Label>
               <Select
                 value={group.capPolicy}
@@ -160,7 +169,10 @@ export default function CustomerBudgetGroupsEditor({
                 </SelectContent>
               </Select>
             </div>
-            <Label className="flex gap-2 sm:col-start-4 sm:row-start-1 sm:justify-center">
+            <Label
+              hidden={!memberGroups}
+              className={memberGroups ? "flex gap-2 sm:col-start-4 sm:row-start-1 sm:justify-center" : "hidden"}
+            >
               <RadioGroupItem
                 value={group.id}
                 aria-label={t("customerPortal.createDialog.useDefault", { name: group.name || index + 1 })}
@@ -173,8 +185,8 @@ export default function CustomerBudgetGroupsEditor({
               type="button"
               variant="ghost"
               size="icon-sm"
-              className="justify-self-end sm:col-start-5 sm:row-start-1"
-              disabled={groups.length === 1}
+              className="justify-self-end sm:col-start-[-2] sm:row-start-1"
+              disabled={memberGroups && groups.length === 1}
               onClick={() => removeGroup(group.id)}
               aria-label={t("customerPortal.createDialog.removeGroup", { name: group.name || index + 1 })}
             >
@@ -187,8 +199,6 @@ export default function CustomerBudgetGroupsEditor({
         <Plus className="size-4" />
         {t("customerPortal.createDialog.addGroup")}
       </Button>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.defaultHelp")}</p>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.resetHelp")}</p>
     </section>
   );
 }

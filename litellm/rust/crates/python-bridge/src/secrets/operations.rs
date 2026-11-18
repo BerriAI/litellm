@@ -1,4 +1,4 @@
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secrets::Secret;
 use litellm_secrets::cyberark::AuthenticationRetry;
 use litellm_secrets::{Error, SecretManager};

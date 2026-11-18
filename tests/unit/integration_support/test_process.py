@@ -396,6 +396,19 @@ def test_owned_writer_keeps_only_a_reader_paired_with_its_database(
     assert environment.get("DATABASE_URL_READ_REPLICA") == expected_reader
 
 
+@pytest.mark.parametrize("inherited", (None, "", "0"))
+@pytest.mark.parametrize("override", (None, ""))
+def test_owned_proxies_always_record_fatal_signal_stacks(inherited: str | None, override: str | None) -> None:
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"),
+            {} if override is None else {"PYTHONFAULTHANDLER": override},
+            (),
+            {} if inherited is None else {"PYTHONFAULTHANDLER": inherited},
+        )
+    assert environment["PYTHONFAULTHANDLER"] == "1"
+
+
 @pytest.mark.parametrize("explicit", (False, True))
 @pytest.mark.parametrize("remove", (False, True))
 def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(

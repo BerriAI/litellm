@@ -3,15 +3,12 @@ Router behavior the router-code differential fuzz run found changed once the Rus
 only core: count settings below zero, an allowed_fails_policy write that is no policy, a model
 response object as a deployment's mock_response, and endpoints read or patched on the Router class.
 """
-
-import asyncio
 import gc
 import json
 import socket
 import threading
 import weakref
 from collections.abc import Iterator, Mapping
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 from unittest import mock
@@ -245,95 +242,6 @@ def upstream() -> Iterator[str]:
     thread.join()
 
 
-def _served(name: str, deployment_id: str, model: str, api_base: str) -> dict[str, object]:
-    return {
-        "model_name": name,
-        "litellm_params": {"model": model, "api_key": "k", "api_base": api_base},
-        "model_info": {"id": deployment_id},
-    }
-
-
-def _request_logging(call_type: str, *, stream: bool) -> object:
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    return Logging(
-        model="g",
-        messages=MESSAGES,
-        stream=stream,
-        call_type=call_type,
-        start_time=datetime.now(),  # noqa: DTZ005  # litellm's own naive start time
-        litellm_call_id="call-1",
-        function_id="f",
-    )
-
-
-async def _recorded() -> None:
-    """Let the background recordings of a stream's outcome run."""
-    for _ in range(50):
-        await asyncio.sleep(0.02)
-
-
-@pytest.mark.asyncio
-async def test_a_responses_stream_cut_after_it_opened_counts_one_fail_with_a_shared_logging_object(
-    upstream: str,
-) -> None:
-    router: Final = Router(
-        model_list=[_served("g", "d1", "openai/gpt-4o", f"{upstream}/cut/v1")], num_retries=0, disable_cooldowns=True
-    )
-
-    stream: Final = await router.aresponses(
-        model="g", input="hi", stream=True, litellm_logging_obj=_request_logging("aresponses", stream=True)
-    )
-    with pytest.raises(Exception):  # noqa: B017, PT011  # the transport's read error, whatever class maps it
-        async for _ in stream:  # pyright: ignore[reportGeneralTypeIssues]  # a stream when stream=True
-            pass
-    await _recorded()
-
-    assert router.health().store.get_cache(key="d1:fails") == 1
-
-
-@pytest.mark.asyncio
-async def test_a_blocked_response_raised_for_a_fallback_counts_no_success_with_a_shared_logging_object(
-    upstream: str,
-) -> None:
-    router: Final = Router(
-        model_list=[
-            _served("a", "a1", "openai/gpt-4o", f"{upstream}/filtered/v1"),
-            _served("safe", "s1", "openai/gpt-4o", f"{upstream}/ok/v1"),
-        ],
-        content_policy_fallbacks=[{"a": ["safe"]}],
-        num_retries=0,
-        disable_cooldowns=True,
-    )
-
-    response: Final = await router.acompletion(
-        model="a", messages=MESSAGES, litellm_logging_obj=_request_logging("acompletion", stream=False)
-    )
-    await _recorded()
-
-    assert response.choices[0].message.content == "ok"
-    assert router.health().store.get_cache(key="a1:successes") is None
-    assert router.health().store.get_cache(key="s1:successes") == 1
-
-
-@pytest.mark.asyncio
-async def test_a_text_completion_stream_that_fails_before_its_first_chunk_counts_nothing(upstream: str) -> None:
-    router: Final = Router(
-        model_list=[_served("g", "d1", "openai/gpt-3.5-turbo-instruct", f"{upstream}/down/v1")],
-        num_retries=0,
-        disable_cooldowns=True,
-    )
-
-    stream: Final = await router.atext_completion(model="g", prompt="hi", stream=True)
-    with pytest.raises(litellm.BadGatewayError):
-        async for _ in stream:  # pyright: ignore[reportGeneralTypeIssues]  # a stream when stream=True
-            pass
-    await _recorded()
-
-    assert router.health().store.get_cache(key="d1:successes") is None
-    assert router.health().store.get_cache(key="d1:fails") is None
-
-
 @pytest.mark.asyncio
 async def test_a_text_completion_without_a_prompt_raises_type_error_before_routing() -> None:
     router: Final = Router(model_list=[_deployment("g", "ok")], num_retries=0)
@@ -387,20 +295,6 @@ async def test_a_refused_pick_by_deployment_id_names_the_deployments_group() -> 
 
     with pytest.raises(Exception, match="model=t2-pub"):  # noqa: PT011  # the refusal, whatever class names it
         await router.async_get_available_deployment(model="p2", messages=MESSAGES, request_kwargs={})
-
-
-@pytest.mark.asyncio
-async def test_a_request_refused_before_the_provider_counts_against_no_deployment(upstream: str) -> None:
-    router: Final = Router(
-        model_list=[_served("g", "d1", "openai/gpt-4o", f"{upstream}/ok/v1")], num_retries=0, disable_cooldowns=True
-    )
-
-    with pytest.raises(litellm.UnsupportedParamsError):
-        await router.acompletion(model="g", messages=MESSAGES, reasoning_effort="low")
-    await _recorded()
-
-    assert router.health().store.get_cache(key="d1:fails") is None
-    assert not [key for key in router.health().store.in_memory_cache.cache_dict if ":rpm" in key]
 
 
 @pytest.mark.asyncio

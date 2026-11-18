@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use litellm_redis_resolve::{Asked, Error, Handling, SETTINGS, Setting, interpret, kwargs};
+use litellm_redis_resolve::{Asked, Error, Handling, Kwarg, interpret, kwargs};
 use rstest::rstest;
 use serde::Deserialize;
 use serde_json::json;
+use strum::IntoEnumIterator;
 
 #[derive(Deserialize)]
 struct Catalog {
@@ -25,13 +26,11 @@ struct Arg {
 // the signatures of the clients the proxy builds, where an unknown kwarg raises TypeError
 const PROXY_SIGNATURES: &[&str] = &["async", "cluster", "connection"];
 
-fn rejected() -> impl Iterator<Item = (&'static Setting, Asked)> {
-    SETTINGS
-        .iter()
-        .filter_map(|setting| match setting.handling {
-            Handling::Reject { asked, .. } => Some((setting, asked)),
-            Handling::Read | Handling::Warn { .. } => None,
-        })
+fn rejected() -> impl Iterator<Item = (Kwarg, Asked)> {
+    Kwarg::iter().filter_map(|kwarg| match kwarg.setting().handling {
+        Handling::Reject { asked, .. } => Some((kwarg, asked)),
+        Handling::Read | Handling::Warn { .. } => None,
+    })
 }
 
 fn catalog() -> Catalog {
@@ -46,65 +45,61 @@ fn host_with(kwarg: &str, value: serde_json::Value) -> litellm_redis_resolve::Kw
 }
 
 #[rstest]
-fn every_catalogued_kwarg_has_exactly_one_settings_row() {
-    let rows: Vec<&str> = SETTINGS.iter().map(|setting| setting.kwarg).collect();
-    let unique: BTreeSet<&str> = rows.iter().copied().collect();
-    assert_eq!(rows.len(), unique.len(), "a kwarg has two SETTINGS rows");
+fn every_catalogued_kwarg_is_a_kwarg_and_nothing_else_is() {
+    let kwargs: BTreeSet<&str> = Kwarg::iter().map(Kwarg::name).collect();
 
     let catalog = catalog();
     let catalogued: BTreeSet<&str> = catalog.args.keys().map(String::as_str).collect();
-    assert_eq!(unique, catalogued);
+    assert_eq!(kwargs, catalogued);
 }
 
 #[rstest]
 fn settings_read_redis_environment_names_exactly_where_python_does() {
     let catalog = catalog();
 
-    let differing: Vec<&str> = SETTINGS
-        .iter()
-        .filter(|setting| {
+    let differing: Vec<&str> = Kwarg::iter()
+        .filter(|kwarg| {
             catalog
                 .args
-                .get(setting.kwarg)
-                .is_some_and(|arg| arg.environment != setting.environment)
+                .get(kwarg.name())
+                .is_some_and(|arg| arg.environment != kwarg.setting().environment)
         })
-        .map(|setting| setting.kwarg)
+        .map(Kwarg::name)
         .collect();
     assert!(differing.is_empty(), "{differing:?}");
 }
 
 #[rstest]
 fn every_warned_setting_is_reported() {
-    let warned = SETTINGS
-        .iter()
-        .filter(|setting| matches!(setting.handling, Handling::Warn { met: None, .. }));
+    let warned = Kwarg::iter()
+        .filter(|kwarg| matches!(kwarg.setting().handling, Handling::Warn { met: None, .. }));
 
-    for setting in warned {
-        let resolved = interpret(&host_with(setting.kwarg, json!("set")), None, None).unwrap();
+    for kwarg in warned {
+        let resolved = interpret(&host_with(kwarg.name(), json!("set")), None, None).unwrap();
 
         let reported: Vec<&str> = resolved
             .ignored
             .iter()
             .map(|ignored| ignored.setting.as_str())
             .collect();
-        assert_eq!(reported, vec![setting.kwarg]);
+        assert_eq!(reported, vec![kwarg.name()]);
     }
 }
 
 #[rstest]
 fn every_rejected_setting_fails_when_asked_for_and_not_otherwise() {
-    for (setting, asked) in rejected() {
+    for (kwarg, asked) in rejected() {
         let (asking, not_asking) = match asked {
             Asked::WhenTrue => (json!(true), json!(false)),
             Asked::WhenSet => (json!(["VERIFY_CRL_CHECK_LEAF"]), json!([])),
         };
 
-        let error = interpret(&host_with(setting.kwarg, asking), None, None).unwrap_err();
+        let error = interpret(&host_with(kwarg.name(), asking), None, None).unwrap_err();
         assert!(
-            matches!(&error, Error::Unenforceable { setting: source, .. } if source == setting.kwarg),
+            matches!(&error, Error::Unenforceable { setting: source, .. } if source == kwarg.name()),
             "{error:?}"
         );
-        assert!(interpret(&host_with(setting.kwarg, not_asking), None, None).is_ok());
+        assert!(interpret(&host_with(kwarg.name(), not_asking), None, None).is_ok());
     }
 }
 
@@ -113,7 +108,7 @@ fn python_already_refuses_every_rejected_setting() {
     let catalog = catalog();
 
     let accepted: Vec<&str> = rejected()
-        .map(|(setting, _)| setting.kwarg)
+        .map(|(kwarg, _)| kwarg.name())
         .filter(|kwarg| {
             catalog.args[*kwarg]
                 .redis_py
