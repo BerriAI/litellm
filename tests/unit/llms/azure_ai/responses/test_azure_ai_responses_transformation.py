@@ -126,6 +126,9 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
         ("https://res.openai.azure.com/openai/v1", AzureAIResponsesAPIConfig),
         ("https://res.cognitiveservices.azure.com/openai/v1", NoneType),
         ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", NoneType),
+        ("https://res.services.ai.azure.com/models", NoneType),
+        ("https://res.services.ai.azure.com", NoneType),
+        ("https://res.openai.azure.com/openai/deployments/model-router", NoneType),
         (SERVERLESS_BASE, NoneType),
     ],
 )
@@ -400,7 +403,8 @@ async def test_a_model_router_drops_custom_tools_under_drop_params(url_regex, ca
 @pytest.mark.parametrize(
     "tool_choice,sent_tool_choice", [({"type": "custom", "name": "apply_patch"}, None), ("auto", "auto")]
 )
-async def test_a_model_router_drops_only_a_tool_choice_naming_a_custom_tool(tool_choice, sent_tool_choice):
+@pytest.mark.parametrize("tools", [[WEATHER_TOOL, CUSTOM_TOOL], [WEATHER_TOOL]], ids=["with_custom", "function_only"])
+async def test_a_model_router_drops_only_a_tool_choice_naming_a_custom_tool(tools, tool_choice, sent_tool_choice):
     route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
     )
@@ -408,7 +412,7 @@ async def test_a_model_router_drops_only_a_tool_choice_naming_a_custom_tool(tool
     await litellm.aresponses(
         model="azure_ai/model_router/model-router",
         input="What is the weather in SF?",
-        tools=[WEATHER_TOOL, CUSTOM_TOOL],
+        tools=tools,
         tool_choice=tool_choice,
         api_base=FOUNDRY_PROJECT_BASE,
         api_key="fake-key",
