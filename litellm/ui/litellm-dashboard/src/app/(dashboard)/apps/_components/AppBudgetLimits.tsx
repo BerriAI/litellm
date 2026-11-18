@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Info } from "lucide-react";
+import { BudgetUsageProgress } from "@/components/shared/BudgetUsageProgress";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { customerBudgetPeriod, type CustomerBudgetUsage } from "../../customers/_components/customerBudgetUsage";
@@ -113,22 +114,7 @@ export default function AppBudgetLimits({
         )}
         <BudgetDetails windows={windows} cumulativeSpend={cumulativeSpend} />
       </div>
-      {spent !== null && (
-        <div
-          role="progressbar"
-          aria-label={t("apps.budgetUsed")}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percentage}
-          aria-valuetext={label}
-          className="h-1 overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className={atLimit ? "h-full bg-destructive" : "h-full bg-foreground/70"}
-            style={{ width: `${percentage}%` }}
-          />
-        </div>
-      )}
+      {spent !== null && <BudgetUsageProgress percentage={percentage} label={t("apps.budgetUsed")} valueText={label} />}
       <p className={atLimit ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{caption}</p>
       <CustomerRateLimitSummary limits={budget} />
     </div>
