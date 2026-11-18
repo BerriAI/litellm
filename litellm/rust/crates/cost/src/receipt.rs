@@ -2,12 +2,12 @@
 //! each adjustment, and the breakdown values main stores on the logging object. An unpriced call says why and is
 //! never 0.0
 
-use crate::adjust::{Discount, Margin};
+use crate::adjust::{Adjusted, AdjustmentKey, Discount, Margin, adjust};
 use crate::money::Usd;
 use crate::price::Meter;
 use crate::priced::Line;
-use crate::query::{Basis, Candidate, Kind};
-use crate::row::RowRef;
+use crate::query::{AdjustmentPolicy, Basis, Candidate, Kind};
+use crate::row::{RowRef, RowSource};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PriceOutcome {
@@ -21,6 +21,10 @@ pub enum Unpriced {
     NoRow { tried: Vec<Candidate> },
     /// The row prices none of the meters the call used
     MissingRates { row: RowRef, missing: Vec<Meter> },
+    /// The row prices the call by a meter whose quantity the call did not report
+    MissingUsage { row: RowRef, meter: Meter },
+    /// The rows given do not price the call, and the caller has not fetched the catalog row it deferred
+    CatalogDeferred,
     /// This crate does not price this kind, or this case of it, yet. The caller prices it the old way
     NotPorted(Kind),
 }
@@ -88,6 +92,48 @@ impl Receipt {
     /// The cost before discount and margin, main's `original_cost`
     pub fn original(&self) -> f64 {
         (self.token_subtotal() + self.tools + self.additional).get()
+    }
+
+    /// Applies the discount and margin `policy` asks for and settles the total. The discount is keyed on `model`
+    /// unless the policy names another
+    pub(crate) fn settled(
+        self,
+        source: &impl RowSource,
+        policy: &AdjustmentPolicy,
+        model: Option<&str>,
+    ) -> Self {
+        let original = self.original();
+        let Adjusted {
+            cost,
+            discount,
+            margin,
+        } = match policy {
+            AdjustmentPolicy::None => Adjusted {
+                cost: original,
+                discount: Discount::default(),
+                margin: Margin::default(),
+            },
+            AdjustmentPolicy::Apply {
+                provider,
+                model: keyed,
+                region,
+            } => adjust(
+                source.discounts(),
+                source.margins(),
+                original,
+                &AdjustmentKey {
+                    provider: provider.as_deref(),
+                    model: keyed.as_deref().or(model),
+                    region: region.as_deref(),
+                },
+            ),
+        };
+        Self {
+            discount,
+            margin,
+            total: cost,
+            ..self
+        }
     }
 }
 

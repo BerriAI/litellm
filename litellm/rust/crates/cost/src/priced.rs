@@ -47,10 +47,12 @@ pub struct Line {
 }
 
 /// A billed amount of one meter
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Quantity {
     Count(u64),
     Duration(Duration),
+    /// A float amount main multiplies as is, such as measured seconds or OCR credits
+    Measured(f64),
 }
 
 /// Meters main bills as one total (video, Replicate, Amazon Transcribe) take a fixed side, chosen in 09

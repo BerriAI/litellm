@@ -85,6 +85,22 @@ impl PricingRows {
     }
 }
 
+impl PricingRows {
+    /// Adds a row built for this call alone under `key` and names it as `candidate`'s row, such as the fields of the
+    /// capability rule `get_model_info` answers with when no name is a key
+    pub fn with_named_per_call(
+        self,
+        candidate: Candidate,
+        key: &str,
+        fields: Fields,
+        provider: &str,
+    ) -> Self {
+        let (rows, at) = self.with_per_call(key, fields, provider);
+        let named = rows.named.into_iter().chain([(candidate, at)]).collect();
+        Self { named, ..rows }
+    }
+}
+
 impl RowSource for PricingRows {
     type Row = LoweredRow;
 

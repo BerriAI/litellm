@@ -318,6 +318,20 @@ impl NativeModelCostMap {
         cost::price(py, &*self.cost_snapshot(py)?, document, row)
     }
 
+    /// Prices a per-unit call (rerank, vector store search, OCR) from the facts in `document`, a receipt or why it is
+    /// unpriced. `tables` are the deployment's own price tables, read in order ahead of `catalog`, the row
+    /// `get_model_info` found for the call
+    #[pyo3(signature = (document, tables=Vec::new(), catalog=None))]
+    fn price_units(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+        tables: Vec<Bound<'_, PyMapping>>,
+        catalog: Option<&Bound<'_, PyMapping>>,
+    ) -> PyResult<Py<PyAny>> {
+        cost::price_units(py, &*self.cost_snapshot(py)?, document, &tables, catalog)
+    }
+
     /// The legacy budget hold and the input cost floor of a request. `rows` are the model info mappings its shapes
     /// read by index
     fn bound(
