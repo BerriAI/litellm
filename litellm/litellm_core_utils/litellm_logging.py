@@ -7822,6 +7822,13 @@ def _logged_error_code(original_exception: Exception | None) -> str:
     return "" if carried_code in ("", "None") else carried_code
 
 
+def _logged_provider_error_code(original_exception: Exception | None) -> str | None:
+    carried_code: Final = str(getattr(original_exception, "code", None))
+    if carried_code in ("", "None") or _is_http_error_status(carried_code):
+        return None
+    return carried_code
+
+
 class StandardLoggingPayloadSetup:
     @staticmethod
     def cleanup_timestamps(
@@ -8352,6 +8359,7 @@ class StandardLoggingPayloadSetup:
             traceback=redact_string(traceback_info),
             error_message=redact_string(error_message),
             error_provider_request_id=provider_request_id,
+            error_provider_code=_logged_provider_error_code(original_exception),
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
             error_budget_entity_type=budget_error.entity_type if budget_error else None,

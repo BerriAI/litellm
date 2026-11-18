@@ -5865,7 +5865,7 @@ def test_get_error_information_error_code_priority():
 @pytest.mark.parametrize(
     "provider_code", ["context_length_exceeded", "integer_below_min_value", "content_filter", "1211", "200"]
 )
-def test_get_error_information_logs_the_http_status_over_a_provider_error_code(provider_code: str):
+def test_get_error_information_logs_the_http_status_and_keeps_the_provider_error_code(provider_code: str):
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     error: Final = litellm.BadRequestError(
@@ -5874,9 +5874,29 @@ def test_get_error_information_logs_the_http_status_over_a_provider_error_code(p
         llm_provider="openai",
         body={"message": "rejected", "type": "invalid_request_error", "param": None, "code": provider_code},
     )
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(error)
 
     assert error.code == provider_code
-    assert StandardLoggingPayloadSetup.get_error_information(error)["error_code"] == "400"
+    assert error_information["error_code"] == "400"
+    assert error_information["error_provider_code"] == provider_code
+
+
+@pytest.mark.parametrize("carried_code", [None, "", 400, "400"])
+def test_get_error_information_logs_no_provider_error_code_when_the_carried_code_is_empty_or_the_http_status(
+    carried_code: int | str | None,
+):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    error: Final = litellm.BadRequestError(
+        message="rejected",
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", "type": "BadRequestError", "param": "max_tokens", "code": carried_code},
+    )
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(error)
+
+    assert error_information["error_code"] == "400"
+    assert error_information["error_provider_code"] is None
 
 
 def test_get_error_information_logs_a_provider_error_code_when_no_http_status_is_known():
