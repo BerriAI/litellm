@@ -325,6 +325,34 @@ def test_a_runtime_price_on_the_mode_entry_wins_over_a_runtime_price_on_the_gene
     assert cost == pytest.approx((0.011, 0.0))
 
 
+@pytest.mark.parametrize(("max_results", "expected"), [(50, 0.009), (200, 0.009), (10, 0.002)])
+def test_result_tiers_price_a_search_ahead_of_the_rows_flat_query_rate(
+    monkeypatch: pytest.MonkeyPatch, max_results: int, expected: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "exa_ai/tiered-probe",
+        {
+            "litellm_provider": "exa_ai",
+            "mode": "search",
+            "input_cost_per_query": 0.004,
+            "tiered_pricing": [
+                {"max_results_range": [1, 25], "input_cost_per_query": 0.002},
+                {"max_results_range": [26, 100], "input_cost_per_query": 0.009},
+            ],
+        },
+    )
+
+    cost: Final = search_provider_cost_per_query(
+        model="exa_ai/tiered-probe",
+        custom_llm_provider="exa_ai",
+        number_of_queries=1,
+        optional_params={"max_results": max_results},
+    )
+
+    assert cost == pytest.approx((expected, 0.0))
+
+
 @pytest.mark.usefixtures("_search_mode_prices")
 def test_sync_tavily_advanced_search_reports_the_advanced_price(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(TAVILY_SEARCH_URL).respond(json={"results": [{"title": "t", "url": "https://example.com"}]})

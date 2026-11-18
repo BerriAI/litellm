@@ -180,6 +180,10 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
         max_output_tokens: count("max_output_tokens"),
         provider_entry: provider_entry(fields.get("provider_specific_entry")),
         declared: declared(fields),
+        prices_by_results: fields
+            .get("tiered_pricing")
+            .and_then(Value::as_array)
+            .is_some_and(|tiers| !tiers.is_empty()),
     }
 }
 
@@ -450,5 +454,34 @@ mod tests {
             (facts.mode, facts.max_input_tokens, facts.max_output_tokens),
             (mode, max_input, max_output)
         );
+    }
+
+    #[rstest]
+    #[case::result_tiers(json!({"tiered_pricing": [{"max_results_range": [0, 25], "input_cost_per_query": 0.005}]}), true)]
+    #[case::token_tiers(json!({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 1e-6}]}), true)]
+    #[case::no_tiers(json!({"tiered_pricing": []}), false)]
+    #[case::flat_query_rate(json!({"input_cost_per_query": 0.005}), false)]
+    fn a_row_prices_by_results_whenever_it_lists_tiers(#[case] row: Value, #[case] expected: bool) {
+        assert_eq!(row_facts(&fields(row)).prices_by_results, expected);
+    }
+
+    #[rstest]
+    fn a_named_per_call_row_resolves_as_its_candidates_row() {
+        let candidate = Candidate {
+            model: "rerank-v3.5".into(),
+            provider: Provider::Other("cohere".to_owned()),
+        };
+        let rows = snapshot(0.0).pricing_rows([], []).with_named_per_call(
+            candidate.clone(),
+            "get_model_info",
+            fields(json!({"input_cost_per_query": 0.002})),
+            "cohere",
+        );
+        let at = rows
+            .resolve(&candidate)
+            .expect("the candidate names the row");
+
+        assert_eq!(at.provenance, Provenance::PerCall);
+        assert!(rows.row(&at).is_some());
     }
 }

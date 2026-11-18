@@ -15,6 +15,7 @@ pub mod receipt;
 mod rerank;
 pub mod row;
 pub mod schedule;
+mod search;
 mod speech;
 #[cfg(test)]
 mod testing;
