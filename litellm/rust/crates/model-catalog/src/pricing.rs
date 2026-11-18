@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use litellm_cost::adjust::{Discounts, Margins};
 use litellm_cost::call::{InferenceGeo, Speed};
+use litellm_cost::money::UnitPrice;
 use litellm_cost::price::{Adjustments, Uplift};
 use litellm_cost::query::Candidate;
 use litellm_cost::row::{
@@ -188,6 +189,11 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
             .get("guardrail_cost_per_unit")
             .and_then(Value::as_object)
             .is_some_and(|rates| rates.values().all(|rate| float_of(rate).is_ok())),
+        legacy_search_query_rate: fields
+            .get("search_queries_cost_per_query")
+            .filter(|rate| rate.is_number())
+            .and_then(|rate| float_of(rate).ok())
+            .and_then(UnitPrice::new),
     }
 }
 
@@ -302,6 +308,11 @@ mod tests {
                 ..TokenUsage::default()
             },
             requested_model: None,
+            rules: Default::default(),
+            elapsed: None,
+            characters: None,
+            embedding: false,
+            raw: Default::default(),
         }))
     }
 
@@ -762,5 +773,205 @@ mod batch_parity {
             sides(row, "openai", usage, basis(None, None)).0,
             uncached + (0.0 * 1.25e-7 + 1_000.0 * expected_rate)
         );
+    }
+}
+
+#[cfg(test)]
+mod tokens_parity {
+    //! Parity with main's `cost_per_token` for every provider branch over rows Model Catalog lowered.
+    //! `tokens_parity.json` was captured once from main's Python (`captured_from` in the file,
+    //! `LITELLM_LOCAL_MODEL_COST_MAP=True`, billing time pinned per case): each case holds the row the branch looked up,
+    //! the billed usage and raw counts the adapter hands over, the call facts, and main's `(prompt, completion)`
+
+    use litellm_cost::query::{
+        AdjustmentPolicy, Basis, CacheReads, CacheWrites, Candidate, DataResidency, Header,
+        Modalities, PriceQuery, PriceSource, RawCounts, TokenUsage, TokensQuery,
+    };
+    use litellm_cost::receipt::PriceOutcome;
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::snapshot::SnapshotInputs;
+    use crate::store::Store;
+    use crate::test_support::{GENERATION, TestRows, bundled_rows, bundled_rules, names};
+
+    const FIXTURE: &str = include_str!("tokens_parity.json");
+
+    fn parsed<T: serde::de::DeserializeOwned>(value: &Value) -> T {
+        serde_json::from_value(value.clone()).unwrap()
+    }
+
+    fn basis(written: &Value) -> Basis {
+        let lowered = |key: &str| {
+            written[key]
+                .as_str()
+                .map_or(Value::Null, |text| json!(text.to_lowercase()))
+        };
+        Basis {
+            service_tier: parsed::<Option<_>>(&lowered("service_tier")).unwrap_or_default(),
+            data_residency: parsed::<Option<DataResidency>>(&lowered("data_residency")),
+            vertex_location: written["vertex_location"].as_str().map(Into::into),
+            at: written["at"].as_str().unwrap().parse().unwrap(),
+        }
+    }
+
+    /// The usage `custom_cost_per_token` bills: the prompt with every cache read and write in it
+    fn custom_usage(raw: &RawCounts, prompt_tokens: u64) -> TokenUsage {
+        TokenUsage {
+            prompt_tokens,
+            cache_read: CacheReads {
+                text: raw.cached_tokens,
+                ..CacheReads::default()
+            },
+            cache_write: CacheWrites {
+                default: raw.cache_creation_tokens,
+                ..CacheWrites::default()
+            },
+            output: Modalities {
+                text: raw.completion_tokens,
+                ..Modalities::default()
+            },
+            ..TokenUsage::default()
+        }
+    }
+
+    fn sides(case: &Value) -> (f64, f64) {
+        let snapshot: Snapshot<Store<TestRows>> = Snapshot::new(
+            GENERATION,
+            CostConfig::default(),
+            SnapshotInputs {
+                table: Store::new(bundled_rows()),
+                rules: Arc::new(bundled_rules()),
+                names: Arc::new(names(&[])),
+            },
+        );
+        let written = &case["query"];
+        let raw: RawCounts = parsed(&written["raw"]);
+        let usage: TokenUsage = parsed(&written["usage"]);
+        let (rows, source) = match (&case["row"], &written["custom"]) {
+            (_, Value::Object(custom)) if !custom["per_token"].is_null() => (
+                snapshot.pricing_rows([], []),
+                PriceSource::FlatPerToken(parsed(&custom["per_token"])),
+            ),
+            (_, Value::Object(custom)) => (
+                snapshot.pricing_rows([], []),
+                PriceSource::PerSecond {
+                    rate: parsed(&custom["per_second"]),
+                },
+            ),
+            (Value::Object(row), _) => {
+                let (rows, at) = snapshot.pricing_rows([], []).with_per_call(
+                    "requested_model_info_override",
+                    row.clone(),
+                    case["row_provider"].as_str().unwrap(),
+                );
+                (
+                    rows,
+                    PriceSource::Row {
+                        row: at,
+                        breakdown_by_name: false,
+                    },
+                )
+            }
+            _ => (snapshot.pricing_rows([], []), PriceSource::Catalog),
+        };
+        let usage = match source {
+            PriceSource::FlatPerToken(_) => custom_usage(&raw, usage.prompt_tokens),
+            _ => usage,
+        };
+        let query = PriceQuery::Tokens(Box::new(TokensQuery {
+            rules: parsed(&written["rules"]),
+            elapsed: parsed(&written["elapsed"]),
+            characters: parsed(&written["characters"]),
+            embedding: written["embedding"].as_bool().unwrap(),
+            raw,
+            ..TokensQuery::new(
+                Header {
+                    candidates: vec![Candidate {
+                        model: case["model"].as_str().unwrap().into(),
+                        provider: case["provider"].as_str().unwrap().parse().unwrap(),
+                    }],
+                    source,
+                    basis: basis(&written["basis"]),
+                    adjustments: AdjustmentPolicy::None,
+                    reported: parsed(&written["reported"]),
+                },
+                usage,
+            )
+        }));
+        match litellm_cost::price(&rows, &query) {
+            PriceOutcome::Priced(receipt) => (receipt.prompt.get(), receipt.completion.get()),
+            PriceOutcome::Unpriced(unpriced) => panic!("unpriced: {unpriced:?}"),
+        }
+    }
+
+    #[rstest]
+    #[case::openai_plain("openai_plain")]
+    #[case::openai_priority("openai_priority")]
+    #[case::openai_flex("openai_flex")]
+    #[case::openai_audio_in("openai_audio_in")]
+    #[case::openai_residency_eu("openai_residency_eu")]
+    #[case::openai_residency_us_priority("openai_residency_us_priority")]
+    #[case::openai_fedramp("openai_fedramp")]
+    #[case::azure_residency_ignored("azure_residency_ignored")]
+    #[case::azure_cached("azure_cached")]
+    #[case::gemini_over_200k("gemini_over_200k")]
+    #[case::gemini_priority("gemini_priority")]
+    #[case::deepseek_off_peak("deepseek_off_peak")]
+    #[case::deepseek_peak("deepseek_peak")]
+    #[case::tencent_off_peak("tencent_off_peak")]
+    #[case::databricks_legacy_name("databricks_legacy_name")]
+    #[case::databricks_claude("databricks_claude")]
+    #[case::fireworks_bucket("fireworks_bucket")]
+    #[case::fireworks_moe_bucket("fireworks_moe_bucket")]
+    #[case::perplexity_reported_dict("perplexity_reported_dict")]
+    #[case::perplexity_reported_unmapped("perplexity_reported_unmapped")]
+    #[case::perplexity_search_low("perplexity_search_low")]
+    #[case::perplexity_citations_reasoning("perplexity_citations_reasoning")]
+    #[case::perplexity_stated_reasoning("perplexity_stated_reasoning")]
+    #[case::perplexity_reasoning_without_rate("perplexity_reasoning_without_rate")]
+    #[case::perplexity_legacy_search_rate("perplexity_legacy_search_rate")]
+    #[case::xai_normalized("xai_normalized")]
+    #[case::xai_band_edge_inclusive("xai_band_edge_inclusive")]
+    #[case::xai_reported_split("xai_reported_split")]
+    #[case::xai_reported_unmapped("xai_reported_unmapped")]
+    #[case::lemonade_any("lemonade_any")]
+    #[case::dashscope_tier_two("dashscope_tier_two")]
+    #[case::dashscope_cache_writes("dashscope_cache_writes")]
+    #[case::qwencloud_alias("qwencloud_alias")]
+    #[case::groq_else_branch("groq_else_branch")]
+    #[case::else_branch_residency("else_branch_residency")]
+    #[case::else_branch_unpriced_tokens("else_branch_unpriced_tokens")]
+    #[case::together_else_branch("together_else_branch")]
+    #[case::amazon_nova_else_branch("amazon_nova_else_branch")]
+    #[case::vertex_gemini_token_regional("vertex_gemini_token_regional")]
+    #[case::vertex_gemini_token_global("vertex_gemini_token_global")]
+    #[case::vertex_legacy_128k_prompt_over("vertex_legacy_128k_prompt_over")]
+    #[case::vertex_characters_under_128k("vertex_characters_under_128k")]
+    #[case::vertex_characters_over_128k("vertex_characters_over_128k_bills_completion_tokens")]
+    #[case::vertex_characters_missing_output_rate(
+        "vertex_characters_missing_output_rate_bills_tokens"
+    )]
+    #[case::vertex_characters_none_counted("vertex_characters_none_counted")]
+    #[case::vertex_embedding_routes_to_tokens("vertex_embedding_routes_to_tokens")]
+    #[case::vertex_medlm_characters("vertex_medlm_characters")]
+    #[case::per_second_cost_per_second("per_second_cost_per_second")]
+    #[case::per_second_transcription_mode_audio("per_second_transcription_mode_audio")]
+    #[case::per_second_input_rate("per_second_input_rate")]
+    #[case::custom_per_token("custom_per_token")]
+    #[case::custom_per_second("custom_per_second")]
+    #[case::override_generic_residency_location("override_generic_residency_location")]
+    #[case::override_per_second("override_per_second")]
+    fn a_token_call_costs_what_main_charged(#[case] name: &str) {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        let case = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap_or_else(|| panic!("no fixture case {name}"));
+        let expected: (f64, f64) = parsed(&case["expected"]);
+        assert_eq!(sides(case), expected);
     }
 }

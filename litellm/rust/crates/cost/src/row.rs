@@ -77,6 +77,8 @@ pub struct RowFacts {
     /// The row lists `guardrail_cost_per_unit` as a mapping of numbers, which main reads as a guardrail pricing row
     /// even when it prices none of a call's counters
     pub guardrail_units: bool,
+    /// `search_queries_cost_per_query`, the flat search price Perplexity reads ahead of `search_context_cost_per_query`
+    pub legacy_search_query_rate: Option<crate::money::UnitPrice>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

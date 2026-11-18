@@ -4,7 +4,8 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 
 - `price`, `bound` and `rates` are the three entry points, and `RowSource` (`row.rs`) is the only way they reach a row. Model Catalog implements it over its per-call snapshot, so this crate never reads the cost map, never merges rows and holds no provider list beyond the pricing rules it ports
 - `engine.rs` hands each `PriceQuery` kind to its handler module. A kind or case without a handler answers `Unpriced::NotPorted`, and only then may the caller price it the old way
-- `tokens.rs` and `tokens/` port the token path of `completion_cost`: `rule.rs` for what each provider branch of `cost_per_token` adds, `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
+- `tokens.rs` and `tokens/` port `cost_per_token` for every provider and the token path of `completion_cost`: `rule.rs` for which provider branch prices a row and what it adds to `generic_cost_per_token` (the basis facts it reads, uplifts, the web search fee, a cost the provider stated), `branch.rs` for the branches with a formula of their own (a row billed by the second, Vertex AI's legacy 128k bands and character pricing, Perplexity, Dashscope, free branches), `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
+  - `TokenRules` says which path the caller took: a provider branch, `generic_cost_per_token` or `requested_model_info_override`. The caller looks the row up the way its branch did and passes it, so the core never repeats a provider's name rewrite
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
 - Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`, `search.rs`, `video.rs`, `image.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
   - Where main billed a call nothing on purpose (no row, no rate, no units) the core answers `Unpriced`, never 0.0, and the adapter maps it to each calculator's legacy return
@@ -51,6 +52,13 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - Translation and transcription read only the rates a model's own cost map entry declares, while Live voice and xAI read whatever `get_model_info` answers, synthesized rates included
 - A token-billed transcription clip with no audio token rate bills its audio tokens at the text token rate (`_transcription_usage_cost`)
 
+- Vertex AI's legacy 128k path bills the output band by completion tokens, every prompt token at the input rate whatever the cache, and no service tier (`_handle_128k_pricing` in `llms/vertex_ai/cost_calculator.py`)
+- Vertex AI bills completion tokens, not characters, at the above-128k character rate once the completion passes 128k tokens' worth of characters (`cost_per_character`)
+- DeepSeek, Tencent, Fireworks AI, xAI, Perplexity and Dashscope never read the service tier, and only OpenAI and the generic branch read the data residency, so an Azure call's residency uplift reaches only the stored breakdown rates (`cost_per_token` provider branches)
+- Perplexity bills every search query at the low context price and adds it to the completion side, splits reasoning tokens out only when the row prices them, and bills cached tokens at the input rate when the row has no cache read rate (`llms/perplexity/cost_calculator.py`)
+- Dashscope bills 5m, 30m and 12h cache writes at the base write rate, only 1h writes at their own (`llms/dashscope/cost_calculator.py`)
+- A provider outside the named branches whose row lists no positive token price and no tiers bills nothing, whatever else the row prices (`cost_per_token`'s `else` branch), and Lemonade bills nothing for any model, mapped or not
+
 ## Not copied from main
 - `video_generation_cost` read a catalog row through `get_model_info`, which drops every `output_cost_per_second_<resolution>` key but six. The core reads any resolution the row lists. No shipped row lists another
 
@@ -60,3 +68,6 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - A batch line whose cached and written tokens exceed its prompt tokens bills no uncached input, where main's half-price path billed a negative amount (`_half_price_prompt_cost`)
 - A negative or non-numeric configured agent, MCP tool or Prompt Shield price fails the call's pricing instead of billing a negative amount, and a guardrail row whose `guardrail_cost_per_unit` lists a negative rate prices none of its counters, where main billed the negative rate. An MCP tool listed with a null price fails too, where main returned `None`
 - The breakdown bills unattributed writes and 5m/30m writes as one `CacheTtl::Default` count. Main multiplies each count by the rate separately, so the two can differ in the last bit when a call reports both
+- A row billed by the second is read off the row the provider branch looked up, where main read `cached_get_model_info_helper(model, provider)` first. The two differ only for a Databricks legacy endpoint name, a Fireworks AI size bucket and a Vertex AI name with a provider prefix, whose rows price tokens
+- `custom_cost_per_token` with a cache rate key set to `null` bills that cache at the input rate, where main raised multiplying by `None`
+- Perplexity reads `search_queries_cost_per_query` only when it is a number, where main also read a breakdown or a numeric string there

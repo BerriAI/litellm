@@ -16,13 +16,11 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
 
     Follows the same logic as Anthropic's cost per token calculation.
     """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import branch_cost
+    from litellm.utils import get_model_info
 
-    return generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="gemini",
-        service_tier=service_tier,
+    return branch_cost(
+        model, "gemini", usage, get_model_info(model=model, custom_llm_provider="gemini"), service_tier=service_tier
     )
 
 
