@@ -809,20 +809,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         client: object | None = None,
     ) -> dict:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
-        store: Final = next(
-            (
-                params["store"]
-                for params in (
-                    as_str_mapping(request_params.get("extra_body")) or {},
-                    request_params,
-                    as_str_mapping(litellm_params.get("extra_body")) or {},
-                    litellm_params,
-                )
-                if "store" in params
-            ),
-            None,
-        )
-        preserve_system_instructions: Final = store is not False or any(
+        preserve_system_instructions: Final = any(
             params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
             for params in (
                 request_params,
@@ -831,6 +818,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 as_str_mapping(litellm_params.get("extra_body")) or {},
             )
         )
+        optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = litellm_params.get("custom_llm_provider")
         base_model: Final = litellm_params.get("base_model")
         supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
@@ -840,7 +828,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
-            preserve_system_instructions=preserve_system_instructions or provider not in _SYSTEM_INPUT_PROVIDERS,
+            preserve_system_instructions=(
+                preserve_system_instructions
+                or optional_params.get("store") is not False
+                or provider not in _SYSTEM_INPUT_PROVIDERS
+            ),
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
@@ -864,8 +856,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else target_input_items
         )
         instructions: Final = None if is_system_only_request else converted_instructions
-
-        optional_params = self._extract_extra_body_params(optional_params)
 
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()

@@ -9,6 +9,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -31,6 +32,70 @@ if TYPE_CHECKING:
 
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params,wire_controls,preserve_instructions",
+    [
+        ({}, {}, True),
+        ({"store": False, "drop_params": True}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, True),
+        ({"extra_body": {"store": None}}, {}, True),
+        ({"store": True}, {"store": True}, True),
+        ({"store": False}, {"store": False}, False),
+        ({"extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "previous_response_id": "resp_prior"}, {"store": False, "previous_response_id": "resp_prior"}, True),
+        ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+    ],
+)
+async def test_acompletion_system_input_requires_forwarded_store_false(
+    request_params: dict[str, object],
+    wire_controls: dict[str, object],
+    preserve_instructions: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [{"type": "message", "id": "msg_wire", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "ok", "annotations": []}]}],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            **request_params,
+        )
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert {
+        key: request_body[key]
+        for key in ("store", "conversation", "previous_response_id", "truncation")
+        if key in request_body
+    } == wire_controls
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    if preserve_instructions:
+        assert request_body["instructions"] == "Stable prefix"
+        assert request_body["input"] == [user_input]
+    else:
+        assert "instructions" not in request_body
+        assert request_body["input"] == [_system_input_item("Stable prefix"), user_input]
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
