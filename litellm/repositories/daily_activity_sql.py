@@ -43,6 +43,7 @@ PRISMA_TO_PG_TABLE: Final[Mapping[DailyActivityTable, str]] = MappingProxyType(
         DailyActivityTable.TAG: "LiteLLM_DailyTagSpend",
         DailyActivityTable.ORGANIZATION: "LiteLLM_DailyOrganizationSpend",
         DailyActivityTable.CUSTOMER: "LiteLLM_DailyEndUserSpend",
+        DailyActivityTable.CUSTOMER_MEMBER: "LiteLLM_DailyCustomerMemberSpend",
         DailyActivityTable.AGENT: "LiteLLM_DailyAgentSpend",
     }
 )

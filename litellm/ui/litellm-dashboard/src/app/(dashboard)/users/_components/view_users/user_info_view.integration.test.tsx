@@ -80,6 +80,9 @@ vi.mock("@/components/networking", async (importOriginal) => {
     getProxyBaseUrl: () => "https://litellm.test",
     fetchMCPServers: (...args: unknown[]) => mockFetchMCPServers(...args),
     fetchMCPToolsets: vi.fn().mockResolvedValue([]),
+    getClaudeCodePluginsList: vi
+      .fn()
+      .mockResolvedValue({ plugins: [{ id: "private-skill", name: "private-skill", enabled: false, source: {} }] }),
     listMCPTools: (...args: unknown[]) => mockListMCPTools(...args),
   };
 });
@@ -122,6 +125,44 @@ describe("UserInfoView add-to-team form", () => {
     mockFetchMCPServers.mockResolvedValue([MCP_SERVER]);
     mockListMCPTools.mockResolvedValue({ tools: [] });
   });
+
+  it.each(["grant", "revoke", "keep"])("saves direct user skills on %s without dropping MCP grants", async (action) => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      object_permission: {
+        ...MOCK_USER_DATA.object_permission,
+        skills: action === "grant" ? [] : ["private-skill"],
+      },
+    });
+    const user = userEvent.setup();
+    render(<UserInfoView {...defaultProps} initialTab={1} startInEditMode />);
+    const selector = await screen.findByRole("combobox", { name: "Select skills (optional)" });
+    if (action === "grant") {
+      await user.click(selector);
+      await user.click(await screen.findByRole("option", { name: /private-skill/ }));
+      await user.keyboard("{Escape}");
+    } else if (action === "revoke") {
+      await user.click(screen.getByRole("button", { name: "Clear all skills" }));
+    }
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1));
+    const payload = mockUserUpdateUserCall.mock.calls[0][1];
+    expect(payload).not.toHaveProperty("skills");
+    expect(payload.object_permission).toEqual({
+      ...MOCK_USER_DATA.object_permission,
+      mcp_toolsets: [],
+      skills: action === "revoke" ? [] : ["private-skill"],
+    });
+  });
+
+  it.each(["Internal User", "proxy_admin_viewer", "org_admin"])(
+    "does not expose the Skills writer to %s",
+    async (userRole) => {
+      render(<UserInfoView {...defaultProps} userRole={userRole} initialTab={1} startInEditMode />);
+      await screen.findByRole("button", { name: "Save Changes" });
+      expect(screen.queryByRole("combobox", { name: "Select skills (optional)" })).not.toBeInTheDocument();
+    },
+  );
 
   it("loads only the selected user's Activity, after opening the tab", async () => {
     mockUserDailyActivityAggregatedCall.mockResolvedValue(EMPTY_DAILY_ACTIVITY_RESPONSE);

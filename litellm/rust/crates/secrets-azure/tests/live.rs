@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_env::ProcessEnvironment;
 use litellm_secrets_azure::AzureKeyVault;
 use litellm_secrets_types::Secret;
 use rstest::rstest;

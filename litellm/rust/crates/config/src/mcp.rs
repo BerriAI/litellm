@@ -1,11 +1,13 @@
-use std::{collections::BTreeMap, fmt};
+use std::collections::BTreeMap;
 
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
+use veil::Redact;
 
 use crate::Object;
 
-#[derive(Clone, Default, Deserialize)]
+/// `command` and `args` can carry credentials, and the `SecretValue`s redact themselves.
+#[derive(Clone, Default, Deserialize, Redact)]
 #[serde(default)]
 pub struct McpServer {
     pub server_id: Option<String>,
@@ -14,7 +16,9 @@ pub struct McpServer {
     pub mcp_info: Object,
     pub transport: McpTransport,
     pub url: Option<SecretValue>,
+    #[redact(fixed = 3)]
     pub command: Option<String>,
+    #[redact(fixed = 3)]
     pub args: Box<[String]>,
     pub env: BTreeMap<String, SecretValue>,
     pub auth_type: Option<McpAuth>,
@@ -27,18 +31,6 @@ pub struct McpServer {
     pub max_concurrent_requests: Option<usize>,
     #[serde(flatten)]
     pub unsupported: Object,
-}
-
-impl fmt::Debug for McpServer {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("McpServer")
-            .field("transport", &self.transport)
-            .field("auth_type", &self.auth_type)
-            .field("timeout", &self.timeout)
-            .field("max_concurrent_requests", &self.max_concurrent_requests)
-            .finish_non_exhaustive()
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::IntoStaticStr)]

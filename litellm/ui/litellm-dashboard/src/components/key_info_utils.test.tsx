@@ -4,6 +4,7 @@ import {
   extractLoggingSettings,
   formatMetadataForDisplay,
   stripTagsFromMetadata,
+  stripFieldManagedKeysFromMetadata,
 } from "./key_info_utils";
 
 describe("filterSensitiveMetadata", () => {
@@ -56,4 +57,16 @@ describe("stripTagsFromMetadata", () => {
     // Ensure original input is not mutated
     expect(input).toEqual(originalCopy);
   });
+});
+
+describe("stripFieldManagedKeysFromMetadata", () => {
+  it.each(["ops@qa.test", ["ops@qa.test"], 80])(
+    "leaves a max_budget_alert_emails value that is not a threshold map in the Metadata box: %j",
+    (value) => {
+      expect(stripFieldManagedKeysFromMetadata({ cost_center: "ops", max_budget_alert_emails: value })).toEqual({
+        cost_center: "ops",
+        max_budget_alert_emails: value,
+      });
+    },
+  );
 });

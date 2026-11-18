@@ -9,7 +9,6 @@ import { cn } from "@/lib/cva.config";
 const LOG_SCALE_DOMAIN: [number, "auto"] = [1, "auto"];
 const LINEAR_SCALE_DOMAIN: [number, "auto"] = [0, "auto"];
 
-/** The Model Leaderboard palette; shared so the usage page stacks in the same colors. */
 export const STACKED_USAGE_PALETTE = [
   "#ec4899",
   "#a855f7",

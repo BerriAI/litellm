@@ -554,6 +554,39 @@ def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
     assert parsed.mcp_info == {"skip_tool_output_validation": value}
 
 
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [-1, 1.5, "60", True, None, 31536001, 10**400])
+def test_mcp_metadata_rejects_a_tools_list_cache_ttl_that_is_not_whole_seconds_within_a_year(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"tools_list_cache_ttl_seconds": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [0, 60, 31536000])
+def test_mcp_metadata_accepts_a_tools_list_cache_ttl_in_whole_seconds(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: int
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"tools_list_cache_ttl_seconds": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"tools_list_cache_ttl_seconds": value}
+
+
 MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)
 STDIO_SERVER_FIELDS = {"server_id": "stdio-1", "transport": "stdio", "command": "python", "args": ["server.py"]}
 
