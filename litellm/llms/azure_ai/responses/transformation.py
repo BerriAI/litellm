@@ -35,6 +35,7 @@ _RESPONSES_PATH: Final = ("openai", "v1", "responses")
 _AGENT_OWNED_PARAMS: Final = frozenset({"temperature", "top_p", "tools", "text", "reasoning"})
 _CALLER_AGENT_KEYS: Final = ("agent", "agent_reference")
 _RESPONSE_FIELDS: Final = TypeAdapter(dict[str, object])
+_REQUEST_TOOLS: Final = TypeAdapter(tuple[object, ...])
 
 
 def _responses_url(api_base: str) -> str:
@@ -57,6 +58,34 @@ def _event_without_agent_instructions(event: Mapping[str, object]) -> Mapping[st
     if fields.get("agent_reference") is None:
         return event
     return {**event, "response": {**fields, "instructions": None}}
+
+
+def _is_custom_tool(tool: object) -> bool:
+    match tool:
+        case {"type": "custom"}:
+            return True
+        case _:
+            return False
+
+
+def _without_custom_tools(mapped: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, object]:
+    tools: Final = _REQUEST_TOOLS.validate_python(mapped.get("tools") or ())
+    if not any(_is_custom_tool(tool) for tool in tools):
+        return mapped
+    if not drop_params:
+        raise UnsupportedParamsError(
+            message=(
+                "azure_ai Model Router rejects `custom` tools on the Responses API. Send them as function tools, or "
+                "set `drop_params: true` to drop them"
+            ),
+            llm_provider=LlmProviders.AZURE_AI.value,
+            model=model,
+        )
+    drops_tool_choice: Final = _is_custom_tool(mapped.get("tool_choice"))
+    return {
+        **{key: value for key, value in mapped.items() if key != "tool_choice" or not drops_tool_choice},
+        "tools": [tool for tool in tools if not _is_custom_tool(tool)],
+    }
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
@@ -119,6 +148,21 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         if model is not None and AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router":
             return False
         return super().should_fake_stream(model, stream, custom_llm_provider)
+
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None,
+    ) -> Mapping[str, object]:
+        mapped: Final = super().map_openai_params_for_deployment(
+            response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+        if AzureFoundryModelInfo.get_azure_ai_route(model) != "model_router":
+            return mapped
+        return _without_custom_tools(mapped, model, drop_params)
 
     def supports_native_websocket(self) -> bool:
         return False
