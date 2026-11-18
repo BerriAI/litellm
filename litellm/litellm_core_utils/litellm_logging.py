@@ -477,6 +477,7 @@ _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset(
         "agentops",
         "arize",
         "arize_phoenix",
+        "athina",
         "langfuse_otel",
         "langtrace",
         "levo",
@@ -485,6 +486,7 @@ _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset(
         "otel",
         "sentry",
         "signoz",
+        "wandb",
         "weave_otel",
     }
 )

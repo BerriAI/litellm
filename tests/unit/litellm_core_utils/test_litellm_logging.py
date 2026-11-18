@@ -45,6 +45,7 @@ from litellm.constants import (
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.integrations.arize.arize import ArizeLogger
+from litellm.integrations.athina import AthinaLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, OptOutBy, Patch, on
 from litellm.integrations.custom_logger_v2.host import V2Outcome, get_dispatcher
@@ -1020,6 +1021,8 @@ def test_post_call_gives_logger_fn_the_exact_json(logging_obj):
         pytest.param("otel", id="otel-name"),
         pytest.param("arize", id="arize-name"),
         pytest.param("langfuse_otel", id="langfuse-otel-name"),
+        pytest.param("athina", id="athina-name"),
+        pytest.param("wandb", id="wandb-name"),
     ],
 )
 def test_post_call_keeps_the_json_for_a_global_reader(logging_obj, monkeypatch, list_name, callback):
@@ -1068,6 +1071,42 @@ def test_every_callback_name_backed_by_a_reader_class_keeps_the_json(logging_obj
     for name in reader_names:
         monkeypatch.setattr(litellm, "success_callback", [name])
         assert _retained_response(logging_obj) == json.dumps(_SMALL_RESPONSE), name
+
+
+class _RecordingHttpClient:
+    def __init__(self) -> None:
+        self.bodies: Final[list[str]] = []
+
+    def post(self, _url: str, headers: Mapping[str, object], data: str) -> httpx.Response:
+        self.bodies.append(data)
+        return httpx.Response(200)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_athina_still_receives_the_full_json_it_forwards(monkeypatch):
+    client: Final = _RecordingHttpClient()
+    monkeypatch.setattr(litellm, "module_level_client", client)
+    monkeypatch.setattr(litellm, "success_callback", ["athina"])
+    monkeypatch.setattr(litellm_logging, "athinaLogger", AthinaLogger())
+    call_logging: Final = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="athina-call",
+        function_id="athina-function",
+    )
+    call_logging.update_environment_variables(litellm_params={}, optional_params={})
+
+    call_logging.post_call(original_response=_SMALL_RESPONSE)
+    call_logging.success_handler(
+        result=litellm.ModelResponse(model="gpt-4o"),
+        start_time=dt_object(2026, 1, 1, 0, 0, 0),
+        end_time=dt_object(2026, 1, 1, 0, 0, 1),
+    )
+
+    assert [json.loads(body)["request"]["original_response"] for body in client.bodies] == [json.dumps(_SMALL_RESPONSE)]
 
 
 class _RecordingHandler(logging.Handler):
