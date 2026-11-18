@@ -264,7 +264,22 @@ def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs(
         }
     )
 
-    response: Final = litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data, api_key="jina-test-key")
+    logging_obj: Final = Logging(
+        model="jina_ai/jina-embeddings-v4",
+        messages=[],
+        stream=False,
+        call_type="embedding",
+        start_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+
+    response: Final = litellm.embedding(
+        model="jina_ai/jina-embeddings-v4",
+        input=input_data,
+        api_key="jina-test-key",
+        litellm_logging_obj=logging_obj,
+    )
 
     assert route.call_count == 1
     assert json.loads(route.calls.last.request.content) == {
@@ -272,6 +287,7 @@ def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs(
         "input": expected_payload_input,
     }
     assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert logging_obj.model_call_details["input"] == expected_payload_input
 
 
 @pytest.mark.parametrize(
@@ -290,31 +306,3 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         == "https://gateway.example.com/jina/v1/embeddings"
     )
 
-
-def test_jina_ai_embedding_logs_the_input_it_sent(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post("https://api.jina.ai/v1/embeddings").respond(
-        json={
-            "model": "jina-embeddings-v3",
-            "object": "list",
-            "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
-            "usage": {"prompt_tokens": 1, "total_tokens": 1},
-        }
-    )
-    logging_obj: Final = Logging(
-        model="jina_ai/jina-embeddings-v3",
-        messages=[],
-        stream=False,
-        call_type="embedding",
-        start_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        litellm_call_id="call-id",
-        function_id="function-id",
-    )
-
-    litellm.embedding(
-        model="jina_ai/jina-embeddings-v3",
-        input=["a"],
-        api_key="jina-test-key",
-        litellm_logging_obj=logging_obj,
-    )
-
-    assert logging_obj.model_call_details["input"] == json.loads(route.calls[0].request.content)["input"]

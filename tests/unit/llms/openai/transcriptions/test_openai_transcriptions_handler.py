@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Final
 from unittest.mock import Mock
 
@@ -7,11 +8,11 @@ import pytest
 from openai import AsyncOpenAI, OpenAI
 
 import litellm
-from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from litellm.types.utils import TranscriptionResponse
 
+AUDIO_FILE: Final = Path(__file__).parents[4] / "gettysburg.wav"
 _PROVIDER_HEADERS: Final = {"x-request-id": "req_stt", "x-ratelimit-remaining-requests": "41"}
 
 
@@ -76,8 +77,7 @@ async def test_async_audio_transcriptions_records_provider_response_headers():
 
 
 @pytest.mark.asyncio
-async def test_async_audio_transcriptions_logs_the_audio_file_when_the_provider_fails():
-    audio_file: Final = ("audio.wav", b"riff-bytes", "audio/wav")
+async def test_async_audio_transcriptions_logs_the_audio_file_when_the_provider_fails() -> None:
     logging_obj: Final = Logging(
         model="openai/whisper-1",
         messages=[],
@@ -92,13 +92,13 @@ async def test_async_audio_transcriptions_logs_the_audio_file_when_the_provider_
     )
 
     async with httpx.AsyncClient(transport=failing_transport) as http_client:
-        with pytest.raises(litellm.InternalServerError):
+        with AUDIO_FILE.open("rb") as audio, pytest.raises(litellm.InternalServerError):
             await litellm.atranscription(
                 model="openai/whisper-1",
-                file=audio_file,
+                file=audio,
                 client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
                 max_retries=0,
                 litellm_logging_obj=logging_obj,
             )
 
-    assert logging_obj.model_call_details["input"] == get_audio_file_name(audio_file)
+    assert logging_obj.model_call_details["input"] == str(AUDIO_FILE)

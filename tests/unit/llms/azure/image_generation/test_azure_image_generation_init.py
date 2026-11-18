@@ -330,7 +330,7 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
             model_response=None,
             azure_client_params=azure_client_params,
             api_key=api_key,
-            input=[],
+            input=data["prompt"],
             logging_obj=logging_obj,
             headers={},
             model=model,
@@ -441,7 +441,7 @@ async def test_azure_aimage_generation_v1_route_sends_deployment_name_in_body(
         model_response=None,
         azure_client_params=azure_client_params,
         api_key="test-api-key",
-        input=[],
+        input=data["prompt"],
         logging_obj=logging_obj,
         headers={},
         model=model,
@@ -790,7 +790,7 @@ def test_redact_azure_auth_headers_masks_only_credential_values():
 @pytest.mark.asyncio
 async def test_azure_aimage_generation_logs_the_prompt_when_the_provider_fails(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     respx_mock.post(url__regex=r"https://my-resource\.openai\.azure\.com/openai/deployments/img-dep/.*").mock(

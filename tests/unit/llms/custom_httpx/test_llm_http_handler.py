@@ -1994,7 +1994,7 @@ def test_sync_delete_responses_omits_body_for_azure():
 
 
 @pytest.mark.parametrize("is_async", [False, True])
-def test_delete_responses_logs_an_empty_input(is_async: bool):
+def test_delete_responses_logs_an_empty_input(is_async: bool) -> None:
     transport: Final = httpx.MockTransport(
         lambda request: httpx.Response(200, json={"id": "resp_xyz", "object": "response", "deleted": True})
     )
