@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypeVar, cast
 
 from pydantic import (
+    AllowInfNan,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -170,8 +171,8 @@ def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object 
     return next((config[key] for key in keys if config.get(key) is not None), None)
 
 
-_INTEGER_STRING: Final = re.compile(r"-?\d+")
-_NUMBER_STRING: Final = re.compile(r"-?\d+(\.\d+)?([eE][+-]?\d+)?")
+_INTEGER_STRING: Final = re.compile(r"[+-]?\d+")
+_NUMBER_STRING: Final = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
 
 
 def _google_int(value: object) -> object:
@@ -189,7 +190,7 @@ def _google_float(value: object) -> object:
 
 
 _GoogleInt: TypeAlias = Annotated[StrictInt, BeforeValidator(_google_int)]
-_GoogleFloat: TypeAlias = Annotated[StrictFloat, BeforeValidator(_google_float)]
+_GoogleFloat: TypeAlias = Annotated[StrictFloat, AllowInfNan(False), BeforeValidator(_google_float)]
 
 
 class _CompletionConfigParams(BaseModel):

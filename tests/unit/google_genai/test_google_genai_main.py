@@ -482,6 +482,7 @@ async def test_adapter_path_sends_the_output_cap_in_every_spelling(
     [
         {"max_output_tokens": "16", "temperature": "0.5", "topP": "0.9"},
         {"maxOutputTokens": 16.0, "temperature": 0.5, "top_p": 0.9},
+        {"max_output_tokens": "+16", "temperature": ".5", "top_p": "+.9"},
     ],
 )
 async def test_adapter_path_sends_numbers_as_google_reads_them(
@@ -507,6 +508,8 @@ async def test_adapter_path_sends_numbers_as_google_reads_them(
         {"maxOutputTokens": "16.0"},
         {"max_output_tokens": True},
         {"temperature": True},
+        {"temperature": "1e400"},
+        {"top_p": float("inf")},
     ],
 )
 async def test_adapter_path_rejects_an_invalid_config_before_calling_upstream(
