@@ -149,11 +149,13 @@ class ImageDocument(TypedDict):
     kind: ReadOnly[Literal["image"]]
     model: ReadOnly[str]
     provider: ReadOnly[str | None]
-    calculator: ReadOnly[Literal["default", "per_image", "per_image_and_input"]]
+    calculator: ReadOnly[Literal["default", "per_image", "per_image_and_input", "xai", "azure_ai"]]
     images: ReadOnly[int]
     pixels: ReadOnly[int]
     input_images: ReadOnly[int]
     vertex_location: ReadOnly[NotRequired[str | None]]
+    size: ReadOnly[NotRequired[str | None]]
+    reported_usd: ReadOnly[NotRequired[float | None]]
 
 
 class WritesByTtl(TypedDict):

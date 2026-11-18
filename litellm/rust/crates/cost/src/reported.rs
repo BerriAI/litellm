@@ -25,6 +25,9 @@ pub enum ReportSource {
     /// (`billed_usage_cost`)
     #[cfg_attr(feature = "serde", serde(rename = "upstream_usage_cost"))]
     UpstreamUsageCost,
+    /// The `cost_in_usd_ticks` an xAI image response reports, billed as reported
+    #[cfg_attr(feature = "serde", serde(rename = "cost_in_usd_ticks"))]
+    CostInUsdTicks,
 }
 
 impl ReportSource {
@@ -32,7 +35,7 @@ impl ReportSource {
     fn adjusted(self) -> bool {
         match self {
             Self::UpstreamUsageCost => true,
-            Self::ResponseCostHeader | Self::UsageCost => false,
+            Self::ResponseCostHeader | Self::UsageCost | Self::CostInUsdTicks => false,
         }
     }
 }
