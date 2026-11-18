@@ -3207,6 +3207,7 @@ async def _authorize_authenticated_request_checks(
             safe_get_request_headers(request),  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
             user_api_key_auth_obj.jwt_claims,
             litellm_jwtauth,
+            general_settings=cast("Mapping[str, object]", general_settings),
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         if customer_identity is not None and not RustAuth.is_public_route(route, core.proxy_settings()):
