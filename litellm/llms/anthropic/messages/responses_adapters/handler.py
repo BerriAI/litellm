@@ -26,7 +26,10 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     prompt_cache_breakpoint_with_readable_mode,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.reasoning_effort_capability import deployment_drops_reasoning_effort
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    drops_explicit_reasoning_effort,
+    model_group_from_metadata,
+)
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
@@ -57,7 +60,7 @@ from ..context_management.constants import COMPACT_EDIT_TYPE
 from ..context_management.dispatcher import normalize_spec
 from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
-from ..utils import litellm_logging_obj_from_kwargs, local_model_name
+from ..utils import litellm_logging_obj_from_kwargs, local_model_name, responses_gate_refuses_effort_level
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -207,10 +210,12 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
     return extra_kwargs or {}
 
 
+def _target_provider(model: str, custom_llm_provider: object) -> str:
+    return custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
+
+
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
-    provider: Final = (
-        custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
-    )
+    provider: Final = _target_provider(model, custom_llm_provider)
     provider_model: Final = local_model_name(model, provider)
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
@@ -286,11 +291,50 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def _drops_explicit_effort(
+    output_config: AnthropicOutputConfig,
+    *,
+    model: str,
+    forwarded_kwargs: Mapping[str, object],
+    drop_params: bool,
+) -> bool:
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    deployment_model_info: Final = forwarded_kwargs.get("model_info")
+
+    def target_refuses_level(level: str) -> bool:
+        return responses_gate_refuses_effort_level(
+            level,
+            model=model,
+            custom_llm_provider=_target_provider(model, provider),
+            deployment_model_info=deployment_model_info,
+        )
+
+    return drops_explicit_reasoning_effort(
+        output_config.get("effort"),
+        model=model,
+        custom_llm_provider=provider if isinstance(provider, str) else None,
+        deployment_model_info=deployment_model_info,
+        model_group=model_group_from_metadata(
+            forwarded_kwargs.get("litellm_metadata"), forwarded_kwargs.get("metadata")
+        ),
+        drop_params=drop_params,
+        target_refuses_level=target_refuses_level,
+        report=True,
+    )
+
+
 def _deployment_output_config(
-    output_config: AnthropicOutputConfig | None, *, deployment_model_info: object, drop_params: bool
+    output_config: AnthropicOutputConfig | None,
+    thinking: Mapping[str, object] | None,
+    *,
+    model: str,
+    forwarded_kwargs: Mapping[str, object],
+    drop_params: bool,
 ) -> AnthropicOutputConfig | None:
-    if output_config is None or not deployment_drops_reasoning_effort(
-        output_config, deployment_model_info, drop_params=drop_params
+    if output_config is None or thinking is None or thinking.get("type") != "enabled":
+        return output_config
+    if not _drops_explicit_effort(
+        output_config, model=model, forwarded_kwargs=forwarded_kwargs, drop_params=drop_params
     ):
         return output_config
     output_format: Final = output_config.get("format")
@@ -323,7 +367,7 @@ def _build_responses_kwargs(
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     drop_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     request_output_config: Final = _deployment_output_config(
-        output_config, deployment_model_info=forwarded_kwargs.get("model_info"), drop_params=drop_params
+        output_config, thinking, model=model, forwarded_kwargs=forwarded_kwargs, drop_params=drop_params
     )
     reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")

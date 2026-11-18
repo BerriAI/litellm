@@ -290,3 +290,19 @@ def normalize_reasoning_effort_value(
 
     accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+
+
+def responses_gate_refuses_effort_level(
+    level: str, *, model: str, custom_llm_provider: str, deployment_model_info: object
+) -> bool:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.utils import ProviderConfigManager
+
+    provider_model: Final = local_model_name(model, custom_llm_provider)
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(custom_llm_provider, provider_model)
+    if not isinstance(config, OpenAIResponsesAPIConfig) or config.refuses_reasoning(provider_model):
+        return False
+    gated_level: Final = normalize_reasoning_effort_value(
+        level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+    )
+    return config.refuses_reasoning_effort_level(provider_model, gated_level)

@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     is_encrypted_reasoning_block,
     thinking_blocks_with_encrypted_reasoning,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import model_group_from_metadata
 from litellm.litellm_core_utils.tool_fields import (
     ROUTES_WITHOUT_MCP_SERVERS,
     drops_mcp_servers,
@@ -812,6 +813,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
             deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
+            model_group=model_group_from_metadata(
+                provider_kwargs.get("metadata"), provider_kwargs.get("litellm_metadata")
+            ),
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
             drop_params=drop_params,
         )

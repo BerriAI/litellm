@@ -481,6 +481,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         )
 
+    def refuses_reasoning(self, model: str) -> bool:
+        return self.custom_llm_provider == LlmProviders.OPENAI and not self._supports_reasoning_param(model=model)
+
+    def refuses_reasoning_effort_level(self, model: str, level: str) -> bool:
+        lookup_name: Final = self._model_map_lookup_name(model)
+        return self._is_gpt_5_model(model=lookup_name) and self._effort_level_is_disabled(lookup_name, level)
+
     def honors_declared_reasoning_efforts(self) -> bool:
         return type(self).map_openai_params is OpenAIResponsesAPIConfig.map_openai_params
 
@@ -504,11 +511,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
-        if (
-            self.custom_llm_provider == LlmProviders.OPENAI
-            and self._requests_reasoning_effort(params.get("reasoning"))
-            and not self._supports_reasoning_param(model=model)
-        ):
+        if self._requests_reasoning_effort(params.get("reasoning")) and self.refuses_reasoning(model):
             if drop_params or litellm.drop_params:
                 dropped_reasoning: Final = params.pop("reasoning", None)
                 if self._requested_effort(dropped_reasoning) != "none" or not self._is_known_non_reasoning_model(model):
@@ -531,7 +534,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 isinstance(reasoning, dict)
                 and isinstance(requested_effort, str)
                 and requested_effort not in (declared_reasoning_efforts or ())
-                and self._effort_level_is_disabled(lookup_name, requested_effort)
+                and self.refuses_reasoning_effort_level(model, requested_effort)
             ):
                 if not (drop_params or litellm.drop_params):
                     raise litellm.UnsupportedParamsError(

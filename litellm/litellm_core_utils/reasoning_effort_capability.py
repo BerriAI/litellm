@@ -24,7 +24,7 @@ llms/bedrock/common_utils.py, which ranks max below xhigh while the thinking-bud
 it above.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias, get_args
@@ -271,18 +271,81 @@ def _sent_level(
     return None if drop_params and rounded_level not in declared else rounded_level
 
 
-def deployment_drops_reasoning_effort(
-    requested: RequestedReasoningEffort, deployment_model_info: object, *, drop_params: bool
-) -> bool:
-    requested_level: Final = _requested_level(requested)
-    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
-    return (
-        requested_level is not None
-        and requested_level != _DEFAULT_EFFORT
-        and declared is not None
-        and _sent_level(requested_level, declared, _deployment_rounding(deployment_model_info), drop_params=drop_params)
-        is None
+def _declaration_drops(effort: object, declared: Sequence[str], deployment_model_info: object) -> bool:
+    if not isinstance(effort, str):
+        return True
+    rounding: Final = _deployment_rounding(deployment_model_info)
+    return effort != _DEFAULT_EFFORT and _sent_level(effort, declared, rounding, drop_params=True) is None
+
+
+def _target_drops(effort: object, target_refuses_level: Callable[[str], bool]) -> bool:
+    if not isinstance(effort, str) or effort not in REASONING_EFFORT_ADVERTISEMENT_ORDER:
+        return True
+    return target_refuses_level(effort)
+
+
+def _loggable_level(effort: object) -> str:
+    return effort if isinstance(effort, str) and effort in _LOGGABLE_REQUESTED_LEVELS else _UNRECOGNIZED_LEVEL
+
+
+def _log_explicit_drop(
+    effort: object,
+    *,
+    declared: Sequence[str] | None,
+    deployment_model: str,
+    deployment_model_info: object,
+    model_group: str | None,
+) -> None:
+    if declared is not None:
+        _log_remap(
+            requested_level=_loggable_level(effort),
+            sent_level=None,
+            rounding=_deployment_rounding(deployment_model_info),
+            deployment_model=deployment_model,
+            deployment_model_info=deployment_model_info,
+            model_group=model_group,
+        )
+        return
+
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import refused_reasoning_effort_warning
+
+    verbose_logger.warning(
+        refused_reasoning_effort_warning(suggest_declared_levels=True, suggest_base_model=False),
+        "output_config.effort",
+        _loggable_level(effort),
+        _single_line(deployment_model),
+        _single_line(deployment_model),
     )
+
+
+def drops_explicit_reasoning_effort(
+    effort: object,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    deployment_model_info: object,
+    model_group: str | None,
+    drop_params: bool,
+    target_refuses_level: Callable[[str], bool],
+    report: bool,
+) -> bool:
+    if not drop_params or not effort:
+        return False
+    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
+    dropped: Final = (
+        _target_drops(effort, target_refuses_level)
+        if declared is None
+        else _declaration_drops(effort, declared, deployment_model_info)
+    )
+    if dropped and report:
+        _log_explicit_drop(
+            effort,
+            declared=declared,
+            deployment_model=_provider_model(model, custom_llm_provider),
+            deployment_model_info=deployment_model_info,
+            model_group=model_group,
+        )
+    return dropped
 
 
 @dataclass(frozen=True, slots=True)

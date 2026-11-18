@@ -1,6 +1,6 @@
 import hashlib
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -15,13 +15,17 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.reasoning_effort_capability import drops_explicit_reasoning_effort
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    local_model_name,
+    normalize_reasoning_effort_value,
     object_mapping,
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
+    responses_gate_refuses_effort_level,
 )
 from litellm.responses.utils import auto_reasoning_summary
 
@@ -307,6 +311,41 @@ def openai_thinking_routes_to_responses(
     return model_info.get("supports_reasoning") is not False
 
 
+def _chat_gate_refuses_effort_level(
+    level: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> bool:
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+    from litellm.utils import ProviderConfigManager
+
+    provider: Final = custom_llm_provider if custom_llm_provider is not None else _inferred_provider(model)
+    llm_provider: Final = next((member for member in LlmProviders if member.value == provider), None)
+    if llm_provider is None:
+        return False
+    provider_model: Final = local_model_name(model, provider)
+    config: Final = ProviderConfigManager.get_provider_chat_config(model=provider_model, provider=llm_provider)
+    if not isinstance(config, OpenAIGPT5Config):
+        return False
+    gated_level: Final = normalize_reasoning_effort_value(
+        level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+    )
+    return config.refuses_reasoning_effort_level(provider_model, gated_level)
+
+
+def _target_gate_refuses_effort_level(
+    thinking: Mapping[str, object], *, model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> Callable[[str], bool]:
+    def refuses(level: str) -> bool:
+        if openai_thinking_routes_to_responses(model, custom_llm_provider, thinking):
+            return responses_gate_refuses_effort_level(
+                level, model=model, custom_llm_provider="openai", deployment_model_info=deployment_model_info
+            )
+        return _chat_gate_refuses_effort_level(
+            level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+        )
+
+    return refuses
+
+
 def _keeps_encrypted_reasoning_for_responses(
     model: str | None,
     custom_llm_provider: str | None,
@@ -375,6 +414,7 @@ class AnthropicAdapter:
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
+        model_group: str | None = None,
         reasoning_summary: object | None = None,
         drop_params: bool = True,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
@@ -412,6 +452,7 @@ class AnthropicAdapter:
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             deployment_model_info=deployment_model_info,
+            model_group=model_group,
             reasoning_summary=reasoning_summary,
             drop_params=drop_params,
             report_reasoning_drops=True,
@@ -1232,6 +1273,8 @@ class LiteLLMAnthropicMessagesAdapter:
         new_kwargs: ChatCompletionRequest,
         *,
         custom_llm_provider: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
+        model_group: str | None = None,
         drop_params: bool = True,
         report_reasoning_drops: bool = False,
     ) -> None:
@@ -1286,15 +1329,28 @@ class LiteLLMAnthropicMessagesAdapter:
             if not self._target_declares_reasoning_effort(model, custom_llm_provider):
                 return
 
-        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
+        explicit_effort: Final = output_config.get("effort") if isinstance(output_config, dict) else None
+        thinking_config: Final = cast(AnthropicThinkingParam, thinking)
         declared_effort: Final = (
-            output_config.get("effort") if thinking_type == "adaptive" and isinstance(output_config, dict) else None
+            explicit_effort
+            if self._explicit_effort_applies(
+                thinking_config,
+                explicit_effort,
+                model=model,
+                budget_wins_on_enabled_thinking=is_claude_target or is_bedrock_target,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+                model_group=model_group,
+                drop_params=drop_params,
+                report_reasoning_drops=report_reasoning_drops,
+            )
+            else None
         )
         if is_claude_target and not declared_effort:
             return
 
         reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
-            cast(AnthropicThinkingParam, thinking),
+            thinking_config,
             model=model,
             drop_params=drop_params,
             report_reasoning_drops=report_reasoning_drops,
@@ -1309,6 +1365,41 @@ class LiteLLMAnthropicMessagesAdapter:
                 reasoning_effort, cast(dict[str, object], thinking), model, custom_llm_provider
             )
         )
+
+    @staticmethod
+    def _explicit_effort_applies(
+        thinking: Mapping[str, object],
+        explicit_effort: object,
+        *,
+        model: str,
+        budget_wins_on_enabled_thinking: bool,
+        custom_llm_provider: str | None,
+        deployment_model_info: Mapping[str, object] | None,
+        model_group: str | None,
+        drop_params: bool,
+        report_reasoning_drops: bool,
+    ) -> bool:
+        match thinking.get("type"):
+            case "adaptive":
+                return True
+            case "enabled" if not budget_wins_on_enabled_thinking:
+                return not drops_explicit_reasoning_effort(
+                    explicit_effort,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=deployment_model_info,
+                    model_group=model_group,
+                    drop_params=drop_params,
+                    target_refuses_level=_target_gate_refuses_effort_level(
+                        thinking,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        deployment_model_info=deployment_model_info,
+                    ),
+                    report=report_reasoning_drops,
+                )
+            case _:
+                return False
 
     def _translate_output_format_to_openai(
         self,
@@ -1356,6 +1447,7 @@ class LiteLLMAnthropicMessagesAdapter:
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
+        model_group: str | None = None,
         reasoning_summary: object | None = None,
         preserve_midturn_system: bool = False,
         drop_params: bool = True,
@@ -1402,6 +1494,8 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            model_group=model_group,
             drop_params=drop_params,
             report_reasoning_drops=report_reasoning_drops,
         )
