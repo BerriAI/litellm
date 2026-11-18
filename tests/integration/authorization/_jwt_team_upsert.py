@@ -63,15 +63,18 @@ def upserting_jwt_rig(
         assert request.method == "GET", request
         return Reply(body=json.dumps({"keys": [{**json.loads(public_jwk), "kid": KEY_ID}]}).encode())
 
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["general_settings"] = {
-        **config["general_settings"],
-        "enable_jwt_auth": True,
-        "litellm_jwtauth": {"user_id_jwt_field": "sub", **team_claim, "team_id_upsert": True},
-    }
-    config["litellm_settings"] = {
-        **config["litellm_settings"],
-        **({} if default_team_params is None else {"default_team_params": dict(default_team_params)}),
+    base_config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {
+        **base_config,
+        "general_settings": {
+            **base_config["general_settings"],
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {"user_id_jwt_field": "sub", **team_claim, "team_id_upsert": True},
+        },
+        "litellm_settings": {
+            **base_config["litellm_settings"],
+            **({} if default_team_params is None else {"default_team_params": dict(default_team_params)}),
+        },
     }
     path: Final = directory / "jwt_team_upsert.yaml"
     path.write_text(yaml.safe_dump(config))

@@ -47,13 +47,16 @@ def _upserting_jwt_proxy(
             headers={"kid": KEY_ID},
         )
 
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["general_settings"] = {
-        **config["general_settings"],
-        "enable_jwt_auth": True,
-        "litellm_jwtauth": {"user_id_jwt_field": "sub", **team_claim, "team_id_upsert": True},
+    base_config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {
+        **base_config,
+        "general_settings": {
+            **base_config["general_settings"],
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {"user_id_jwt_field": "sub", **team_claim, "team_id_upsert": True},
+        },
+        "litellm_settings": {**base_config["litellm_settings"], "default_team_params": dict(default_team_params)},
     }
-    config["litellm_settings"] = {**config["litellm_settings"], "default_team_params": dict(default_team_params)}
     path: Final = directory / "jwt_team_upsert.yaml"
     path.write_text(yaml.safe_dump(config))
     with (

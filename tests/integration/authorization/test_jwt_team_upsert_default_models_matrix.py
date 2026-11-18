@@ -63,7 +63,7 @@ def _provider(request: Request) -> Reply:
 
 
 @pytest.fixture(scope="module")
-def matrix(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Matrix]:
+def shared_matrix(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Matrix]:
     with gateway_from_environment() as gateway, wire_server(_provider) as provider, gateway.scenario() as scenario:
         approved: Final = scenario.model(api_base=f"{provider.url}/v1")
         unapproved: Final = scenario.model(api_base=f"{provider.url}/v1")
@@ -76,6 +76,12 @@ def matrix(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Matrix]:
             workers=2,
         ) as rig:
             yield Matrix(rig, scenario, provider, approved, unapproved, subject)
+
+
+@pytest.fixture
+def matrix(shared_matrix: Matrix) -> Matrix:
+    shared_matrix.provider.drain()
+    return shared_matrix
 
 
 def _marker() -> str:
@@ -113,9 +119,8 @@ def _chat_stream_async_sdk(matrix: Matrix, token: str, model: str, text: str) ->
                 chunks: Final = [chunk async for chunk in stream]
             except openai.APIStatusError as error:
                 return error.status_code, error.message
-        return 200, " ".join(
-            (chunks[0].id, *(choice.delta.content or "" for chunk in chunks for choice in chunk.choices[:1]))
-        )
+        first_choices: Final = tuple(chunk.choices[0] for chunk in chunks if chunk.choices)
+        return 200, " ".join((chunks[0].id, *(choice.delta.content or "" for choice in first_choices)))
 
     return asyncio.run(consume())
 
