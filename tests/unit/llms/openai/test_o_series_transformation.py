@@ -219,3 +219,42 @@ def test_o_series_request_turns_system_into_user_without_touching_the_callers_me
 
     assert [message["role"] for message in body["messages"]] == ["user", "user"]
     assert messages == messages_before
+
+
+_O_SERIES_EFFORT_MODEL: Final = "o3"
+
+
+def _o_series_effort_row(monkeypatch: pytest.MonkeyPatch, **flags: bool) -> None:
+    without_effort_flags: Final = {
+        field: value
+        for field, value in litellm.model_cost[_O_SERIES_EFFORT_MODEL].items()
+        if field != "reasoning_effort_levels" and not field.endswith("_reasoning_effort")
+    }
+    monkeypatch.setitem(
+        litellm.model_cost, _O_SERIES_EFFORT_MODEL, {**without_effort_flags, "supports_reasoning": True, **flags}
+    )
+
+
+@pytest.mark.parametrize("level", ["low", "medium", "high"])
+def test_o_series_accepts_low_medium_and_high_even_when_the_row_turns_them_off(
+    monkeypatch: pytest.MonkeyPatch, level: str
+) -> None:
+    _o_series_effort_row(monkeypatch, **{f"supports_{level}_reasoning_effort": False})
+
+    assert not OpenAIOSeriesConfig.refuses_reasoning_effort_level(_O_SERIES_EFFORT_MODEL, level)
+
+
+@pytest.mark.parametrize("level", ["none", "minimal", "xhigh", "max"])
+def test_o_series_refuses_other_reasoning_efforts_its_row_does_not_opt_in_to(
+    monkeypatch: pytest.MonkeyPatch, level: str
+) -> None:
+    _o_series_effort_row(monkeypatch)
+
+    assert OpenAIOSeriesConfig.refuses_reasoning_effort_level(_O_SERIES_EFFORT_MODEL, level)
+
+
+@pytest.mark.parametrize("level", ["none", "minimal", "xhigh", "max"])
+def test_o_series_accepts_a_reasoning_effort_its_row_opts_in_to(monkeypatch: pytest.MonkeyPatch, level: str) -> None:
+    _o_series_effort_row(monkeypatch, **{f"supports_{level}_reasoning_effort": True})
+
+    assert not OpenAIOSeriesConfig.refuses_reasoning_effort_level(_O_SERIES_EFFORT_MODEL, level)

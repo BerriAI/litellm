@@ -12,13 +12,14 @@ Translations handled by LiteLLM:
 """
 
 from collections.abc import Coroutine, Sequence
-from typing import Final, Literal, cast, overload
+from typing import ClassVar, Final, Literal, cast, overload
 
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.utils import (
+    supports_factory,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_response_schema,
@@ -27,15 +28,25 @@ from litellm.utils import (
 
 from .gpt_transformation import OpenAIGPTConfig
 
+_O_SERIES_REASONING_EFFORTS: Final = frozenset(("low", "medium", "high"))
+
 
 class OpenAIOSeriesConfig(OpenAIGPTConfig):
     """
     Reference: https://platform.openai.com/docs/guides/reasoning
     """
 
+    LOOKS_UP_BASE_MODEL: ClassVar[bool] = False
+
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    @classmethod
+    def refuses_reasoning_effort_level(cls, model: str, level: str) -> bool:
+        return level not in _O_SERIES_REASONING_EFFORTS and not supports_factory(
+            model=model, custom_llm_provider=None, key=f"supports_{level}_reasoning_effort"
+        )
 
     def translate_developer_role_to_system_role(
         self,

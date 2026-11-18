@@ -13,10 +13,11 @@ from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.litellm_core_utils.reasoning_effort_utils import explicit_effort_fits_thinking_budget
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, LlmProviders, ModelInfo, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH: Final = 64
 
@@ -314,9 +315,21 @@ def explicit_effort_goes_out_within_budget(
     return explicit_effort_fits_thinking_budget(outgoing_effort, budget_effort)
 
 
+def reasoning_chat_config(model: str, custom_llm_provider: str, base_model: str | None) -> "BaseConfig | None":
+    from litellm.utils import ProviderConfigManager
+
+    llm_provider: Final = next((member for member in LlmProviders if member.value == custom_llm_provider), None)
+    if llm_provider is None:
+        return None
+    return ProviderConfigManager.get_provider_chat_config(
+        model=local_model_name(model, custom_llm_provider), provider=llm_provider, base_model=base_model
+    )
+
+
 def responses_gate_refuses_effort_level(
     level: str, *, model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> bool:
+    from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
     from litellm.utils import ProviderConfigManager
 
@@ -327,4 +340,7 @@ def responses_gate_refuses_effort_level(
     gated_level: Final = normalize_reasoning_effort_value(
         level, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
     )
+    chat_config: Final = reasoning_chat_config(model, custom_llm_provider, None)
+    if isinstance(chat_config, OpenAIOSeriesConfig):
+        return chat_config.refuses_reasoning_effort_level(provider_model, gated_level)
     return config.refuses_reasoning_effort_level(provider_model, gated_level)

@@ -27,6 +27,7 @@ from litellm.llms.anthropic.messages.utils import (
     object_mapping,
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
+    reasoning_chat_config,
     responses_gate_refuses_effort_level,
 )
 from litellm.responses.utils import auto_reasoning_summary
@@ -313,28 +314,16 @@ def openai_thinking_routes_to_responses(
     return model_info.get("supports_reasoning") is not False
 
 
-def _refuses_no_level(level: str) -> bool:
-    return False
-
-
 def _reasoning_chat_gate(model: str, custom_llm_provider: str, base_model: str | None) -> Callable[[str], bool] | None:
     from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
     from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
-    from litellm.utils import ProviderConfigManager
 
-    llm_provider: Final = next((member for member in LlmProviders if member.value == custom_llm_provider), None)
-    if llm_provider is None:
-        return None
-    deployment_model: Final = local_model_name(model, custom_llm_provider)
-    config: Final = ProviderConfigManager.get_provider_chat_config(
-        model=deployment_model, provider=llm_provider, base_model=base_model
-    )
+    config: Final = reasoning_chat_config(model, custom_llm_provider, base_model)
     match config:
-        case OpenAIGPT5Config():
+        case OpenAIGPT5Config() | OpenAIOSeriesConfig():
+            deployment_model: Final = local_model_name(model, custom_llm_provider)
             gated_model: Final = (base_model or deployment_model) if config.LOOKS_UP_BASE_MODEL else deployment_model
             return partial(config.refuses_reasoning_effort_level, gated_model)
-        case OpenAIOSeriesConfig():
-            return _refuses_no_level
         case _:
             return None
 

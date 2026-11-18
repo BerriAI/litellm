@@ -31,9 +31,11 @@ from typing import Final, TypeAlias, get_args
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.reasoning_effort_strength import (
+    PROVIDER_DEFAULT_REASONING_EFFORT,
     REASONING_EFFORT_STRENGTH_ORDER,
     ReasoningEffortRounding,
     nearest_declared_reasoning_effort,
@@ -118,9 +120,10 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
 
 
 _ROUNDING_KEY: Final = "reasoning_effort_rounding"
-_DEFAULT_EFFORT: Final = "default"
 _EFFORT_KEY: Final = "effort"
-_LOGGABLE_REQUESTED_LEVELS: Final = frozenset((*REASONING_EFFORT_ADVERTISEMENT_ORDER, _DEFAULT_EFFORT))
+_LOGGABLE_REQUESTED_LEVELS: Final = frozenset(
+    (*REASONING_EFFORT_ADVERTISEMENT_ORDER, PROVIDER_DEFAULT_REASONING_EFFORT)
+)
 _UNRECOGNIZED_LEVEL: Final = "unrecognized"
 _PROVIDERS_SENDING_THINKING_AS_EFFORT: Final = frozenset(("hosted_vllm",))
 
@@ -209,7 +212,7 @@ def keeps_effort(requested: RequestedReasoningEffort, resolved: RequestedReasoni
     since the caller asked for the provider's own default in place of the budget's."""
     requested_level: Final = _requested_level(requested)
     return requested_level is not None and (
-        requested_level == _DEFAULT_EFFORT or _requested_level(resolved) is not None
+        requested_level == PROVIDER_DEFAULT_REASONING_EFFORT or _requested_level(resolved) is not None
     )
 
 
@@ -265,7 +268,7 @@ def _sent_level(
 ) -> str | None:
     rounded_level: Final = (
         None
-        if requested_level == _DEFAULT_EFFORT
+        if requested_level == PROVIDER_DEFAULT_REASONING_EFFORT
         else nearest_declared_reasoning_effort(requested_level, declared, rounding)
     )
     return None if drop_params and rounded_level not in declared else rounded_level
@@ -275,13 +278,16 @@ def _declaration_drops(effort: object, declared: Sequence[str], deployment_model
     if not isinstance(effort, str):
         return True
     rounding: Final = _deployment_rounding(deployment_model_info)
-    return effort != _DEFAULT_EFFORT and _sent_level(effort, declared, rounding, drop_params=True) is None
+    return _sent_level(effort, declared, rounding, drop_params=True) is None
+
+
+def _advertised_level(effort: object) -> str | None:
+    return effort if isinstance(effort, str) and effort in REASONING_EFFORT_ADVERTISEMENT_ORDER else None
 
 
 def _target_drops(effort: object, target_refuses_level: Callable[[str], bool]) -> bool:
-    if not isinstance(effort, str) or effort not in REASONING_EFFORT_ADVERTISEMENT_ORDER:
-        return True
-    return target_refuses_level(effort)
+    level: Final = _advertised_level(effort)
+    return level is None or target_refuses_level(level)
 
 
 def _loggable_level(effort: object) -> str:
@@ -318,6 +324,15 @@ def _log_explicit_drop(
     )
 
 
+def _refused_explicit_effort_error(level: str, deployment_model: str) -> UnsupportedParamsError:
+    from litellm.llms.openai.chat.gpt_reasoning_transformation import unsupported_reasoning_effort_message
+
+    return UnsupportedParamsError(
+        message=unsupported_reasoning_effort_message("output_config.effort", level, deployment_model),
+        status_code=400,
+    )
+
+
 def drops_explicit_reasoning_effort(
     effort: object,
     *,
@@ -329,9 +344,14 @@ def drops_explicit_reasoning_effort(
     target_refuses_level: Callable[[str], bool],
     report: bool,
 ) -> bool:
-    if not drop_params or not effort:
+    if not effort:
         return False
     declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
+    if not drop_params:
+        refused_level: Final = _advertised_level(effort) if declared is None else None
+        if refused_level is not None and target_refuses_level(refused_level):
+            raise _refused_explicit_effort_error(refused_level, _provider_model(model, custom_llm_provider))
+        return False
     dropped: Final = (
         _target_drops(effort, target_refuses_level)
         if declared is None
@@ -447,7 +467,7 @@ def resolve_chat_reasoning(
             thinking=None,
             output_config=output,
         )
-    if _requested_level(reasoning_effort if explicit_kept else output_config) != _DEFAULT_EFFORT:
+    if _requested_level(reasoning_effort if explicit_kept else output_config) != PROVIDER_DEFAULT_REASONING_EFFORT:
         return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
     return ChatReasoning(
         effort=explicit,
@@ -492,7 +512,7 @@ def _log_remap(
             "reasoning_effort_rounding": rounding,
         }
     )
-    if sent_level is None and requested_level != _DEFAULT_EFFORT:
+    if sent_level is None and requested_level != PROVIDER_DEFAULT_REASONING_EFFORT:
         verbose_logger.warning(
             "Dropping reasoning level %s (drop_params=True) for deployment %s, model group %s, model %s because its "
             "model_info.reasoning_effort_levels does not list that level. List every level the deployment supports.",

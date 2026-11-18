@@ -12,7 +12,7 @@ Translations handled by LiteLLM:
 - Temperature => drop param (if user opts in to dropping param)
 """
 
-from typing import Final
+from typing import ClassVar, Final
 
 import litellm
 from litellm import verbose_logger
@@ -24,6 +24,8 @@ from .gpt_transformation import sanitized_tools_update
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
+    LOOKS_UP_BASE_MODEL: ClassVar[bool] = True
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for the Azure O-Series models

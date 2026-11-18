@@ -15,7 +15,10 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.reasoning_effort_strength import REASONING_EFFORT_STRENGTH_ORDER
+from litellm.litellm_core_utils.reasoning_effort_strength import (
+    PROVIDER_DEFAULT_REASONING_EFFORT,
+    REASONING_EFFORT_STRENGTH_ORDER,
+)
 
 OpenAIStyleReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
@@ -122,6 +125,8 @@ _EFFORT_RANK_UNDER_A_BUDGET: Final = MappingProxyType(
 
 
 def explicit_effort_fits_thinking_budget(explicit_effort: object, budget_effort: str | None) -> bool:
+    if explicit_effort == PROVIDER_DEFAULT_REASONING_EFFORT:
+        return False
     explicit_rank: Final = (
         _EFFORT_RANK_UNDER_A_BUDGET.get(explicit_effort) if isinstance(explicit_effort, str) else None
     )

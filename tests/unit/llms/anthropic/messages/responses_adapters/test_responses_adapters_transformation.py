@@ -1295,6 +1295,28 @@ class TestTranslateRequestBroaderCoverage:
         assert kwargs["reasoning"] == {"effort": "high"}
         assert "summary" not in kwargs["reasoning"]
 
+    @pytest.mark.parametrize("explicit_effort", ["high", "default"])
+    def test_an_explicit_effort_the_budget_does_not_fit_sends_the_budget_effort(self, explicit_effort: str) -> None:
+        thinking: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET}
+        budget_only: Final = _ADAPTER.translate_request(_make_request(thinking=thinking))["reasoning"]
+
+        sent: Final = _ADAPTER.translate_request(
+            _make_request(thinking=thinking, output_config={"effort": explicit_effort})
+        )["reasoning"]
+
+        assert budget_only["effort"] != explicit_effort
+        assert sent == budget_only
+
+    def test_an_explicit_effort_below_the_budget_effort_is_sent(self) -> None:
+        sent: Final = _ADAPTER.translate_request(
+            _make_request(
+                thinking={"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+                output_config={"effort": "low"},
+            )
+        )["reasoning"]
+
+        assert sent == {"effort": "low"}
+
     def test_disabled_thinking_not_included_in_kwargs(self):
         req = _make_request(thinking={"type": "disabled"})
         kwargs = _ADAPTER.translate_request(req)
