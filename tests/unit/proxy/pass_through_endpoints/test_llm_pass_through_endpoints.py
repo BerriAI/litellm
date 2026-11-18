@@ -8890,12 +8890,16 @@ class _AzureBodyModelGroupRouter:
         route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
-        return ["gpt-5.4", "azure-gpt-5.4"]
+        return ["gpt-5.4", "azure-gpt-5.4", "openai-gpt", "bedrock-claude", "mixed-gpt"]
 
     def get_model_list(self, model_name=None, team_id=None):
         rows = [
             {"model_name": "gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-primary", "api_key": "k"}},
             {"model_name": "azure-gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-fallback", "api_key": "k"}},
+            {"model_name": "openai-gpt", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k"}},
+            {"model_name": "bedrock-claude", "litellm_params": {"model": "bedrock/anthropic.claude-opus-4-8"}},
+            {"model_name": "mixed-gpt", "litellm_params": {"model": "azure/gpt-5.4-primary", "api_key": "k"}},
+            {"model_name": "mixed-gpt", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k"}},
         ]
         return [row for row in rows if model_name is None or row["model_name"] == model_name]
 
@@ -8983,6 +8987,36 @@ class TestAzureBodyModelGroupRelay:
         import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
 
         captured = self._install(monkeypatch, {"model": "gpt-5.4-raw-deployment", "input": "ping"})
+        monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+        monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+        routes: list[dict] = []
+
+        def fake_create_pass_through_route(**kwargs):
+            routes.append(kwargs)
+            return AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+        monkeypatch.setattr(ep, "create_pass_through_route", fake_create_pass_through_route)
+
+        result = await azure_proxy_route(
+            endpoint="openai/v1/responses",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert captured == []
+        (route,) = routes
+        assert route["target"] == "https://operator.openai.azure.com/openai/v1/responses"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model_group", ["openai-gpt", "bedrock-claude", "mixed-gpt"])
+    async def test_body_naming_a_group_not_served_by_azure_goes_to_the_operator_azure_endpoint(
+        self, monkeypatch, model_group
+    ):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+
+        captured = self._install(monkeypatch, {"model": model_group, "input": "ping"})
         monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
         monkeypatch.setenv("AZURE_API_KEY", "operator-key")
         routes: list[dict] = []
