@@ -5,6 +5,7 @@ import asyncio
 import copy
 import datetime
 import functools
+import itertools
 import json
 import math
 import os
@@ -469,6 +470,34 @@ last_fetched_at_keys: Final = None
 
 ####
 in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
+
+_ORIGINAL_RESPONSE_NOT_RETAINED: Final = '{"litellm_note":"raw response not retained"}'
+_ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset(
+    {
+        "agentops",
+        "arize",
+        "arize_phoenix",
+        "langfuse_otel",
+        "langtrace",
+        "levo",
+        "logfire",
+        "opentelemetry",
+        "otel",
+        "sentry",
+        "signoz",
+        "weave_otel",
+    }
+)
+
+
+def _callback_may_read_original_response(callback: object) -> bool:
+    if isinstance(callback, str):
+        return callback in _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES
+    module: Final[object] = getattr(callback, "__module__", None)
+    if not isinstance(module, str) or not (module == "litellm" or module.startswith("litellm.")):
+        return True
+    return isinstance(callback, CustomLogger) and callback.reads_original_response
+
 
 # Cached lazy import for PrometheusLogger
 # Module-level cache to avoid repeated imports while preserving memory benefits
@@ -2227,7 +2256,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         if isinstance(original_response, dict):
-            original_response = json.dumps(original_response, default=str)
+            original_response = (
+                json.dumps(original_response, default=str)
+                if self._original_response_may_be_read()
+                else _ORIGINAL_RESPONSE_NOT_RETAINED
+            )
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -2243,9 +2276,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
             callattr: Final = verbose_logger.warning if attr == "warning" else verbose_logger.debug
             callattr(
-                "RAW RESPONSE:\n{}\n\n".format(
-                    self._model_call_details_view.get("original_response", self._model_call_details_view)
-                )
+                "RAW RESPONSE:\n%s\n\n",
+                self._model_call_details_view.get("original_response", self._model_call_details_view),
             )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
@@ -2270,6 +2302,30 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         except Exception as e:
             verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
+
+    def _original_response_may_be_read(self) -> bool:
+        return (
+            callable(getattr(self, "logger_fn", None))
+            or self.litellm_request_debug
+            or is_debugging_on()
+            or any(
+                _callback_may_read_original_response(callback)
+                for callback in itertools.chain(
+                    litellm.callbacks,
+                    litellm.input_callback,
+                    litellm.success_callback,
+                    litellm.failure_callback,
+                    litellm._async_input_callback,  # pyright: ignore[reportPrivateUsage]  # no public accessor
+                    litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # no public accessor
+                    litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # no public accessor
+                    self.dynamic_input_callbacks or (),
+                    self.dynamic_success_callbacks or (),
+                    self.dynamic_async_success_callbacks or (),
+                    self.dynamic_failure_callbacks or (),
+                    self.dynamic_async_failure_callbacks or (),
+                )
+            )
+        )
 
     def _log_provider_response_received(self, callback: object, _kwargs: object) -> None:
         try:
