@@ -948,7 +948,7 @@ class TestTransformResponseGeminiThoughtSignatures:
     """Gemini 3.x returns list-shaped reasoning_content (signed thought blocks) on tool-call follow-ups."""
 
     @staticmethod
-    def _transform(message):
+    def _transform(message: dict[str, object]):
         from unittest.mock import MagicMock
 
         from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
@@ -1043,7 +1043,7 @@ class TestTransformResponseGeminiThoughtSignatures:
         assert getattr(message, "thinking_blocks", None) is None
 
 
-def _stream_event(shape: str, delta: dict) -> str:
+def _stream_event(shape: str, delta: dict[str, object]) -> str:
     chunk = {
         "id": "chatcmpl-1",
         "object": "chat.completion.chunk",
