@@ -7,9 +7,9 @@
 
 use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::query::{
-    AdjustmentPolicy, Basis, Candidate, Header, ImageCalculator, ImageQuery, OcrQuery, PriceQuery,
-    PriceSource, Provider, RerankQuery, SearchQuery, SpeechQuery, TranscriptionQuery,
-    VectorStoreSearchQuery, VideoQuery,
+    AdjustmentPolicy, Basis, BatchLineQuery, BatchUsage, Candidate, Header, ImageCalculator,
+    ImageQuery, OcrQuery, PriceQuery, PriceSource, Provider, RerankQuery, SearchQuery, SpeechQuery,
+    TranscriptionQuery, VectorStoreSearchQuery, VideoQuery,
 };
 use litellm_cost::receipt::{PriceOutcome, Unpriced};
 use litellm_cost::row::RowRef;
@@ -91,6 +91,15 @@ enum UnitsDocument {
         #[serde(default)]
         requested_row: bool,
     },
+    BatchLine {
+        #[serde(flatten)]
+        named: Named,
+        usage: BatchUsage,
+        #[serde(default)]
+        data_residency: Option<String>,
+        #[serde(default)]
+        vertex_location: Option<Box<str>>,
+    },
     Search {
         #[serde(flatten)]
         named: Named,
@@ -145,29 +154,13 @@ pub(crate) fn price_units(
     catalog: Option<&Bound<'_, PyMapping>>,
 ) -> PyResult<Py<PyAny>> {
     let document: UnitsDocument = from_py_argument(document)?;
-    let named = match &document {
-        UnitsDocument::Rerank { named, .. }
-        | UnitsDocument::VectorStoreSearch { named }
-        | UnitsDocument::Ocr { named, .. }
-        | UnitsDocument::Speech { named, .. }
-        | UnitsDocument::Transcription { named, .. }
-        | UnitsDocument::Search { named, .. }
-        | UnitsDocument::Video { named, .. }
-        | UnitsDocument::Image { named, .. } => named,
-    };
-    let provider = named.provider.as_deref().unwrap_or_default();
-    let candidate = Candidate {
-        model: named.model.as_str().into(),
-        provider: provider
-            .parse()
-            .unwrap_or_else(|_| Provider::Other(provider.to_owned())),
-    };
+    let (candidate, provider) = document.candidate();
     let rows = match catalog {
         Some(catalog) => snapshot.pricing_rows([], []).with_named_per_call(
             candidate.clone(),
             "get_model_info",
             row_fields(catalog)?,
-            provider,
+            &provider,
         ),
         None => snapshot.pricing_rows([], []),
     };
@@ -175,7 +168,7 @@ pub(crate) fn price_units(
         (rows, Vec::new()),
         |(rows, given), (index, table)| -> PyResult<_> {
             let (rows, at) =
-                rows.with_per_call(&format!("table-{index}"), row_fields(table)?, provider);
+                rows.with_per_call(&format!("table-{index}"), row_fields(table)?, &provider);
             Ok((rows, given.into_iter().chain([at]).collect::<Vec<RowRef>>()))
         },
     )?;
@@ -194,113 +187,225 @@ pub(crate) fn price_units(
         }
         _ => (given, Vec::new()),
     };
-    let header = Header {
-        candidates: vec![candidate],
-        source: match rows_given.is_empty() {
-            true => PriceSource::Catalog,
-            false => PriceSource::Rows { rows: rows_given },
-        },
-        basis: Basis {
-            service_tier: Default::default(),
-            data_residency: None,
-            vertex_location: None,
-            at: jiff::Timestamp::now(),
-        },
-        adjustments: match &document {
-            UnitsDocument::Search {
-                adjust: Some(adjust),
-                ..
-            } => AdjustmentPolicy::Apply {
-                provider: adjust.provider.clone(),
-                model: adjust.model.clone(),
-                region: adjust.region.clone(),
-            },
-            _ => AdjustmentPolicy::None,
-        },
-        reported: None,
+    let source = match rows_given.is_empty() {
+        true => PriceSource::Catalog,
+        false => PriceSource::Rows { rows: rows_given },
     };
-    let query = match document {
-        UnitsDocument::Rerank {
-            search_units,
-            total_tokens,
-            ..
-        } => PriceQuery::Rerank(Box::new(RerankQuery {
-            header,
-            search_units,
-            total_tokens,
-        })),
-        UnitsDocument::VectorStoreSearch { .. } => {
-            PriceQuery::VectorStoreSearch(Box::new(VectorStoreSearchQuery { header, queries: 1 }))
-        }
-        UnitsDocument::Ocr {
-            pages,
-            annotation_pages,
-            credits,
-            batch,
-            catalog_deferred,
-            ..
-        } => PriceQuery::Ocr(Box::new(OcrQuery {
-            header,
-            pages,
-            annotation_pages,
-            credits,
-            batch,
-            catalog_deferred,
-        })),
-        UnitsDocument::Speech {
-            characters,
-            generations,
-            ..
-        } => PriceQuery::Speech(Box::new(SpeechQuery {
-            header,
-            characters,
-            generations,
-        })),
-        UnitsDocument::Transcription {
-            seconds, tokens, ..
-        } => PriceQuery::Transcription(Box::new(TranscriptionQuery {
-            header,
-            seconds,
-            tokens,
-        })),
-        UnitsDocument::Image {
-            calculator,
-            images,
-            pixels,
-            input_images,
-            ..
-        } => PriceQuery::Image(Box::new(ImageQuery {
-            header,
-            calculator,
-            images,
-            pixels,
-            input_images,
-        })),
-        UnitsDocument::Video {
-            seconds,
-            resolution,
-            videos,
-            input_images,
-            ..
-        } => PriceQuery::Video(Box::new(VideoQuery {
-            header,
-            seconds,
-            resolution,
-            videos,
-            input_images,
-            input_image_rows: image_rows,
-        })),
-        UnitsDocument::Search {
-            queries,
-            additional_results,
-            ..
-        } => PriceQuery::Search(Box::new(SearchQuery {
-            header,
-            queries,
-            additional_results,
-        })),
-    };
+    let query = document.query(candidate, source, image_rows);
     outcome(py, litellm_cost::price(&rows, &query))
+}
+
+impl UnitsDocument {
+    fn named(&self) -> &Named {
+        match self {
+            Self::Rerank { named, .. }
+            | Self::VectorStoreSearch { named }
+            | Self::Ocr { named, .. }
+            | Self::Speech { named, .. }
+            | Self::Transcription { named, .. }
+            | Self::Search { named, .. }
+            | Self::Video { named, .. }
+            | Self::Image { named, .. }
+            | Self::BatchLine { named, .. } => named,
+        }
+    }
+
+    /// The model and provider main's calculator priced under, and the provider as written
+    fn candidate(&self) -> (Candidate, String) {
+        let named = self.named();
+        let provider = named.provider.clone().unwrap_or_default();
+        let candidate = Candidate {
+            model: named.model.as_str().into(),
+            provider: provider
+                .parse()
+                .unwrap_or_else(|_| Provider::Other(provider.clone())),
+        };
+        (candidate, provider)
+    }
+
+    fn query(
+        self,
+        candidate: Candidate,
+        source: PriceSource,
+        image_rows: Vec<RowRef>,
+    ) -> PriceQuery {
+        let (data_residency, vertex_location) = match &self {
+            Self::BatchLine {
+                data_residency,
+                vertex_location,
+                ..
+            } => (
+                super::query::data_residency(data_residency.as_deref()),
+                vertex_location.clone(),
+            ),
+            _ => (None, None),
+        };
+        let header = Header {
+            candidates: vec![candidate],
+            source,
+            basis: Basis {
+                service_tier: Default::default(),
+                data_residency,
+                vertex_location,
+                at: jiff::Timestamp::now(),
+            },
+            adjustments: match &self {
+                Self::Search {
+                    adjust: Some(adjust),
+                    ..
+                } => AdjustmentPolicy::Apply {
+                    provider: adjust.provider.clone(),
+                    model: adjust.model.clone(),
+                    region: adjust.region.clone(),
+                },
+                _ => AdjustmentPolicy::None,
+            },
+            reported: None,
+        };
+        match self {
+            Self::Rerank {
+                search_units,
+                total_tokens,
+                ..
+            } => PriceQuery::Rerank(Box::new(RerankQuery {
+                header,
+                search_units,
+                total_tokens,
+            })),
+            Self::VectorStoreSearch { .. } => {
+                PriceQuery::VectorStoreSearch(Box::new(VectorStoreSearchQuery {
+                    header,
+                    queries: 1,
+                }))
+            }
+            Self::Ocr {
+                pages,
+                annotation_pages,
+                credits,
+                batch,
+                catalog_deferred,
+                ..
+            } => PriceQuery::Ocr(Box::new(OcrQuery {
+                header,
+                pages,
+                annotation_pages,
+                credits,
+                batch,
+                catalog_deferred,
+            })),
+            Self::Speech {
+                characters,
+                generations,
+                ..
+            } => PriceQuery::Speech(Box::new(SpeechQuery {
+                header,
+                characters,
+                generations,
+            })),
+            Self::Transcription {
+                seconds, tokens, ..
+            } => PriceQuery::Transcription(Box::new(TranscriptionQuery {
+                header,
+                seconds,
+                tokens,
+            })),
+            Self::Image {
+                calculator,
+                images,
+                pixels,
+                input_images,
+                ..
+            } => PriceQuery::Image(Box::new(ImageQuery {
+                header,
+                calculator,
+                images,
+                pixels,
+                input_images,
+            })),
+            Self::Video {
+                seconds,
+                resolution,
+                videos,
+                input_images,
+                ..
+            } => PriceQuery::Video(Box::new(VideoQuery {
+                header,
+                seconds,
+                resolution,
+                videos,
+                input_images,
+                input_image_rows: image_rows,
+            })),
+            Self::Search {
+                queries,
+                additional_results,
+                ..
+            } => PriceQuery::Search(Box::new(SearchQuery {
+                header,
+                queries,
+                additional_results,
+            })),
+            Self::BatchLine { usage, .. } => {
+                PriceQuery::BatchLine(Box::new(BatchLineQuery { header, usage }))
+            }
+        }
+    }
+}
+
+/// One call of a `price_many` request and the index of its row among the rows passed beside it, `None` when no row
+/// prices it
+#[derive(Deserialize)]
+struct ManyDocument {
+    #[serde(flatten)]
+    document: UnitsDocument,
+    #[serde(default)]
+    row: Option<usize>,
+}
+
+/// Prices many per-unit calls in one crossing, such as the lines of a batch output file. Each row is lowered once
+/// however many calls name it, and each call is answered as `price_units` would answer it alone with its row as the
+/// row `get_model_info` found
+pub(crate) fn price_many(
+    py: Python<'_>,
+    snapshot: &CostSnapshot,
+    documents: &Bound<'_, PyAny>,
+    rows: &[Bound<'_, PyMapping>],
+) -> PyResult<Vec<Py<PyAny>>> {
+    let documents: Vec<ManyDocument> = from_py_argument(documents)?;
+    let (source, refs) = rows.iter().enumerate().try_fold(
+        (snapshot.pricing_rows([], []), Vec::new()),
+        |(source, refs), (index, row)| -> PyResult<_> {
+            let fields = row_fields(row)?;
+            let provider = fields
+                .get("litellm_provider")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let (source, at) = source.with_per_call(&format!("row-{index}"), fields, &provider);
+            Ok((
+                source,
+                refs.into_iter().chain([at]).collect::<Vec<RowRef>>(),
+            ))
+        },
+    )?;
+    let queries: Vec<PriceQuery> = documents
+        .into_iter()
+        .map(|many| {
+            let (candidate, _) = many.document.candidate();
+            let source = match many.row.and_then(|index| refs.get(index)) {
+                Some(row) => PriceSource::Row {
+                    row: row.clone(),
+                    breakdown_by_name: false,
+                },
+                None => PriceSource::Rows { rows: Vec::new() },
+            };
+            many.document.query(candidate, source, Vec::new())
+        })
+        .collect();
+    litellm_cost::price_many(&source, &queries)
+        .into_iter()
+        .map(|priced| outcome(py, priced))
+        .collect()
 }
 
 pub(super) fn outcome(py: Python<'_>, outcome: PriceOutcome) -> PyResult<Py<PyAny>> {

@@ -70,7 +70,8 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 - `TableRow` and `LiveTable` are the whole host interface: exact key, folded key through the store, and a row object with its fields and `registered_fields`
 - `KnownNames` is the two lists only Python has, every provider name and the model names `get_model_info` renames
 
-`pricing.rs` is the glue `litellm-cost` prices through. `Snapshot::pricing_rows` fetches the rows one query may read (each candidate under the model name main priced it with, plus rows by key) into `PricingRows`, the core's `RowSource`, and `with_per_call` adds a row the caller passed for that call alone. `LoweredRow` is the core's `LoweredRow`, and its `RowFacts` (mode, max tokens, how main's `float()` reads `provider_specific_entry`, the raw keys the auth checks read) are read off the fields when the row is lowered
+`pricing.rs` is the glue `litellm-cost` prices through. `Snapshot::pricing_rows` fetches the rows one query may read (each candidate under the model name main priced it with, plus rows by key) into `PricingRows`, the core's `RowSource`, and `with_per_call` adds a row the caller passed for that call alone. `LoweredRow` is the core's `LoweredRow`, and its `RowFacts` (mode, max tokens, how main's `float()` reads `provider_specific_entry`, the raw keys the auth checks read, whether `guardrail_cost_per_unit` validates as main's guardrail pricing) are read off the fields when the row is lowered
+- `batch_parity.json` is main's `batch_cost_calculator` answer for deployment rows, captured once. The `batch_parity` tests in `pricing.rs` lower each row here and price it through the core, so they cover the key grammar and the batch rules together. Recapture it only when main's batch pricing changes on purpose
 - A row is lowered with `litellm_provider` replaced by the billed provider, as `NativePrices` does
 
 ## Copied from main, fix later

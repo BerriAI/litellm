@@ -14,6 +14,7 @@ use crate::row::RowRef;
 use crate::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage, WebSearch};
 
 pub use crate::a2a::{A2aQuery, AgentUsage};
+pub use crate::batch::{BatchLineQuery, BatchUsage, WritesByTtl};
 pub use crate::guardrail::{GuardrailQuery, GuardrailUse, PromptShield};
 pub use crate::image::{ImageCalculator, ImageQuery};
 pub use crate::mcp::McpQuery;
@@ -44,7 +45,7 @@ pub enum PriceQuery {
     Video(Box<VideoQuery>),
     /// Realtime, Live and Responses websocket sessions
     Session(Header),
-    BatchLine(Header),
+    BatchLine(Box<BatchLineQuery>),
     Guardrail(Box<GuardrailQuery>),
     A2a(Box<A2aQuery>),
     Mcp(Box<McpQuery>),
