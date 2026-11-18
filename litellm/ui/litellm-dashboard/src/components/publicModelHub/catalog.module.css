@@ -419,17 +419,13 @@
 
 .providerSelect input::placeholder {
   color: var(--catalog-ink);
+  opacity: 1;
 }
 
 .providerSelect input {
   font-size: 12px;
   font-weight: 400;
   line-height: 1.6;
-}
-
-.providerSelect input::placeholder {
-  color: var(--catalog-ink);
-  opacity: 1;
 }
 
 .catalog [data-slot="catalog-results"] {
