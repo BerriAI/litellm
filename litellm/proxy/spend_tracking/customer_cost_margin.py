@@ -3,10 +3,20 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt, TypeAdapter, ValidationError
+
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, finalize_cost
 from litellm.types.utils import StandardLoggingPayload
 
+
+class _RecordedSurcharge(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+
+    customer_margin_amount: StrictFloat | StrictInt
+
+
+_RECORDED_SURCHARGE: Final = TypeAdapter(_RecordedSurcharge)
 CUSTOMER_MARGIN_KEY: Final = "customer"
 MAX_CUSTOMER_MARGIN: Final = 10
 
@@ -85,10 +95,11 @@ def apply_callback_customer_cost_margin(
 
 def customer_margin_share_of_spend(spend_log_metadata: Mapping[str, object], spend: float) -> float:
     """The part of a spend row's ``spend`` that is the customer surcharge, capped at the row's spend."""
-    breakdown: Final = spend_log_metadata.get("cost_breakdown")
-    if not isinstance(breakdown, Mapping):
+    try:
+        recorded: Final = _RECORDED_SURCHARGE.validate_python(spend_log_metadata.get("cost_breakdown"))
+    except ValidationError:
         return 0.0
-    amount: Final = breakdown.get("customer_margin_amount")
-    if not isinstance(amount, (int, float)) or isinstance(amount, bool) or not math.isfinite(amount):
+    amount: Final = recorded.customer_margin_amount
+    if not math.isfinite(amount):
         return 0.0
-    return min(max(float(amount), 0.0), max(spend, 0.0))
+    return min(max(amount, 0.0), max(spend, 0.0))
