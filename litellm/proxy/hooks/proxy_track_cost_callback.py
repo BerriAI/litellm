@@ -329,9 +329,7 @@ def _failure_row_with_customer_surcharge(
     row_cost: float, row_kwargs: Mapping[str, object]
 ) -> tuple[float, Mapping[str, object]]:
     """A failure row the provider billed is charged to the customer like a completed request, surcharge included."""
-    margin: Final = customer_cost_margin(
-        request_has_customer(failed_request_customer_attribution(row_kwargs.get("litellm_params")))
-    )
+    margin: Final = customer_cost_margin(request_has_customer(failed_request_customer_attribution(row_kwargs)))
     if margin is None or row_cost <= 0:
         return row_cost, row_kwargs
     snapshot: Final = row_kwargs.get("standard_logging_object")
