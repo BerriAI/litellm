@@ -3247,6 +3247,7 @@ async def _authorize_authenticated_request_checks(
                     )
                 except CustomerBudgetExceededError as error:
                     user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
+                    await refuse_unknown_customer(customer_identity, error.customer_hierarchy, refusal)
                     raise
                 await refuse_unknown_customer(customer_identity, hierarchy, refusal)
                 user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
