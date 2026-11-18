@@ -13,13 +13,14 @@ https://platform.openai.com/docs/api-reference/batch
 import asyncio
 import contextvars
 import os
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
 from pydantic import TypeAdapter
+from typing_extensions import Buffer
 
 import litellm
 from litellm._logging import verbose_logger
@@ -71,9 +72,15 @@ class _PopsKeys(Protocol):
     def pop(self, key: str, default: None, /) -> object: ...
 
 
+def _timeout_seconds(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
+
+
 def _resolve_timeout(
     optional_params: GenericLiteLLMParams,
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     custom_llm_provider: str,
     default_timeout: float = 600.0,
 ) -> float:
@@ -107,7 +114,7 @@ def _resolve_timeout(
         return float(default_timeout)
 
     # Handle numeric values (int, float, string representations)
-    return float(timeout)
+    return _timeout_seconds(timeout)
 
 
 @client

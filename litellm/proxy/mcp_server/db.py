@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, cast
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter
@@ -161,7 +161,13 @@ def _submitted_or(submitted: Mapping[str, object], field: str, fallback: str | N
 # the current code has never written — a cleared column can then never be
 # silently resurrected by a stale blob copy. These keys are stored plaintext
 # (endpoints/identifiers, not secrets), so values lift as-is.
-_TOKEN_EXCHANGE_COLUMN_FIELDS: Final["frozenset[str]"] = frozenset(
+_TokenExchangeColumnField: TypeAlias = Literal[
+    "token_exchange_endpoint",
+    "audience",
+    "subject_token_type",
+    "token_exchange_profile",
+]
+_TOKEN_EXCHANGE_COLUMN_FIELDS: Final["frozenset[_TokenExchangeColumnField]"] = frozenset(
     {
         "token_exchange_endpoint",
         "audience",
@@ -299,7 +305,7 @@ def _encrypt_global_env_var_values(env_vars: Iterable[dict[str, str]]) -> None:
             entry["value"] = encrypt_value_helper(value)
 
 
-def decrypt_global_env_var_values(env_vars: Iterable[MCPEnvVar | dict[str, str]] | None) -> None:
+def decrypt_global_env_var_values(env_vars: Iterable[MCPEnvVar | dict[str, object]] | None) -> None:
     """Decrypt ``scope="global"`` env var values in place after reading the DB.
 
     Accepts ``MCPEnvVar`` models (``LiteLLM_MCPServerTable``) or plain dicts
@@ -317,6 +323,8 @@ def decrypt_global_env_var_values(env_vars: Iterable[MCPEnvVar | dict[str, str]]
             continue
         value = entry.get("value") if is_dict else getattr(entry, "value", None)
         if not value:
+            continue
+        if not isinstance(value, str):
             continue
         decrypted = decrypt_value_helper(
             value=value,
@@ -472,7 +480,7 @@ def _prepare_mcp_server_data(
             data_dict["alias"] = getattr(data, "alias", None)
 
     # Handle credentials serialization
-    credentials: Final = data_dict.get("credentials")
+    credentials: Final[MCPCredentials | None] = data_dict.get("credentials")
     if credentials is not None:
         # Lift legacy blob-shaped token-exchange settings into their dedicated
         # columns (an explicit top-level value wins, including an explicit

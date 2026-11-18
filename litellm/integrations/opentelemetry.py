@@ -80,7 +80,7 @@ if TYPE_CHECKING:
     Context = _Context
     SpanExporter = _SpanExporter
     UserAPIKeyAuth = _UserAPIKeyAuth
-    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload | Any
+    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
 else:
     Span = Any
     Tracer = Any
@@ -2486,7 +2486,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return kv_pairs
 
-    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
+    def set_attributes(self, span: Span, kwargs, response_obj: object):
         try:
             if self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes
@@ -3552,14 +3552,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 start_time=_start_time_ns,
             )
 
-            _request_data: Final = logging_payload.request_data
-            if _request_data is not None:
-                for key, value in _request_data.items():
-                    self.safe_set_attribute(
-                        span=management_endpoint_span,
-                        key=f"request.{key}",
-                        value=value,
-                    )
+            _request_data: Final = logging_payload.request_data or {}
+            for key, value in _request_data.items():
+                self.safe_set_attribute(
+                    span=management_endpoint_span,
+                    key=f"request.{key}",
+                    value=value,
+                )
 
             _response: Final = logging_payload.response
             if _response is not None:
@@ -3610,14 +3609,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 start_time=_start_time_ns,
             )
 
-            _request_data: Final = logging_payload.request_data
-            if _request_data is not None:
-                for key, value in _request_data.items():
-                    self.safe_set_attribute(
-                        span=management_endpoint_span,
-                        key=f"request.{key}",
-                        value=value,
-                    )
+            _request_data: Final = logging_payload.request_data or {}
+            for key, value in _request_data.items():
+                self.safe_set_attribute(
+                    span=management_endpoint_span,
+                    key=f"request.{key}",
+                    value=value,
+                )
 
             _exception: Final = logging_payload.exception
             self.safe_set_attribute(

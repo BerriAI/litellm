@@ -1732,7 +1732,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return []
 
     @classmethod
-    def _recover_output_items_from_logging(cls, logging_obj: "LiteLLMLoggingObj") -> list[dict[str, object]]:
+    def _recover_output_items_from_logging(cls, logging_obj: object) -> list[dict[str, object]]:
         model_call_details: Final = getattr(logging_obj, "model_call_details", {}) or {}
         original_response: Final = model_call_details.get("original_response")
         return cls._recover_output_items_from_raw_sse(original_response)
@@ -1742,7 +1742,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         model: str,
         raw_response: "BaseModel",
         model_response: "ModelResponse",
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: object,
         request_data: dict,
         messages: list["AllMessageValues"],
         optional_params: dict,

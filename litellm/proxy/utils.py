@@ -2565,7 +2565,7 @@ class ProxyLogging:
         for callback in failure_callbacks:
             add_configured_callback_to_specific_event(callback, "failure")
 
-    async def update_request_status(self, litellm_call_id: str, status: Literal["success", "fail"]):
+    async def update_request_status(self, litellm_call_id: object, status: Literal["success", "fail"]):
         # only use this if slack alerting is being used
         if self.alerting is None:
             return

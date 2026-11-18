@@ -6,14 +6,16 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sized
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_TOKENS
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
@@ -35,6 +37,14 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 class AnthropicTextError(BaseLLMException):
@@ -194,14 +204,15 @@ class AnthropicTextConfig(BaseConfig):
             completion_response: Final = raw_response.json()
         except Exception:
             raise AnthropicTextError(message=raw_response.text, status_code=raw_response.status_code)
+        completion_body: Final = _DECODED_JSON.validate_python(completion_response)
         prompt: Final = self._get_anthropic_text_prompt_from_messages(messages=messages, model=model)
-        if "error" in completion_response:
+        if json_contains(completion_body, "error"):
             raise AnthropicTextError(
-                message=str(completion_response["error"]),
+                message=str(subscript(completion_body, "error")),
                 status_code=raw_response.status_code,
             )
         else:
-            if len(completion_response["completion"]) > 0:
+            if _json_len(subscript(completion_body, "completion")) > 0:
                 model_response.choices[0].message.content = completion_response["completion"]
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 

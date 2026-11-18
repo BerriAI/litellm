@@ -5,7 +5,7 @@ https://docs.cohere.com/reference/rerank
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, overload
+from typing import Final, Literal, TypeVar, overload
 
 from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -80,6 +80,7 @@ class RerankUsage(TypedDict):
 
 _RERANK_META: Final = TypeAdapter(RerankResponseMeta)
 _FIELD_VALUE: Final = TypeAdapter(object)
+_Default: Final = TypeVar("_Default")
 
 
 def get_rerank_usage(response: Mapping[str, object]) -> RerankUsage | None:
@@ -155,6 +156,9 @@ class RerankResponse(LiteLLMBaseModel):
 
     @overload
     def get(self, key: Literal["results"], default: None = None) -> list[RerankResponseResult] | None: ...
+
+    @overload
+    def get(self, key: Literal["results"], default: _Default) -> Sequence[RerankResponseResult] | _Default | None: ...
 
     @overload
     def get(self, key: Literal["meta"], default: None = None) -> RerankResponseMeta | None: ...

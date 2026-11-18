@@ -232,6 +232,10 @@ def _get_response_headers(original_exception: Exception) -> httpx.Headers | None
     return _response_headers
 
 
+def response_headers_from_exception(original_exception: Exception) -> httpx.Headers | None:
+    return _get_response_headers(original_exception=original_exception)
+
+
 def _accepted_init_kwargs(exception_class: type[Exception], candidates: Mapping[str, object]) -> Mapping[str, object]:
     accepted: Final = inspect.signature(exception_class).parameters
     return MappingProxyType({name: value for name, value in candidates.items() if name in accepted})

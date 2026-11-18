@@ -1883,7 +1883,7 @@ class RoutingContext:
         return self._router is router or router.__dict__.get("_core") is self._router
 
     @property
-    def explicit_allowed_fails(self) -> int | None:
+    def explicit_allowed_fails(self) -> object:
         """``allowed_fails`` as the caller passed it, ``None`` when it came from the global default."""
         return self._router.explicit_allowed_fails
 

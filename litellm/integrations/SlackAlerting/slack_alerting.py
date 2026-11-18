@@ -30,6 +30,7 @@ from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_ale
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     add_key_name_and_team_to_alert,
@@ -1052,7 +1053,7 @@ class SlackAlerting(CustomBatchLogger):
             pass
 
     async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
-        base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
+        base_model_from_user: Final = attribute_or_none(passed_model_info, "base_model")
         model_info = {}
         base_model = ""
         if base_model_from_user is not None:

@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
+from litellm.litellm_core_utils.exception_mapping_utils import response_headers_from_exception
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import Logging, same_attempt_marker
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -157,9 +158,7 @@ def _trigger_cooldown_for_failed_deployment(
             if deployment_dict is not None
             else None
         )
-        exception_headers: Final[httpx.Headers | None] = (
-            litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(original_exception=exception)
-        )
+        exception_headers: Final[httpx.Headers | None] = response_headers_from_exception(original_exception=exception)
         _get_retry_after: Final = (
             litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
         )

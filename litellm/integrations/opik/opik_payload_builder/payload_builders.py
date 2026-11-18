@@ -1,7 +1,8 @@
 """Payload builders for Opik traces and spans."""
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Final
 
 from litellm import _logging
 from litellm.integrations.opik import utils
@@ -12,7 +13,7 @@ from . import types
 def build_trace_payload(
     project_name: str,
     trace_id: str,
-    response_obj: dict[str, Any],
+    response_obj: Mapping[str, object],
     start_time: datetime,
     end_time: datetime,
     input_data: object,
@@ -22,7 +23,7 @@ def build_trace_payload(
     thread_id: str | None,
 ) -> types.TracePayload:
     """Build a complete trace payload."""
-    trace_name: Final[str] = response_obj.get("object", "unknown type")
+    trace_name: Final = response_obj.get("object", "unknown type")
 
     return types.TracePayload(
         project_name=project_name,
@@ -42,7 +43,7 @@ def build_span_payload(
     project_name: str,
     trace_id: str,
     parent_span_id: str | None,
-    response_obj: dict[str, Any],
+    response_obj: Mapping[str, object],
     start_time: datetime,
     end_time: datetime,
     input_data: object,
@@ -56,7 +57,7 @@ def build_span_payload(
     """Build a complete span payload."""
     span_id: Final = utils.create_uuid7()
 
-    model: Final[str] = response_obj.get("model", "unknown-model")
+    model: Final = response_obj.get("model", "unknown-model")
     span_name: Final = f"{model}_{response_obj.get('object', 'unknown-object')}_{response_obj.get('created', 0)}"
 
     _logging.verbose_logger.debug("OpikLogger creating span with id %s for trace %s", span_id, trace_id)

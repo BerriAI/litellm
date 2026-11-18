@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Final
 
 import litellm
@@ -25,7 +26,7 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
         self,
         headers: dict[str, str],  # mutable-ok: overrides the base signature
         model: str,
-        messages: list[object],  # mutable-ok: overrides the base signature
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: overrides the base signature
         litellm_params: dict[str, object],  # mutable-ok: overrides the base signature
         api_key: str | None = None,
@@ -71,7 +72,7 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
         self,
         headers: dict[str, str],  # mutable-ok: mirrors validate_anthropic_messages_environment
         model: str,
-        messages: list[object],  # mutable-ok: mirrors validate_anthropic_messages_environment
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: mirrors validate_anthropic_messages_environment
         litellm_params: dict[str, object],  # mutable-ok: mirrors validate_anthropic_messages_environment
         api_key: str | None = None,

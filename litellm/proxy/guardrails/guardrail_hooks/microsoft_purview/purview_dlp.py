@@ -111,9 +111,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         user_id: str,
         text: str,
         activity: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         block_on_violation: bool = True,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         """Evaluate content against Purview DLP policies.
 
         Args:
@@ -128,7 +128,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         """
         start_time: Final = datetime.now()
         status: GuardrailStatus = "success"
-        response: dict[str, object] = {}
+        response: Mapping[str, object] = {}
 
         try:
             etag, _ = await self._compute_protection_scopes(user_id)

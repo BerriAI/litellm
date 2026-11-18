@@ -13,7 +13,6 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    Any,
     Final,
     Literal,
     NamedTuple,
@@ -785,12 +784,12 @@ async def cursor_chat_completions(
 
         # Transform non-streaming Responses API response to chat completions format
         if isinstance(response, ResponsesAPIResponse):
-            logging_obj: Final = processor.data.get("litellm_logging_obj")
+            logging_obj: Final = _DECODED_JSON.validate_python(processor.data.get("litellm_logging_obj"))
             transformed_response: Final = responses_api_bridge.transformation_handler.transform_response(
                 model=processor.data.get("model", ""),
                 raw_response=response,
                 model_response=ModelResponse(),
-                logging_obj=cast(Any, logging_obj),
+                logging_obj=logging_obj,
                 request_data=processor.data,
                 messages=processor.data.get("input", []),
                 optional_params={},

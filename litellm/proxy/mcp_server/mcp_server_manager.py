@@ -1831,7 +1831,7 @@ def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | No
         return data
 
 
-def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
+def _deserialize_json_list(data: object) -> _EnvVarList | None:
     """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
 
     Returns ``None`` for empty / null / unparseable input. Accepts strings

@@ -1129,7 +1129,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         request_data: dict,
         guardrail_to_apply: CustomGuardrail | None = None,
         buffer_until_moderated_default: bool = False,
-    ) -> AsyncGenerator[Any, None]:
+    ) -> AsyncGenerator[object, None]:
         """
         Passes the entire stream to the guardrail
 

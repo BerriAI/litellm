@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -30,6 +31,8 @@ GRAPH_SCOPE: Final = "https://graph.microsoft.com/.default"
 
 # Protection scope cache TTL in seconds (1 hour, per Microsoft recommendation).
 SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GraphTokenResponse(TypedDict):
@@ -83,7 +86,7 @@ class PurviewGuardrailBase:
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
         # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
-        self._scope_cache: OrderedDict[str, tuple[str, Mapping[str, object], float]] = OrderedDict()
+        self._scope_cache: OrderedDict[str, tuple[str, object, float]] = OrderedDict()
         self._scope_cache_maxsize = 1000
         # Use a threading.Lock (not asyncio.Lock) because this lock is acquired
         # from both the proxy's main asyncio event loop and from short-lived
@@ -144,7 +147,7 @@ class PurviewGuardrailBase:
         url: str,
         json_body: dict[str, object],
         extra_headers: Mapping[str, str] | None = None,
-    ) -> tuple[dict[str, object], dict[str, str]]:
+    ) -> tuple[object, dict[str, str]]:
         """POST to Graph API with bearer auth.
 
         Returns:
@@ -161,7 +164,7 @@ class PurviewGuardrailBase:
         verbose_proxy_logger.debug("Purview Graph POST %s", url)
         response: Final = await self.async_handler.post(url=url, headers=headers, json=json_body, timeout=self.timeout)
         response.raise_for_status()
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = _DECODED_JSON.validate_python(response.json())
         response_headers: Final = dict(response.headers)
         verbose_proxy_logger.debug("Purview Graph response: %s", response_json)
         return response_json, response_headers
@@ -170,7 +173,7 @@ class PurviewGuardrailBase:
     # Protection scopes
     # ------------------------------------------------------------------
 
-    async def _compute_protection_scopes(self, user_id: str) -> tuple[str, Mapping[str, object]]:
+    async def _compute_protection_scopes(self, user_id: str) -> tuple[str, object]:
         """Call protectionScopes/compute and cache with ETag.
 
         Returns:
@@ -223,8 +226,8 @@ class PurviewGuardrailBase:
         text: str,
         activity: str,
         etag: str,
-        correlation_id: str | None = None,
-    ) -> dict[str, object]:
+        correlation_id: object = None,
+    ) -> Mapping[str, object]:
         """Call processContent for DLP policy evaluation.
 
         Args:
@@ -274,13 +277,14 @@ class PurviewGuardrailBase:
             extra_headers["If-None-Match"] = etag
 
         response_json, _ = await self._graph_post(url, body, extra_headers)
+        processed: Final = decoded_json_object(response_json)
 
         # If policies changed, invalidate scope cache so next call re-fetches.
-        if response_json.get("protectionScopeState") == "modified":
+        if processed.get("protectionScopeState") == "modified":
             with self._cache_lock:
                 self._scope_cache.pop(user_id, None)
 
-        return response_json
+        return processed
 
     # ------------------------------------------------------------------
     # User ID resolution

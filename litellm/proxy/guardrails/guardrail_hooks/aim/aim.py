@@ -18,6 +18,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -74,6 +75,7 @@ class AimRedactedChat(TypedDict):
 
 
 _REDACTED_CHAT_ADAPTER: Final = TypeAdapter(AimRedactedChat)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AimAnalyzeResponse(TypedDict):
@@ -428,7 +430,9 @@ class AimGuardrail(CustomGuardrail):
         ) as websocket:
             sender: Final = asyncio.create_task(self.forward_the_stream_to_aim(websocket, response))
             while True:
-                result: AimStreamMessage = json.loads(await websocket.recv())
+                result: Mapping[str, object] = decoded_json_object(
+                    _DECODED_JSON.validate_python(json.loads(await websocket.recv()))
+                )
                 if verified_chunk := result.get("verified_chunk"):
                     yield ModelResponseStream.model_validate(verified_chunk)
                 else:

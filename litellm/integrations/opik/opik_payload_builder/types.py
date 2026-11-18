@@ -11,7 +11,7 @@ class TracePayload:
 
     project_name: str
     id: str
-    name: str
+    name: object
     start_time: str
     end_time: str
     input: object
@@ -30,7 +30,7 @@ class SpanPayload:
     trace_id: str
     name: str
     type: Literal["llm"]
-    model: str
+    model: object
     start_time: str
     end_time: str
     input: object

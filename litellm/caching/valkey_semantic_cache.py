@@ -19,7 +19,7 @@ import hashlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, Protocol, SupportsFloat, SupportsIndex
 
 from pydantic import TypeAdapter
 from redis import Redis
@@ -27,15 +27,27 @@ from redis.asyncio import Redis as AsyncRedis
 from redis.commands.search.field import TagField, VectorField
 from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
+from typing_extensions import Buffer
 
 from litellm._logging import print_verbose
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
 
 from ._embedding_router import resolve_embedding_timeout
 from .redis_semantic_cache import RedisSemanticCache
 
 _OPAQUE_SEARCH_FIELD: Final = TypeAdapter(object)
+
+
+class _SimilaritySlot(Protocol):
+    def __setitem__(self, key: str, value: float, /) -> None: ...
+
+
+def _search_distance(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,16 +242,19 @@ class ValkeySemanticCache(RedisSemanticCache):
             return None
         doc: Final = docs[0]
         response_field: Final = _OPAQUE_SEARCH_FIELD.validate_python(getattr(doc, cls.RESPONSE_FIELD_NAME))
-        distance_field: Final[str | bytes | float] = getattr(doc, cls.DISTANCE_FIELD_NAME)
+        distance_field: Final = _OPAQUE_SEARCH_FIELD.validate_python(getattr(doc, cls.DISTANCE_FIELD_NAME))
         return _ValkeyCacheHit(
             response=str(response_field),
-            distance=float(distance_field),
+            distance=_search_distance(distance_field),
         )
 
     @staticmethod
-    def _record_similarity(kwargs: dict[str, Any], similarity: float) -> None:
+    def _record_similarity(kwargs: dict[str, object], similarity: float) -> None:
         """Stamp the semantic-similarity score onto the request metadata carried in ``kwargs``."""
-        kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+        metadata: Final = kwargs.setdefault("metadata", dict[str, object]())
+        if not has_attributes(metadata, _SimilaritySlot, "__setitem__"):
+            raise TypeError(f"'{type(metadata).__name__}' object does not support item assignment")
+        metadata["semantic-similarity"] = similarity
 
     @staticmethod
     def _embedding_metadata(kwargs: dict[str, Any]) -> dict[str, object] | None:

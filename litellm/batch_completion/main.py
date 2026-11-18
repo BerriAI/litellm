@@ -103,10 +103,8 @@ def batch_completion(
                     kwargs_modified = args.copy()
                     kwargs_modified.pop("max_workers")
                     kwargs_modified["messages"] = message_list
-                    original_kwargs = {}
-                    if "kwargs" in kwargs_modified:
-                        original_kwargs = kwargs_modified.pop("kwargs")
-                    future = executor.submit(litellm.completion, **kwargs_modified, **original_kwargs)
+                    del kwargs_modified["kwargs"]
+                    future = executor.submit(litellm.completion, **kwargs_modified, **kwargs)
                     completions.append(future)
 
         # Retrieve the results from the futures

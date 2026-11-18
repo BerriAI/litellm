@@ -3,8 +3,11 @@ Support for gpt model family
 """
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Protocol
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import require_attributes, subscript
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
@@ -12,6 +15,21 @@ from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionR
 
 from ..chat.gpt_transformation import OpenAIGPTConfig
 from .utils import transform_prompt
+
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: None, /) -> object: ...
+
+
+def _chat_choice(text_choice: object, index: int, message: Message) -> Choices:
+    return Choices(
+        finish_reason=subscript(text_choice, "finish_reason"),
+        index=index,
+        message=message,
+        logprobs=require_attributes(text_choice, _SupportsGetWithDefault, "get").get("logprobs", None),
+    )
 
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
@@ -95,12 +113,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
                     content=choice["text"],
                     role="assistant",
                 )
-                choice = Choices(
-                    finish_reason=choice["finish_reason"],
-                    index=idx,
-                    message=message,
-                    logprobs=choice.get("logprobs", None),
-                )
+                choice = _chat_choice(_UNTYPED_VALUE.validate_python(choice), idx, message)
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 

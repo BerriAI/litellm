@@ -219,7 +219,7 @@ class ModelsManagementClient:
             )
         )
 
-    def info(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
+    def info(self, return_request: bool = False) -> builtins.list[dict[str, object]] | requests.Request:
         """
         Get detailed information about all models from the server.
 
