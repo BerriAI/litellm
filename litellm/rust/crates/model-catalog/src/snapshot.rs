@@ -1,19 +1,22 @@
 //! One call's view of a host's live cost table, for pricing
 //!
 //! A `Snapshot` reads rows from the host's table through `LiveTable`, never copying the table. It is keyed on a
-//! `Generation`, main's `ModelCostVersion` plus the identity of the discount and margin configs, and `Snapshots` hands
-//! the same snapshot to every call until the generation moves. Rows are lowered lazily and cached per row object, so
+//! `Generation`, main's `ModelCostVersion` plus the version of the host's generalization rules, and on the discount
+//! and margin config by value, and `Snapshots` hands the same snapshot to every call until either moves. Rows are lowered lazily and cached per row object, so
 //! a row no write replaced keeps its lowering across generations
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use litellm_cost::adjust::{Discounts, Margins};
 use litellm_cost::price::Adjustments;
+use litellm_cost::row::RowFacts;
 use serde_json::Value;
 
 use crate::fallback::CapabilityRules;
 use crate::lower::{BilledPrices, billed_prices};
+use crate::pricing::row_facts;
 use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
 
@@ -85,15 +88,22 @@ impl<T: LiveTable> LiveTable for Arc<T> {
     }
 }
 
-/// What a snapshot is valid for: main's `ModelCostVersion` and the identity of the discount and margin config dicts,
-/// which have no version and are only ever replaced whole
+/// What a snapshot's table and rules are valid for: main's `ModelCostVersion` and the version of the host's
+/// `fallback_generalizations` rules, which moves each time the host installs a rule list
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Generation {
     pub table: usize,
     pub size: usize,
     pub writes: u64,
-    pub discount: usize,
-    pub margin: usize,
+    pub rules: u64,
+}
+
+/// `cost_discount_config` and `cost_margin_config` as the host reads them on this call. Main reads both live dicts on
+/// every call, so a snapshot is reused only while they read the same, whether they were replaced or edited in place
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CostConfig {
+    pub discounts: Discounts,
+    pub margins: Margins,
 }
 
 /// Names only the host knows: every provider name, and the model names `get_model_info` renames before a lookup
@@ -131,6 +141,7 @@ pub struct LoweredRow {
     pub fields: Arc<Fields>,
     pub prices: BilledPrices,
     pub adjustments: Adjustments,
+    pub facts: RowFacts,
 }
 
 /// A row ready for pricing, with the key and provenance it was found by
@@ -157,17 +168,19 @@ pub struct Snapshot<T: LiveTable> {
     pub(crate) table: T,
     pub(crate) rules: Arc<CapabilityRules>,
     pub(crate) names: Arc<KnownNames>,
+    pub(crate) config: Arc<CostConfig>,
     memo: Arc<Memo<T::Row>>,
 }
 
 impl<T: LiveTable> Snapshot<T> {
     /// A snapshot with a cache of its own, for a host that prices one call
-    pub fn new(generation: Generation, inputs: SnapshotInputs<T>) -> Self {
-        Self::with_memo(generation, inputs, Arc::new(Memo::default()))
+    pub fn new(generation: Generation, config: CostConfig, inputs: SnapshotInputs<T>) -> Self {
+        Self::with_memo(generation, config, inputs, Arc::new(Memo::default()))
     }
 
     fn with_memo(
         generation: Generation,
+        config: CostConfig,
         inputs: SnapshotInputs<T>,
         memo: Arc<Memo<T::Row>>,
     ) -> Self {
@@ -176,12 +189,21 @@ impl<T: LiveTable> Snapshot<T> {
             table: inputs.table,
             rules: inputs.rules,
             names: inputs.names,
+            config: Arc::new(config),
             memo,
         }
     }
 
     pub fn generation(&self) -> Generation {
         self.generation
+    }
+
+    pub fn discounts(&self) -> &Discounts {
+        &self.config.discounts
+    }
+
+    pub fn margins(&self) -> &Margins {
+        &self.config.margins
     }
 
     /// The row under `row_ref`, lowered for its provider. `None` when the table no longer has the key
@@ -230,10 +252,12 @@ impl<T: LiveTable> Default for Snapshots<T> {
 }
 
 impl<T: LiveTable> Snapshots<T> {
-    /// The snapshot for `generation`, built from `read` only when the generation moved. `read` runs with no lock held
+    /// The snapshot for `generation` and `config`, built from `read` only when either moved. `read` runs with no lock
+    /// held
     pub fn at<E>(
         &self,
         generation: Generation,
+        config: CostConfig,
         read: impl FnOnce() -> Result<SnapshotInputs<T>, E>,
     ) -> Result<Arc<Snapshot<T>>, E> {
         if let Some(current) = self
@@ -241,12 +265,13 @@ impl<T: LiveTable> Snapshots<T> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
-            .filter(|current| current.generation == generation)
+            .filter(|current| current.generation == generation && *current.config == config)
         {
             return Ok(Arc::clone(current));
         }
         let snapshot = Arc::new(Snapshot::with_memo(
             generation,
+            config,
             read()?,
             Arc::clone(&self.memo),
         ));
@@ -314,7 +339,7 @@ impl<Row: TableRow> Memo<Row> {
             return Arc::clone(lowered);
         }
         let fields = self.fields(row);
-        let lowered = Arc::new(lower(fields, provider));
+        let lowered = Arc::new(LoweredRow::lower(fields, provider));
         if let Some(cached) = self.entries().get_mut(&identity) {
             cached
                 .lowered
@@ -332,17 +357,20 @@ impl<Row: TableRow> Memo<Row> {
     }
 }
 
-fn lower(fields: Arc<Fields>, provider: &str) -> LoweredRow {
-    let billed: Fields = fields
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .chain([("litellm_provider".to_owned(), Value::from(provider))])
-        .collect();
-    let wire = EntryWire::read(&billed);
-    LoweredRow {
-        prices: billed_prices(&wire),
-        adjustments: Adjustments::from(&wire),
-        fields,
+impl LoweredRow {
+    pub(crate) fn lower(fields: Arc<Fields>, provider: &str) -> Self {
+        let billed: Fields = fields
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .chain([("litellm_provider".to_owned(), Value::from(provider))])
+            .collect();
+        let wire = EntryWire::read(&billed);
+        Self {
+            prices: billed_prices(&wire),
+            adjustments: Adjustments::from(&wire),
+            facts: row_facts(&fields),
+            fields,
+        }
     }
 }
 
@@ -352,6 +380,7 @@ mod tests {
     use std::sync::RwLock;
 
     use indexmap::IndexMap;
+    use litellm_cost::adjust::AdjustmentKey;
     use litellm_cost::call::InferenceGeo;
     use litellm_cost::money::Multiplier;
     use litellm_cost::price::Uplift;
@@ -441,8 +470,12 @@ mod tests {
             inputs(&table)
         };
 
-        let first = snapshots.at(GENERATION, read).unwrap();
-        let second = snapshots.at(GENERATION, read).unwrap();
+        let first = snapshots
+            .at(GENERATION, CostConfig::default(), read)
+            .unwrap();
+        let second = snapshots
+            .at(GENERATION, CostConfig::default(), read)
+            .unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(reads.get(), 1);
@@ -451,17 +484,55 @@ mod tests {
     #[rstest]
     #[case::table_write(Generation { writes: 1, ..GENERATION })]
     #[case::new_table(Generation { table: 2, ..GENERATION })]
-    #[case::discount_config_replaced(Generation { discount: 7, ..GENERATION })]
-    #[case::margin_config_replaced(Generation { margin: 7, ..GENERATION })]
+    #[case::rules_replaced(Generation { rules: 7, ..GENERATION })]
     fn a_moved_generation_is_a_new_snapshot(#[case] moved: Generation) {
         let table = Arc::new(Table::default());
         let snapshots = Snapshots::default();
 
-        let before = snapshots.at(GENERATION, || inputs(&table)).unwrap();
-        let after = snapshots.at(moved, || inputs(&table)).unwrap();
+        let before = snapshots
+            .at(GENERATION, CostConfig::default(), || inputs(&table))
+            .unwrap();
+        let after = snapshots
+            .at(moved, CostConfig::default(), || inputs(&table))
+            .unwrap();
 
         assert!(!Arc::ptr_eq(&before, &after));
         assert_eq!(after.generation(), moved);
+    }
+
+    fn discount(fraction: f64) -> CostConfig {
+        CostConfig {
+            discounts: Discounts::new([("anthropic".to_owned(), fraction)]),
+            margins: Margins::default(),
+        }
+    }
+
+    /// Main reads the config dicts live on every call, so a snapshot answers with the config the host read on this
+    /// call however the dict changed: replaced (even by a new dict at the old one's address) or edited in place
+    #[rstest]
+    fn a_snapshot_prices_with_the_config_read_on_this_call() {
+        let table = Arc::new(Table::default());
+        let snapshots = Snapshots::default();
+        let reads = Cell::new(0);
+        let read = || {
+            reads.set(reads.get() + 1);
+            inputs(&table)
+        };
+        let anthropic = || AdjustmentKey {
+            provider: Some("anthropic"),
+            ..AdjustmentKey::default()
+        };
+
+        let applied: Vec<Option<f64>> = [0.1, 0.1, 0.5, 0.1]
+            .into_iter()
+            .map(|fraction| {
+                let snapshot = snapshots.at(GENERATION, discount(fraction), read).unwrap();
+                snapshot.discounts().resolve(&anthropic())
+            })
+            .collect();
+
+        assert_eq!(applied, [Some(0.1), Some(0.1), Some(0.5), Some(0.1)]);
+        assert_eq!(reads.get(), 3);
     }
 
     #[rstest]
@@ -469,7 +540,9 @@ mod tests {
         let table = Arc::new(Table::default());
         let snapshots = Snapshots::default();
         table.write("claude-opus-5-5", json!({"input_cost_per_token": 1e-6}));
-        let before = snapshots.at(GENERATION, || inputs(&table)).unwrap();
+        let before = snapshots
+            .at(GENERATION, CostConfig::default(), || inputs(&table))
+            .unwrap();
         assert_eq!(input_rate(&before), Some(1e-6));
 
         table.write("claude-opus-5-5", json!({"input_cost_per_token": 2e-6}));
@@ -479,6 +552,7 @@ mod tests {
                     writes: 1,
                     ..GENERATION
                 },
+                CostConfig::default(),
                 || inputs(&table),
             )
             .unwrap();
@@ -491,7 +565,9 @@ mod tests {
         let table = Arc::new(Table::default());
         let snapshots = Snapshots::default();
         let row = table.write("claude-opus-5-5", json!({"input_cost_per_token": 1e-6}));
-        let before = snapshots.at(GENERATION, || inputs(&table)).unwrap();
+        let before = snapshots
+            .at(GENERATION, CostConfig::default(), || inputs(&table))
+            .unwrap();
         assert_eq!(input_rate(&before), Some(1e-6));
         row.0
             .write()
@@ -502,9 +578,17 @@ mod tests {
             ..GENERATION
         };
 
-        let unseen = input_rate(&snapshots.at(moved, || inputs(&table)).unwrap());
+        let unseen = input_rate(
+            &snapshots
+                .at(moved, CostConfig::default(), || inputs(&table))
+                .unwrap(),
+        );
         snapshots.forget_rows();
-        let seen = input_rate(&snapshots.at(moved, || inputs(&table)).unwrap());
+        let seen = input_rate(
+            &snapshots
+                .at(moved, CostConfig::default(), || inputs(&table))
+                .unwrap(),
+        );
 
         assert_eq!(unseen, Some(1e-6));
         assert_eq!(seen, Some(3e-6));
@@ -517,7 +601,7 @@ mod tests {
             "claude-opus-5-5",
             json!({"input_cost_per_token": 1e-6, "provider_specific_entry": {"us": 1.1}}),
         );
-        let snapshot = Snapshot::new(GENERATION, inputs(&table).unwrap());
+        let snapshot = Snapshot::new(GENERATION, CostConfig::default(), inputs(&table).unwrap());
 
         let row = snapshot.row(&opus()).unwrap();
 
@@ -540,7 +624,7 @@ mod tests {
     ) {
         let table = Arc::new(Table::default());
         table.write("dep-1", json!({"input_cost_per_token": 1e-6}));
-        let snapshot = Snapshot::new(GENERATION, inputs(&table).unwrap());
+        let snapshot = Snapshot::new(GENERATION, CostConfig::default(), inputs(&table).unwrap());
 
         let found = snapshot.deployment_row(id, "anthropic");
 
