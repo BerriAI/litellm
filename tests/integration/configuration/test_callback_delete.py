@@ -176,7 +176,7 @@ def test_delete_of_an_unconfigured_callback_is_a_404_and_changes_nothing(rig: Ri
 @pytest.mark.parametrize(
     ("file_key", "database_key"), (("failure_callback", "success_callback"), ("success_callback", "failure_callback"))
 )
-def test_delete_removes_the_database_copy_and_keeps_the_copy_the_config_file_sets(
+def test_delete_is_refused_when_the_config_file_owns_a_copy_and_keeps_both_copies(
     gateway: Gateway, tmp_path: Path, file_key: str, database_key: str
 ) -> None:
     with _rig(gateway, tmp_path, {file_key: [CALLBACK]}) as file_owned:
@@ -185,10 +185,12 @@ def test_delete_removes_the_database_copy_and_keeps_the_copy_the_config_file_set
 
         status, body = _delete(file_owned.proxy, CALLBACK)
 
-        assert status == 200, body
-        assert body["remaining_callbacks"] == []
-        assert _stored_settings(file_owned.database_url)[database_key] == []
-        _listed(file_owned.proxy, ((CALLBACK, LIST_TYPES[file_key]),))
+        assert status == 400, body
+        detail: Final = object_value(body["detail"])
+        assert (detail["keys"], detail["section"]) == ([file_key], "litellm_settings")
+        assert "set in the config file" in str(detail["error"])
+        assert _stored_settings(file_owned.database_url)[database_key] == [CALLBACK]
+        _listed(file_owned.proxy, ((CALLBACK, "failure"), (CALLBACK, "success")))
 
 
 def test_delete_of_a_callback_only_the_config_file_lists_is_refused_and_names_the_file(
