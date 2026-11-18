@@ -4,7 +4,7 @@
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 
@@ -12,9 +12,8 @@ from pydantic import TypeAdapter
 from typing_extensions import Buffer, ReadOnly
 
 import litellm
-from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
-from litellm.rust_bridge._native import NativeCallContext, NativePrices, NativeQuote
+from litellm.rust_bridge._native import NativeReceipt
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -345,33 +344,6 @@ def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: M
     return resolved
 
 
-def calculate_cache_writing_cost(
-    cache_creation_tokens: int,
-    cache_creation_token_details: CacheCreationTokenDetails | None,
-    cache_creation_cost: float,
-    cache_creation_cost_by_ttl: Mapping[str, float],
-) -> float:
-    """
-    Bill cache writes per lifetime: Anthropic reports 5m and 1h counts, OpenAI reports 30m and 12h counts.
-    Writes no lifetime count covers, such as a lifetime a provider adds later, bill at the base write rate.
-    """
-    if cache_creation_token_details is None:
-        return cache_creation_tokens * cache_creation_cost
-    tokens_by_ttl: Final[Mapping[str, int | None]] = MappingProxyType(
-        {
-            "5m": cache_creation_token_details.ephemeral_5m_input_tokens,
-            "30m": cache_creation_token_details.ephemeral_30m_input_tokens,
-            "1hr": cache_creation_token_details.ephemeral_1h_input_tokens,
-            "12hr": cache_creation_token_details.ephemeral_12h_input_tokens,
-        }
-    )
-    unattributed_tokens: Final = max(cache_creation_tokens - sum(t or 0 for t in tokens_by_ttl.values()), 0)
-    return unattributed_tokens * cache_creation_cost + sum(
-        (tokens or 0) * cache_creation_cost_by_ttl.get(ttl, cache_creation_cost)
-        for ttl, tokens in tokens_by_ttl.items()
-    )
-
-
 class PromptTokensDetailsResult(TypedDict):
     cache_hit_tokens: int
     cache_hit_audio_tokens: ReadOnly[int]
@@ -655,30 +627,6 @@ def get_vertex_regional_endpoint_uplift(model_info: Mapping[str, object], vertex
         return 1.0
 
 
-def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) -> float:
-    """
-    Resolve the provider-specific regional pricing multiplier for the geo the
-    request was served from (``usage.inference_geo``), e.g. Anthropic's ``us: 1.1``
-    stored under ``provider_specific_entry``. The regional surcharge applies to
-    every token type, so per-type cost breakdowns must scale by it too.
-
-    Returns 1.0 when the request was served globally or the model carries no
-    multiplier for the geo.
-    """
-    inference_geo: Final = getattr(usage, "inference_geo", None)
-    if not isinstance(inference_geo, str) or inference_geo.lower() in ("global", "not_available"):
-        return 1.0
-    provider_specific_entry: Final[dict[str, float]] = model_info.get("provider_specific_entry") or {}
-    return float(provider_specific_entry.get(inference_geo.lower(), 1.0))
-
-
-def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) -> float:
-    provider_specific_entry: Final = model_info.get("provider_specific_entry")
-    if getattr(usage, "speed", None) != "fast" or not provider_specific_entry:
-        return 1.0
-    return float(provider_specific_entry.get("fast", 1.0))
-
-
 def _billed_prompt_tokens(usage: Usage) -> PromptTokensDetailsResult:
     """Prompt-side counts with the overlap between cached and per-modality tokens removed.
 
@@ -765,12 +713,6 @@ def _reads_explicit_cache(usage: Usage) -> bool:
     if details is None or getattr(details, "cache_type", None) != "ephemeral":
         return False
     return parse_prompt_tokens_details(usage)["cache_hit_tokens"] > 0
-
-
-def billed_cache_read_rate(quote: NativeQuote, usage: Usage) -> float:
-    """The rate ``usage``'s cached tokens bill at: the explicit cache-read rate when they are reads of a
-    cache the caller created, the implicit one otherwise."""
-    return quote.explicit_cache_read if _reads_explicit_cache(usage) else quote.cache_read
 
 
 class ModalityCounts(TypedDict):
@@ -862,25 +804,6 @@ def billed_usage(usage: Usage) -> BilledUsage:
     )
 
 
-def call_context(
-    service_tier: str | None,
-    data_residency: str | None,
-    vertex_location: str | None,
-    current_time: datetime | None,
-) -> NativeCallContext:
-    """The call facts that pick a price. A missing ``current_time`` is the pinned billing moment, and a
-    naive one is read as UTC."""
-    reference: Final = current_time if current_time is not None else current_billing_time()
-    return NativeCallContext(
-        service_tier=service_tier,
-        data_residency=data_residency,
-        vertex_location=vertex_location,
-        at=reference.astimezone(timezone.utc)
-        if reference.tzinfo is not None
-        else reference.replace(tzinfo=timezone.utc),
-    )
-
-
 def generic_cost_per_token(
     model: str,
     usage: Usage,
@@ -948,26 +871,6 @@ class BilledTokenRates:
     output_cost_per_reasoning_token: float
     cache_read_input_image_token_cost: float | None = None
 
-    def scaled(self, multiplier: float) -> "BilledTokenRates":
-        if multiplier == 1.0:
-            return self
-        return BilledTokenRates(
-            input_cost_per_token=self.input_cost_per_token * multiplier,
-            output_cost_per_token=self.output_cost_per_token * multiplier,
-            cache_read_input_token_cost=self.cache_read_input_token_cost * multiplier,
-            cache_read_input_audio_token_cost=self.cache_read_input_audio_token_cost * multiplier,
-            cache_creation_input_token_cost=self.cache_creation_input_token_cost * multiplier,
-            cache_creation_input_token_cost_by_ttl=MappingProxyType(
-                {ttl: rate * multiplier for ttl, rate in self.cache_creation_input_token_cost_by_ttl.items()}
-            ),
-            output_cost_per_reasoning_token=self.output_cost_per_reasoning_token * multiplier,
-            cache_read_input_image_token_cost=(
-                self.cache_read_input_image_token_cost * multiplier
-                if self.cache_read_input_image_token_cost is not None
-                else None
-            ),
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class TokenTypeCostBreakdown:
@@ -979,79 +882,74 @@ class TokenTypeCostBreakdown:
     differently-argued way. None when the model's pricing could not be resolved."""
 
 
-def _reasoning_token_count(usage: Usage) -> int:
-    parsed: Final = (
-        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
-    )
-    return parsed or _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
-
-
-def _cache_token_counts(usage: Usage) -> tuple[int, int, int, CacheCreationTokenDetails | None]:
-    """(cache read tokens, cached audio tokens, cache creation tokens, cache creation details): read from
-    prompt_tokens_details first, then the private top-level counters the Usage constructor mirrors cache
-    tokens onto for providers/callers that bypass the details."""
-    parsed: Final = parse_prompt_tokens_details(usage) if usage.prompt_tokens_details is not None else None
-    parsed_read: Final = parsed["cache_hit_tokens"] if parsed is not None else 0
-    parsed_creation: Final = parsed["cache_creation_tokens"] if parsed is not None else 0
-    return (
-        parsed_read or _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0)),
-        parsed["cache_hit_audio_tokens"] if parsed is not None else 0,
-        parsed_creation or _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0)),
-        parsed["cache_creation_token_details"] if parsed is not None else None,
-    )
-
-
-def _custom_pricing_rates(custom_cost_per_token: CostPerToken) -> BilledTokenRates:
-    """Flat custom pricing has no tiers, uplifts or reasoning rate: cache tokens bill at the configured
-    cache rates (else the input rate) and reasoning at the output rate, as _cost_per_token_custom_pricing_helper does."""
-    input_rate: Final = custom_cost_per_token["input_cost_per_token"]
-    output_rate: Final = custom_cost_per_token["output_cost_per_token"]
-    cache_read_rate: Final = custom_cost_per_token.get("cache_read_input_token_cost", input_rate)
-    cache_creation_rate: Final = custom_cost_per_token.get("cache_creation_input_token_cost", input_rate)
-    return BilledTokenRates(
-        input_cost_per_token=input_rate,
-        output_cost_per_token=output_rate,
-        cache_read_input_token_cost=cache_read_rate,
-        cache_read_input_audio_token_cost=cache_read_rate,
-        cache_creation_input_token_cost=cache_creation_rate,
-        cache_creation_input_token_cost_by_ttl=MappingProxyType({}),
-        output_cost_per_reasoning_token=output_rate,
-    )
-
-
-def _cost_map_billed_rates(
-    model_info: ModelInfo,
-    usage: Usage,
+def _breakdown_receipt(
+    model: str,
     custom_llm_provider: str | None,
+    usage: Usage,
     service_tier: str | None,
     data_residency: str | None,
     vertex_location: str | None,
     current_time: datetime | None,
-) -> BilledTokenRates:
-    quote: Final = NativePrices(model_info, custom_llm_provider).quote(
-        _count(usage.prompt_tokens),
-        call_context(service_tier, data_residency, vertex_location, current_time),
+    custom_cost_per_token: CostPerToken | None,
+    model_info: ModelInfo | None,
+) -> NativeReceipt | None:
+    """The Rust receipt of ``usage`` on ``model_info``, else the model's cost map row, by ``generic_cost_per_token``'s
+    rules. ``None`` when the model's pricing cannot be resolved."""
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+        BranchFacts,
+        CustomPricing,
+        CustomRates,
+        ModelFacts,
+        custom_pricing_usage,
+        custom_receipt,
+        price,
+        priced_usage,
     )
-    cache_read_rate: Final = billed_cache_read_rate(quote, usage)
-    multiplier: Final = (
-        quote.uplift
-        * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
-        * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
+
+    provider: Final = custom_llm_provider or ""
+    if custom_cost_per_token is not None:
+        billed: Final = billed_usage(usage)
+        reads: Final = billed["cache_read"]
+        writes: Final = billed["cache_write"]
+        return custom_receipt(
+            model,
+            provider,
+            custom_pricing_usage(
+                prompt_tokens=billed["prompt_tokens"],
+                completion_tokens=_count(usage.completion_tokens),
+                cached_tokens=reads["text"] + reads["audio"] + reads["image"],
+                cache_creation_tokens=writes["default"] + writes["one_hour"] + writes["twelve_hours"],
+                reasoning_tokens=billed["reasoning"],
+            ),
+            CustomPricing(
+                per_token=CustomRates(
+                    input=custom_cost_per_token["input_cost_per_token"],
+                    output=custom_cost_per_token["output_cost_per_token"],
+                    cache_read=custom_cost_per_token.get("cache_read_input_token_cost"),
+                    cache_write=custom_cost_per_token.get("cache_creation_input_token_cost"),
+                ),
+                per_second=None,
+            ),
+            None,
+        )
+    try:
+        row: Final = (
+            model_info
+            if model_info is not None
+            else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        )
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
+        return None
+    return price(
+        ModelFacts(by="model", model=model, provider=provider, region=None),
+        priced_usage(usage, web_search=None),
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        row=row,
+        current_time=current_time,
+        branch=BranchFacts(rules="generic"),
     )
-    return BilledTokenRates(
-        input_cost_per_token=quote.input,
-        output_cost_per_token=quote.output,
-        cache_read_input_token_cost=cache_read_rate,
-        cache_read_input_audio_token_cost=(
-            cache_read_rate if quote.cache_read_audio is None else quote.cache_read_audio
-        ),
-        cache_creation_input_token_cost=quote.cache_write,
-        cache_creation_input_token_cost_by_ttl=MappingProxyType(
-            {"1hr": quote.cache_write_1h, "12hr": quote.cache_write_12h}
-        ),
-        output_cost_per_reasoning_token=quote.reasoning,
-        cache_read_input_image_token_cost=quote.cache_read_image,
-    ).scaled(multiplier)
 
 
 def get_billed_token_rates(
@@ -1065,27 +963,22 @@ def get_billed_token_rates(
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
 ) -> BilledTokenRates | None:
-    """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
-    breakdown resolve them. None when the model's pricing cannot be resolved."""
-    if custom_cost_per_token is not None:
-        return _custom_pricing_rates(custom_cost_per_token)
-    try:
-        resolved_model_info: Final = (
-            model_info
-            if model_info is not None
-            else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        )
-    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
-        return None
-    return _cost_map_billed_rates(
-        model_info=resolved_model_info,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-        service_tier=service_tier,
-        data_residency=data_residency,
-        vertex_location=vertex_location,
-        current_time=current_time,
+    """Rates the cost calculator bills ``usage`` at, priced in Rust as the totals and the token-type breakdown are.
+    None when the model's pricing cannot be resolved."""
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import billed_token_rates
+
+    receipt: Final = _breakdown_receipt(
+        model,
+        custom_llm_provider,
+        usage,
+        service_tier,
+        data_residency,
+        vertex_location,
+        current_time,
+        custom_cost_per_token,
+        model_info,
     )
+    return None if receipt is None else billed_token_rates(receipt)
 
 
 def get_token_type_cost_breakdown(
@@ -1099,62 +992,28 @@ def get_token_type_cost_breakdown(
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
 ) -> TokenTypeCostBreakdown:
-    """
-    Provider-agnostic cost of reasoning and cache tokens, derived from the usage
-    object and model pricing alone.
+    """The cost of ``usage``'s reasoning and cache tokens and the rates they bill at, the breakdown the Rust receipt
+    of the call carries. Zeros (never raises) when the model or its pricing cannot be resolved."""
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import billed_token_rates
 
-    This works for every provider, including Perplexity/Cerebras/Dashscope whose
-    cost calculators bypass ``generic_cost_per_token``, because cache tokens always
-    land on ``prompt_tokens_details`` (via the Usage constructor and provider
-    transformations) and reasoning tokens on ``completion_tokens_details``. It reuses
-    the same rate resolution as the total-cost path (``get_billed_token_rates``) so the
-    breakdown can never drift from the totals. A deployment billed by
-    ``custom_cost_per_token`` is priced from those flat rates instead of the cost map and,
-    like its totals, bills cache writes flat rather than by their 5m/1h split.
-    Returns zeros (never raises) when the model or its pricing cannot be resolved.
-    """
-    rates: Final = get_billed_token_rates(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        usage=usage,
-        service_tier=service_tier,
-        data_residency=data_residency,
-        vertex_location=vertex_location,
-        current_time=current_time,
-        custom_cost_per_token=custom_cost_per_token,
-        model_info=model_info,
+    receipt: Final = _breakdown_receipt(
+        model,
+        custom_llm_provider,
+        usage,
+        service_tier,
+        data_residency,
+        vertex_location,
+        current_time,
+        custom_cost_per_token,
+        model_info,
     )
-    if rates is None:
+    if receipt is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
-
-    cache_read_tokens, cached_audio_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(
-        usage
-    )
-    cached_image_tokens: Final = parse_prompt_tokens_details(usage)["cached_image_tokens"]
-    image_cache_read_rate: Final = (
-        rates.cache_read_input_image_token_cost
-        if rates.cache_read_input_image_token_cost is not None
-        else rates.cache_read_input_token_cost
-    )
-    cache_creation_cost: Final = (
-        float(cache_creation_tokens) * rates.cache_creation_input_token_cost
-        if custom_cost_per_token is not None
-        else calculate_cache_writing_cost(
-            cache_creation_tokens=cache_creation_tokens,
-            cache_creation_token_details=cache_creation_token_details,
-            cache_creation_cost=rates.cache_creation_input_token_cost,
-            cache_creation_cost_by_ttl=rates.cache_creation_input_token_cost_by_ttl,
-        )
-    )
     return TokenTypeCostBreakdown(
-        reasoning_cost=float(_reasoning_token_count(usage)) * rates.output_cost_per_reasoning_token,
-        cache_read_cost=(
-            float(cache_read_tokens - cached_audio_tokens - cached_image_tokens) * rates.cache_read_input_token_cost
-            + float(cached_audio_tokens) * rates.cache_read_input_audio_token_cost
-            + float(cached_image_tokens) * image_cache_read_rate
-        ),
-        cache_creation_cost=cache_creation_cost,
-        rates=rates,
+        reasoning_cost=receipt.reasoning_cost,
+        cache_read_cost=receipt.cache_read_cost,
+        cache_creation_cost=receipt.cache_creation_cost,
+        rates=billed_token_rates(receipt),
     )
 
 
@@ -1167,44 +1026,22 @@ def calculate_prompt_caching_savings(
     vertex_location: str | None = None,
     billed_at: datetime | None = None,
 ) -> float:
-    """Read discount minus write premium, using the biller's rate and TTL resolution.
-
-    Missing reads and unpublished (missing/zero) writes claim no saving or premium;
-    explicit zero reads remain free. An unpublished 1h price uses the ordinary write rate.
-    ``billed_at`` is the request's completion time, so off-peak windows resolve as the
-    biller saw them rather than at the later spend write.
-    """
-    quote: Final = NativePrices(model_info, custom_llm_provider).quote(
-        _count(usage.prompt_tokens),
-        call_context(service_tier, data_residency, vertex_location, billed_at),
+    """Read discount minus write premium at the biller's rates, the savings the Rust receipt of ``usage`` on
+    ``model_info`` carries. ``billed_at`` is the request's completion time, so off-peak windows resolve as the biller
+    saw them rather than at the later spend write."""
+    receipt: Final = _breakdown_receipt(
+        "savings",
+        custom_llm_provider,
+        usage,
+        service_tier,
+        data_residency,
+        vertex_location,
+        billed_at,
+        None,
+        model_info,
     )
-    prompt_base_cost: Final = quote.input
-    effective_cache_read_cost: Final = billed_cache_read_rate(quote, usage)
-    write_rate: Final = quote.cache_write or prompt_base_cost
-    prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
-    cache_read_tokens: Final = max(prompt_tokens_details["cache_hit_tokens"], 0)
-    cache_creation_tokens: Final = max(prompt_tokens_details["cache_creation_tokens"], 0)
-    details: Final = prompt_tokens_details["cache_creation_token_details"]
-    cache_creation_details: Final = (
-        CacheCreationTokenDetails(
-            ephemeral_5m_input_tokens=max(details.ephemeral_5m_input_tokens or 0, 0),
-            ephemeral_30m_input_tokens=max(details.ephemeral_30m_input_tokens or 0, 0),
-            ephemeral_1h_input_tokens=max(details.ephemeral_1h_input_tokens or 0, 0),
-            ephemeral_12h_input_tokens=max(details.ephemeral_12h_input_tokens or 0, 0),
-        )
-        if details is not None
-        else None
-    )
-    read_discount: Final = cache_read_tokens * max(prompt_base_cost - effective_cache_read_cost, 0.0)
-    write_premium: Final = calculate_cache_writing_cost(
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_token_details=cache_creation_details,
-        cache_creation_cost=write_rate - prompt_base_cost,
-        cache_creation_cost_by_ttl=MappingProxyType(
-            {"1hr": quote.cache_write_1h - prompt_base_cost, "12hr": quote.cache_write_12h - prompt_base_cost}
-        ),
-    )
-    return (read_discount - write_premium) * quote.uplift
+    savings: Final = None if receipt is None else receipt.cache_savings
+    return 0.0 if savings is None else savings
 
 
 def calculate_image_response_cost_from_usage(
