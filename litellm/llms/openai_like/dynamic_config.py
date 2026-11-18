@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final, Literal, overload
 
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -196,7 +197,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 _PAYLOAD_ADAPTER.validate_python(non_default_params),
                 model=model,
                 provider_slug=provider.slug,
-                drop_params=drop_params,
+                drop_params=drop_params or litellm.drop_params is True,
             )
 
             # Apply supported params
