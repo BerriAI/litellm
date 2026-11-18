@@ -40,6 +40,7 @@ export interface TeamMemberBudgetSource {
         litellm_budget_table?: MemberBudgetRow;
       }[]
     | null;
+  pending_user_ids?: readonly string[];
 }
 
 type TeamBudgetSource = Pick<Team, "team_id" | "team_alias" | "max_budget" | "budget_duration">;
@@ -107,6 +108,7 @@ export const teamMemberBudgetGate = (
   now: Date = new Date(),
 ): InheritedBudgetGate | null => {
   if (!teamInfo || !userId) return null;
+  if (teamInfo.pending_user_ids?.includes(userId)) return null;
 
   const membership = teamInfo.team_memberships?.find((row) => row.user_id === userId);
   const membershipBudget = membership?.litellm_budget_table;
