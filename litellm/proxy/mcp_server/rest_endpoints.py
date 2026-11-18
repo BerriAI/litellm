@@ -18,7 +18,7 @@ from starlette.datastructures import Headers
 from typing_extensions import Never, ReadOnly
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT, UNSAFE_PROXY_RESPONSE_HEADERS
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
@@ -1337,12 +1337,13 @@ if MCP_AVAILABLE:
         processor: Final = ProxyBaseLLMRequestProcessing(data={})
 
         async def callback_headers(result: object) -> Mapping[str, str]:
-            return await proxy_logging_obj.post_call_response_headers_hook(
+            headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
                 data=processor.data,  # pyright: ignore[reportUnknownMemberType]  # the processor holds a bare dict
                 user_api_key_dict=user_api_key_dict,
                 response=result,
                 request_headers=dict(request.headers),
             )
+            return {name: value for name, value in headers.items() if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
 
         try:
             reject_disallowed_mcp_client(request.headers, user_api_key_dict)

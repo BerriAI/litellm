@@ -5299,3 +5299,61 @@ async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data
         )
     assert (error.value.status_code, error.value.detail) == (418, {"error": "teapot"})
     assert error.value.headers == {"x-callback-stamp": "call_mcp_tool", "x-callback-response": "None"}
+
+
+@pytest.mark.parametrize("unsafe_header", ["content-length", "X-Frame-Options"])
+@pytest.mark.parametrize("succeeds", [True, False], ids=["success", "failure"])
+async def test_rest_tool_call_drops_unsafe_callback_response_headers(
+    monkeypatch: pytest.MonkeyPatch, unsafe_header: str, succeeds: bool
+) -> None:
+    from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
+
+    class UnsafeHeaders(CustomLogger):
+        async def async_post_call_response_headers_hook(
+            self,
+            data: dict[str, object],
+            user_api_key_dict: UserAPIKeyAuth,
+            response: object,
+            request_headers: dict[str, str] | None = None,
+        ) -> dict[str, str]:
+            return {unsafe_header: "from-callback", "x-callback-trace": "trace-1"}
+
+    async def echo() -> str:
+        return "filtered-result"
+
+    managed: Final = MCPServer(
+        server_id="filtered",
+        name="filtered",
+        transport=MCPTransport.http,
+        spec_path="/catalog.yaml",
+        allow_all_keys=True,
+    )
+    monkeypatch.setitem(rest_endpoints.global_mcp_server_manager.registry, managed.server_id, managed)
+    monkeypatch.setattr(litellm, "callbacks", [UnsafeHeaders()])
+    global_mcp_tool_registry.register_tool(
+        name="filtered-echo", description="Echo", input_schema={"type": "object"}, handler=echo
+    )
+    response: Final = Response()
+    call: Final = rest_endpoints.call_tool_rest_api(
+        _build_request(
+            path="/mcp-rest/tools/call",
+            json_body={"name": "filtered-echo", "arguments": {}, **({"server_id": "filtered"} if succeeds else {})},
+        ),
+        response,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-filtered",
+            object_permission={"object_permission_id": "filtered", "mcp_servers": ["filtered"]},
+        ),
+    )
+    try:
+        if succeeds:
+            assert (await call).is_error is False
+            sent: Final = dict(response.headers)
+        else:
+            with pytest.raises(HTTPException) as error:
+                await call
+            assert error.value.status_code == 400
+            sent = dict(error.value.headers or {})
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("filtered-")
+    assert sent == {**(Response().headers if succeeds else {}), "x-callback-trace": "trace-1"}
