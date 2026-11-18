@@ -55,7 +55,7 @@ def _redacted_error(error: object) -> object:
     if not isinstance(error, str) or litellm.turn_off_message_logging is not True:
         return error
     from litellm.proxy.spend_tracking.spend_tracking_utils import (
-        _redact_prompt_leaks_in_error_string,  # noqa: PLC2701  # the spend log redaction rule, applied to the same error
+        _redact_prompt_leaks_in_error_string,
     )
 
     return _redact_prompt_leaks_in_error_string(error)

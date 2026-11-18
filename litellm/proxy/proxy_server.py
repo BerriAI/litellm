@@ -248,7 +248,6 @@ if TYPE_CHECKING:
     from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
     from litellm.proxy.tracing_runtime import LedgerExportOptions
-    from litellm.tracing.types import LedgerCapabilities
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
     Span = _Span | Any
@@ -1129,6 +1128,7 @@ from litellm.secret_managers.main import (
     str_to_bool,
 )
 from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.tracing.types import LedgerPublication
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
@@ -1684,7 +1684,7 @@ def _lens_ledger_options(database: "PrismaClient | None") -> "LedgerExportOption
     return LedgerExportOptions(
         enabled=general_settings.get("lens_ledger_export") is True,
         database=cast(LedgerDatabase, database),  # cast-ok: PrismaClient.tx owns writer routing for the outbox
-        publish=_publish_lens_ledger,
+        publish=lens_ledger_publication.publish,
         settings=ExportSettings.from_env(),
     )
 
@@ -3363,12 +3363,7 @@ _BATCH_WRITE_JITTER_MAX_SECONDS: Final = 5
 proxy_config_reload_interval_seconds = PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 litellm_master_key_hash = None
 disable_spend_logs = False
-lens_ledger_capabilities: "LedgerCapabilities | None" = None
-
-
-def _publish_lens_ledger(capabilities: "LedgerCapabilities | None") -> None:
-    global lens_ledger_capabilities  # noqa: PLW0603  # update_database reads the active Lens ledger contract per request
-    lens_ledger_capabilities = capabilities  # rebind-ok: published by the tracing lifespan
+lens_ledger_publication: Final = LedgerPublication()
 
 
 litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()

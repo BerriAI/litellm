@@ -103,8 +103,7 @@ async def test_an_outage_at_boot_keeps_the_durable_ledger_as_the_only_producer(l
         await publications.until(UNREACHABLE_CAPABILITIES, count=2)
         assert not _legacy_registered()
 
-    assert publications.values[-1] is None
-    assert None not in publications.values[:-1]
+    assert None not in publications.values
 
 
 @pytest.mark.asyncio
@@ -163,3 +162,22 @@ async def test_shutdown_cancels_a_stuck_runner_and_releases_its_leases(lens_env:
     await asyncio.wait_for(lifecycle(), timeout=5)
 
     assert sum("SET lease_owner = NULL" in statement for statement in outbox.statements) == 4
+
+
+@pytest.mark.asyncio
+async def test_bodies_parked_while_the_store_was_off_are_requeued_when_it_returns(lens_env: None) -> None:
+    publications: Final = Publications()
+    outbox: Final = RecordingOutbox()
+    with_store: Final = LedgerCapabilities(versions=(1,), payload_store=True, inline_bytes=4096, preview_bytes=512)
+    store_on: Final = httpx.Response(
+        200, json={"ledger": {"versions": [1], "payload_store": True, "inline_bytes": 4096, "preview_bytes": 512}}
+    )
+
+    async with manage_tracing(
+        True, client_factory=_factory([LEDGER_STATUS, store_on]), ledger=_options(publications, outbox)
+    ):
+        await publications.until(with_store)
+
+    requeues: Final = [statement for statement in outbox.statements if "SET parked_at = NULL" in statement]
+    assert len(requeues) == 1
+    assert "LiteLLM_LensLedgerPayload" in requeues[0]

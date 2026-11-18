@@ -195,18 +195,23 @@ async def test_undecodable_events_are_parked_and_never_posted() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "acknowledged", "parked", "retried"),
+    ("status", "store_disabled", "acknowledged", "parked", "retried"),
     [
-        (204, ["e/messages"], [], []),
-        (409, [], [("e/messages", "PayloadStoreDisabled")], []),
-        (422, [], [("e/messages", "HTTP 422")], []),
-        (503, [], [], [("e/messages", "HTTP 503")]),
+        (204, False, ["e/messages"], [], []),
+        (409, True, [], [("e/messages", "PayloadStoreDisabled")], []),
+        (409, False, [], [], [("e/messages", "HTTP 409")]),
+        (422, False, [], [("e/messages", "HTTP 422")], []),
+        (503, False, [], [], [("e/messages", "HTTP 503")]),
     ],
-    ids=["stored", "store_disabled", "integrity_failure", "unavailable"],
+    ids=["stored", "store_reported_disabled", "store_state_unknown", "integrity_failure", "unavailable"],
 )
 @pytest.mark.asyncio
 async def test_bodies_are_acknowledged_only_once_stored(
-    status: int, acknowledged: list[str], parked: list[tuple[str, str]], retried: list[tuple[str, str]]
+    status: int,
+    store_disabled: bool,
+    acknowledged: list[str],
+    parked: list[tuple[str, str]],
+    retried: list[tuple[str, str]],
 ) -> None:
     store: Final = FakeStore(payloads=(_payload("e", '["雪"]'),))
     bodies: Final[list[bytes]] = []  # mutable-ok: captures uploads
@@ -216,7 +221,7 @@ async def test_bodies_are_acknowledged_only_once_stored(
         bodies.append(request.content)
         return httpx.Response(status)
 
-    await UploadRunner(store, _client(handler), SETTINGS).step()
+    await UploadRunner(store, _client(handler), SETTINGS, lambda: store_disabled).step()
 
     assert store.acknowledged == acknowledged
     assert store.parked == parked
@@ -240,7 +245,11 @@ async def test_costs_keep_flowing_while_the_payload_store_hangs_and_stop_release
     stop: Final = asyncio.Event()
     uploads: Final = asyncio.create_task(
         run_loop(
-            UploadRunner(store, client, SETTINGS).step, store.release, stop=stop, active=lambda: True, idle_seconds=0.01
+            UploadRunner(store, client, SETTINGS, lambda: False).step,
+            store.release,
+            stop=stop,
+            active=lambda: True,
+            idle_seconds=0.01,
         )
     )
     costs: Final = asyncio.create_task(

@@ -6279,7 +6279,7 @@ async def test_lens_ledger_record_carries_the_accepted_delivery_amount_for_each_
     monkeypatch: pytest.MonkeyPatch, spend_logs_disabled: bool
 ) -> None:
     from litellm.proxy import proxy_server
-    from litellm.tracing.types import LedgerCapabilities
+    from litellm.tracing.types import LedgerCapabilities, LedgerPublication
 
     prisma: Final = _tool_usage_prisma()
     prisma.get_request_status.return_value = "success"
@@ -6288,8 +6288,11 @@ async def test_lens_ledger_record_carries_the_accepted_delivery_amount_for_each_
     monkeypatch.setattr(proxy_server, "disable_spend_logs", spend_logs_disabled)
     monkeypatch.setattr(
         proxy_server,
-        "lens_ledger_capabilities",
-        LedgerCapabilities(versions=(1,), payload_store=True, inline_bytes=1024, preview_bytes=256),
+        "lens_ledger_publication",
+        LedgerPublication(),
+    )
+    proxy_server.lens_ledger_publication.publish(
+        LedgerCapabilities(versions=(1,), payload_store=True, inline_bytes=1024, preview_bytes=256)
     )
     now: Final = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
     writer: Final = DBSpendUpdateWriter()

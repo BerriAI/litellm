@@ -165,5 +165,5 @@ class LensExportRepository:
         return OutboxBacklog.model_validate((await self._rows(_BACKLOG))[0])
 
 
-def _keys(payloads: Sequence[ClaimedPayload]) -> tuple[list[str], list[str]]:
-    return [payload.event_id for payload in payloads], [payload.field for payload in payloads]
+def _keys(payloads: Sequence[ClaimedPayload]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    return tuple(payload.event_id for payload in payloads), tuple(payload.field for payload in payloads)

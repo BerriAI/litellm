@@ -158,3 +158,25 @@ async def test_body_claims_stop_at_the_byte_budget_but_always_take_one(
 
     assert [payload.event_id for payload in await repository.claim_payloads(10, 60, max_bytes=1300)] == ["a", "b"]
     assert [payload.event_id for payload in await repository.claim_payloads(10, 60, max_bytes=100)] == ["c"]
+
+
+@pytest.mark.asyncio
+async def test_body_settlement_belongs_to_the_current_lease_holder(
+    export_database: Connection, export_client: "Prisma"
+) -> None:
+    _seed_body(export_database, "a", 10)
+    stale: Final = _repository(export_client, "stale")
+    current: Final = _repository(export_client, "current")
+    [stale_claim] = await stale.claim_payloads(10, 60, max_bytes=1024)
+    export_database.execute(
+        """UPDATE "LiteLLM_LensLedgerPayload" SET lease_until = CURRENT_TIMESTAMP - INTERVAL '1 second'"""
+    )
+    [current_claim] = await current.claim_payloads(10, 60, max_bytes=1024)
+
+    assert await stale.retry_payloads((stale_claim,), "HTTP 503") == 0
+    assert await stale.park_payloads((stale_claim,), "HTTP 422") == 0
+    assert await stale.acknowledge_payloads((stale_claim,)) == 0
+    assert export_database.execute(
+        'SELECT lease_owner, attempts, parked_at IS NULL FROM "LiteLLM_LensLedgerPayload"'
+    ).fetchone() == ("current", 0, True)
+    assert await current.acknowledge_payloads((current_claim,)) == 1

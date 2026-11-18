@@ -822,7 +822,7 @@ class DBSpendUpdateWriter:
             customer_accounting_counters,
             disable_spend_logs,
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy proxy configuration is narrowed below
-            lens_ledger_capabilities,
+            lens_ledger_publication,
             litellm_proxy_budget_name,
             prisma_client,
         )
@@ -920,7 +920,8 @@ class DBSpendUpdateWriter:
                 and payload["status"] == "failure"
                 and proxy_settings.get("disable_error_logs") is True
             )
-            if use_ledger and lens_ledger_capabilities is not None:
+            lens_capabilities: Final = lens_ledger_publication.capabilities
+            if use_ledger and lens_capabilities is not None:
                 from litellm.tracing.ledger_record import LENS_EXPORT_KEY, safe_lens_export
 
                 payload[LENS_EXPORT_KEY] = safe_lens_export(
@@ -929,7 +930,7 @@ class DBSpendUpdateWriter:
                     start_time=start_time,
                     end_time=end_time,
                     keep_content=keep_spend_logs,
-                    capabilities=lens_ledger_capabilities,
+                    capabilities=lens_capabilities,
                 )
             if not await self._record_spend_log(
                 payload=payload,

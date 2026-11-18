@@ -141,3 +141,13 @@ class LensPayload(TypedDict):
 class LensExport(TypedDict):
     record: ReadOnly[Mapping[str, object]]
     payloads: ReadOnly[Sequence[LensPayload]]
+
+
+class LedgerPublication:
+    """The Lens ledger contract update_database reads per request; the tracing lifespan publishes it."""
+
+    def __init__(self) -> None:
+        self.capabilities: LedgerCapabilities | None = None
+
+    def publish(self, capabilities: LedgerCapabilities | None) -> None:
+        self.capabilities = capabilities

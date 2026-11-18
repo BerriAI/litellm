@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Final
@@ -141,22 +141,37 @@ class _LedgerProducer:
     """Chooses the single Lens producer from the latest probe.
 
     Only a Lens that answers without ledger version 1 hands production back to the callback. An outage
-    keeps the ledger producing with the last known contract, because its outbox is durable.
+    keeps the ledger producing with the last known contract, because its outbox is durable. Closing keeps
+    the ledger contract published, so requests that finish during shutdown still reach the outbox.
     """
 
-    def __init__(self, client: httpx.AsyncClient, ledger: LedgerExportOptions) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        ledger: LedgerExportOptions,
+        requeue_store_disabled: Callable[[], Awaitable[int]],
+    ) -> None:
         self._ledger: Final = ledger
         self._legacy: Final = _LegacyProducer(client)
+        self._requeue_store_disabled: Final = requeue_store_disabled
         self._known: LedgerCapabilities = UNREACHABLE_CAPABILITIES
         self.probe: Probe = Unreachable("NotProbed")
 
     def draining(self) -> bool:
         return not isinstance(self.probe, Unsupported)
 
+    def store_disabled(self) -> bool:
+        return isinstance(self.probe, Supported) and not self.probe.capabilities.payload_store
+
     async def apply(self, probe: Probe) -> None:
+        store_returned: Final = (
+            isinstance(probe, Supported) and probe.capabilities.payload_store and not self._known.payload_store
+        )
         self.probe = probe
         if isinstance(probe, Supported):
             self._known = probe.capabilities
+        if store_returned:
+            await self._requeue_parked_bodies()
         if self._ledger.enabled and self.draining():
             self._ledger.publish(self._known)
             await self._legacy.stop()
@@ -164,14 +179,22 @@ class _LedgerProducer:
         self._legacy.start()
         self._ledger.publish(None)
 
+    async def _requeue_parked_bodies(self) -> None:
+        try:
+            requeued: Final = await self._requeue_store_disabled()
+        except Exception as error:  # noqa: BLE001  # parked bodies stay parked and the next store transition retries
+            verbose_proxy_logger.warning("Lens payload store returned but parked bodies were not requeued: %s", error)
+            return
+        if requeued:
+            verbose_proxy_logger.info("Lens payload store returned; requeued %d parked bodies", requeued)
+
     async def close(self) -> None:
-        self._ledger.publish(None)
         await self._legacy.stop()
 
 
 async def _reprobe(client: httpx.AsyncClient, producer: _LedgerProducer, stop: asyncio.Event, seconds: float) -> None:
     while not stop.is_set():
-        probe = await probe_lens(client)  # rebind-ok: one probe per cycle
+        probe = await probe_lens(client)
         if stop.is_set():
             return
         await producer.apply(probe)
@@ -188,11 +211,13 @@ async def _join(tasks: tuple[asyncio.Task[None], ...], seconds: float) -> None:
 
 @asynccontextmanager
 async def _ledger_export(client: httpx.AsyncClient, ledger: LedgerExportOptions) -> AsyncGenerator[None, None]:
-    producer: Final = _LedgerProducer(client, ledger)
-    await producer.apply(Unreachable("NotProbed"))
     settings: Final = ledger.settings
     costs: Final = LensExportRepository(ledger.database, exporter_owner("cost"))
     uploads: Final = LensExportRepository(ledger.database, exporter_owner("upload"))
+    producer: Final = _LedgerProducer(
+        client, ledger, lambda: uploads.requeue_parked("payloads", "PayloadStoreDisabled")
+    )
+    await producer.apply(Unreachable("NotProbed"))
     stop: Final = asyncio.Event()
     tasks: Final = (
         asyncio.create_task(
@@ -206,7 +231,7 @@ async def _ledger_export(client: httpx.AsyncClient, ledger: LedgerExportOptions)
         ),
         asyncio.create_task(
             run_loop(
-                UploadRunner(uploads, client, settings).step,
+                UploadRunner(uploads, client, settings, producer.store_disabled).step,
                 uploads.release,
                 stop=stop,
                 active=producer.draining,

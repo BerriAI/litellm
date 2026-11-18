@@ -9,10 +9,11 @@ import json
 import os
 import socket
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Final, Protocol
+from functools import reduce
+from typing import Final, Protocol, TypeAlias
 
 import httpx
 from pydantic import ValidationError
@@ -101,7 +102,7 @@ class Unreachable:
     reason: str
 
 
-Probe = Supported | Unsupported | Unreachable
+Probe: TypeAlias = Supported | Unsupported | Unreachable
 
 
 async def probe_lens(client: httpx.AsyncClient) -> Probe:
@@ -134,21 +135,20 @@ def _decoded(event: ClaimedEvent) -> Mapping[str, object] | None:
     return record if isinstance(record, dict) else None
 
 
-def _batches(
-    events: Sequence[tuple[ClaimedEvent, Mapping[str, object]]], max_bytes: int
-) -> Iterator[tuple[tuple[ClaimedEvent, Mapping[str, object]], ...]]:
-    batch: list[tuple[ClaimedEvent, Mapping[str, object]]] = []  # mutable-ok: greedy byte-bounded batching
-    size = 0  # rebind-ok: bytes in the open batch
-    for item in events:
-        length = len(item[0].event.encode())  # rebind-ok: per-item size
-        if batch and size + length > max_bytes:
-            yield tuple(batch)
-            batch = []  # rebind-ok: start the next batch
-            size = 0  # rebind-ok: start the next batch
-        batch.append(item)
-        size += length
-    if batch:
-        yield tuple(batch)
+_Claimed: TypeAlias = tuple[ClaimedEvent, Mapping[str, object]]
+
+
+def _event_bytes(batch: Sequence[_Claimed]) -> int:
+    return sum(len(event.event.encode()) for event, _ in batch)
+
+
+def _batches(events: Sequence[_Claimed], max_bytes: int) -> tuple[tuple[_Claimed, ...], ...]:
+    def add(batches: tuple[tuple[_Claimed, ...], ...], item: _Claimed) -> tuple[tuple[_Claimed, ...], ...]:
+        if batches and _event_bytes((*batches[-1], item)) <= max_bytes:
+            return (*batches[:-1], (*batches[-1], item))
+        return (*batches, (item,))
+
+    return reduce(add, events, ())
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,10 +224,20 @@ class CostRunner:
 
 
 class UploadRunner:
-    def __init__(self, store: PayloadStore, client: httpx.AsyncClient, settings: ExportSettings) -> None:
+    """Uploads committed bodies. A 409 means Lens has no payload store: the body is parked only once a probe has
+    positively reported that, and is otherwise retried, so a restart without the store never drops it."""
+
+    def __init__(
+        self,
+        store: PayloadStore,
+        client: httpx.AsyncClient,
+        settings: ExportSettings,
+        store_disabled: Callable[[], bool],
+    ) -> None:
         self._store: Final = store
         self._client: Final = client
         self._settings: Final = settings
+        self._store_disabled: Final = store_disabled
 
     async def _upload(self, payload: ClaimedPayload) -> int | str:
         try:
@@ -247,7 +257,7 @@ class UploadRunner:
         )
         outcomes: Final = tuple([(payload, await self._upload(payload)) for payload in claimed])
         uploaded: Final = tuple(payload for payload, outcome in outcomes if outcome == 204)
-        disabled: Final = tuple(payload for payload, outcome in outcomes if outcome == 409)
+        disabled: Final = tuple(payload for payload, outcome in outcomes if outcome == 409 and self._store_disabled())
         rejected: Final = tuple(
             (payload, outcome)
             for payload, outcome in outcomes
@@ -256,7 +266,9 @@ class UploadRunner:
         failed: Final = tuple(
             (payload, outcome)
             for payload, outcome in outcomes
-            if outcome not in (204, 409) and not (isinstance(outcome, int) and outcome in _REJECTED_UPLOAD)
+            if outcome != 204
+            and not (outcome == 409 and self._store_disabled())
+            and not (isinstance(outcome, int) and outcome in _REJECTED_UPLOAD)
         )
         await self._store.acknowledge_payloads(uploaded)
         await self._store.park_payloads(disabled, "PayloadStoreDisabled")
@@ -278,6 +290,16 @@ async def _idle(stop: asyncio.Event, seconds: float) -> None:
         await asyncio.wait_for(stop.wait(), timeout=seconds)
 
 
+async def _attempt(step: Callable[[], Awaitable[int]]) -> int:
+    try:
+        return await step()
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:  # noqa: BLE001  # the outbox is durable; a failed pass retries next tick
+        verbose_proxy_logger.warning("Lens ledger export pass failed, retrying: %s", type(error).__name__)
+        return 0
+
+
 async def run_loop(
     step: Callable[[], Awaitable[int]],
     release: Callable[[], Awaitable[int]],
@@ -289,17 +311,7 @@ async def run_loop(
     """Runs `step` until stopped; on stop or cancellation it releases this runner's leases."""
     try:
         while not stop.is_set():
-            if not active():
-                await _idle(stop, idle_seconds)
-                continue
-            try:
-                moved = await step()  # rebind-ok: loop progress
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:  # noqa: BLE001  # the outbox is durable; a failed pass retries next tick
-                verbose_proxy_logger.warning("Lens ledger export pass failed, retrying: %s", type(error).__name__)
-                moved = 0  # rebind-ok: loop progress
-            if moved == 0:
+            if not active() or await _attempt(step) == 0:
                 await _idle(stop, idle_seconds)
     finally:
         with suppress(Exception, asyncio.CancelledError):
