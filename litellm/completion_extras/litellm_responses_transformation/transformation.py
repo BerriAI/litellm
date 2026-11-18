@@ -1129,8 +1129,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> dict:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         optional_params = self._extract_extra_body_params(optional_params)
+        merged_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         upstream_store: Final = (as_str_mapping(litellm_params.get("extra_body")) or {}).get(
-            "store", optional_params.get("store")
+            "store", merged_params.get("store")
         )
         preserve_system_instructions: Final = upstream_store is not False or any(
             params.get("previous_response_id") or params.get("truncation") == "auto"
