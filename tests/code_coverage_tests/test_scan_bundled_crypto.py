@@ -124,10 +124,15 @@ def test_bundled_crypto_next_to_a_waiver_still_fails(tmp_path: Path, relative: s
 def test_inventory_entry_matches_any_arch_and_hash_suffix(tmp_path: Path, arch: str) -> None:
     root: Final = tmp_path / "root"
     _elf(root / "pkg" / f"_mod.cpython-313-{arch}-linux-gnu.so")
-    _elf(root / "pkg.libs" / "libfoo-0123abcd.so")
+    _elf(root / "numpy.libs" / "libgfortran-040039e1-0352e75f.so.5.0.0")
 
     result, _ = _scan(
-        tmp_path, [root], inventory=[f"{root}/pkg/_mod.cpython-313-ARCH-linux-gnu.so", f"{root}/pkg.libs/libfoo.so"]
+        tmp_path,
+        [root],
+        inventory=[
+            f"{root}/pkg/_mod.cpython-313-ARCH-linux-gnu.so",
+            f"{root}/numpy.libs/libgfortran-040039e1.so.5.0.0",
+        ],
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
