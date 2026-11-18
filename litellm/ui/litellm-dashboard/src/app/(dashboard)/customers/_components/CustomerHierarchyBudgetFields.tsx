@@ -17,6 +17,7 @@ import {
 } from "./customerHierarchyForms";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
 import CustomerBudgetInput from "./CustomerBudgetInput";
+import { CustomerRateLimitFields, CustomerRateLimitSummary } from "./CustomerRateLimits";
 
 interface Props {
   kind: CustomerHierarchyEntity["kind"];
@@ -65,7 +66,10 @@ export default function CustomerHierarchyBudgetFields({
     update("templateId", customId);
     update("maxBudget", amount);
     if (leavingSavedGroup || (!fields.budgetEnabled && newScalarBudget)) update("budgetDuration", "1mo");
-    update("budgetEnabled", Boolean(customId || amount.trim() || keepCustom));
+    update(
+      "budgetEnabled",
+      Boolean(customId || keepCustom) || [amount, fields.tpm, fields.rpm].some((value) => value.trim()),
+    );
   };
   const templateLabel = (templateId: string): string => {
     if (!templateId) return t("customerPortal.hierarchy.noTemplate");
@@ -116,6 +120,11 @@ export default function CustomerHierarchyBudgetFields({
             </SelectContent>
           </Select>
         </div>
+      )}
+      {kind === "member" && (
+        <CustomerRateLimitSummary
+          limits={organization.default_budgets.find((group) => group.budget_id === fields.templateId)}
+        />
       )}
       <div hidden={!showCustomBudget} className="space-y-1.5">
         <div className="flex items-center gap-2">
@@ -179,8 +188,6 @@ export function CustomerBudgetFields({
   const numericFields = [
     ["maxBudget", "customerPortal.hierarchy.maxBudget", "any"],
     ["softBudget", "customerPortal.hierarchy.softBudget", "any"],
-    ["tpm", "customerPortal.hierarchy.tpm", "1"],
-    ["rpm", "customerPortal.hierarchy.rpm", "1"],
   ] as const;
   return (
     <div className="space-y-4">
@@ -212,6 +219,7 @@ export function CustomerBudgetFields({
         </div>
         {children}
       </div>
+      <CustomerRateLimitFields id={idPrefix} tpm={fields.tpm} rpm={fields.rpm} onChange={update} />
       <div className="space-y-1.5">
         <Label htmlFor={`${idPrefix}-models`}>{t("customerPortal.hierarchy.allowedModels")}</Label>
         <CustomerAllowedModelsSelect
