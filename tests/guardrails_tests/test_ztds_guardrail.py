@@ -10,6 +10,7 @@ import asyncio
 import json
 import re
 import time
+import tracemalloc
 import unittest
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
@@ -1318,6 +1319,114 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             done.set()
             await counter
         self.assertGreater(len(loop_turns) - turns_before, 0)
+
+    def test_output_log_sanitizer_bounds_memory_on_large_secrets_and_fail_closed_budget(self) -> None:
+        # 1. Exact Veria #4617457297 probe: 256 KiB sk-... key + "OK" response must allocate < 64 KiB
+        big_secret: Final = "sk-" + ("A" * ((256 * 1024) - 3))
+        short_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-mem-ok",
+            function_id="",
+        )
+        tracemalloc.start()
+        try:
+            register_served_output_sanitizer(
+                short_logging_obj,
+                short_logging_obj.model_call_details,
+                ((big_secret, "[API_SECRET_TOKEN_1]"),),
+                "sid-mem-ok",
+            )
+            record_served_output_texts(short_logging_obj.model_call_details, ("OK",))
+            peak_ok: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(short_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY), ("OK",))
+        self.assertLess(peak_ok, 64 * 1024, f"Short-response peak allocation grew to {peak_ok} bytes")
+
+        # 2. 256 KiB secret embedded in ~300 KiB response still sanitizes accurately under 2 MiB
+        match_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-mem-match",
+            function_id="",
+        )
+        big_response: Final = "Prefix " + big_secret + (" filler" * 4000)
+        tracemalloc.start()
+        try:
+            register_served_output_sanitizer(
+                match_logging_obj,
+                match_logging_obj.model_call_details,
+                ((big_secret, "[API_SECRET_TOKEN_1]"),),
+                "sid-mem-match",
+            )
+            record_served_output_texts(match_logging_obj.model_call_details, (big_response,))
+            peak_big: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        big_recorded: Final = match_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY)
+        self.assertEqual(big_recorded, ("Prefix [API_SECRET_TOKEN_1]" + (" filler" * 4000),))
+        self.assertLess(peak_big, 2 * 1024 * 1024, f"Long-key fallback peak allocation grew to {peak_big} bytes")
+
+        # 3. Hybrid short-trie + long-key overlap preserves leftmost-longest semantics
+        overlap_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-hybrid-overlap",
+            function_id="",
+        )
+        register_served_output_sanitizer(
+            overlap_logging_obj,
+            overlap_logging_obj.model_call_details,
+            (("QA", "[EMAIL_TOKEN_1]"), ("A" * 2000, "[API_SECRET_TOKEN_2]")),
+            "sid-hybrid-overlap",
+        )
+        record_served_output_texts(overlap_logging_obj.model_call_details, ("Q" + ("A" * 2001),))
+        self.assertEqual(
+            overlap_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY),
+            ("[EMAIL_TOKEN_1][API_SECRET_TOKEN_2]",),
+        )
+
+        # 4. Pattern byte budget > 2 MiB stays 0-alloc on short outputs and fails closed on large outputs
+        oversized_secret: Final = "sk-" + ("B" * ((2 * 1024 * 1024) + 64))
+        budget_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-budget-cap",
+            function_id="",
+        )
+        register_served_output_sanitizer(
+            budget_logging_obj,
+            budget_logging_obj.model_call_details,
+            ((oversized_secret, "[API_SECRET_TOKEN_1]"),),
+            "sid-budget-cap",
+        )
+        record_served_output_texts(budget_logging_obj.model_call_details, ("OK",))
+        self.assertEqual(budget_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY), ("OK",))
+        large_probe: Final = "Leak: " + oversized_secret
+        tracemalloc.start()
+        try:
+            record_served_output_texts(budget_logging_obj.model_call_details, (large_probe,))
+            peak_budget: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(
+            budget_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY),
+            ("[ZTDS_REDACTED_OUTPUT]",),
+        )
+        self.assertLess(peak_budget, 4 * 1024 * 1024, f"Budget guard peak allocation grew to {peak_budget} bytes")
 
 
 if __name__ == "__main__":
