@@ -1119,7 +1119,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         bedrock_jsonl_content: Final = []
         line_numbers: Final = file_line_numbers or range(1, len(openai_jsonl_content) + 1)
-        for idx, (line_number, _openai_jsonl_content) in enumerate(zip(line_numbers, openai_jsonl_content)):
+        for idx, (line_number, _openai_jsonl_content) in enumerate(
+            zip(line_numbers, openai_jsonl_content, strict=True)
+        ):
             # Extract the request body from OpenAI format
             openai_body = _openai_jsonl_content.get("body", {})
             record_model = openai_body.get("model", "")

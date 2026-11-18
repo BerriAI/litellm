@@ -326,7 +326,10 @@ def test_responses_call_forwards_a_developer_item_without_content_unchanged() ->
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/kimi-k3",
-            input=[{"role": "user", "content": "What is the capital of France?"}, {"type": "message", "role": "developer"}],
+            input=[
+                {"role": "user", "content": "What is the capital of France?"},
+                {"type": "message", "role": "developer"},
+            ],
             api_key="fw-test-key",
         )
     _, _, body = _sent_request(client)
