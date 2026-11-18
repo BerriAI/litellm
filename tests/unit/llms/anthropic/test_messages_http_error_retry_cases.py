@@ -24,6 +24,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_trans
 )
 from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
+from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
@@ -46,7 +47,7 @@ class _RetryCase(TypedDict):
     name: ReadOnly[str]
     status: ReadOnly[int]
     error_text: ReadOnly[str]
-    thinking: ReadOnly[NotRequired[Mapping[str, object]]]
+    thinking: ReadOnly[NotRequired[Mapping[str, object] | None]]
     retried: ReadOnly[bool]
     outcome: ReadOnly[_Outcome]
     retry_thinking: ReadOnly[NotRequired[Mapping[str, object]]]
@@ -88,6 +89,7 @@ class _StrictRetryCase(TypedDict):
     retried: ReadOnly[bool]
     stripped: ReadOnly[bool]
     strict_dropped: ReadOnly[bool]
+    retry_thinking: ReadOnly[NotRequired[Mapping[str, object]]]
 
 
 class _StrictRetryTable(TypedDict):
@@ -153,8 +155,7 @@ def _rejection(case: _RetryCase | _StrictRetryCase) -> httpx.HTTPStatusError:
 
 
 def _request_body(case: _RetryCase) -> dict[str, object]:  # mutable-ok: the transform rewrites its input
-    thinking: Final = case.get("thinking")
-    return {**copy.deepcopy(RETRY["request"]), **({} if thinking is None else {"thinking": thinking})}
+    return {**copy.deepcopy(RETRY["request"]), **({"thinking": case["thinking"]} if "thinking" in case else {})}
 
 
 def _retried_body(case: _RetryCase, outcome: _Outcome) -> Mapping[str, object]:
@@ -185,14 +186,18 @@ def test_claude_hosts_retry_like_the_shared_cases(config: BaseAnthropicMessagesC
 
     assert retried is case["retried"]
     assert transformed == _retried_body(case, case["outcome"])
-    assert config.anthropic_messages_retry_header_betas(transformed) == (
-        (RETRY["binding_beta"],) if case["outcome"] == "drop_block" else ()
+    assert config.anthropic_messages_retry_header_beta(_rejection(case), body) == (
+        RETRY["binding_beta"] if case["outcome"] == "drop_block" else None
     )
 
 
+@pytest.mark.parametrize(
+    "config",
+    [DeepSeekAnthropicMessagesConfig(), OpenAILikeAnthropicMessagesConfig()],
+    ids=["deepseek", "openai_like"],
+)
 @pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in RETRY["cases"]])
-def test_other_hosts_never_send_a_block_binding(case: _RetryCase) -> None:
-    config: Final = DeepSeekAnthropicMessagesConfig()
+def test_other_hosts_never_send_a_block_binding(config: BaseAnthropicMessagesConfig, case: _RetryCase) -> None:
     body: Final = _request_body(case)
     outcome: Final = case.get("other_hosts_outcome", case["outcome"])
 
@@ -205,7 +210,7 @@ def test_other_hosts_never_send_a_block_binding(case: _RetryCase) -> None:
 
     assert retried is case.get("other_hosts_retried", case["retried"])
     assert transformed == _retried_body(case, outcome)
-    assert config.anthropic_messages_retry_header_betas(transformed) == ()
+    assert config.anthropic_messages_retry_header_beta(_rejection(case), body) is None
 
 
 _DROP_BLOCK_CASES: Final = tuple(case for case in RETRY["cases"] if case["outcome"] == "drop_block")
@@ -214,38 +219,42 @@ _DROP_BLOCK_CASES: Final = tuple(case for case in RETRY["cases"] if case["outcom
 @pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in _DROP_BLOCK_CASES])
 def test_bedrock_invoke_carries_the_binding_beta_in_the_body(case: _RetryCase) -> None:
     config: Final = AmazonAnthropicClaudeMessagesConfig()
+    body: Final = {**_request_body(case), "anthropic_beta": ["zeta-beta", "alpha-beta"]}
 
+    header_beta: Final = config.anthropic_messages_retry_header_beta(_rejection(case), body)
     transformed: Final = config.transform_anthropic_messages_request_on_http_error(
-        e=_rejection(case), request_data={**_request_body(case), "anthropic_beta": ["zeta-beta", "alpha-beta"]}
+        e=_rejection(case), request_data=body
     )
 
     assert transformed == {
         **_retried_body(case, "drop_block"),
-        "anthropic_beta": sorted(("alpha-beta", RETRY["binding_beta"], "zeta-beta")),
+        "anthropic_beta": tuple(sorted(("alpha-beta", RETRY["binding_beta"], "zeta-beta"))),
     }
-    assert config.anthropic_messages_retry_header_betas(transformed) == ()
+    assert header_beta is None
 
 
 @pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in _DROP_BLOCK_CASES])
 def test_bedrock_mantle_carries_the_binding_beta_in_the_header(case: _RetryCase) -> None:
     config: Final = BedrockMantleAnthropicMessagesConfig()
+    body: Final = _request_body(case)
 
+    header_beta: Final = config.anthropic_messages_retry_header_beta(_rejection(case), body)
     transformed: Final = config.transform_anthropic_messages_request_on_http_error(
-        e=_rejection(case), request_data=_request_body(case)
+        e=_rejection(case), request_data=body
     )
 
     assert transformed == _retried_body(case, "drop_block")
-    assert config.anthropic_messages_retry_header_betas(transformed) == (RETRY["binding_beta"],)
+    assert header_beta == RETRY["binding_beta"]
 
 
 @pytest.mark.parametrize(
-    "config",
-    [AnthropicMessagesConfig(), DeepSeekAnthropicMessagesConfig()],
+    ("config", "recovers_binding"),
+    [(AnthropicMessagesConfig(), True), (DeepSeekAnthropicMessagesConfig(), False)],
     ids=["anthropic", "deepseek"],
 )
 @pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in STRICT_RETRY["cases"]])
 def test_the_strict_tools_retry_matches_the_shared_cases(
-    monkeypatch: pytest.MonkeyPatch, config: BaseAnthropicMessagesConfig, case: _StrictRetryCase
+    monkeypatch: pytest.MonkeyPatch, config: BaseAnthropicMessagesConfig, recovers_binding: bool, case: _StrictRetryCase
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     body: Final = {
@@ -253,8 +262,14 @@ def test_the_strict_tools_retry_matches_the_shared_cases(
         "thinking": case["thinking"],
         "tools": copy.deepcopy(list(STRICT_RETRY["tools"])),
     }
+    retry_thinking: Final = case.get("retry_thinking") if recovers_binding else None
+    retried_thinking: Final = (
+        {**body, "thinking": retry_thinking}
+        if retry_thinking is not None
+        else (RETRY["stripped_request"] if case["stripped"] else body)
+    )
     expected: Final = {
-        **copy.deepcopy(RETRY["stripped_request"] if case["stripped"] else body),
+        **copy.deepcopy(retried_thinking),
         "tools": list(STRICT_RETRY["tools_without_strict"] if case["strict_dropped"] else STRICT_RETRY["tools"]),
     }
 

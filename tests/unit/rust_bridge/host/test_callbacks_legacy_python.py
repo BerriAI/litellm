@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import inspect
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -11,6 +12,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm._internal_context import is_internal_call
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
@@ -460,16 +462,12 @@ async def test_a_retry_that_dropped_strict_tools_warns_with_the_dropped_count(
     ],
 )
 async def test_a_binding_retry_warns_the_operator(
-    monkeypatch: pytest.MonkeyPatch, reasons: tuple[Mapping[str, object], ...], warned: int
+    caplog: pytest.LogCaptureFixture, reasons: tuple[Mapping[str, object], ...], warned: int
 ) -> None:
-    from litellm.llms.anthropic import common_utils
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        await legacy.retried_request(_messages_logger(), {"messages": []}, {"messages": []}, reasons)
 
-    warnings: Final[list[None]] = []
-    monkeypatch.setattr(common_utils, "warn_thinking_binding_mismatch_recovered", lambda: warnings.append(None))
-
-    await legacy.retried_request(_messages_logger(), {"messages": []}, {"messages": []}, reasons)
-
-    assert len(warnings) == warned
+    assert sum("bound to a different conversation" in record.getMessage() for record in caplog.records) == warned
 
 
 def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:

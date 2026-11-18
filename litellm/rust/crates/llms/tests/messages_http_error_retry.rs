@@ -124,9 +124,7 @@ fn every_messages_provider_retries_like_the_shared_cases(
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, true)]
 #[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG, true)]
 #[case::bedrock_invoke_reads_the_body(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG, false)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG, false)]
-#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG, false)]
-fn only_header_hosts_add_the_binding_beta_to_a_retry(
+fn a_binding_retry_names_its_beta_in_the_header_unless_the_host_reads_the_body(
     #[case] config: &dyn BaseMessagesConfig,
     #[case] adds_the_beta: bool,
 ) {
@@ -148,19 +146,20 @@ fn only_header_hosts_add_the_binding_beta_to_a_retry(
 }
 
 #[rstest]
-#[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
-#[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::edenai(&EDENAI_MESSAGES_CONFIG)]
-#[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
-#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG)]
-#[case::tencent(&TENCENT_MESSAGES_CONFIG)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG)]
-fn every_messages_provider_drops_rejected_strict_tools_like_the_python_base_config(
+#[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::BodyBeta)]
+#[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::None)]
+#[case::edenai(&EDENAI_MESSAGES_CONFIG, BindingRecovery::None)]
+#[case::minimax(&MINIMAX_MESSAGES_CONFIG, BindingRecovery::None)]
+#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG, BindingRecovery::None)]
+#[case::tencent(&TENCENT_MESSAGES_CONFIG, BindingRecovery::None)]
+#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+fn every_messages_provider_drops_rejected_strict_tools_like_the_shared_cases(
     #[case] config: &dyn BaseMessagesConfig,
+    #[case] recovery: BindingRecovery,
 ) {
     let fixture: Value = serde_json::from_str(include_str!(
         "fixtures/anthropic_messages_http_error_retry.json"
@@ -178,7 +177,18 @@ fn every_messages_provider_drops_rejected_strict_tools_like_the_python_base_conf
             let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
             let expected = case["retried"].as_bool().unwrap().then(|| {
                 let mut reasons = Vec::new();
-                let mut expected = if case["stripped"].as_bool().unwrap() {
+                let binding_thinking = case
+                    .get("retry_thinking")
+                    .filter(|_| recovery != BindingRecovery::None);
+                let mut expected = if let Some(thinking) = binding_thinking {
+                    reasons.push(RetryReason::ThinkingBinding);
+                    let mut recovered = body.clone();
+                    recovered["thinking"] = thinking.clone();
+                    if recovery == BindingRecovery::BodyBeta {
+                        recovered["anthropic_beta"] = json!([replay["binding_beta"]]);
+                    }
+                    recovered
+                } else if case["stripped"].as_bool().unwrap() {
                     reasons.push(RetryReason::ThinkingSignature);
                     replay["stripped_request"].clone()
                 } else {

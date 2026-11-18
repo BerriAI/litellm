@@ -656,9 +656,10 @@ async def test_a_binding_mismatch_retry_warns_the_operator_once(
     server.responses.insert(0, ResponseSpec(body=_BOUND_ELSEWHERE, status=400))
 
     with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
-        await _logged_exchange(server, False, _THINKING_REPLAY, {"type": "adaptive"})
+        sent, _ = await _logged_exchange(server, False, _THINKING_REPLAY, {"type": "adaptive"})
 
     assert_served_natively(server, count=2)
+    assert "thinking-binding-controls-2026-08-01" in sent.headers["anthropic-beta"].split(",")
     retried: Final = _OBJECT.validate_python(server.requests[1].body)
     assert retried["thinking"] == {
         "type": "adaptive",

@@ -1,5 +1,5 @@
 use crate::anthropic::messages::transformation::retry_claude_messages_after_http_error;
-use litellm_host::interceptors::RetriedRequest;
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 
 use crate::{
     anthropic::messages::handler::shape_anthropic_messages_request,
@@ -225,6 +225,10 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
     ) -> Option<RetriedRequest> {
         retry_claude_messages_after_http_error(status, error_text, request_body, context)
             .map(with_thinking_binding_beta)
+    }
+
+    fn headers_for_retry(&self, headers: Headers, _reasons: &[RetryReason]) -> Headers {
+        headers
     }
 
     fn shape_request(

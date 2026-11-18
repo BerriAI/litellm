@@ -1,12 +1,10 @@
-use crate::anthropic::messages::transformation::{
-    claude_retry_headers, retry_claude_messages_after_http_error,
-};
+use crate::anthropic::messages::transformation::retry_claude_messages_after_http_error;
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
     VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
     get_vertex_ai_project_from_credentials, secret_names,
 };
-use litellm_host::interceptors::{RetriedRequest, RetryReason};
+use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_header, header_value, without_headers};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig},
@@ -65,10 +63,6 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Option<RetriedRequest> {
         retry_claude_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn headers_for_retry(&self, headers: Headers, reasons: &[RetryReason]) -> Headers {
-        claude_retry_headers(headers, reasons)
     }
 
     fn shape_request(

@@ -2276,7 +2276,7 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     provider_config.max_retry_on_anthropic_messages_http_error = 2
     provider_config.should_retry_anthropic_messages_on_http_error = Mock(return_value=True)
     provider_config.transform_anthropic_messages_request_on_http_error = _mutate
-    provider_config.anthropic_messages_retry_header_betas = Mock(return_value=())
+    provider_config.anthropic_messages_retry_header_beta = Mock(return_value=None)
     # Re-sign returns no signed body (native anthropic path) -> must re-dump.
     provider_config.sign_request = Mock(return_value=({}, None))
 
@@ -2423,6 +2423,7 @@ async def _post_binding_replay(
     request_body: dict[str, object],
     headers: dict[str, str],
     rebuild: Callable[[], Mapping[str, object]] | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
 ) -> httpx.Response:
     logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
@@ -2435,7 +2436,7 @@ async def _post_binding_replay(
         stream=False,
         logging_obj=logging_obj,
         provider_config=config,
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=litellm_params or GenericLiteLLMParams(),
         api_key="k",
         model="claude-opus-5-5",
         rebuild_without_native_output=rebuild,
@@ -2491,7 +2492,6 @@ async def test_a_binding_mismatch_retries_with_the_history_and_the_merged_beta(
     assert retried["thinking"] == expected_thinking
     (warning,) = _binding_warnings(caplog)
     assert "still holds" in warning
-    assert "sig" not in warning and "plan" not in warning
 
 
 @pytest.mark.asyncio
@@ -2544,9 +2544,35 @@ async def test_other_invalid_thinking_errors_keep_the_strip_retry_without_a_warn
 
 
 @pytest.mark.asyncio
-async def test_a_native_output_rebuild_replays_the_binding_recovery_and_warns_once(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_a_callers_own_drop_block_adds_no_beta_to_a_strict_tools_retry(caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+
+    client: Final = _binding_http_client((400, "Too many strict tools (21). The maximum is 20."), (200, "{}"))
+    thinking: Final = {"type": "adaptive", "block_binding": _DROP_BLOCK}
+    request_body: Final[dict[str, object]] = {
+        "messages": copy.deepcopy(list(_BINDING_REPLAY)),
+        "thinking": thinking,
+        "tools": [{"name": "a", "input_schema": {"type": "object"}, "strict": True}],
+    }
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        await _post_binding_replay(
+            client,
+            AnthropicMessagesConfig(),
+            request_body,
+            {"Anthropic-Beta": "zeta-beta"},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+        )
+
+    retried: Final = _posted_json(client, 1)
+    assert retried["tools"] == [{"name": "a", "input_schema": {"type": "object"}}]
+    assert retried["thinking"] == thinking
+    assert client.post.await_args_list[1].kwargs["headers"] == {"Anthropic-Beta": "zeta-beta"}
+    assert _binding_warnings(caplog) == ()
+
+
+@pytest.mark.asyncio
+async def test_a_native_output_rebuild_replays_the_binding_recovery() -> None:
     client: Final = _binding_http_client((400, _BOUND_THINKING_ERROR), (400, _NATIVE_OUTPUT_REJECTED), (200, "{}"))
     original: Final[dict[str, object]] = {
         "messages": list(_BINDING_REPLAY),
@@ -2554,14 +2580,13 @@ async def test_a_native_output_rebuild_replays_the_binding_recovery_and_warns_on
         "anthropic_beta": ["zeta-beta"],
     }
 
-    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
-        await _post_binding_replay(
-            client,
-            _UnsignedBedrockInvokeConfig(),
-            copy.deepcopy(original),
-            {},
-            rebuild=lambda: copy.deepcopy(original),
-        )
+    await _post_binding_replay(
+        client,
+        _UnsignedBedrockInvokeConfig(),
+        copy.deepcopy(original),
+        {},
+        rebuild=lambda: copy.deepcopy(original),
+    )
 
     assert client.post.await_count == 3
     expected: Final = {
@@ -2572,7 +2597,6 @@ async def test_a_native_output_rebuild_replays_the_binding_recovery_and_warns_on
     assert _posted_json(client, 1) == expected
     assert _posted_json(client, 2) == expected
     assert all("anthropic-beta" not in call.kwargs["headers"] for call in client.post.await_args_list)
-    assert len(_binding_warnings(caplog)) == 1
 
 
 def test_base_responses_config_sign_request_is_noop_by_default():

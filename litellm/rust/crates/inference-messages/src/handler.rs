@@ -949,10 +949,7 @@ fn replayed_recoveries(
                 reasons: replayed
                     .reasons
                     .into_iter()
-                    // The first send of this recovery already reported it to the operator.
-                    .chain(retried.reasons.into_iter().filter(|reason| {
-                        *reason != litellm_host::interceptors::RetryReason::ThinkingBinding
-                    }))
+                    .chain(retried.reasons)
                     .collect(),
                 body: retried.body,
             },
@@ -1316,12 +1313,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::binding_recovery_is_reported_once(
+    #[case::binding_recovery(
         "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.",
         json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}),
-        Vec::new()
+        vec![litellm_host::interceptors::RetryReason::ThinkingBinding]
     )]
-    #[case::other_recoveries_are_reported_again(
+    #[case::thinking_strip(
         "messages.1.content.0: Invalid `signature` in `thinking` block",
         Value::Null,
         vec![litellm_host::interceptors::RetryReason::ThinkingSignature]

@@ -2071,21 +2071,13 @@ def is_anthropic_thinking_binding_mismatch_error(error_text: str) -> bool:
     return "bound to a different conversation" in error_text.lower()
 
 
-def _thinking_prefix_mismatch_behavior(request_body: object) -> object:
-    body: Final = validated_object_mapping(request_body)
-    thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
-    binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
-    return binding.get("prefix_mismatch_behavior") if binding is not None else None
-
-
 def anthropic_request_errors_on_thinking_binding_mismatch(request_body: object) -> bool:
     """``thinking.block_binding.prefix_mismatch_behavior: error`` is the caller asking
     for the 400, so a retry that strips thinking must not override it."""
-    return _thinking_prefix_mismatch_behavior(request_body) == "error"
-
-
-def anthropic_request_drops_mismatched_thinking_blocks(request_body: object) -> bool:
-    return _thinking_prefix_mismatch_behavior(request_body) == "drop_block"
+    body: Final = validated_object_mapping(request_body)
+    thinking: Final = validated_object_mapping(body.get("thinking")) if body is not None else None
+    binding: Final = validated_object_mapping(thinking.get("block_binding")) if thinking is not None else None
+    return binding is not None and binding.get("prefix_mismatch_behavior") == "error"
 
 
 def anthropic_thinking_binding_retry(error_text: str, request_body: object) -> Mapping[object, object] | None:
@@ -2102,9 +2094,9 @@ def anthropic_thinking_binding_retry(error_text: str, request_body: object) -> M
     return {**thinking, "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
 
 
-def with_anthropic_beta(betas: object, beta: str) -> list[str]:  # mutable-ok: becomes the JSON body's array
+def with_anthropic_beta(betas: object, beta: str) -> tuple[str, ...]:
     existing: Final = tuple(entry for entry in validated_object_list(betas) or () if isinstance(entry, str))
-    return merge_anthropic_beta_headers(existing, beta).split(",")
+    return tuple(merge_anthropic_beta_headers(existing, beta).split(","))
 
 
 _CLAUDE_STRICT_TOOLS_REJECTION: Final = re.compile(
