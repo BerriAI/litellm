@@ -2366,7 +2366,7 @@ def client(original_function):
                 kwargs=kwargs,
                 call_type=call_type,
             ):
-                if "complete_response" in kwargs and kwargs["complete_response"] is True:
+                if kwargs.get("complete_response") is True and not isinstance(result, Awaitable):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
@@ -2803,6 +2803,16 @@ def client(original_function):
                         result=result, request_data=kwargs, call_type=call_type
                     )
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
+                    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+                    if (
+                        isinstance(result, CustomStreamWrapper)
+                        and result.custom_llm_provider == LlmProviders.BEDROCK.value
+                    ):
+                        async for _ in result:
+                            pass
+                        return litellm.stream_chunk_builder(result.chunks, messages=kwargs.get("messages", None))
+
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)

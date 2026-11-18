@@ -1444,7 +1444,11 @@ async def test_converse_stream_bills_the_tier_reported_in_metadata(
     assert chunks[-1].model_dump().get("service_tier") == served_tier
 
 
-def test_converse_stream_assembled_response_keeps_served_tier(_aws_test_credentials: None) -> None:
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_converse_stream_assembled_response_keeps_served_tier(
+    _aws_test_credentials: None, async_mode: bool
+) -> None:
     model: Final = "bedrock/converse/qwen.qwen3-coder-next"
     usage: Final = {"inputTokens": 3, "outputTokens": 2, "totalTokens": 5}
     metadata: Final = _converse_event_frame(
@@ -1456,14 +1460,19 @@ def test_converse_stream_assembled_response_keeps_served_tier(_aws_test_credenti
             200, content=b"".join((*_CONVERSE_CONTENT_FRAMES, metadata)), headers=_event_stream_headers()
         )
 
-    response: Final = litellm.completion(
-        model=model,
-        messages=[{"role": "user", "content": "hi"}],
-        aws_region_name="us-east-1",
-        stream=True,
-        complete_response=True,
-        service_tier="priority",
-        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle_request))),
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "aws_region_name": "us-east-1",
+        "stream": True,
+        "complete_response": True,
+        "service_tier": "priority",
+    }
+    transport: Final = httpx.MockTransport(handle_request)
+    response: Final = (
+        await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+        if async_mode
+        else litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport)))
     )
     rates: Final = litellm.get_model_info("bedrock/us-east-1/qwen.qwen3-coder-next")
     input_rate, output_rate = rates["input_cost_per_token_flex"], rates["output_cost_per_token_flex"]
