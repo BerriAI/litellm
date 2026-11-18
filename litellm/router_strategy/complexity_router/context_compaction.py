@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     inherit_message_logging_privacy,
     initialize_standard_callback_dynamic_params,
@@ -265,14 +266,14 @@ def _deployment_section(deployment: object, section: str) -> Mapping[str, object
 
 
 def _deployment_model_info(ctx: RoutingContext, deployment: Mapping[str, object], model: str) -> Mapping[str, object]:
+    deployment_dict: Final = _DICT.validate_python(deployment)
     try:
-        return _MAPPING.validate_python(
-            ctx.registry().router_model_info(deployment=_DICT.validate_python(deployment), received_model_name=model)
-        )
-    except Exception:  # noqa: BLE001  # an unmappable deployment falls back to its own declared metadata
-        params: Final = _deployment_section(deployment, "litellm_params")
-        model_info: Final = _deployment_section(deployment, "model_info")
+        raw_info: Final = ctx.registry().router_model_info(deployment=deployment_dict, received_model_name=model)
+    except ModelNotMappedError:
+        params: Final = _deployment_section(deployment_dict, "litellm_params")
+        model_info: Final = _deployment_section(deployment_dict, "model_info")
         return {**params, **model_info}
+    return _MAPPING.validate_python(raw_info)
 
 
 def _budget(
@@ -288,7 +289,9 @@ def _budget(
             for key in ("max_completion_tokens", "max_output_tokens", "max_tokens")
             if payload.get(key) is not None
         ),
-        info.get("max_output_tokens") if info.get("max_output_tokens") is not None else info.get("max_tokens"),
+        info.get("max_output_tokens")
+        if info.get("max_output_tokens") is not None
+        else info.get("max_completion_tokens"),
     )
     if output is not None and (not isinstance(output, int) or isinstance(output, bool) or output <= 0):
         _reject(model, "The output allowance must be a positive integer")

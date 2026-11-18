@@ -8,6 +8,7 @@ from typing import Final, Literal
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms import compaction as native
@@ -506,25 +507,33 @@ async def test_retry_reuses_summary_or_terminal_cancellation(outcome: Literal["s
         compaction_executor.reset(token)
 
 
-@pytest.mark.parametrize("declared_limits", [False, True])
+@pytest.mark.parametrize("limits_mode", ["none", "full", "request_cap_only"])
 async def test_unmapped_deployment_does_not_raise_model_not_mapped_error(
-    wire: tuple[respx.Route, respx.Route], declared_limits: bool
+    wire: tuple[respx.Route, respx.Route], limits_mode: Literal["none", "full", "request_cap_only"]
 ) -> None:
     router: Final = make_router()
     ctx: Final = RoutingContext(router)
+    extra_params: Final[dict[str, object]] = {
+        "none": {},
+        "full": {"max_input_tokens": 128000, "max_output_tokens": 4096},
+        "request_cap_only": {"max_input_tokens": 128000, "max_tokens": 100},
+    }[limits_mode]
     deployment_dict: Final = {
         "model_name": "unmapped-tier",
         "litellm_params": {
             "model": "openrouter/unmapped-model-family/unmapped-variant-1234",
             "api_key": "fake",
-            **({"max_input_tokens": 128000, "max_output_tokens": 4096} if declared_limits else {}),
+            **extra_params,
         },
         "model_info": {"id": "db-deployment-1"},
     }
     budget: Final = _budget(ctx, deployment_dict, {"model": "auto"}, 0.9)
-    if declared_limits:
+    if limits_mode == "full":
         assert budget.window == 128000
         assert budget.available == int(128000 * 0.9) - 4096
+    elif limits_mode == "request_cap_only":
+        assert budget.window == 128000
+        assert budget.available is None
     else:
         assert budget.window is None
         assert budget.available is None
@@ -536,6 +545,13 @@ async def test_unmapped_deployment_does_not_raise_model_not_mapped_error(
     }
     result: Final = await compact_to_fit(ctx, deployment_dict, request, "chat")
     assert result is request
+
+
+async def test_budget_does_not_mask_invalid_deployment_type() -> None:
+    router: Final = make_router()
+    ctx: Final = RoutingContext(router)
+    with pytest.raises(ValidationError):
+        _budget(ctx, "not-a-dict", {"model": "auto"}, 0.9)  # pyright: ignore[reportArgumentType]  # verify invalid input raises ValidationError instead of falling back
 
 
 @pytest.fixture(autouse=True)
