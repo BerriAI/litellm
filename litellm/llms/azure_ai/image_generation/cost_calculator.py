@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import ImageDocument, price_units
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -9,6 +11,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.rust_bridge._native import NativeReceipt
 from litellm.types.utils import ImageResponse, ModelInfo
+
+_ROW: Final = TypeAdapter(Mapping[str, object])
 
 
 def cost_calculator(
@@ -40,7 +44,8 @@ def cost_calculator(
 
         num_images: Final = n if n is not None else len(image_response.data or ())
         model_cost_key: Final = _model_info.get("key")
-        shared_entry: Final = litellm.model_cost.get(model_cost_key) if model_cost_key is not None else None
+        raw_shared_entry: Final[object] = litellm.model_cost.get(model_cost_key) if model_cost_key is not None else None
+        shared_entry: Final = _ROW.validate_python(raw_shared_entry) if isinstance(raw_shared_entry, Mapping) else None
         outcome: Final = price_units(
             ImageDocument(
                 kind="image",
