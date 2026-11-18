@@ -23,23 +23,20 @@ describe("buildSkillDownloadsCsv", () => {
     expect(result.data).toEqual([
       {
         downloaded_at: "2026-10-01T10:00:00.000Z",
-        downloader: "reader@example.test",
+        user_id: "reader",
+        user_email: "reader@example.test",
         key: "key",
         team: "Team",
         version: "1.0",
         authenticated: "true",
-        user_id: "reader",
-        user_email: "reader@example.test",
-        team_id: "team-id",
-        id: "123",
-        digest: "abc",
+        download_id: "123",
       },
     ]);
   });
 
   it("exports headers for empty history", () => {
     expect(buildSkillDownloadsCsv([])).toBe(
-      "downloaded_at,downloader,key,team,version,authenticated,user_id,user_email,team_id,id,digest\r\n",
+      "downloaded_at,user_id,user_email,key,team,version,authenticated,download_id\r\n",
     );
   });
 
@@ -63,7 +60,8 @@ describe("buildSkillDownloadsCsv", () => {
     );
     expect(result.errors).toEqual([]);
     const expected = {
-      downloader: "reader",
+      user_id: "reader",
+      user_email: "",
       key: 'clé, "quoted"\nnext',
       team: "team-id",
       version: "",

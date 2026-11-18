@@ -118,9 +118,9 @@ it("exports fresh history across all pages without loading them into the table",
     reader.readAsText(blob);
   });
   expect(content.split("\r\n")).toEqual([
-    "downloaded_at,downloader,key,team,version,authenticated,user_id,user_email,team_id,id,digest",
-    `2026-10-01T10:00:00.000Z,reader@example.test,development,Engineering,1.2.0,true,reader-id,reader@example.test,team-id,${event.id},${digest}`,
-    `2026-10-01T10:00:00.000Z,second@example.test,development,Engineering,1.2.0,true,reader-id,second@example.test,team-id,2,${digest}`,
+    "downloaded_at,user_id,user_email,key,team,version,authenticated,download_id",
+    `2026-10-01T10:00:00.000Z,reader-id,reader@example.test,development,Engineering,1.2.0,true,${event.id}`,
+    "2026-10-01T10:00:00.000Z,reader-id,second@example.test,development,Engineering,1.2.0,true,2",
   ]);
   expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:csv");
   expect(screen.queryByRole("cell", { name: "second@example.test" })).not.toBeInTheDocument();
