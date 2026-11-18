@@ -90,6 +90,17 @@ def _accounting_row(payload: "SpendLogsPayload") -> Mapping[str, object]:
     }
 
 
+def _charge_scope(payload: "SpendLogsPayload") -> Mapping[str, object]:
+    """The key, team, user and organization the accounting delivery charged, which outrank the callback's view."""
+    scope: Final = {
+        "api_key": payload.get("api_key"),
+        "team_id": payload.get("team_id"),
+        "user": payload.get("user"),
+        "organization_id": payload.get("organization_id"),
+    }
+    return {name: value for name, value in scope.items() if value}
+
+
 def _spill(
     field: Literal["messages", "response"],
     content: str,
@@ -138,6 +149,7 @@ def lens_export(
     event_time_ms: Final = _millis(start_time)
     owner: Final = {
         **{name: _storable(value) for name, value in base.items()},
+        **_charge_scope(payload),
         "request_id": payload["request_id"],
         "spend": payload["spend"],
         "start_time": event_time_ms,

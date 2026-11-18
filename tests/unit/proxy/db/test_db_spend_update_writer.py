@@ -5,6 +5,7 @@ import itertools
 import json
 import logging
 import re
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -6273,66 +6274,106 @@ async def test_a_row_without_a_caller_session_or_cost_adds_nothing(litellm_param
     assert await totals.read("hashed-key", "minted-1") is None
 
 
-@pytest.mark.parametrize("spend_logs_disabled", [False, True], ids=["logging_on", "logging_disabled"])
+def _billed_attempt_kwargs(attempt: int, *, status: str) -> dict[str, object]:
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    logged: Final = create_standard_logging_payload()
+    return {
+        "model": "gpt-5-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": "retried-call",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "key",
+                "user_api_key_user_id": "user",
+                "billed_retry_attempt": attempt,
+                "status": status,
+            }
+        },
+        "standard_logging_object": {
+            **logged,
+            "id": "chatcmpl-retried",
+            "litellm_call_id": "retried-call",
+            "call_type": "acompletion",
+            "response_cost": 9.0,
+            "status": status,
+            "error_str": "provider rejected the request" if status == "failure" else None,
+            "messages": "secret prompt",
+        },
+    }
+
+
+def _fail_on_swallowed_error(*args: object, **kwargs: object) -> None:
+    raise AssertionError("update_database swallowed an exception") from sys.exc_info()[1]
+
+
+@pytest.mark.parametrize(
+    ("spend_logs_disabled", "disable_error_logs", "status", "content_kept"),
+    [
+        (False, False, "success", True),
+        (True, False, "success", False),
+        (False, True, "failure", False),
+        (False, False, "failure", True),
+    ],
+    ids=["logging_on", "spend_logs_disabled", "error_logs_disabled", "failure_logged"],
+)
 @pytest.mark.asyncio
 async def test_lens_ledger_record_carries_the_accepted_delivery_amount_for_each_billed_attempt(
-    monkeypatch: pytest.MonkeyPatch, spend_logs_disabled: bool
+    monkeypatch: pytest.MonkeyPatch,
+    spend_logs_disabled: bool,
+    disable_error_logs: bool,
+    status: str,
+    content_kept: bool,
 ) -> None:
     from litellm.proxy import proxy_server
+    from litellm.proxy.db import db_spend_update_writer as writer_module
     from litellm.tracing.types import LedgerCapabilities, LedgerPublication
 
     prisma: Final = _tool_usage_prisma()
-    prisma.get_request_status.return_value = "success"
+    prisma.get_request_status.return_value = status
+    publication: Final = LedgerPublication()
+    publication.publish(LedgerCapabilities(versions=(1,), payload_store=True, inline_bytes=1024, preview_bytes=256))
+    monkeypatch.setattr(writer_module, "spend_log_error", _fail_on_swallowed_error)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
-    monkeypatch.setattr(proxy_server, "disable_spend_logs", spend_logs_disabled)
     monkeypatch.setattr(
         proxy_server,
-        "lens_ledger_publication",
-        LedgerPublication(),
+        "general_settings",
+        {"use_spend_logs_ledger": True, "disable_error_logs": disable_error_logs},
     )
-    proxy_server.lens_ledger_publication.publish(
-        LedgerCapabilities(versions=(1,), payload_store=True, inline_bytes=1024, preview_bytes=256)
-    )
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", spend_logs_disabled)
+    monkeypatch.setattr(proxy_server, "lens_ledger_publication", publication)
     now: Final = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
     writer: Final = DBSpendUpdateWriter()
-    for attempt, cost in ((1, 0.1), (2, 0.2)):
+
+    charged: Final = [
         await writer.update_database(
             token="key",
             user_id="user",
             team_id="team",
-            org_id=None,
+            org_id="org",
             end_user_id=None,
-            kwargs={
-                "model": "ledger-test",
-                "call_type": "acompletion",
-                "litellm_call_id": "retried-call",
-                "litellm_params": {
-                    "metadata": {"user_api_key": "key", "user_api_key_user_id": "user", "billed_retry_attempt": attempt}
-                },
-                "standard_logging_object": {
-                    "id": "chatcmpl-retried",
-                    "litellm_call_id": "retried-call",
-                    "call_type": "acompletion",
-                    "response_cost": 9.0,
-                    "status": "success",
-                    "messages": "secret prompt",
-                    "metadata": {"user_api_key_team_id": "team"},
-                },
-            },
+            kwargs=_billed_attempt_kwargs(attempt, status=status),
             completion_response=None,
             start_time=now,
             end_time=now,
             response_cost=cost,
         )
+        for attempt, cost in ((1, 0.1), (2, 0.2))
+    ]
     await drain_logging_tasks()
 
     rows: Final = prisma.spend_log_transactions
     records: Final = [row["lens_export"]["record"] for row in rows]
+    assert charged == [True, True]
     assert len(rows) == 2
     assert len({row["accounting_delivery_id"] for row in rows}) == 2
     assert [record["spend"] for record in records] == [pytest.approx(0.1), pytest.approx(0.2)]
     assert [record["spend"] for record in records] == [row["accounting_payload"]["spend"] for row in rows]
     assert [record["request_id"] for record in records] == [row["request_id"] for row in rows]
-    assert [record["messages"] for record in records] == (["", ""] if spend_logs_disabled else ["secret prompt"] * 2)
-    assert all(row.get("accounting_log_disabled", False) is spend_logs_disabled for row in rows)
+    assert [
+        (record["api_key"], record["team_id"], record["user"], record["organization_id"]) for record in records
+    ] == [(row["accounting_payload"]["api_key"], "team", "user", "org") for row in rows]
+    assert [record["messages"] for record in records] == (["secret prompt"] * 2 if content_kept else ["", ""])
+    expected_error: Final = "provider rejected the request" if content_kept and status == "failure" else ""
+    assert [record["error_str"] for record in records] == [expected_error] * 2
+    assert all(row.get("accounting_log_disabled", False) is (not content_kept) for row in rows)
