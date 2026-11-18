@@ -15,7 +15,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
-from litellm.responses.main import _will_bridge_to_chat_completions
+from litellm.responses.main import _will_bridge_to_chat_completions, provider_stores_the_conversation
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
@@ -640,6 +641,70 @@ async def test_a_model_router_sends_custom_tool_history_as_function_calls(url_re
         "arguments": json.dumps({"content": "*** Begin Patch\n*** End Patch"}),
     }
     assert sent_output == {"type": "function_call_output", "call_id": "call_1", "output": "Done"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input=[{**item, "namespace": "editor"} if item["type"] == "custom_tool_call" else item for item in CUSTOM_TOOL_HISTORY],
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    sent_call: Final = json.loads(route.calls.last.request.content)["input"][1]
+    assert (sent_call["type"], sent_call["namespace"], sent_call["name"]) == ("function_call", "editor", "apply_patch")
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "earlier_response_id,bridged",
+    [pytest.param("chatcmpl-earlier", True, id="bridged-turn"), pytest.param("resp_earlier", False, id="native-turn")],
+)
+async def test_a_model_router_follow_up_stays_where_its_previous_turn_was_answered(earlier_response_id, bridged):
+    chat_route: Final = respx.post(url__regex=r".*/chat/completions(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_chat_completion_payload("FW-GLM-5.3-Flash"))
+    )
+    responses_route: Final = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="And the next step?",
+        previous_response_id=ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
+        ),
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    assert (chat_route.called, responses_route.called) == (bridged, not bridged)
+
+
+@pytest.mark.parametrize(
+    "earlier_response_id,stored",
+    [pytest.param("chatcmpl-earlier", False, id="bridged-turn"), pytest.param("resp_earlier", True, id="native-turn")],
+)
+def test_a_model_router_follow_up_is_stored_by_the_provider_only_after_a_native_turn(earlier_response_id, stored):
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
+    )
+
+    assert (
+        provider_stores_the_conversation(
+            "azure_ai/model_router/model-router",
+            "azure_ai",
+            {"api_base": FOUNDRY_PROJECT_BASE, "previous_response_id": previous_response_id},
+        )
+        is stored
+    )
 
 
 @pytest.mark.asyncio

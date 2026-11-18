@@ -83,10 +83,12 @@ def _router_tool_choice(tool_choice: object) -> object:
 
 
 def _function_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
+    namespace: Final = item.get("namespace")
     return {
         "type": "function_call",
         "call_id": item.get("call_id"),
         "name": item.get("name"),
+        **({"namespace": namespace} if isinstance(namespace, str) else {}),
         "arguments": json.dumps({"content": item.get("input") or ""}),
     }
 

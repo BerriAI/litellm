@@ -113,14 +113,16 @@ def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Rout
     """
     if payload.get("call_type") not in RESPONSES_SESSION_CALL_TYPES:
         return False
+    from litellm.responses.main import answered_by_the_chat_bridge, provider_stores_the_conversation
+
+    if answered_by_the_chat_bridge(payload.get("request_id")):
+        return True
     model_id: Final = payload.get("model_id")
     deployment: Final = (
         llm_router.get_deployment(model_id=model_id) if llm_router is not None and isinstance(model_id, str) else None
     )
     if deployment is None:
         return True
-    from litellm.responses.main import provider_stores_the_conversation
-
     litellm_params: Final = deployment.litellm_params
     return not provider_stores_the_conversation(
         litellm_params.model,

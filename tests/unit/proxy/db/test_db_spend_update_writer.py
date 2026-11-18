@@ -4206,6 +4206,33 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answered_id, expects_flush",
+    [pytest.param("chatcmpl-turn-1", True, id="bridged-turn"), pytest.param("resp_turn_1", False, id="native-turn")],
+)
+async def test_a_native_deployment_row_flushes_at_once_when_the_chat_bridge_answered_its_turn(
+    answered_id: str, expects_flush: bool
+):
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    prisma: Final = _tool_usage_prisma()
+    prisma.spend_log_flush_requested = asyncio.Event()
+    payload: Final = {
+        "request_id": ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="dep-native", response_id=answered_id
+        ),
+        "call_type": "aresponses",
+        "model_id": "dep-native",
+    }
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(
+        payload=payload, prisma_client=prisma, llm_router=_responses_router()
+    )
+
+    assert prisma.spend_log_flush_requested.is_set() is expects_flush
+
+
 def _batch_cost_payload() -> dict:
     return {
         **_minimal_spend_payload(),
