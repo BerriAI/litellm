@@ -151,6 +151,7 @@ from litellm.router_rust.steps.precall import (
     declares_no_vision,
     refuses_decisions_media,
     request_carries_image,
+    request_carries_json_input,
     serves_route_capability,
 )
 from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies, picks_async
@@ -2867,7 +2868,7 @@ class RustCore(
         # drops the others, and a Decisions call carrying media skips the deployments refusing it.
         handler: Final = plan.handler
         decisions_media: Final = handler in DECISIONS_MEDIA_CALL_TYPES and bool(
-            request.get("audio") or request.get("videos")
+            request.get("audio") or request.get("videos") or request_carries_json_input(request.get("input"))
         )
         return {
             **_request_narrowing(request),
@@ -3481,17 +3482,23 @@ class RustCore(
     def _media_refusing(
         self, step: Mapping[str, object], request: Mapping[str, object]
     ) -> list[str]:  # mutable-ok: the step's answer
-        """The candidates that refuse the audio or videos a Decisions call carries."""
+        """The candidates that refuse the audio, videos or JSON input a Decisions call carries."""
         group: Final = str(step.get("model_group"))
         defaults: Final = {k: v for k, v in self._resolved.default_litellm_params.items() if v is not None}
         sent: Final = {**defaults, **request}
         audio: Final = bool(request.get("audio"))
         videos: Final = bool(request.get("videos"))
+        json_input: Final = request_carries_json_input(request.get("input"))
         return [
             str(id)
             for id in _as_list(step.get("candidates"))
             if refuses_decisions_media(
-                as_str_mapping(self._handle.deployment(str(id))) or {}, group, sent, audio=audio, videos=videos
+                as_str_mapping(self._handle.deployment(str(id))) or {},
+                group,
+                sent,
+                audio=audio,
+                videos=videos,
+                json_input=json_input,
             )
         ]
 

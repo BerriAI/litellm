@@ -420,14 +420,17 @@ def deployment_refuses_media(
     *,
     audio: bool,
     videos: bool,
+    json_input: bool,
 ) -> bool:
     if _drops_params(call_kwargs):
         return False
     provider_config: Final = get_decisions_provider_config(model, custom_llm_provider)
     canonical_model: Final = provider_config.canonical_model(model)
     deployment: Final = _DeploymentCapabilities.model_validate(model_info)
-    return (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment)) or (
-        videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment)
+    return (
+        (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment))
+        or (videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment))
+        or (json_input and not provider_config.supports_json_input)
     )
 
 

@@ -2,8 +2,8 @@
 Parity of the Rust core with ``router_python_core.py`` on routing a Decisions call: a group's
 deployments whose provider has no Decisions config are dropped before any later stage, unless that
 leaves none (``_without_deployments_that_cannot_serve_route``), and a Decisions or SystemOne call
-carrying audio or videos skips the deployments that refuse them, unless that leaves none
-(``_without_decisions_deployments_refusing_media``).
+carrying audio, videos or an ``input_json`` part skips the deployments that refuse them, unless that
+leaves none (``_without_decisions_deployments_refusing_media``).
 
 The weights put the deployment that must be skipped first, so a core that does not narrow the
 group picks it every time.
@@ -17,6 +17,7 @@ import pytest
 
 import litellm
 from litellm.router_core import RouterCore
+from litellm.types.decisions import OpenAIDecisionInputMessage
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost, patch_direct_endpoints
 from tests.unit.test_router.core.scripted_host import auth_error, deployment
@@ -224,6 +225,45 @@ def test_the_media_filter_runs_before_order(make_core: MakeCore, host: EndpointH
     _call(core, "adecisions", model="m", audio=CLIP, **QUESTION)
 
     assert host.deployments_called("adecisions") == ["take"]
+
+
+def _json_group() -> list[dict[str, object]]:  # mutable-ok: a fresh model_list
+    """``no-json`` is a provider without JSON input and weighs more; ``json`` takes it."""
+    return [
+        deployment("j", "no-json", model="typesafe/jev-1.14.0", weight=1),
+        deployment("j", "json", model="openai/gpt-4o", weight=0),
+    ]
+
+_EVIDENCE: Final = {"type": "input_json", "data": {"order_id": "A1", "charges": [49, 49]}}
+_TICKET: Final = {"type": "input_text", "text": "Refund the duplicate charge."}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [{"role": "user", "content": [_TICKET, _EVIDENCE]}, OpenAIDecisionInputMessage(content=[_TICKET, _EVIDENCE])],
+    ids=["as-sent", "validated"],
+)
+@pytest.mark.parametrize("op", ["adecisions", "decisions"])
+def test_a_call_carrying_json_input_skips_the_deployment_refusing_it(
+    make_core: MakeCore, host: EndpointHost, op: str, message: object
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    for _ in range(3):
+        _call(core, op, model="j", **{**QUESTION, "input": [message]})
+
+    assert host.deployments_called(op) == ["json"] * 3
+
+
+@pytest.mark.parametrize("op", ["adecisions", "decisions"])
+def test_a_call_with_only_text_parts_keeps_the_deployment_refusing_json_input(
+    make_core: MakeCore, host: EndpointHost, op: str
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    _call(core, op, model="j", **{**QUESTION, "input": [{"role": "user", "content": [_TICKET]}]})
+
+    assert host.deployments_called(op) == ["no-json"]
 
 
 def test_every_deployment_refusing_media_still_picks(make_core: MakeCore, host: EndpointHost) -> None:
