@@ -29,8 +29,10 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import PrismaClient
 
-KNOWN: Final = CustomerHierarchyAuth(customer_org_id="org", customer_member_id="member", scopes=())
-ORG_ONLY: Final = CustomerHierarchyAuth(customer_org_id="org", scopes=())
+KNOWN: Final = CustomerHierarchyAuth(
+    customer_org_id="org", customer_org_alias="org", customer_member_id="member", scopes=()
+)
+ORG_ONLY: Final = CustomerHierarchyAuth(customer_org_id="org", customer_org_alias="org", scopes=())
 
 
 async def _refusal(
@@ -129,6 +131,11 @@ async def test_the_no_app_setting_survives_a_definition_write_that_omits_it_and_
             "x-litellm-customer-member-id",
         ),
         (CustomerRequestIdentity(customer_org_alias="org", customer_member_id="member"), KNOWN, None),
+        (
+            CustomerRequestIdentity(customer_org_alias="another-org", customer_member_id="member"),
+            KNOWN,
+            "x-litellm-customer-org-alias",
+        ),
     ),
 )
 def test_the_unknown_customer_header_is_the_one_the_resolved_hierarchy_lacks(

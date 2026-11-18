@@ -75,7 +75,9 @@ def gated_registrars(refusal: RegistrationRefusal) -> tuple[MemberRegistrar, Org
 
 def unknown_customer_header(identity: CustomerRequestIdentity, hierarchy: CustomerHierarchyAuth | None) -> str | None:
     """The header naming a customer the resolved hierarchy does not carry, or None when every named one is known."""
-    if identity.customer_org_alias is not None and (hierarchy is None or hierarchy.customer_org_id is None):
+    if identity.customer_org_alias is not None and (
+        hierarchy is None or hierarchy.customer_org_alias != identity.customer_org_alias
+    ):
         return CUSTOMER_ORG_ALIAS_HEADER
     if identity.customer_member_id is not None and (hierarchy is None or hierarchy.customer_member_id is None):
         return CUSTOMER_MEMBER_ID_HEADER
