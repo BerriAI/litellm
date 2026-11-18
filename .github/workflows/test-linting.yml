@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - "litellm_**"
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -14,8 +17,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  plan:
+    name: lint plan
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      skipped: ${{ steps.plan.outputs.skipped }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Run the diff gates on pull requests and the tree-wide checks on main and labelled pull requests
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "${PR_NUMBER}" ]; then
+            mode=push
+            skipped='["python","ui"]'
+          else
+            mode=core
+            skipped='["ui-api-types","code-quality","ci-coverage","semgrep"]'
+            labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')" || mode=full
+            ! grep -qx 'run-all-unit-shards' <<< "${labels:-}" || mode=full
+            [ "${mode}" = core ] || skipped='[]'
+          fi
+          printf 'mode=%s\nskipped=%s\n' "${mode}" "${skipped}" | tee -a "$GITHUB_OUTPUT"
   python:
     name: python
+    needs: plan
+    if: ${{ needs.plan.outputs.mode != 'push' }}
     permissions:
       contents: read
       pull-requests: read
@@ -264,6 +297,8 @@ jobs:
           fi
   ui:
     name: ui
+    needs: plan
+    if: ${{ needs.plan.outputs.mode != 'push' }}
     permissions:
       contents: read
       pull-requests: read
@@ -354,6 +389,8 @@ jobs:
         run: npm run knip:ci
   ui-api-types:
     name: ui-api-types
+    needs: plan
+    if: ${{ needs.plan.outputs.mode != 'core' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -474,6 +511,8 @@ jobs:
           echo "schema.d.ts is in sync with the proxy OpenAPI spec."
   code-quality:
     name: code-quality
+    needs: plan
+    if: ${{ needs.plan.outputs.mode != 'core' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -657,6 +696,8 @@ jobs:
         run: uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
   ci-coverage:
     name: ci-coverage
+    needs: plan
+    if: ${{ needs.plan.outputs.mode != 'core' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -683,6 +724,8 @@ jobs:
         run: python .github/scripts/assert_workflow_dir_hygiene.py
   semgrep:
     name: semgrep
+    needs: plan
+    if: ${{ needs.plan.outputs.mode != 'core' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -706,7 +749,7 @@ jobs:
         run: uv tool run --from 'semgrep==1.157.0' semgrep scan --config .github/semgrep/rules . --error
   lint-passed:
     name: lint passed
-    needs: [python, secret-scan, ui, ui-api-types, code-quality, ci-coverage, semgrep]
+    needs: [plan, python, secret-scan, ui, ui-api-types, code-quality, ci-coverage, semgrep]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -717,4 +760,5 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null
+          jq -e '(.plan.outputs.skipped // "[]" | fromjson) as $skipped
+            | all(to_entries[]; .value.result == "success" or (.value.result == "skipped" and (.key | IN($skipped[]))))' <<< "$NEEDS" > /dev/null
