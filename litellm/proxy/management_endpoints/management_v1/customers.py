@@ -72,16 +72,8 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "https://www.litellm.ai/enterprise",
         ),
         ErrorCode.NOT_FOUND: (404, "Not found", "Customer entity not found."),
-        ErrorCode.PARENT_NOT_FOUND: (
-            404,
-            "Parent not found",
-            "Customer parent not found.",
-        ),
-        ErrorCode.ALREADY_EXISTS: (
-            409,
-            "Already exists",
-            "Customer entity ID already exists.",
-        ),
+        ErrorCode.PARENT_NOT_FOUND: (404, "Parent not found", "Customer parent not found."),
+        ErrorCode.ALREADY_EXISTS: (409, "Already exists", "Customer entity ID already exists."),
         ErrorCode.INVALID_DEFAULT_BUDGET: (
             422,
             "Invalid default budget",
@@ -92,26 +84,14 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Template not in organization",
             "Budget template must belong to the selected member or organization budget group catalog.",
         ),
-        ErrorCode.HAS_CHILDREN: (
-            409,
-            "Has children",
-            "Delete the customer's children before deleting the parent.",
-        ),
+        ErrorCode.HAS_CHILDREN: (409, "Has children", "Delete the customer's children before deleting the parent."),
         ErrorCode.INVALID_TEMPLATE_NAMES: (
             422,
             "Invalid template names",
             "Budget template names must be unique within the organization.",
         ),
-        ErrorCode.TEMPLATE_IN_USE: (
-            409,
-            "Template in use",
-            "A default or referenced template cannot be deleted.",
-        ),
-        ErrorCode.BUDGET_REQUIRED: (
-            422,
-            "Budget required",
-            "A member requires a template or a budget override.",
-        ),
+        ErrorCode.TEMPLATE_IN_USE: (409, "Template in use", "A default or referenced template cannot be deleted."),
+        ErrorCode.BUDGET_REQUIRED: (422, "Budget required", "A member requires a template or a budget override."),
         ErrorCode.INCREASE_NOT_ALLOWED: (
             422,
             "Increase not allowed",
@@ -127,26 +107,14 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Request already pending",
             "The member already has an increase request waiting for review.",
         ),
-        ErrorCode.EXPIRY_IN_PAST: (
-            422,
-            "Expiry in past",
-            "A temporary increase must expire in the future.",
-        ),
+        ErrorCode.EXPIRY_IN_PAST: (422, "Expiry in past", "A temporary increase must expire in the future."),
         ErrorCode.KEY_NOT_IN_ORG: (
             403,
             "Key not in organization",
             "The key may only act for members of its own customer organization.",
         ),
-        ErrorCode.FORBIDDEN: (
-            403,
-            "Forbidden",
-            "Only proxy admins can manage customer hierarchies.",
-        ),
-        ErrorCode.DATABASE_UNAVAILABLE: (
-            503,
-            "Database not connected",
-            "Database not connected.",
-        ),
+        ErrorCode.FORBIDDEN: (403, "Forbidden", "Only proxy admins can manage customer hierarchies."),
+        ErrorCode.DATABASE_UNAVAILABLE: (503, "Database not connected", "Database not connected."),
         ErrorCode.CONFIGURATION_CONFLICT: (
             409,
             "Budget groups changed",

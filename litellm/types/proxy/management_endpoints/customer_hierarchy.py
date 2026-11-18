@@ -82,9 +82,7 @@ class OrganizationFields(BaseModel):
     alias: str | None = None
     budget: Budget | None = None
     budget_id: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Organization budget group ID. Null clears it; omit to keep it.",
+        default=None, min_length=1, description="Organization budget group ID. Null clears it; omit to keep it."
     )
 
     @model_validator(mode="after")
@@ -221,6 +219,9 @@ class BudgetGroups(BaseModel):
 class Organization(AuditFields, BudgetGroups):
     member_count: int = Field(default=0, ge=0, description="Current registered members across all customer teams")
     budget_id: str | None = None
+    budget_is_shared: bool | None = Field(
+        default=None, description="Whether budget_id references a reusable organization group"
+    )
     budget: Budget | None = None
     customer_org_id: str
 

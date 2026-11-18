@@ -24,9 +24,13 @@ type Props =
 export default function CustomerBudgetGroups(props: Props) {
   const { organization } = props;
   const onSaved = async (data: BudgetGroups | Organization | undefined) => {
-    if (!data) throw new Error(t("customerPortal.hierarchy.error"));
+    if (!data) {
+      setError(t("customerPortal.hierarchy.error"));
+      return false;
+    }
     if (props.global) await props.onSaved(data);
     else if ("customer_org_id" in data) await props.onSaved(data);
+    return true;
   };
   const { t } = useTranslation();
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -57,7 +61,7 @@ export default function CustomerBudgetGroups(props: Props) {
             params: { path: { customer_org_id: props.global ? "" : props.organization.customer_org_id } },
             body: plan.body,
           });
-      await onSaved(response.data);
+      if (!(await onSaved(response.data))) return;
       setDraft(null);
       toast.success(t("customerPortal.hierarchy.saved"));
     } catch (failure) {
@@ -74,7 +78,7 @@ export default function CustomerBudgetGroups(props: Props) {
         : await fetchClient.GET("/management/v1/customer_organizations/{customer_org_id}", {
             params: { path: { customer_org_id: props.global ? "" : props.organization.customer_org_id } },
           });
-      await onSaved(response.data);
+      if (!(await onSaved(response.data))) return;
       setDraft(null);
       setError(null);
     } catch (failure) {

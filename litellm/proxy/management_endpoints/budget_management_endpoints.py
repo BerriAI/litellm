@@ -23,10 +23,7 @@ from pydantic import TypeAdapter
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import (
-    attribute_or_none,
-    require_attributes,
-)
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
 from litellm.models.budget import initialize_budget_limits
 from litellm.proxy._types import *
 from litellm.proxy.auth.customer_hierarchy_auth import (
@@ -478,14 +475,11 @@ async def delete_budget(
         )
 
     config: Final = require_attributes(
-        attribute_or_none(prisma_client.writer_db, "litellm_config"),
-        TableActions[PrismaRecord],
-        "find_unique",
+        attribute_or_none(prisma_client.writer_db, "litellm_config"), TableActions[PrismaRecord], "find_unique"
     )
     if data.id in await organization_budget_group_ids(config):
         raise HTTPException(
-            status_code=409,
-            detail={"error": "Remove this group through customer_organization_budget_groups."},
+            status_code=409, detail={"error": "Remove this group through customer_organization_budget_groups."}
         )
     customer_org_count: Final = await CustomerOrganizationRepository(prisma_client).table.count(
         where={"budget_template_ids": {"has": data.id}}

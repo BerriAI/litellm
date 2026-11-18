@@ -16,10 +16,7 @@ from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy, get_user_api_key_cache
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy
-from litellm.types.proxy.management_endpoints.customer_hierarchy import (
-    BudgetGroups,
-    CustomerMember,
-)
+from litellm.types.proxy.management_endpoints.customer_hierarchy import BudgetGroups, CustomerMember
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     NOW,
     BoundedChildrenTable,
@@ -179,25 +176,9 @@ def test_customer_portal_limits_require_admin() -> None:
 @pytest.mark.parametrize(
     ("error", "retryable"),
     (
-        (
-            DataError({"user_facing_error": {"meta": {"code": "55P03", "message": "lock unavailable"}}}),
-            True,
-        ),
-        (
-            DataError({"user_facing_error": {"message": "canceling statement due to lock timeout"}}),
-            True,
-        ),
-        (
-            DataError(
-                {
-                    "user_facing_error": {
-                        "message": "other database error",
-                        "meta": {"code": "XX000"},
-                    }
-                }
-            ),
-            False,
-        ),
+        (DataError({"user_facing_error": {"meta": {"code": "55P03", "message": "lock unavailable"}}}), True),
+        (DataError({"user_facing_error": {"message": "canceling statement due to lock timeout"}}), True),
+        (DataError({"user_facing_error": {"message": "other database error", "meta": {"code": "XX000"}}}), False),
     ),
     ids=("sqlstate", "message-only", "other-error"),
 )
@@ -363,11 +344,7 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         ("DELETE", "/customer_teams/id", None),
         ("DELETE", "/customer_teams/id?cascade=true", None),
         ("POST", "/customer_members", {"parent_team_ids": ["id"]}),
-        (
-            "POST",
-            "/customer_members/upsert",
-            {"customer_member_id": "m", "customer_org_id": "id"},
-        ),
+        ("POST", "/customer_members/upsert", {"customer_member_id": "m", "customer_org_id": "id"}),
         ("GET", "/customer_members", None),
         ("GET", "/customer_members/id", None),
         ("PATCH", "/customer_members/id", {}),
@@ -538,14 +515,8 @@ _PAST_EXPIRY: Final = "2020-01-01T00:00:00Z"
 @pytest.mark.parametrize(
     ("route", "created_without_override"),
     (
-        (
-            "/management/v1/customer_members",
-            {"customer_member_id": "row", "parent_team_ids": ["team"]},
-        ),
-        (
-            "/management/v1/customer_teams",
-            {"customer_team_id": "row", "parent_org_id": "org"},
-        ),
+        ("/management/v1/customer_members", {"customer_member_id": "row", "parent_team_ids": ["team"]}),
+        ("/management/v1/customer_teams", {"customer_team_id": "row", "parent_org_id": "org"}),
     ),
     ids=("member", "team"),
 )
@@ -725,14 +696,8 @@ def test_new_entities_report_zero_spend_and_no_reset_and_parent_deletion_conflic
     "body",
     (
         {"default_budgets": [{"name": "a"}, {"name": "b"}]},
-        {
-            "default_budgets": [{"name": "a"}, {"name": "b"}],
-            "default_budget_template": "c",
-        },
-        {
-            "default_budgets": [{"name": "a"}, {"name": "a"}],
-            "default_budget_template": "a",
-        },
+        {"default_budgets": [{"name": "a"}, {"name": "b"}], "default_budget_template": "c"},
+        {"default_budgets": [{"name": "a"}, {"name": "a"}], "default_budget_template": "a"},
         {"default_budget_template": "a"},
         {"default_budgets": [{"name": "a"}], "default_budget_template_id": "a"},
     ),
@@ -792,10 +757,7 @@ def test_lists_filter_parents_and_link_pages_and_reject_unknown_parameters() -> 
     (
         ("customer_organizations", {"customer_org_id": "duplicate"}),
         ("customer_teams", {"customer_team_id": "duplicate", "parent_org_id": "org"}),
-        (
-            "customer_members",
-            {"customer_member_id": "duplicate", "parent_team_ids": ["team"]},
-        ),
+        ("customer_members", {"customer_member_id": "duplicate", "parent_team_ids": ["team"]}),
     ),
 )
 def test_duplicate_id_conflicts(entity: str, payload: dict[str, str]) -> None:
@@ -906,11 +868,7 @@ def team_in(organization_id: str, http: TestClient) -> str:
 @pytest.mark.parametrize(
     "method,path,body",
     (
-        (
-            "POST",
-            "/customer_organizations/missing/default_budgets",
-            {"name": "template"},
-        ),
+        ("POST", "/customer_organizations/missing/default_budgets", {"name": "template"}),
         ("PATCH", "/customer_organizations/missing/default_budgets/budget", {}),
         ("DELETE", "/customer_organizations/missing/default_budgets/budget", None),
     ),
@@ -1316,10 +1274,7 @@ def test_organization_cascade_preserves_the_sibling_customer_and_its_budgets() -
     assert database.litellm_budgettable.rows == sibling_budgets
 
 
-@pytest.mark.parametrize(
-    "resource,entity_id",
-    (("customer_teams", "team"), ("customer_organizations", "org")),
-)
+@pytest.mark.parametrize("resource,entity_id", (("customer_teams", "team"), ("customer_organizations", "org")))
 def test_cascade_rolls_back_child_and_budget_deletes_after_a_late_foreign_key_failure(
     resource: str, entity_id: str
 ) -> None:
@@ -1349,10 +1304,7 @@ def test_cascade_rolls_back_child_and_budget_deletes_after_a_late_foreign_key_fa
     assert tuple(table.rows for table in tables) == snapshots
 
 
-@pytest.mark.parametrize(
-    "resource,entity_id",
-    (("customer_teams", "team"), ("customer_organizations", "org")),
-)
+@pytest.mark.parametrize("resource,entity_id", (("customer_teams", "team"), ("customer_organizations", "org")))
 def test_cascade_processes_more_than_two_batches_without_unbounded_child_reads(resource: str, entity_id: str) -> None:
     database: Final = Database()
     http: Final = client(database=database)
@@ -1612,29 +1564,9 @@ def test_customer_member_upsert_rejects_cross_customer_org_identity(mismatch: st
         ("customer_organizations", {"customer_org_id": "", "alias": "new"}, 422),
         ("customer_members", {"customer_member_id": "m"}, 422),
         ("customer_members", {"customer_org_id": "org"}, 422),
-        (
-            "customer_members",
-            {"customer_member_id": "m", "customer_org_id": "missing"},
-            404,
-        ),
-        (
-            "customer_members",
-            {
-                "customer_member_id": "m",
-                "customer_org_id": "org",
-                "parent_team_id": "missing",
-            },
-            404,
-        ),
-        (
-            "customer_members",
-            {
-                "customer_member_id": "m",
-                "customer_org_id": "org",
-                "budget_id": "missing",
-            },
-            422,
-        ),
+        ("customer_members", {"customer_member_id": "m", "customer_org_id": "missing"}, 404),
+        ("customer_members", {"customer_member_id": "m", "customer_org_id": "org", "parent_team_id": "missing"}, 404),
+        ("customer_members", {"customer_member_id": "m", "customer_org_id": "org", "budget_id": "missing"}, 422),
     ),
 )
 def test_customer_upsert_missing_identity_or_parent_is_rejected(
@@ -1760,8 +1692,7 @@ def test_customer_org_upsert_merges_templates_without_replacing_customer_member_
 
 def test_resubmitting_a_templates_duration_keeps_its_reset_clock() -> None:
     """An edit that repeats the duration a template already runs must not push its window out: the reset job
-    owes that window a clearing, and a re-stamped clock would skip it. A changed duration starts a new window.
-    """
+    owes that window a clearing, and a re-stamped clock would skip it. A changed duration starts a new window."""
     http: Final = client()
     org: Final = http.post(
         "/management/v1/customer_organizations",
@@ -1805,8 +1736,7 @@ def test_resubmitting_a_templates_duration_keeps_its_reset_clock() -> None:
 
 def test_budget_reset_at_is_read_from_the_governing_budget_row() -> None:
     """Customer rows carry no reset clock: an org or team reports its budget's window, and a member reports
-    its unexpired override's window when that override has a duration, otherwise its template's.
-    """
+    its unexpired override's window when that override has a duration, otherwise its template's."""
     http: Final = client()
     org: Final = http.post(
         "/management/v1/customer_organizations",
@@ -2158,11 +2088,11 @@ def test_invalid_grouped_configuration_leaves_existing_groups_untouched(case: st
     response: Final = http.patch(
         path,
         json={
-            "expected_revision": ("0" * 64 if case == "stale" else org["budget_groups_revision"]),
+            "expected_revision": "0" * 64 if case == "stale" else org["budget_groups_revision"],
             "default_budgets": groups,
-            "default_budget_template": (
-                invalid_default if case == "missing_default" else ("changed" if scope == "member" else None)
-            ),
+            "default_budget_template": invalid_default
+            if case == "missing_default"
+            else ("changed" if scope == "member" else None),
         },
     )
     assert response.status_code == (409 if case == "stale" else 422), response.text
@@ -2179,9 +2109,7 @@ class FailingBudgetInsertTable(Table):
 
 
 @pytest.mark.parametrize("scope", ("member", "organization"))
-def test_grouped_configuration_rolls_back_earlier_writes_when_a_later_database_write_fails(
-    scope: str,
-) -> None:
+def test_grouped_configuration_rolls_back_earlier_writes_when_a_later_database_write_fails(scope: str) -> None:
     database: Final = Database()
     database.litellm_budgettable = FailingBudgetInsertTable("budget_id", database)
     http: Final = client(database=database)
@@ -2197,11 +2125,7 @@ def test_grouped_configuration_rolls_back_earlier_writes_when_a_later_database_w
         json={
             "expected_revision": org["budget_groups_revision"],
             "default_budgets": [
-                {
-                    "budget_id": org["default_budgets"][0]["budget_id"],
-                    "name": "changed",
-                    "max_budget": 999,
-                },
+                {"budget_id": org["default_budgets"][0]["budget_id"], "name": "changed", "max_budget": 999},
                 {"name": "created-first", "max_budget": 1},
                 {"name": "failed-insert", "max_budget": 2},
             ],
@@ -2287,14 +2211,7 @@ def test_member_team_replacement_retains_identity_budgets_and_spend() -> None:
 
 @pytest.mark.parametrize(
     "teams,status",
-    (
-        (None, 422),
-        ([], 422),
-        ([""], 422),
-        (["team", "team"], 422),
-        (["missing"], 404),
-        (["foreign"], 409),
-    ),
+    ((None, 422), ([], 422), ([""], 422), (["team", "team"], 422), (["missing"], 404), (["foreign"], 409)),
 )
 def test_member_team_replacement_rejects_invalid_parents_atomically(teams: object, status: int) -> None:
     http: Final = client()
@@ -2391,13 +2308,7 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> N
         {
             "name": "Shared",
             "max_budget": 100,
-            "budget_limits": [
-                {
-                    "budget_duration": "1mo",
-                    "max_budget": 50,
-                    "reset_at": "2027-01-15T00:00:00Z",
-                }
-            ],
+            "budget_limits": [{"budget_duration": "1mo", "max_budget": 50, "reset_at": "2027-01-15T00:00:00Z"}],
         },
     ).default_budgets[0]
     for org_id in ("org", "other"):
@@ -2410,9 +2321,9 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> N
             },
         )
         assert assigned.status_code == 200, assigned.text
+        assert assigned.json()["budget_is_shared"] is True
     member: Final = http.post(
-        "/management/v1/customer_members",
-        json={"customer_member_id": "m", "parent_team_ids": ["team"]},
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_ids": ["team"]}
     )
     assert member.status_code == 201, member.text
     keys: Final = (
@@ -2449,12 +2360,10 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> N
     custom: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
     assert custom.status_code == 200 and custom.json()["budget_id"] != group.budget_id, custom.text
     assert custom.json()["budget"]["budget_limits"] is None
+    assert custom.json()["budget_is_shared"] is False
     replay: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
     assert replay.json() == custom.json()
-    for invalid in (
-        {"budget_id": custom.json()["budget_id"]},
-        {"budget_id": group.budget_id, "budget": {}},
-    ):
+    for invalid in ({"budget_id": custom.json()["budget_id"]}, {"budget_id": group.budget_id, "budget": {}}):
         refused: Final = http.request(method, path, json={**identity, **invalid})
         assert refused.status_code == 422, refused.text
     selected: Final = http.request(method, path, json={**identity, "budget_id": group.budget_id})
@@ -2462,8 +2371,10 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> N
     assert custom.json()["budget_id"] not in database.litellm_budgettable.rows
     cleared: Final = http.request(method, path, json={**identity, "budget_id": None})
     assert cleared.status_code == 200 and cleared.json()["budget_id"] is None, cleared.text
+    assert cleared.json()["budget_is_shared"] is False
     other: Final = http.get("/management/v1/customer_organizations/other").json()
     assert other["budget_id"] == group.budget_id and other["budget"]["max_budget"] == 50
+    assert other["budget_is_shared"] is True
     for org_id in ("org", "other"):
         deleted: Final = http.delete(f"/management/v1/customer_organizations/{org_id}", params={"cascade": True})
         assert deleted.status_code == 204, deleted.text
