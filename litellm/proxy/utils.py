@@ -365,6 +365,7 @@ from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 from litellm.utils import (
     add_configured_callback_to_specific_event,
     get_base_model_from_metadata,
+    without_huggingface_tokenizer_downloads,
 )
 
 if TYPE_CHECKING:
@@ -1282,9 +1283,10 @@ def _estimate_dispatched_failure_usage(model: str, request_input: object, system
     the same tokenizer fallback interrupted streams use, so the spend log's
     failure row records what was sent instead of zero."""
     try:
-        input_tokens: Final = count_request_input_tokens(
-            model=model, request_input=request_input, system_input=system_input
-        )
+        with without_huggingface_tokenizer_downloads():
+            input_tokens: Final = count_request_input_tokens(
+                model=model, request_input=request_input, system_input=system_input
+            )
     except Exception:
         return None
     if input_tokens <= 0:
