@@ -43,6 +43,7 @@ from litellm.types.proxy.claude_code_endpoints import (
     UpdatePluginRequest,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 
 def _make_mock_prisma():
@@ -1190,11 +1191,12 @@ async def test_marketplace_auth_required_refuses_the_database_outage_fallback_id
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
     await _register_public_and_private_plugins()
-    litellm.proxy.proxy_server.prisma_client.get_data = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
-    litellm.proxy.proxy_server.prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    keys: Final = install_rust_auth_stores(monkeypatch).key
+    keys.rows[hash_token("sk-not-a-litellm-key")] = httpx.ConnectError("connection refused")
 
     response: Final = await _get_marketplace_over_http({"Authorization": "Bearer sk-not-a-litellm-key"})
 
+    assert keys.lookups == [(hash_token("sk-not-a-litellm-key"), False)]
     assert response.status_code == 503
     assert "www-authenticate" not in response.headers
     assert "public-skill" not in response.text

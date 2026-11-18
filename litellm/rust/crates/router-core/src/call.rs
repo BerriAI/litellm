@@ -283,6 +283,12 @@ fn retried_failure(error: &Error) -> Option<Cow<'_, AttemptError>> {
     }
 }
 
+/// The dynamic queue refused an attempt somewhere in the walk: the request ends with that error,
+/// whichever level or fallback hop raised it.
+fn queue_rejected(error: &Error) -> bool {
+    retried_failure(error).is_some_and(|failure| failure.queue_rejected())
+}
+
 impl Core {
     pub(crate) async fn call(
         &self,
@@ -419,6 +425,7 @@ impl Core {
                 .await
             {
                 Ok(response) => return Ok(response),
+                Err(Some(raised)) if queue_rejected(&raised) => return Err(raised),
                 Err(raised) if defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
                 // Outside the `try` around the regular fallbacks: the level raises it as it is.
                 Err(raised) => {
@@ -443,6 +450,7 @@ impl Core {
             .await
         {
             Ok(response) => return Ok(response),
+            Err(Some(raised)) if queue_rejected(&raised) => return Err(raised),
             Err(raised) => raised,
         };
         if !order_path {
@@ -652,6 +660,7 @@ impl Core {
                         response.attempted_fallbacks = hop;
                         return Ok(response);
                     }
+                    Err(raised) if queue_rejected(&raised) => return Err(Some(raised)),
                     Err(raised) => last_hop_error = Some(raised),
                 }
             }
@@ -740,6 +749,7 @@ impl Core {
         // pick raises (no Python exception stands behind it) has no fallback.
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
+                || failure.queue_rejected()
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
         })
@@ -1384,7 +1394,7 @@ impl Core {
                 })
             }
             Err(failure) => {
-                if !failure.recorded {
+                if !failure.recorded && !failure.queue_rejected() {
                     self.record_failure(snapshot, request, &candidates, &deployment, &failure)
                         .await;
                 }

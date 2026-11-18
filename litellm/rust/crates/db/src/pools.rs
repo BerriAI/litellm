@@ -132,6 +132,12 @@ impl Pools {
         acquire_preferring(&self.writer, self.reader.as_ref()).await
     }
 
+    /// A connection from the writer alone, failing while the writer is down rather than serving a read
+    /// replica that may lag behind its latest commit.
+    pub async fn writer_only(&self) -> Result<Connection, Error> {
+        self.writer.acquire().await
+    }
+
     pub fn recycle_after(&self, error: &Error) -> bool {
         if !error.needs_fresh_connections() {
             return false;
@@ -384,6 +390,30 @@ mod tests {
         assert!(is_read_only(&mut *pools.read_after_write().await?).await?);
 
         assert!(started.elapsed().as_secs_f64() < 1.0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn writer_only_fails_while_the_writer_is_down_despite_a_healthy_reader()
+    -> Result<(), Box<dyn StdError>> {
+        let reader = read_only(&database_endpoint()?);
+        let pools = Pools::new(&unreachable(&reader), Some(&reader))?;
+
+        assert!(pools.writer_only().await.is_err());
+        assert!(pools.writer_only().await.is_err());
+        assert!(is_read_only(&mut *pools.read().await?).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn writer_only_uses_the_writer_when_a_reader_is_configured()
+    -> Result<(), Box<dyn StdError>> {
+        let writer = database_endpoint()?;
+        let pools = Pools::new(&writer, Some(&read_only(&writer)))?;
+
+        assert!(!is_read_only(&mut *pools.writer_only().await?).await?);
         Ok(())
     }
 

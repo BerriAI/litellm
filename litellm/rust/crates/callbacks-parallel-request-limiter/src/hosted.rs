@@ -109,11 +109,9 @@ fn written(body: &mut Value, call_type: &str, cap: i64) {
         return;
     };
     if GENAI_CALL_TYPES.contains(&call_type) {
-        let field = if request.contains_key("config") || !request.contains_key("generationConfig") {
-            "config"
-        } else {
-            "generationConfig"
-        };
+        let field = estimate::genai_config_field(request)
+            .unwrap_or_default()
+            .unwrap_or("config");
         let mut config = match request.get(field) {
             Some(Value::Object(config)) => config.clone(),
             _ => Map::new(),
@@ -346,6 +344,16 @@ mod tests {
         json!({"generationConfig": {"a": 1, "maxOutputTokens": 25}})
     )]
     #[case::genai_neither("generate_content", json!({}), json!({"config": {"maxOutputTokens": 25}}))]
+    #[case::genai_snake_case(
+        "agenerate_content",
+        json!({"generation_config": {"a": 1}}),
+        json!({"generation_config": {"a": 1, "maxOutputTokens": 25}})
+    )]
+    #[case::genai_empty_config_yields(
+        "generate_content",
+        json!({"config": {}, "generationConfig": {"a": 1}}),
+        json!({"config": {}, "generationConfig": {"a": 1, "maxOutputTokens": 25}})
+    )]
     fn an_applied_cap_lands_where_python_writes_it(
         #[case] call_type: &str,
         #[case] body: Value,

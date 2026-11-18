@@ -81,6 +81,15 @@ class OrganizationFields(BaseModel):
 
     alias: str | None = None
     budget: Budget | None = None
+    budget_id: str | None = Field(
+        default=None, min_length=1, description="Organization budget group ID. Null clears it; omit to keep it."
+    )
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "OrganizationFields":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a budget group or a custom budget")
+        return self
 
 
 class OrganizationPatch(OrganizationFields):
@@ -188,11 +197,9 @@ class AuditFields(BaseModel):
     updated_by: str
 
 
-class Organization(AuditFields):
-    member_count: int = Field(default=0, ge=0, description="Current registered members across all customer teams")
-    budget_id: str | None = None
-    budget: Budget | None = None
-    customer_org_id: str
+class BudgetGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     default_budget_template_id: str | None = None
     default_budgets: tuple[OrganizationBudget, ...] = ()
 
@@ -207,6 +214,16 @@ class Organization(AuditFields):
             ),
         }
         return sha256(dumps(configuration, sort_keys=True).encode()).hexdigest()
+
+
+class Organization(AuditFields, BudgetGroups):
+    member_count: int = Field(default=0, ge=0, description="Current registered members across all customer teams")
+    budget_id: str | None = None
+    budget_is_shared: bool | None = Field(
+        default=None, description="Whether budget_id references a reusable organization group"
+    )
+    budget: Budget | None = None
+    customer_org_id: str
 
 
 class Team(AuditFields):
