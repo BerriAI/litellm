@@ -6555,7 +6555,8 @@ def completion(
         typed_deployment_model_info: Final = str_keyed_mapping(
             cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
         )
-        if responses_api_model_info.get("mode") != "responses":
+        routed_to_responses_without_base_model: Final = responses_api_model_info.get("mode") == "responses"
+        if not routed_to_responses_without_base_model:
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -6578,13 +6579,14 @@ def completion(
         if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
-            _raise_if_base_model_bridge_would_drop_a_param(
-                optional_params,
-                custom_llm_provider=custom_llm_provider,
-                model=model,
-                base_model=deployment_base_model,
-                drop_params=drop_unsupported_reasoning,
-            )
+            if not routed_to_responses_without_base_model:
+                _raise_if_base_model_bridge_would_drop_a_param(
+                    optional_params,
+                    custom_llm_provider=custom_llm_provider,
+                    model=model,
+                    base_model=deployment_base_model,
+                    drop_params=drop_unsupported_reasoning,
+                )
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
             bridge_optional_params: Final = _responses_bridge_optional_params(
                 optional_params,
