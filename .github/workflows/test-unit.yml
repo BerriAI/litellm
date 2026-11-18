@@ -115,6 +115,7 @@ jobs:
     name: plan
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
       skipped: ${{ steps.plan.outputs.skipped }}
@@ -131,15 +132,16 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels) }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           mode=core
           [ -n "${PR_NUMBER}" ] || mode=full
           case "${BASE_REF}" in
             rc/* | stable/* | lts/*) mode=full ;;
           esac
-          if jq -e 'any(.[]?; .name == "run-all-unit-shards")' <<< "${LABELS:-[]}" > /dev/null; then
-            mode=full
+          if [ "${mode}" = core ]; then
+            labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')" || mode=full
+            ! grep -qx 'run-all-unit-shards' <<< "${labels:-}" || mode=full
           fi
           if [ "${mode}" = full ]; then
             skipped='["unit-core"]'
@@ -1087,7 +1089,7 @@ jobs:
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
 
       - name: Check litellm/schema.prisma against the merge base
-        if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'db-and-spend' && github.event_name == 'pull_request'
+        if: steps.changes.outputs.decision != 'skip' && (matrix.shard == 'db-and-spend' || matrix.shard == 'core-spend') && github.event_name == 'pull_request'
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
