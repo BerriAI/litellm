@@ -28383,6 +28383,8 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+            /** Customer Margin */
+            customer_margin?: number | null;
             default_customer_member_budget?: components["schemas"]["Budget"] | null;
             /** Default Customer Member Budget Id */
             default_customer_member_budget_id?: string | null;
@@ -28414,6 +28416,11 @@ export interface components {
              */
             auto_create_customers?: boolean | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Customer Margin
+             * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
+             */
+            customer_margin?: number | null;
             default_customer_member_budget?: components["schemas"]["Budget"] | null;
             /** Default Tier Budget Id */
             default_tier_budget_id?: string | null;
@@ -28515,6 +28522,11 @@ export interface components {
              */
             auto_create_customers?: boolean | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Customer Margin
+             * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
+             */
+            customer_margin?: number | null;
             default_customer_member_budget?: components["schemas"]["Budget"] | null;
             /** Default Tier Budget Id */
             default_tier_budget_id?: string | null;

@@ -152,6 +152,7 @@ async def resolve_app_hierarchy(
         update={
             "app_id": app.app_id,
             "app_alias": app.alias,
+            "app_customer_margin": app.customer_margin,
             "scopes": (*base.scopes, *app_hierarchy.scopes),
         }
     )

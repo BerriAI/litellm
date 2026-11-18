@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,7 +13,14 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
-import { appBudgetFields, appBudgetValue, type App, type AppResource } from "./appForms";
+import {
+  appBudgetFields,
+  appBudgetValue,
+  appSurchargeField,
+  appSurchargeValue,
+  type App,
+  type AppResource,
+} from "./appForms";
 import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources } from "./appApi";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
@@ -101,6 +109,7 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
   const [member, setMember] = useState(() => appBudgetFields(app?.default_customer_member_budget));
   const [profile, setProfile] = useState(app?.default_tier_budget_id ?? "");
   const [autoCreate, setAutoCreate] = useState(app?.auto_create_customers ?? true);
+  const [surcharge, setSurcharge] = useState(() => appSurchargeField(app?.customer_margin));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -112,6 +121,11 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
       setError(t("customerPortal.hierarchy.invalidNumber"));
       return;
     }
+    const customerMargin = appSurchargeValue(surcharge);
+    if (!customerMargin.ok) {
+      setError(t("apps.surchargeInvalid"));
+      return;
+    }
     setPending(true);
     setError(null);
     setSaved(false);
@@ -121,6 +135,7 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
         default_customer_member_budget: memberBudget.value,
         default_tier_budget_id: profile || null,
         auto_create_customers: autoCreate,
+        customer_margin: customerMargin.value,
       };
       if (app)
         await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body });
@@ -166,6 +181,22 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
           {t("apps.autoCreateCustomers")}
         </label>
         <p className="text-xs text-muted-foreground">{t("apps.autoCreateCustomersHint")}</p>
+      </div>
+      <div className="max-w-md space-y-1.5 border-t pt-4">
+        <label htmlFor="app-surcharge" className="block text-sm font-medium">
+          {t("apps.surcharge")}
+        </label>
+        <Input
+          id="app-surcharge"
+          type="number"
+          step="any"
+          className="w-full"
+          placeholder={t("apps.surchargePlaceholder")}
+          disabled={pending}
+          value={surcharge}
+          onChange={(event) => setSurcharge(event.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">{t("apps.surchargeHint")}</p>
       </div>
       {error && (
         <p role="alert" className="text-sm text-destructive">

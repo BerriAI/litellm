@@ -438,6 +438,7 @@ class AppStore:
                 else {}
             ),
             **({"auto_create_customers": data.auto_create_customers} if data.auto_create_customers is not None else {}),
+            **({"customer_margin": data.customer_margin} if "customer_margin" in data.model_fields_set else {}),
             "updated_by": actor,
         }
 

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # in-memory adapters implement the external Prisma edge
 
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -196,6 +197,31 @@ async def test_registrars_create_nothing_when_registration_is_off() -> None:
 
     assert await organization("new-tenant", no_database) == Failure(ErrorCode.NOT_FOUND)
     assert await member("org", "new-user", no_database) == Failure(ErrorCode.NOT_FOUND)
+
+
+@pytest.mark.asyncio
+async def test_an_apps_surcharge_is_stored_survives_an_unrelated_patch_and_clears_with_null() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(cast("Prisma", database), NOW)  # cast-ok: in-memory Prisma edge
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    app: Final = await store.create(AppCreate(resource_id="chat"), "admin")
+    assert not isinstance(app, AppFailure)
+    assert app.customer_margin is None
+
+    set_to_five: Final = await store.patch(app.app_id, AppPatch(customer_margin=0.05), "admin")
+    unrelated: Final = await store.patch(app.app_id, AppPatch(auto_create_customers=False), "admin")
+    cleared: Final = await store.patch(app.app_id, AppPatch(customer_margin=None), "admin")
+
+    assert not isinstance(set_to_five, AppFailure) and set_to_five.customer_margin == 0.05
+    assert not isinstance(unrelated, AppFailure) and unrelated.customer_margin == 0.05
+    assert not isinstance(cleared, AppFailure) and cleared.customer_margin is None
+
+
+@pytest.mark.parametrize("value", [-0.01, 10.01])
+def test_an_apps_surcharge_outside_zero_to_ten_is_rejected(value: float) -> None:
+    with pytest.raises(ValidationError):
+        AppPatch(customer_margin=value)
 
 
 @pytest.mark.asyncio
