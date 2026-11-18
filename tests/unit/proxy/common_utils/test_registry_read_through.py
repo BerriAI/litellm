@@ -1143,6 +1143,28 @@ async def test_a_burst_of_unknown_index_names_costs_one_db_read_and_never_hides_
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+async def test_one_invalid_index_row_neither_hides_valid_indexes_nor_makes_every_unknown_name_a_db_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.registry_read_through import lookup_vector_store_index
+    from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+
+    row_without_vector_store_name: Final = {
+        **dict(FakeVectorStoreIndexRow("inserted-by-hand")),
+        "litellm_params": {"vector_store_index": "physical-index"},
+    }
+    _serve_index_table(
+        monkeypatch,
+        AsyncMock(return_value=[row_without_vector_store_name, FakeVectorStoreIndexRow("index-made-on-a")]),
+    )
+
+    assert await lookup_vector_store_index("index-made-on-a") == "managed"
+    assert await lookup_vector_store_index("index-nobody-created") == "unmanaged"
+    assert await lookup_vector_store_index("inserted-by-hand") == "unmanaged"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_vector_store_read_throughs")
 async def test_vector_store_index_lookup_answers_unknown_when_the_db_read_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

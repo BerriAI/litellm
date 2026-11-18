@@ -151,11 +151,23 @@ class VectorStoreIndexRegistry:
         client: "WriterPinnedClient",
     ) -> tuple[LiteLLM_ManagedVectorStoreIndex, ...]:
         rows: Final = await ManagedVectorStoreIndexRepository(client).table.find_many()
-        return tuple(VectorStoreIndexRegistry.index_from_db_row(row) for row in rows)
+        indexes: Final = tuple(VectorStoreIndexRegistry._valid_index_from_db_row(row) for row in rows)
+        return tuple(index for index in indexes if index is not None)
 
     @staticmethod
     def index_from_db_row(row: "Iterable[tuple[str, object]]") -> LiteLLM_ManagedVectorStoreIndex:
         return LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row)))
+
+    @staticmethod
+    def _valid_index_from_db_row(row: "Iterable[tuple[str, object]]") -> LiteLLM_ManagedVectorStoreIndex | None:
+        try:
+            return VectorStoreIndexRegistry.index_from_db_row(row)
+        except ValidationError as e:
+            verbose_logger.warning(
+                "Skipping a vector store index row that fails validation: %s",
+                e.errors(include_url=False, include_context=False, include_input=False),
+            )
+            return None
 
 
 class VectorStoreRegistry:
