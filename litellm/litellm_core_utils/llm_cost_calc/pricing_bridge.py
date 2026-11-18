@@ -128,8 +128,26 @@ class SearchDocument(TypedDict):
     adjust: ReadOnly[AdjustFacts | None]
 
 
+class VideoDocument(TypedDict):
+    kind: ReadOnly[Literal["video"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str | None]
+    seconds: ReadOnly[float | None]
+    resolution: ReadOnly[str | None]
+    videos: ReadOnly[int]
+    input_images: ReadOnly[int]
+    deployment: ReadOnly[bool]
+    requested_row: ReadOnly[bool]
+
+
 UnitsDocument = (
-    SearchDocument | RerankDocument | VectorStoreSearchDocument | OcrDocument | SpeechDocument | TranscriptionDocument
+    VideoDocument
+    | SearchDocument
+    | RerankDocument
+    | VectorStoreSearchDocument
+    | OcrDocument
+    | SpeechDocument
+    | TranscriptionDocument
 )
 
 
