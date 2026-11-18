@@ -103,11 +103,17 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
 # Setup TestClient
 client = TestClient(app)
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @contextmanager
@@ -5808,6 +5814,7 @@ async def test_team_member_delete_cleans_verification_tokens(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_team_member_delete_writes_deleted_audit_log_for_member_keys(
     mock_db_client, mock_admin_auth
 ):
@@ -5857,8 +5864,6 @@ async def test_team_member_delete_writes_deleted_audit_log_for_member_keys(
     mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
         return_value=MagicMock()
     )
-    mock_db_client.db.litellm_jwtkeymapping = MagicMock()
-    mock_db_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
     mock_db_client.db.litellm_deletedverificationtoken = MagicMock()
     mock_db_client.db.litellm_deletedverificationtoken.create_many = AsyncMock(return_value=MagicMock())
 
@@ -5895,6 +5900,7 @@ async def test_team_member_delete_writes_deleted_audit_log_for_member_keys(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_delete_team_writes_deleted_audit_log_for_team_keys(
     monkeypatch,
 ):
@@ -10103,6 +10109,7 @@ async def test_delete_validated_teams_records_and_reports_only_the_teams_still_t
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
@@ -10278,6 +10285,7 @@ class _BroadcastRecordingRedis:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
@@ -10385,6 +10393,7 @@ async def test_deleting_a_500_member_team_reaches_every_member_cache_on_other_wo
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_delete_team_survives_a_failing_cache_backend(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
@@ -10456,6 +10465,7 @@ async def test_delete_team_survives_a_failing_cache_backend(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import TeamMemberDeleteRequest
     from litellm.proxy.common_utils.user_api_key_cache import (
@@ -10599,7 +10609,9 @@ def _seed_jwt_mapping_cache(cache, mapping_rows):
 
 
 @pytest.mark.asyncio
-async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(monkeypatch):
+async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """The member's team keys are deleted in bulk here, not through /key/delete, so the
     jwt_key_mapping cache entries pointing at them must be evicted here too, or every JWT call
     from that identity resolves the deleted token hash and 401s until the mapping TTL expires.
@@ -10614,7 +10626,7 @@ async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_de
         JWTMappingRow("hashed-token-1", "sub", "user-123", "https://issuer.example"),
     )
     kept_row: Final = JWTMappingRow("hashed-other-key", "sub", "user-999")
-    jwt_table: Final = CascadingJWTMappingTable([*doomed_rows, kept_row])
+    jwt_table: Final = CascadingJWTMappingTable(rust_auth_stores.jwt_key_mapping, [*doomed_rows, kept_row])
 
     team = LiteLLM_TeamTable(
         team_id="team-1",
@@ -10663,6 +10675,7 @@ async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_de
 async def test_delete_team_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
+    rust_auth_stores: RustAuthStores,
 ):
     """Same contract as /team/member_delete for the bulk key delete in /team/delete: the
     jwt_key_mapping cache entries of the team's keys, issuer-scoped ones included, are gone
@@ -10675,7 +10688,7 @@ async def test_delete_team_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(
         JWTMappingRow("hashed-doomed-key", "sub", "svc-account", "https://issuer.example"),
     )
     kept_row: Final = JWTMappingRow("hashed-unrelated-key", "sub", "svc-account", "https://other-issuer.example")
-    jwt_table: Final = CascadingJWTMappingTable([*doomed_rows, kept_row])
+    jwt_table: Final = CascadingJWTMappingTable(rust_auth_stores.jwt_key_mapping, [*doomed_rows, kept_row])
 
     team = LiteLLM_TeamTable(
         team_id="team-doomed",
@@ -18095,6 +18108,61 @@ def test_team_admin_can_add_entries_beside_a_bedrock_vendor_cap_no_route_serves(
         )
         is None
     )
+
+
+def test_team_admin_cannot_lift_a_pattern_cap_off_a_global_alias_with_a_model_group_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aliased_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-opus",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={"fast-opus": "bedrock-opus"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", aliased_router)
+    existing: Final = {"fast*": {"max_budget": 10.0, "budget_duration": "1d"}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=existing,
+            requested={**existing, "bedrock-opus": {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=routed_models_of(router=aliased_router, team_id="t1"),
+        )
+    assert exc.value.status_code == 403
+    assert "'fast*'" in exc.value.detail["error"]
+
+
+def test_team_admin_cannot_lift_a_pattern_cap_with_an_access_group_named_like_a_global_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collided_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "real-x",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["shared"]},
+            },
+            {
+                "model_name": "other",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+            },
+        ],
+        model_group_alias={"shared": "other"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", collided_router)
+    existing: Final = {"real-*": {"max_budget": 10.0, "budget_duration": "1d"}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=existing,
+            requested={**existing, "shared": {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=routed_models_of(router=collided_router, team_id="t1"),
+        )
+    assert exc.value.status_code == 403
+    assert "'real-*'" in exc.value.detail["error"]
 
 
 def test_team_admin_cannot_outrank_a_group_cap_through_a_team_model_both_groups_serve() -> None:

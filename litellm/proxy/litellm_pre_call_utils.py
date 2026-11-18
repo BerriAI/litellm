@@ -885,6 +885,14 @@ def _key_or_team_allows_client_pricing_override(
     )
 
 
+def client_pricing_fields_stripped_for(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+    return (
+        frozenset()
+        if _key_or_team_allows_client_pricing_override(user_api_key_dict)
+        else _CLIENT_PRICING_CONTROL_FIELDS
+    )
+
+
 def _opts_out_of_message_redaction(fields: Mapping[str, object]) -> bool:
     return "turn_off_message_logging" in fields and _is_false_like(fields["turn_off_message_logging"])
 
@@ -3834,6 +3842,10 @@ async def _resolve_user_provider_credentials_for_request(
 
     from .credential_endpoints.user_provider_credentials import aget_user_provider_credentials
 
+    secret_fields: Final = data.get("secret_fields")
+    if not isinstance(secret_fields, dict):
+        return
+    secret_fields["user_provider_credentials_user_id"] = user_id
     if prisma_client is None:
         return
     try:
@@ -3848,12 +3860,7 @@ async def _resolve_user_provider_credentials_for_request(
             "_resolve_user_provider_credentials_for_request: failed to load user provider credentials"
         )
         return
-
-    secret_fields: Final = data.get("secret_fields")
-    if not isinstance(secret_fields, dict):
-        return
     secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
-    secret_fields["user_provider_credentials_user_id"] = user_id
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:

@@ -1,6 +1,18 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from typing import ClassVar, Final, Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
+from typing import (
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    Never,
+    NotRequired,
+    Protocol,
+    SupportsIndex,
+    TypedDict,
+    TypeVar,
+    final,
+)
 
 import httpx
 from pydantic import JsonValue
@@ -598,8 +610,6 @@ class _KeyFacts(Protocol):
     @property
     def project_id(self) -> str | None: ...
     @property
-    def end_user_id(self) -> str | None: ...
-    @property
     def last_refreshed_at(self) -> float | None: ...
 
 class _TeamFacts(Protocol):
@@ -1059,6 +1069,27 @@ class RustDenial:
         def __new__(cls, team_id: str) -> RustDenial.TeamNotFound: ...
         @property
         def team_id(self) -> str: ...
+
+    @final
+    class KeyNotFound(RustDenial):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        def __new__(cls, hash: str) -> RustDenial.KeyNotFound: ...
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class NoMatchingJwtPublicKey(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.NoMatchingJwtPublicKey: ...
+        @property
+        def message(self) -> str: ...
+
+    @final
+    class IdJagNotBearer(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        def __new__(cls, message: str) -> RustDenial.IdJagNotBearer: ...
+        @property
+        def message(self) -> str: ...
 
 @final
 class RustAuthOutcome:
@@ -1832,6 +1863,25 @@ class NativeDatabase:
     def close(self) -> Future[None]: ...
 
 @final
+class RustKeyRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyRepository: ...
+    def find(self, token: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustJwtKeyMappingRepository:
+    def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
+    def mapped_token(
+        self, jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None
+    ) -> Future[str | None]: ...
+    def mapped_claims(self, tokens: Sequence[str]) -> Future[list[tuple[str, str, str]]]: ...
+
+@final
+class RustModelAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustModelAccessGroupRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def budgets(self, names: Sequence[str]) -> Future[list[tuple[str, float, float | None, bool]]]: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -1974,11 +2024,12 @@ class Tokenizer:
     def count(self, text: str, fast: bool = False) -> int: ...
     # tiktoken encodings
     def encode_special(self, text: str, allowed: Sequence[str]) -> list[int]: ...
+    def encode_special_strict(self, text: str, allowed: Sequence[str]) -> list[int]: ...
     def encode_with_unstable(self, text: str, allowed: Sequence[str]) -> tuple[list[int], list[list[int]]]: ...
     def encode_single_token(self, piece: bytes) -> int: ...
     def special_tokens(self) -> dict[str, int]: ...
     def max_token_value(self) -> int: ...
-    def is_special_token(self, token: int) -> bool: ...
+    def is_special_token(self, token: SupportsIndex) -> bool: ...
     def token_byte_values(self) -> list[bytes]: ...
     def decode_bytes(self, ids: Sequence[int]) -> bytes: ...
     # Hugging Face tokenizers
@@ -2123,9 +2174,12 @@ __all__ = [
     "RustClaimIdentity",
     "RustDenial",
     "RustIdentity",
+    "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyRepository",
     "RustMappedClaims",
+    "RustModelAccessGroupRepository",
     "RustPlan",
     "RustTeamGrant",
     "RustUpstreamError",

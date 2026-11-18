@@ -24,10 +24,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, pkcs12
 
+from litellm._internal_context import current_request_parent_otel_span
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.proxy.db.db_span import db_event_metadata
@@ -41,6 +42,9 @@ from litellm.proxy.db.token_auth import (
     resolve_database_token_auth,
 )
 from litellm.rust_bridge.database import NativeClientIdentity
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 TOKEN_REFRESH_BUFFER_SECONDS: Final = 180.0
 TOKEN_FALLBACK_REFRESH_SECONDS: Final = 600.0
@@ -154,7 +158,7 @@ class DatabaseServiceHooks(Protocol):
         service: ServiceTypes,
         call_type: str,
         duration: float,
-        parent_otel_span: None = None,
+        parent_otel_span: "Span | None" = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         event_metadata: dict[str, str] | None = None,  # mutable-ok: matches the ServiceLogging hook signature
@@ -166,7 +170,7 @@ class DatabaseServiceHooks(Protocol):
         duration: float,
         error: Exception,
         call_type: str,
-        parent_otel_span: None = None,
+        parent_otel_span: "Span | None" = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         event_metadata: dict[str, str] | None = None,  # mutable-ok: matches the ServiceLogging hook signature
@@ -182,7 +186,9 @@ class ServiceLoggingEvents:
     """Turns native round trips into the ``ServiceTypes.DB`` events ``db_span`` emits.
 
     Rust calls ``record`` from its own threads once per round trip, so the hook is
-    handed to the proxy's event loop rather than awaited here.
+    handed to the proxy's event loop rather than awaited here. A read a request made
+    is recorded inside that request's ``contextvars`` context, so its event parents
+    under the request span.
     """
 
     loop: asyncio.AbstractEventLoop
@@ -200,12 +206,13 @@ class ServiceLoggingEvents:
         service_logging: Final = self.service_logging()
         if service_logging is None:
             return
+        parent_otel_span: Final = current_request_parent_otel_span()
         start_time: Final = datetime.fromtimestamp(started_at, tz=timezone.utc).astimezone().replace(tzinfo=None)
         hook: Final = (
             service_logging.async_service_success_hook(
                 service=ServiceTypes.DB,
                 call_type=call_type,
-                parent_otel_span=None,
+                parent_otel_span=parent_otel_span,
                 duration=duration_seconds,
                 start_time=start_time,
                 end_time=start_time + timedelta(seconds=duration_seconds),
@@ -216,7 +223,7 @@ class ServiceLoggingEvents:
                 error=NativeDatabaseError(failure),
                 service=ServiceTypes.DB,
                 call_type=call_type,
-                parent_otel_span=None,
+                parent_otel_span=parent_otel_span,
                 duration=duration_seconds,
                 start_time=start_time,
                 end_time=start_time + timedelta(seconds=duration_seconds),
