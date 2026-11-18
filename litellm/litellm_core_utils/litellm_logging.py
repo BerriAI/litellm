@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
-from types import MappingProxyType, TracebackType
+from types import FunctionType, MappingProxyType, MethodType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
 
 from httpx import Response, Timeout
@@ -105,6 +105,7 @@ from litellm.integrations.custom_logger_v2.legacy import (
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.integrations.custom_logger_v2.manifest import LegacyBinding
 from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.integrations.custom_logger_v2.rust import RustLogger
 from litellm.integrations.custom_logger_v2.selection import RequestSelection
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
@@ -476,16 +477,37 @@ _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset({"athina", "sentry",
 _FIRST_PARTY_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
 
 
-def _is_first_party_module(module: object) -> bool:
-    return isinstance(module, str) and module.partition(".")[0] in _FIRST_PARTY_PACKAGES and module in sys.modules
+def _attribute_defined_on(owner: object, name: str) -> object:
+    return getattr(owner, "__dict__", {}).get(name)
+
+
+def _is_first_party_module_name(module_name: str) -> bool:
+    return module_name.partition(".")[0] in _FIRST_PARTY_PACKAGES
+
+
+def _is_defined_by_litellm(definition: object) -> bool:
+    module_name: Final = getattr(definition, "__module__", None)
+    qualname: Final = getattr(definition, "__qualname__", None)
+    if not isinstance(module_name, str) or not isinstance(qualname, str):
+        return False
+    if not _is_first_party_module_name(module_name):
+        return False
+    return functools.reduce(_attribute_defined_on, qualname.split("."), sys.modules.get(module_name)) is definition
+
+
+def _callback_definition(owner: object) -> object:
+    if isinstance(owner, RustLogger) and _is_first_party_module_name(type(owner).__module__):
+        return RustLogger
+    return owner if isinstance(owner, FunctionType | type) else type(owner)
 
 
 def _callback_may_read_original_response(callback: object) -> bool:
     if isinstance(callback, str):
         return callback in _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES
-    if not _is_first_party_module(getattr(callback, "__module__", None)):
+    owner: Final = callback.__self__ if isinstance(callback, MethodType) else callback
+    if type(owner) is CustomLogger or not _is_defined_by_litellm(_callback_definition(owner)):
         return True
-    return isinstance(callback, CustomLogger) and callback.reads_original_response
+    return getattr(owner, "reads_original_response", False) is True
 
 
 # Cached lazy import for PrometheusLogger
@@ -2298,7 +2320,12 @@ class Logging(LiteLLMLoggingBaseClass):
             or self.litellm_request_debug
             or is_debugging_on()
             or litellm.set_verbose is True
-            or any(
+            or self._callbacks_may_read_original_response()
+        )
+
+    def _callbacks_may_read_original_response(self) -> bool:
+        try:
+            return any(
                 _callback_may_read_original_response(callback)
                 for callback in itertools.chain(
                     litellm.logging_callback_manager.get_all_callbacks(),
@@ -2311,7 +2338,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.dynamic_async_failure_callbacks or (),
                 )
             )
-        )
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return True
 
     def _log_provider_response_received(self, callback: object, _kwargs: object) -> None:
         try:

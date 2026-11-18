@@ -47,6 +47,7 @@ from litellm.cost_calculator import ocr_batch_cost
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.athina import AthinaLogger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import Abort, CallContext, CustomLoggerV2, Field, Hook, OptOutBy, Patch, on
 from litellm.integrations.custom_logger_v2.host import V2Outcome, get_dispatcher
@@ -79,6 +80,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import upda
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.hooks.parallel_request_limiter_v3_native import ParallelRequestLimiterNativeLogger
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
 from litellm.proxy.mcp_server.operations import fire_mcp_tool_call_failure_logging
@@ -825,13 +827,6 @@ class _UserDefinedLogger(CustomLogger):
     pass
 
 
-class _ModulelessCallback:
-    def __getattribute__(self, name: str) -> object:
-        if name == "__module__":
-            raise AttributeError(name)
-        return super().__getattribute__(name)
-
-
 class _RawResponseRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -1062,7 +1057,8 @@ def test_post_call_keeps_the_json_for_a_per_request_reader(list_name: str, callb
 @pytest.mark.parametrize(
     "callback",
     [
-        pytest.param(CustomLogger(), id="first-party-logger"),
+        pytest.param(_without_init(CustomBatchLogger), id="first-party-logger"),
+        pytest.param(_without_init(CustomBatchLogger).flush_queue, id="first-party-bound-method"),
         pytest.param(litellm.completion, id="first-party-function"),
         pytest.param(_without_init(OpenTelemetryV2), id="otel-v2"),
     ],
@@ -1107,8 +1103,10 @@ def test_post_call_drops_the_json_for_enterprise_hooks(
 def test_post_call_keeps_the_json_for_a_package_that_only_shares_our_prefix(
     monkeypatch: pytest.MonkeyPatch, module_name: str
 ) -> None:
-    monkeypatch.setitem(sys.modules, module_name, ModuleType(module_name))
+    module: Final = ModuleType(module_name)
     hook_class: Final = type("PrefixedHook", (CustomLogger,), {"__module__": module_name})
+    monkeypatch.setattr(module, "PrefixedHook", hook_class, raising=False)
+    monkeypatch.setitem(sys.modules, module_name, module)
     monkeypatch.setattr(litellm, "callbacks", [hook_class()])
 
     assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
@@ -1116,13 +1114,89 @@ def test_post_call_keeps_the_json_for_a_package_that_only_shares_our_prefix(
 
 @pytest.mark.usefixtures("no_response_readers")
 @pytest.mark.parametrize("attribute", ["logger_instance", "function_handler"])
-def test_post_call_keeps_the_json_for_a_callback_loaded_from_a_litellm_config_directory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, attribute: str
+@pytest.mark.parametrize(
+    ("relative_path", "module_name"),
+    [
+        pytest.param("litellm/qa_cb.py", "litellm.qa_cb", id="unknown-module-name"),
+        pytest.param("litellm.py", "litellm", id="shadows-the-package"),
+        pytest.param("litellm/utils.py", "litellm.utils", id="shadows-a-real-module"),
+    ],
+)
+def test_post_call_keeps_the_json_for_a_callback_loaded_from_a_config_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, relative_path: str, module_name: str, attribute: str
 ) -> None:
-    (tmp_path / "litellm").mkdir()
-    (tmp_path / "litellm" / "qa_cb.py").write_text(_CONFIG_LOADED_CALLBACKS)
-    callback: Final = get_instance_fn(f"litellm.qa_cb.{attribute}", str(tmp_path / "config.yaml"))
+    callback_file: Final = tmp_path / relative_path
+    callback_file.parent.mkdir(exist_ok=True)
+    callback_file.write_text(_CONFIG_LOADED_CALLBACKS)
+    callback: Final = get_instance_fn(f"{module_name}.{attribute}", str(tmp_path / "config.yaml"))
     monkeypatch.setattr(litellm, "callbacks", [callback])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+@pytest.mark.parametrize(
+    ("module_name", "qualname"),
+    [
+        pytest.param("litellm.router", "Router", id="same-name-as-a-real-class"),
+        pytest.param("litellm.utils", "outer.<locals>.LocalLogger", id="defined-inside-a-function"),
+    ],
+)
+def test_post_call_keeps_the_json_for_a_class_its_module_does_not_define(
+    monkeypatch: pytest.MonkeyPatch, module_name: str, qualname: str
+) -> None:
+    logger_class: Final = type("Impostor", (CustomLogger,), {"__module__": module_name, "__qualname__": qualname})
+    monkeypatch.setattr(litellm, "callbacks", [logger_class()])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+def _raise_lookup_failure(name: str) -> object:
+    raise RuntimeError(name)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_does_not_run_lazy_module_lookups_while_classifying_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lazy_module: Final = ModuleType("litellm.lazy_probe")
+    monkeypatch.setattr(lazy_module, "__getattr__", _raise_lookup_failure, raising=False)
+    monkeypatch.setitem(sys.modules, lazy_module.__name__, lazy_module)
+    logger_class: Final = type("LazyLogger", (CustomLogger,), {"__module__": lazy_module.__name__})
+    monkeypatch.setattr(litellm, "callbacks", [logger_class()])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_drops_the_json_for_a_generated_native_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    generated_class: Final = type(
+        "generated_native_logger",
+        (ParallelRequestLimiterNativeLogger,),
+        {"__module__": ParallelRequestLimiterNativeLogger.__module__},
+    )
+    monkeypatch.setattr(litellm, "callbacks", [generated_class.__new__(generated_class)])
+
+    _assert_not_retained(_retained_response(_request_logging()))
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_keeps_the_json_for_a_user_subclass_of_a_native_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    user_class: Final = type(
+        "UserNativeLogger", (ParallelRequestLimiterNativeLogger,), {"__module__": "user_callbacks"}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [user_class.__new__(user_class)])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_keeps_the_json_for_a_base_custom_logger_with_a_patched_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patched_logger: Final = CustomLogger()
+    monkeypatch.setattr(patched_logger, "async_log_success_event", _user_defined_callback)
+    monkeypatch.setattr(litellm, "callbacks", [patched_logger])
 
     assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
 
@@ -1131,14 +1205,36 @@ def test_post_call_keeps_the_json_for_a_callback_loaded_from_a_litellm_config_di
 @pytest.mark.parametrize(
     "callback",
     [
-        pytest.param(_ModulelessCallback(), id="no-module-attribute"),
-        pytest.param(type("NoneModule", (), {"__module__": None})(), id="module-is-none"),
+        pytest.param(_without_init(OpenTelemetry).async_log_success_event, id="first-party-reader-method"),
+        pytest.param(_UserDefinedLogger().log_success_event, id="inherited-method-on-user-logger"),
     ],
 )
-def test_post_call_keeps_the_json_for_a_callback_without_a_module(
-    monkeypatch: pytest.MonkeyPatch, callback: object
+def test_post_call_keeps_the_json_for_a_bound_method_of_a_reader(
+    monkeypatch: pytest.MonkeyPatch, callback: _Callback
 ) -> None:
-    monkeypatch.setattr(litellm, "callbacks", [callback])
+    monkeypatch.setattr(litellm, "success_callback", [callback])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+class _QualnameRaises(type):
+    def __getattribute__(cls, name: str) -> object:
+        if name == "__qualname__":
+            raise RuntimeError(name)
+        return super().__getattribute__(name)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_keeps_the_json_when_a_callback_cannot_be_inspected(monkeypatch: pytest.MonkeyPatch) -> None:
+    malformed_class: Final = _QualnameRaises("Malformed", (), {"__module__": "litellm.utils"})
+    monkeypatch.setattr(litellm, "callbacks", [malformed_class()])
+
+    assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
+
+
+@pytest.mark.usefixtures("no_response_readers")
+def test_post_call_keeps_the_json_for_a_callback_whose_module_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [type("NoneModule", (), {"__module__": None})()])
 
     assert _retained_response(_request_logging()) == json.dumps(_SMALL_RESPONSE)
 
