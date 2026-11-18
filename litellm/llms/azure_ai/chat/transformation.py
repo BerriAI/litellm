@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reaso
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     CHAT_COMPLETIONS_PATH,
+    OPENAI_V1_PATH,
     api_key_header_for_base,
     foundry_project_root,
     foundry_v1_root,
@@ -475,7 +476,15 @@ class AzureAIStudioConfig(OpenAIConfig):
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
 
-        v1_root: Final = foundry_v1_root(original_url)
+        v1_root: Final = foundry_v1_root(original_url) or (
+            OPENAI_V1_PATH
+            if (
+                original_url.host.endswith(".openai.azure.com")
+                and original_url.path.rstrip("/") in ("", "/openai")
+                and query_params.get("api-version") in (None, "v1")
+            )
+            else None
+        )
         if v1_root is not None:
             v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
             if foundry_project_root(original_url):

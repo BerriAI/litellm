@@ -306,6 +306,61 @@ def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_path", "expected_path", "expected_query"),
+    [
+        pytest.param("", "/openai/v1/chat/completions", b"", id="resource-root"),
+        pytest.param("/openai/", "/openai/v1/chat/completions", b"", id="openai-base"),
+        pytest.param(
+            "/openai/v1?api-version=v1",
+            "/openai/v1/chat/completions",
+            b"api-version=v1",
+            id="explicit-v1-base",
+        ),
+        pytest.param(
+            "/openai?api-version=2024-10-21",
+            "/openai/chat/completions",
+            b"api-version=2024-10-21",
+            id="dated-version-preserved",
+        ),
+    ],
+)
+async def test_azure_ai_chat_health_check_routes_openai_resource_base(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    base_path: str,
+    expected_path: str,
+    expected_query: bytes,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    host: Final = "example-resource.openai.azure.com"
+    deployment: Final = "chat-deployment"
+    route: Final = respx_mock.post(host=host).mock(
+        return_value=Response(200, json={**CHAT_COMPLETION_PAYLOAD, "model": deployment})
+    )
+
+    result: Final = await litellm.ahealth_check(
+        model_params={
+            "model": deployment,
+            "custom_llm_provider": "azure_ai",
+            "api_base": f"https://{host}{base_path}",
+            "api_key": "azure-ai-test-key",
+            "max_retries": 0,
+        },
+        mode="chat",
+        prompt="Reply with OK",
+    )
+
+    assert "error" not in result, result
+    assert route.call_count == 1
+    request: Final = route.calls.last.request
+    assert request.url.path == expected_path
+    assert request.url.query == expected_query
+    assert request.headers["api-key"] == "azure-ai-test-key"
+    assert json.loads(request.content)["model"] == deployment
+
+
 @pytest.mark.parametrize("api_version", ["preview", None])
 @pytest.mark.parametrize("host", ["example-resource.openai.azure.com", "example-resource.cognitiveservices.azure.com"])
 def test_azure_ai_openai_model_on_resource_v1_base_is_served_and_billed_as_azure(
