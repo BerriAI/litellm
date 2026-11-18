@@ -28,7 +28,7 @@ jobs:
       pull-requests: read
     outputs:
       artifact: ${{ steps.bridge.outputs.artifact }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-16-cores
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
