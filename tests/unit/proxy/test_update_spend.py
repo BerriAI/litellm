@@ -121,7 +121,9 @@ async def test_queued_baseline_observation_is_persisted_during_recovery_cooldown
 
     async def query(_statement: str, *args: object) -> list[dict[str, object]]:
         if args == (record.scope,):
-            return [{"revision": 0, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}]
+            return [
+                {"revision": 0, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}
+            ]
         return []
 
     client.db.query_raw.side_effect = query
@@ -152,7 +154,9 @@ async def test_baseline_recovery_immediately_retries_a_full_claim(
         if not args:
             return next(claims)
         if "FOR UPDATE" in statement:
-            return [{"revision": 1, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}]
+            return [
+                {"revision": 1, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}
+            ]
         return []
 
     client.db.query_raw.side_effect = query
