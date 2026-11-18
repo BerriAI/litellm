@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, count, product
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 import httpx
 import pytest
@@ -23,8 +23,8 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
-Provider = Literal["anthropic", "azure_ai", "bedrock_invoke", "bedrock_mantle", "vertex_ai"]
-Body = dict[str, JsonValue]
+Provider: TypeAlias = Literal["anthropic", "azure_ai", "bedrock_invoke", "bedrock_mantle", "vertex_ai", "openai_passthrough"]
+Body: TypeAlias = dict[str, JsonValue]
 
 _PROVIDERS: Final[tuple[Provider, ...]] = ("anthropic", "azure_ai", "bedrock_invoke", "bedrock_mantle", "vertex_ai")
 _ADAPTIVE_MODELS: Final[Mapping[Provider, str]] = MappingProxyType(
@@ -34,6 +34,7 @@ _ADAPTIVE_MODELS: Final[Mapping[Provider, str]] = MappingProxyType(
         "bedrock_invoke": "bedrock/invoke/anthropic.claude-fable-5-2",
         "bedrock_mantle": "bedrock_mantle/anthropic.claude-fable-5",
         "vertex_ai": "vertex_ai/claude-fable-5-2",
+        "openai_passthrough": "openai/claude-fable-5-2",
     }
 )
 _BUDGET_MODELS: Final[Mapping[Provider, str]] = MappingProxyType(
@@ -111,6 +112,14 @@ def _deployment(scenario: Scenario, provider: Provider, model: str, wire_url: st
                 vertex_location="us-east5",
                 vertex_credentials=service_account_json(_VERTEX_PROJECT, scenario.gateway.upstream_url.rstrip("/")),
                 num_retries=0,
+            )
+        case "openai_passthrough":
+            return scenario.model(
+                model=model,
+                api_base=f"{wire_url}/v1",
+                api_key="scripted-openai-like-key",
+                num_retries=0,
+                model_info={"supported_endpoints": ["/v1/messages"]},
             )
 
 
@@ -255,3 +264,21 @@ def test_guard_other_thinking_rejections_retry_without_thinking(
     assert _replayed_thinking(first) == _SIGNED_BLOCKS, first
     assert _replayed_thinking(second) == (), second
     assert "thinking" not in second, second
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("caller_thinking", [_ADAPTIVE, None], ids=["adaptive_with_display", "no_thinking"])
+def test_guard_openai_compatible_passthrough_retries_binding_mismatch_without_thinking(
+    gateway: Gateway, stream: bool, caller_thinking: Body | None
+) -> None:
+    exchange: Final = _exchange(gateway, "openai_passthrough", stream, (_BINDING_ERROR, None), caller_thinking)
+
+    assert exchange.response.status_code == 200, exchange.response.text
+    assert answer(exchange.marker) in exchange.response.text
+    assert len(exchange.requests) == 2, [request.target for request in exchange.requests]
+    first, second = exchange.bodies
+    assert first.get("thinking") == caller_thinking, first
+    assert _replayed_thinking(first) == _SIGNED_BLOCKS, first
+    assert _replayed_thinking(second) == (), second
+    assert "thinking" not in second, second
+    assert _BINDING_BETA not in _betas("openai_passthrough", exchange.requests[1])
