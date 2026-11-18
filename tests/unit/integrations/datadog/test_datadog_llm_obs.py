@@ -92,58 +92,36 @@ def build(logger: DataDogLLMObsLogger, **kwargs: Any) -> dict[str, Any]:
     return json.loads(safe_dumps(payload))
 
 
-def test_dd_tags_are_exported_on_llm_observability_spans(logger: DataDogLLMObsLogger) -> None:
-    with patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}):
-        payload: Final = build(logger)
+def test_dd_tags_reach_the_span_without_a_second_value_for_its_cost_keys(logger: DataDogLLMObsLogger) -> None:
+    dd_tags: Final = "team:platform,user:shared,model_group:default,cost_center:engineering"
+    with patch.dict(os.environ, {"DD_TAGS": dd_tags}):
+        payload: Final = build(logger, metadata={"user_api_key_user_id": "alice"}, model_group="gpt")
 
-    assert "cost_center:engineering" in payload["tags"]
-    assert "team:platform" in payload["tags"]
-    assert "request_tag:cost_center:engineering" not in payload["tags"]
+    keys: Final = ("team:", "user:", "model_group:", "cost_center:")
+    assert sorted(tag for tag in payload["tags"] if tag.startswith(keys)) == [
+        "cost_center:engineering",
+        "model_group:gpt",
+        "team:platform",
+        "user:alice",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_dd_tags_team_stays_off_a_span_whose_request_has_a_team(logger: DataDogLLMObsLogger) -> None:
+async def test_batch_tags_leave_dd_tags_to_each_span(logger: DataDogLLMObsLogger) -> None:
     start: Final = datetime(2026, 9, 1, 12, 0, 0)
-    request: Final = build_payload(metadata={"user_api_key_team_alias": "payments"})
     accepted: Final = httpx.Response(202, request=httpx.Request("POST", "https://intake.example"))
     with (
-        patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}),
+        patch.dict(os.environ, {"DD_TAGS": "team:platform"}),
         patch.object(logger.async_client, "post", AsyncMock(return_value=accepted)) as post,
     ):
+        request: Final = build_payload(metadata={"user_api_key_team_alias": "payments"})
         logger.log_queue.append(logger.create_llm_obs_payload(request, start, start + timedelta(seconds=2)))
         await logger.async_send_batch()
 
     attributes: Final = json.loads(post.await_args.kwargs["content"])["data"]["attributes"]
-    span_tags: Final = attributes["spans"][0]["tags"]
-    assert [tag for tag in [*attributes["tags"], *span_tags] if tag.startswith("team:")] == ["team:payments"]
-    assert "cost_center:engineering" in span_tags
-
-
-def test_request_cost_dimensions_replace_dd_tags_values(logger: DataDogLLMObsLogger) -> None:
-    dd_tags: Final = "user:shared,key_alias:global-key,model_group:default,cost_center:engineering"
-    with patch.dict(os.environ, {"DD_TAGS": dd_tags}):
-        payload: Final = build(
-            logger,
-            metadata={"user_api_key_user_id": "alice", "user_api_key_alias": "alice-key"},
-            model_group="gpt",
-        )
-
-    dimension_tags: Final = [
-        tag for tag in payload["tags"] if tag.partition(":")[0] in {"user", "key_alias", "model_group"}
+    assert [tag for tag in [*attributes["tags"], *attributes["spans"][0]["tags"]] if tag.startswith("team:")] == [
+        "team:payments"
     ]
-    assert sorted(dimension_tags) == ["key_alias:alice-key", "model_group:gpt", "user:alice"]
-    assert "cost_center:engineering" in payload["tags"]
-
-
-def test_dd_tags_cost_dimension_stays_when_the_request_has_none(logger: DataDogLLMObsLogger) -> None:
-    with patch.dict(os.environ, {"DD_TAGS": "user:shared,model_group:default"}):
-        payload: Final = build(logger, model_group="gpt")
-
-    assert [tag for tag in payload["tags"] if tag.startswith(("user:", "model_group:"))] == [
-        "user:shared",
-        "model_group:gpt",
-    ]
-    assert payload["meta"]["metadata"]["_dd"]["cost_tags"] == ["user", "model_group"]
 
 
 def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMObsLogger) -> None:

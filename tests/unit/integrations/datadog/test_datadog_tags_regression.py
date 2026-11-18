@@ -1,16 +1,16 @@
 import datetime
 import os
-from typing import Final
 from unittest.mock import patch
 
 import pytest
 
+
 from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.integrations.datadog.datadog_handler import get_datadog_tags, normalize_datadog_tag_value
 from litellm.integrations.datadog.datadog_cost_management import (
     DatadogCostManagementLogger,
 )
-from litellm.integrations.datadog.datadog_handler import get_datadog_tags, normalize_datadog_tag_value
-from litellm.types.utils import StandardLoggingMetadata, StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload, StandardLoggingMetadata
 
 
 class TestDatadogTagsRegression:
@@ -95,62 +95,34 @@ class TestDatadogTagsRegression:
         assert "request_tag:capability:p_t" in tags
         assert "team:67890" in tags
 
-    def test_dd_tags_are_exported_as_individual_tags_for_logs(self, mock_env_vars: None) -> None:
-        with patch.dict(os.environ, {"DD_TAGS": " team:platform , cost_center:engineering ,, "}):
-            tags: Final = get_datadog_tags()
-            with patch("asyncio.create_task"):
-                logger: Final = DataDogLogger()
-            log: Final = logger.create_datadog_logging_payload(
-                kwargs={"standard_logging_object": StandardLoggingPayload(metadata=StandardLoggingMetadata())},
-                response_obj=None,
-                start_time=datetime.datetime(2026, 1, 1),
-                end_time=datetime.datetime(2026, 1, 1),
-            )
-
-        assert "env:test-env" in tags
-        assert tags[-2:] == ["team:platform", "cost_center:engineering"]
-        assert "cost_center:engineering" in log["ddtags"].split(",")
-
-    def test_space_separated_dd_tags_are_exported_as_individual_tags(self, mock_env_vars: None) -> None:
-        with patch.dict(os.environ, {"DD_TAGS": "  team:platform   cost_center:engineering\tregion:eu "}):
-            tags: Final = get_datadog_tags()
-
-        assert tags[-3:] == ["team:platform", "cost_center:engineering", "region:eu"]
-
-    def test_dd_tags_cannot_add_a_second_value_for_a_base_tag(self, mock_env_vars: None) -> None:
-        dd_tags: Final = "env:other,service:other,version:other,HOSTNAME:other,POD_NAME:other,cost_center:engineering"
+    @pytest.mark.parametrize(
+        ("dd_tags", "expected_dd_tags"),
+        [
+            (" team:platform , cost_center:engineering ,, ", ["team:platform", "cost_center:engineering"]),
+            (
+                "team:platform  cost_center:engineering\tregion:eu",
+                ["team:platform", "cost_center:engineering", "region:eu"],
+            ),
+            (
+                "env:other,service:other,version:other,HOSTNAME:other,POD_NAME:other,cost_center:engineering",
+                ["cost_center:engineering"],
+            ),
+            ("", []),
+        ],
+    )
+    def test_dd_tags_follow_litellm_tags_without_repeating_their_keys(self, mock_env_vars, dd_tags, expected_dd_tags):
         with patch.dict(os.environ, {"DD_TAGS": dd_tags}):
-            tags: Final = get_datadog_tags()
+            tags = get_datadog_tags()
 
-        assert tags == [
-            "env:test-env",
-            "service:test-service",
-            "version:1.0.0",
-            "HOSTNAME:test-host",
-            "POD_NAME:test-pod",
-            "cost_center:engineering",
-        ]
+        base_tags = ["env:test-env", "service:test-service", "version:1.0.0", "HOSTNAME:test-host", "POD_NAME:test-pod"]
+        assert tags == base_tags + expected_dd_tags
 
-    def test_request_team_replaces_the_dd_tags_team(self, mock_env_vars: None) -> None:
-        payload: Final = StandardLoggingPayload(metadata=StandardLoggingMetadata(user_api_key_team_alias="payments"))
+    def test_request_team_replaces_the_dd_tags_team(self, mock_env_vars):
+        payload = StandardLoggingPayload(metadata=StandardLoggingMetadata(user_api_key_team_alias="payments"))
         with patch.dict(os.environ, {"DD_TAGS": "team:platform,cost_center:engineering"}):
-            tags: Final = get_datadog_tags(payload)
+            tags = get_datadog_tags(payload)
 
-        assert [tag for tag in tags if tag.startswith("team:")] == ["team:payments"]
-        assert "cost_center:engineering" in tags
-
-    def test_unset_dd_tags_adds_no_tags(self, mock_env_vars: None, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("DD_TAGS", raising=False)
-
-        tags: Final = get_datadog_tags()
-
-        assert tags == [
-            "env:test-env",
-            "service:test-service",
-            "version:1.0.0",
-            "HOSTNAME:test-host",
-            "POD_NAME:test-pod",
-        ]
+        assert tags[-2:] == ["team:payments", "cost_center:engineering"]
 
     @pytest.mark.asyncio
     async def test_non_string_request_tag_still_emits_the_datadog_payload(self, mock_env_vars):

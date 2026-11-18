@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Final
 
 from litellm.types.utils import StandardLoggingPayload
@@ -45,49 +45,11 @@ def normalize_datadog_tag_value(value: object) -> str:
     return re.sub(r"_+", "_", normalized_value).strip("_")
 
 
-def get_datadog_global_tags(skip_keys: frozenset[str] = frozenset()) -> tuple[str, ...]:
-    """Split `DD_TAGS` into tags, on commas when it has any and on whitespace otherwise, like ddtrace.
-
-    Tags whose key is in `skip_keys` are left out.
-    """
-    dd_tags: Final = os.getenv("DD_TAGS", "")
-    raw_tags: Final = dd_tags.split(",") if "," in dd_tags else dd_tags.split()
-    stripped_tags: Final = (tag.strip() for tag in raw_tags)
-    return tuple(tag for tag in stripped_tags if tag and tag.partition(":")[0] not in skip_keys)
-
-
-def _get_request_team(standard_logging_object: StandardLoggingPayload | None) -> object:
-    """The team alias or id of the request, or None when it has neither."""
-    if not standard_logging_object:
-        return None
-    metadata: Final = standard_logging_object.get("metadata", {}) or {}
-    return (
-        metadata.get("user_api_key_team_alias")
-        or metadata.get("team_alias")
-        or metadata.get("user_api_key_team_id")
-        or metadata.get("team_id")
-    )
-
-
-def _get_datadog_base_tag_values() -> Mapping[str, str]:
-    """LiteLLM's own `env`, `service`, `version`, `HOSTNAME` and `POD_NAME` tag values."""
-    return {
-        "env": get_datadog_env(),
-        "service": get_datadog_service(),
-        "version": os.getenv("DD_VERSION", "unknown"),
-        "HOSTNAME": get_datadog_hostname(),
-        "POD_NAME": get_datadog_pod_name(),
-    }
-
-
-def get_datadog_base_tags() -> tuple[str, ...]:
-    """LiteLLM's own tags, without `DD_TAGS` or anything from a request."""
-    return tuple(f"{k}:{v}" for k, v in _get_datadog_base_tag_values().items())
-
-
 def get_datadog_tags(
     standard_logging_object: StandardLoggingPayload | None = None,
-    caller_tag_keys: frozenset[str] = frozenset(),
+    *,
+    extra_tags: Sequence[str] = (),
+    include_dd_tags: bool = True,
 ) -> list[str]:
     """Build Datadog tags as a list of individual tag strings.
 
@@ -95,23 +57,42 @@ def get_datadog_tags(
     (which expects tags as an array). For Datadog Logs API (ddtags), join with
     comma: ",".join(get_datadog_tags(...)).
 
-    `DD_TAGS` tags whose key is in `caller_tag_keys` are left out, for keys the caller tags itself.
+    `DD_TAGS` goes last, split on commas or else on whitespace like ddtrace, without keys already tagged.
     """
 
-    base_tags: Final = _get_datadog_base_tag_values()
+    base_tags: Final = {
+        "env": get_datadog_env(),
+        "service": get_datadog_service(),
+        "version": os.getenv("DD_VERSION", "unknown"),
+        "HOSTNAME": get_datadog_hostname(),
+        "POD_NAME": get_datadog_pod_name(),
+    }
 
-    team_tag: Final = _get_request_team(standard_logging_object)
-    litellm_tag_keys: Final = frozenset((*base_tags, *caller_tag_keys, *(("team",) if team_tag else ())))
-    tags: Final[list[str]] = [
-        *(f"{k}:{v}" for k, v in base_tags.items()),
-        *get_datadog_global_tags(skip_keys=litellm_tag_keys),
-    ]
+    tags: Final[list[str]] = [f"{k}:{v}" for k, v in base_tags.items()]
 
     if standard_logging_object:
         request_tags: Final = standard_logging_object.get("request_tags", []) or []
         tags.extend(f"request_tag:{normalize_datadog_tag_value(tag)}" for tag in request_tags)
 
-    if team_tag:
-        tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
+        # Add Team Tag
+        metadata: Final = standard_logging_object.get("metadata", {}) or {}
+        team_tag: Final = (
+            metadata.get("user_api_key_team_alias")
+            or metadata.get("team_alias")
+            or metadata.get("user_api_key_team_id")
+            or metadata.get("team_id")
+        )
+        if team_tag:
+            tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
+
+    tags.extend(extra_tags)
+    if include_dd_tags:
+        dd_tags: Final = os.getenv("DD_TAGS", "")
+        tagged_keys: Final = frozenset(tag.partition(":")[0] for tag in tags)
+        tags.extend(
+            tag
+            for raw_tag in (dd_tags.split(",") if "," in dd_tags else dd_tags.split())
+            if (tag := raw_tag.strip()) and tag.partition(":")[0] not in tagged_keys
+        )
 
     return tags

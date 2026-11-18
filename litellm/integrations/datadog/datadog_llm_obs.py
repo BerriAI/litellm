@@ -23,7 +23,6 @@ from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_BY_LITELM_STRING
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
-    get_datadog_base_tags,
     get_datadog_base_url_from_env,
     get_datadog_service,
     get_datadog_tags,
@@ -586,9 +585,8 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
-                        # Datadog copies batch tags onto every span, so DD_TAGS go on each span instead,
-                        # where the request's own team replaces a DD_TAGS team
-                        tags=list(get_datadog_base_tags()),
+                        # Datadog copies batch tags onto every span, and each span already carries DD_TAGS
+                        tags=get_datadog_tags(include_dd_tags=False),
                         spans=self.log_queue,
                     ),
                 ),
@@ -659,14 +657,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         )
         span_kind: Final = self._get_datadog_span_kind(standard_logging_payload.get("call_type"), metadata_parent_id)
         router_fields: Final = _router_span_fields(standard_logging_payload, redact_prompt_text=redact_payload)
-        request_cost_tags: Final = _cost_dimension_tags(standard_logging_payload, router_fields)
-        span_tags: Final = [
-            *get_datadog_tags(
-                standard_logging_object=standard_logging_payload,
-                caller_tag_keys=frozenset(tag.partition(":")[0] for tag in request_cost_tags),
-            ),
-            *request_cost_tags,
-        ]
+        span_tags: Final = get_datadog_tags(
+            standard_logging_object=standard_logging_payload,
+            extra_tags=_cost_dimension_tags(standard_logging_payload, router_fields),
+        )
         payload_metadata: Final = self._get_dd_llm_obs_payload_metadata(
             standard_logging_payload,
             router_fields=router_fields,
