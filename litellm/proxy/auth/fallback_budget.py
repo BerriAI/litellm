@@ -44,6 +44,10 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
+from litellm.redis.stores.spend_counters import (
+    key_counter,
+    user_counter,
+)
 from litellm.router_api import RegistryReader, RoutingContext
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -133,7 +137,7 @@ async def is_token_within_budget_for_model(
     key_budget: Final = valid_token.max_budget
     if key_budget is not None and valid_token.token is not None:
         key_spend: Final = await _counter_spend(
-            counter_key=f"spend:key:{valid_token.token}",
+            counter_key=key_counter(valid_token.token),
             fallback_spend=valid_token.spend or 0.0,
             max_budget=key_budget,
         )
@@ -149,7 +153,7 @@ async def is_token_within_budget_for_model(
         and (valid_token.team_id is None or _applies_user_budget_to_team_keys())
     ):
         user_spend: Final = await _counter_spend(
-            counter_key=f"spend:user:{valid_token.user_id}",
+            counter_key=user_counter(valid_token.user_id),
             fallback_spend=valid_token.user_spend or 0.0,
             max_budget=user_budget,
         )

@@ -345,10 +345,6 @@ def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbati
 
 
 def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: stream=true transcriptions reach the upstream but its SSE body comes back as application/json "
-        '{"text": "data: ..."}, so OpenAI SDK stream=True callers get no transcript events'
-    )
     wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
@@ -836,12 +832,13 @@ def test_gpt_transcribe_unmeasurable_upload_bills_the_seconds_openai_reports(
     assert _uploaded_files(requests[0]) == (("file", "a.m4a", upload),)
 
 
-def test_gpt_transcribe_measured_upload_bills_the_measured_length_over_reported_seconds(gateway: Gateway) -> None:
+def test_gpt_transcribe_measured_upload_bills_reported_seconds_over_the_measured_length(gateway: Gateway) -> None:
     measured_seconds: Final = 1.0
+    reported_seconds: Final = 7.0
     upload: Final = _silent_wav(measured_seconds)
 
     with (
-        wire_server(lambda request: _openai_gpt_transcribe_reply(request, 7)) as wire,
+        wire_server(lambda request: _openai_gpt_transcribe_reply(request, reported_seconds)) as wire,
         gateway.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -855,9 +852,13 @@ def test_gpt_transcribe_measured_upload_bills_the_measured_length_over_reported_
             {"model": model, "response_format": "json"},
             {"file": ("a.wav", upload, _WAV_CONTENT_TYPE)},
         )
-        expected_cost: Final = measured_seconds * _DEPLOYMENT_COST_PER_SECOND
+        expected_cost: Final = reported_seconds * _DEPLOYMENT_COST_PER_SECOND
 
         assert response.status_code == 200, response.text
+        assert JSON_OBJECT.validate_json(response.content) == {
+            "text": "hello world",
+            "usage": {"type": "duration", "seconds": reported_seconds},
+        }, response.text
         assert math.isclose(_response_cost(response), expected_cost), (_response_cost(response), expected_cost)
         assert math.isclose(_logged_spend(response.headers["x-litellm-call-id"]), expected_cost)
         requests: Final = wire.drain()

@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -315,7 +316,10 @@ def _to_dd_tool_calls(message: Mapping[str, object]) -> tuple[ToolCall, ...]:
             tool_id=_text_field(tool_call, "id"),
             type=_text_field(tool_call, "type", "function"),
         )
-        for tool_call in (raw_tool_calls if isinstance(raw_tool_calls, list) else ())
+        for tool_call in (
+            *anthropic_server_tool_call_params(message),
+            *(raw_tool_calls if isinstance(raw_tool_calls, list) else ()),
+        )
         if isinstance(tool_call, dict)
         for function in [_mapping_field(tool_call, "function")]
     )
