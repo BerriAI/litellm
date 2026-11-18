@@ -13,7 +13,10 @@ use crate::price::{CacheReadMode, CacheTtl, Residency, SearchContextSize, Servic
 use crate::row::RowRef;
 use crate::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage, WebSearch};
 
+pub use crate::a2a::{A2aQuery, AgentUsage};
+pub use crate::guardrail::{GuardrailQuery, GuardrailUse, PromptShield};
 pub use crate::image::{ImageCalculator, ImageQuery};
+pub use crate::mcp::McpQuery;
 pub use crate::ocr::OcrQuery;
 pub use crate::rerank::RerankQuery;
 pub use crate::search::SearchQuery;
@@ -42,9 +45,9 @@ pub enum PriceQuery {
     /// Realtime, Live and Responses websocket sessions
     Session(Header),
     BatchLine(Header),
-    Guardrail(Header),
-    A2a(Header),
-    Mcp(Header),
+    Guardrail(Box<GuardrailQuery>),
+    A2a(Box<A2aQuery>),
+    Mcp(Box<McpQuery>),
 }
 
 /// The kind of a query, named in `Unpriced::NotPorted`
@@ -142,6 +145,8 @@ pub enum PriceSource {
     /// Rows the caller resolved, such as a deployment's own prices, read ahead of the first candidate's catalog row
     /// in the order the kind's main calculator reads them
     Rows { rows: Vec<RowRef> },
+    /// A flat price per request the caller configured, such as an agent's `cost_per_query`
+    PerQuery { rate: UnitPrice },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -4,6 +4,7 @@ Cost calculator for MCP tools.
 
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import McpDocument, price_fee, total_or_zero
 from litellm.types.mcp import MCPServerCostInfo
 from litellm.types.utils import StandardLoggingMCPToolCall
 
@@ -17,10 +18,16 @@ else:
 
 def mcp_tool_cost_per_query(cost_info: MCPServerCostInfo | None, tool_name: str) -> float:
     resolved_cost_info: Final = cost_info or MCPServerCostInfo()
-    tool_name_to_cost_per_query: Final = resolved_cost_info.get("tool_name_to_cost_per_query") or {}
-    if tool_name in tool_name_to_cost_per_query:
-        return tool_name_to_cost_per_query[tool_name]
-    return resolved_cost_info.get("default_cost_per_query") or 0.0
+    return total_or_zero(
+        price_fee(
+            McpDocument(
+                kind="mcp",
+                tool=tool_name,
+                tool_prices=resolved_cost_info.get("tool_name_to_cost_per_query") or {},
+                default_price=resolved_cost_info.get("default_cost_per_query"),
+            )
+        )
+    )
 
 
 def mcp_server_charges_for_tool_calls(cost_info: MCPServerCostInfo | None) -> bool:
