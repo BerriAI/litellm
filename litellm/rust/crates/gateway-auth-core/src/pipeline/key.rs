@@ -226,6 +226,22 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test]
+    async fn a_resolved_key_stored_under_an_empty_hash_is_malformed(settings: KeySettings) {
+        let host = ScriptedHost::default();
+        let record = KeyRecord {
+            token: Some(KeyHash::new("")),
+            ..virtual_key()
+        };
+        assert_eq!(
+            run_resolved(&host, record, &settings)
+                .await
+                .map_err(|refused| *refused.error),
+            Err(KeyDenial::MalformedKey.into())
+        );
+    }
+
+    #[rstest]
     #[case::allowed(true, Ok(KeyIdentity::UserAuthRoute))]
     #[case::disabled(false, Err(KeyDenial::UserAuthDisabled.into()))]
     #[tokio::test]
@@ -785,6 +801,7 @@ mod tests {
     #[rstest]
     #[case::team_newer(Some(at(2)), Some(at(1)), "cached+team+prepared")]
     #[case::team_older(Some(at(1)), Some(at(2)), "cached+prepared")]
+    #[case::refreshed_together(Some(at(1)), Some(at(1)), "cached+prepared")]
     #[case::key_never_refreshed(Some(at(2)), None, "cached+prepared")]
     #[case::team_never_refreshed(None, Some(at(1)), "cached+prepared")]
     #[tokio::test]

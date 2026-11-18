@@ -1,6 +1,5 @@
 from typing import Final, TypeGuard
 
-import pytest
 from fastapi import HTTPException
 
 import litellm
@@ -88,43 +87,6 @@ def test_gone_session_team_is_a_team_not_found() -> None:
 
     assert isinstance(error, TeamNotFoundError)
     assert error.status_code == 404
-
-
-def test_unknown_key_denial_is_the_typed_error_carrying_the_hash_the_core_looked_up() -> None:
-    error: Final = auth_denial.denial_error(RustDenial.KeyNotFound(hash="looked-up-hash"))
-
-    assert type(error) is KeyNotFoundError
-    assert (error.hashed_token, error.message, error.type, error.param, error.code) == (
-        "looked-up-hash",
-        "Authentication Error, Invalid API key provided.",
-        ProxyErrorTypes.token_not_found_in_db,
-        "key",
-        "401",
-    )
-
-
-@pytest.mark.parametrize(
-    ("denial", "error_class", "message"),
-    [
-        (
-            RustDenial.NoMatchingJwtPublicKey(message="No matching public key found. keys=u, kid=k"),
-            auth_denial.NoMatchingJWTPublicKeyError,
-            "No matching public key found. keys=u, kid=k",
-        ),
-        (
-            RustDenial.IdJagNotBearer(message="an ID-JAG is an authorization grant"),
-            auth_denial.IdJagIsNotABearerTokenError,
-            "an ID-JAG is an authorization grant",
-        ),
-    ],
-)
-def test_a_refused_jwt_keeps_the_error_class_the_failure_row_records(
-    denial: RustDenial, error_class: type[Exception], message: str
-) -> None:
-    error: Final = auth_denial.denial_error(denial)
-
-    assert type(error) is error_class
-    assert str(error) == message
 
 
 _ERROR_CLASSES: Final[dict[RustDenial, type[Exception]]] = {

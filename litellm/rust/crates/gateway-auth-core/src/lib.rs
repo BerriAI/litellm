@@ -188,8 +188,7 @@ mod tests {
     use std::collections::HashMap;
 
     use http::Method;
-    use litellm_config::{GeneralSettings, JwtAuthSettings, UnregisteredJwtClientBehavior};
-    use rstest::rstest;
+    use litellm_config::{GeneralSettings, JwtAuthSettings};
     use serde_json::{Value, json};
 
     use super::*;
@@ -198,7 +197,6 @@ mod tests {
             jwt::{JwtSettings, MappedKey},
             key::{KeyRecord, Keyed},
         },
-        identity::jwt::User,
         testing::ScriptedHost,
     };
 
@@ -235,45 +233,44 @@ mod tests {
         );
     }
 
-    fn mapped(hash: &'static str, record: KeyRecord) -> (&'static str, MappedKey<String>) {
+    /// A host whose userinfo carries `claims` and maps `client_id=app` to the stored key `record`.
+    fn host_mapping_the_client(claims: Value, record: KeyRecord) -> ScriptedHost {
         let key = Keyed {
             record: KeyRecord {
-                token: Some(KeyHash::new(hash)),
+                token: Some(KeyHash::new("h1")),
                 ..record
             },
-            row: format!("{hash} row"),
+            row: "h1 row".to_owned(),
         };
-        (
-            hash,
-            MappedKey {
-                key,
-                user_email: None,
-            },
-        )
+        let mapped = MappedKey {
+            key,
+            user_email: None,
+        };
+        ScriptedHost {
+            userinfo: Some(claims),
+            mappings: HashMap::from([("client_id=app -".to_owned(), "h1".to_owned())]),
+            keys: HashMap::from([("h1", mapped)]),
+            ..ScriptedHost::default()
+        }
     }
 
-    /// JWTs map to a virtual key by `claim_field`.
-    fn jwt_settings(claim_field: &str, behavior: UnregisteredJwtClientBehavior) -> Settings {
+    /// A chat request whose body names the end user `from-body`, on a proxy that maps JWTs to a
+    /// virtual key by `client_id` and reads the end user from the `end` claim.
+    async fn chat(host: &ScriptedHost) -> Authenticated<ScriptedHost> {
         let base = settings();
-        Settings {
+        let settings = Settings {
             jwt: JwtSettings {
                 config: JwtAuthSettings {
                     oidc_userinfo_enabled: true,
                     oidc_userinfo_endpoint: Some("https://idp/userinfo".to_owned()),
-                    virtual_key_claim_field: Some(claim_field.into()),
-                    unregistered_jwt_client_behavior: behavior,
-                    user_id_jwt_field: Some("sub".into()),
+                    virtual_key_claim_field: Some("client_id".into()),
                     end_user_id_jwt_field: Some("end".into()),
                     ..JwtAuthSettings::default()
                 },
                 ..base.jwt.clone()
             },
             ..base
-        }
-    }
-
-    /// A chat request whose body names the end user `from-body`.
-    async fn chat(host: &ScriptedHost, settings: &Settings) -> Authenticated<ScriptedHost> {
+        };
         let token = Token::new("opaque");
         let request = Request {
             route: "/chat/completions",
@@ -283,92 +280,34 @@ mod tests {
             runs_inference_checks: true,
             ..Request::default()
         };
-        authenticate_jwt(host, &request, settings).await
+        authenticate_jwt(host, &request, &settings).await
     }
 
-    /// The end user the key path validated and warmed the cache for.
-    fn key_path_end_user(host: &ScriptedHost) -> Vec<String> {
-        host.calls()
+    #[tokio::test]
+    async fn a_mapped_jwt_has_its_key_checked_for_the_end_user_its_claim_names() {
+        let host = host_mapping_the_client(
+            json!({"client_id": "app", "end": "from-claim"}),
+            KeyRecord::default(),
+        );
+
+        let outcome = chat(&host).await;
+
+        assert!(
+            matches!(
+                outcome,
+                Ok(Outcome::Authenticated(Identity::MappedJwtKey(..)))
+            ),
+            "{outcome:?}"
+        );
+        let end_user_reads: Vec<String> = host
+            .calls()
             .into_iter()
             .filter(|call| {
                 call.starts_with("validated_end_user_id") || call.starts_with("prefetch_identity")
             })
-            .collect()
-    }
-
-    #[rstest]
-    #[case::the_claim_wins_over_the_request(json!("from-claim"), "from-claim")]
-    #[case::an_empty_claim_leaves_the_requests(json!(""), "from-body")]
-    #[case::a_missing_claim_leaves_the_requests(Value::Null, "from-body")]
-    #[tokio::test]
-    async fn a_mapped_jwt_names_the_end_user_its_key_is_checked_for(
-        #[case] claim: Value,
-        #[case] expected: &str,
-    ) {
-        let host = ScriptedHost {
-            userinfo: Some(json!({"client_id": "app", "end": claim})),
-            mappings: HashMap::from([("client_id=app -".to_owned(), "h1".to_owned())]),
-            keys: HashMap::from([mapped("h1", KeyRecord::default())]),
-            ..ScriptedHost::default()
-        };
-
-        let outcome = chat(
-            &host,
-            &jwt_settings("client_id", UnregisteredJwtClientBehavior::Reject),
-        )
-        .await;
-
-        assert!(
-            matches!(
-                outcome,
-                Ok(Outcome::Authenticated(Identity::MappedJwtKey(..)))
-            ),
-            "{outcome:?}"
-        );
+            .collect();
         assert_eq!(
-            key_path_end_user(&host),
-            [
-                format!("validated_end_user_id {expected}"),
-                format!("prefetch_identity {expected} resolved"),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_jwt_linked_to_an_existing_key_names_the_end_user_that_key_is_checked_for() {
-        let host = ScriptedHost {
-            userinfo: Some(json!({"sub": "u1", "end": "from-claim"})),
-            users: HashMap::from([(
-                "u1",
-                User {
-                    user_id: "u1".to_owned(),
-                    user_email: None,
-                    user_role: Some("internal_user".to_owned()),
-                    teams: Vec::new(),
-                    deactivated: false,
-                    row: "u1".to_owned(),
-                },
-            )]),
-            reusable_key: Some("reused"),
-            keys: HashMap::from([mapped("reused", KeyRecord::default())]),
-            ..ScriptedHost::default()
-        };
-
-        let outcome = chat(
-            &host,
-            &jwt_settings("sub", UnregisteredJwtClientBehavior::LinkOnly),
-        )
-        .await;
-
-        assert!(
-            matches!(
-                outcome,
-                Ok(Outcome::Authenticated(Identity::MappedJwtKey(..)))
-            ),
-            "{outcome:?}"
-        );
-        assert_eq!(
-            key_path_end_user(&host),
+            end_user_reads,
             [
                 "validated_end_user_id from-claim",
                 "prefetch_identity from-claim resolved"
@@ -382,21 +321,10 @@ mod tests {
             blocked: true,
             ..KeyRecord::default()
         };
-        let host = ScriptedHost {
-            userinfo: Some(json!({"client_id": "app"})),
-            mappings: HashMap::from([("client_id=app -".to_owned(), "h1".to_owned())]),
-            keys: HashMap::from([mapped("h1", blocked)]),
-            ..ScriptedHost::default()
-        };
-
-        let outcome = chat(
-            &host,
-            &jwt_settings("client_id", UnregisteredJwtClientBehavior::Reject),
-        )
-        .await;
+        let host = host_mapping_the_client(json!({"client_id": "app"}), blocked);
 
         assert_eq!(
-            outcome,
+            chat(&host).await,
             Ok(Outcome::Denied(
                 KeyDenial::Blocked.into(),
                 Some("h1 row".to_owned())

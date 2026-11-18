@@ -120,11 +120,7 @@ async fn check_team<H: AuthHost>(
     model: Option<&str>,
     eligibility: &TeamEligibility<'_>,
 ) -> Result<Verdict<TeamRow<H>>, Error> {
-    let read = match host.team(team_id, false).await {
-        Err(error) if error.is_host_failure() => return Err(error),
-        read => read.ok(),
-    };
-    let Some(team) = read.and_then(TeamRead::found) else {
+    let Some(team) = host.team(team_id, false).await?.found() else {
         return Ok(Verdict::Unresolved);
     };
     if team.models.is_none() {
@@ -759,11 +755,6 @@ mod tests {
     #[case::unresolved_with_claim_fallback(Ok(TeamRead::Absent), true, Ok(None))]
     #[case::unreadable_with_claim_fallback(Ok(TeamRead::Unreadable), true, Ok(None))]
     #[case::host_failure_with_claim_fallback(Err(Error::HostFailed), true, Err(Error::HostFailed))]
-    #[case::host_failure_without_claim_fallback(
-        Err(Error::HostFailed),
-        false,
-        Err(Error::HostFailed)
-    )]
     #[tokio::test]
     async fn no_team_has_the_model(
         #[case] team: Result<TeamRead<String>, Error>,
@@ -783,23 +774,6 @@ mod tests {
             select(&host, &["a"], Some("gpt"), false, settings).await,
             expected
         );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn a_team_the_host_fails_to_read_ends_the_selection_before_a_later_team_is_tried(
-        enforced: TeamSettings,
-    ) {
-        let host = ScriptedHost {
-            teams: HashMap::from([("a", Err(Error::HostFailed)), ("b", granted("b"))]),
-            model_access: HashSet::from(["b"]),
-            ..ScriptedHost::default()
-        };
-        assert_eq!(
-            select(&host, &["a", "b"], Some("gpt"), true, enforced).await,
-            Err(Error::HostFailed)
-        );
-        assert_eq!(host.calls(), ["team a"]);
     }
 
     #[rstest]

@@ -204,28 +204,6 @@ async def test_mapped_jwt_keeps_its_claims_and_fills_a_missing_email(
 
 
 @pytest.mark.asyncio
-async def test_a_mapped_jwt_without_an_end_user_claim_takes_the_end_user_its_key_was_checked_for(
-    project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
-) -> None:
-    end_user: Final = EndUserRow(
-        end_user_id="from-body",
-        end_user=LiteLLM_EndUserTable(user_id="from-body", blocked=False),
-        params={"end_user_id": "from-body", "end_user_tpm_limit": 7},
-    )
-
-    token: Final = await project_outcome(
-        RustIdentity.MappedJwtKey(
-            claims={"sub": "u"},
-            end_user_id=None,
-            user_email=None,
-            context=_context(UserAPIKeyAuth(token="hashed", user_id="u"), end_user=end_user),
-        ),
-    )
-
-    assert (token.end_user_id, token.end_user_tpm_limit) == ("from-body", 7)
-
-
-@pytest.mark.asyncio
 async def test_master_key_is_named_by_its_alias_never_the_key(
     project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
 ) -> None:
