@@ -122,11 +122,15 @@ pub struct CostConfig {
     pub margins: Margins,
 }
 
-/// Names only the host knows: every provider name, and the model names `get_model_info` renames before a lookup
+/// Names only the host knows: every provider name, the model names `get_model_info` renames before a lookup (the
+/// Azure deployment names for every provider, the Vertex AI Llama, Mistral and AI21 names for Vertex AI) and the
+/// Replicate models `completion_cost` bills by run time
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KnownNames {
     pub providers: HashSet<String>,
-    pub renamed_models: HashSet<String>,
+    pub renamed_models: HashMap<String, String>,
+    pub vertex_renamed: HashMap<String, String>,
+    pub replicate_models: HashSet<String>,
 }
 
 /// What the host hands a new snapshot

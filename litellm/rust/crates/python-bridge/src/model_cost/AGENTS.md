@@ -6,6 +6,7 @@
   - It needs the GIL, so Rust code running without the GIL cannot use it
   - Its stamp is the dict's address, length and last key. [model-catalog/src/store/AGENTS.md](../../../model-catalog/src/store/AGENTS.md) says what that misses
 - `host.rs` is the only code that calls Python, by name through `MODULE`. Calls happen with the GIL held and no `NativeModelCostMap` lock held
+  - `PythonNames` is model-catalog's `NameHost` for a pricing call: `infer_provider` (`get_llm_provider`) and `served_row` (the `get_model_info` row of a provider that serves its own, through Python's own lookup cache). A host call that raises answers as a lookup that misses
   - `resolve` reaches `find_key` on this same object, so holding a lock across a host call deadlocks
   - Test `a_host_lookup_that_reaches_find_key_on_the_same_map_finishes` guards this
 - Rows and registrations cross as Python objects, never JSON, because router `model_info` holds `datetime`

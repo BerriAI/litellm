@@ -19,6 +19,7 @@ use crate::cost::{self, NativeRateCard};
 use litellm_callbacks_legacy_python::NativeReceipt;
 
 pub(crate) use fetch::{NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched};
+pub(crate) use host::PythonNames;
 use live::LiveDict;
 pub(crate) use live::row_fields;
 
@@ -331,6 +332,58 @@ impl NativeModelCostMap {
         )
     }
 
+    /// The call `document` describes as `completion_cost` reads it: the name `select_model_name_for_cost_calc` picks
+    /// with the provider the call names, the name `completion_cost` selects, the names its loop walks in main's order, each with the provider it pairs it
+    /// with, and the Bedrock row key every Bedrock candidate prices with beside the registration main merges over it
+    fn cost_candidates(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+    ) -> PyResult<CandidateNames> {
+        let found = cost::cost_candidates(py, &*self.cost_snapshot(py)?, document)?;
+        Ok((
+            found.selected,
+            found.call_selected,
+            found.names,
+            found.bedrock,
+        ))
+    }
+
+    /// The candidates main's loop prices the call `document` describes with, in its order: each one's place among
+    /// the names, the model name and provider it is priced as and the provider the loop holds, then whether the walk
+    /// stops at a candidate only Python prices
+    fn cost_rows(&self, py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<cost::CostRows> {
+        cost::cost_rows(py, &*self.cost_snapshot(py)?, document)
+    }
+
+    /// Prices each usage part of the call `document` describes on its own walk of the call's candidates, as main
+    /// priced each service tier of a Responses WebSocket session, `None` when any part is left to Python. `rows` are
+    /// the rows each part's candidates name by index
+    fn price_parts(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+        rows: Vec<Bound<'_, PyMapping>>,
+    ) -> PyResult<Option<Vec<NativeReceipt>>> {
+        cost::price_parts(py, &*self.cost_snapshot(py)?, document, &rows)
+    }
+
+    /// The names `cost_per_token` looks `model` up with when the caller names `provider`: the key main settles on
+    /// and the name without a leading provider segment
+    #[pyo3(signature = (model, provider=None, region=None))]
+    fn priced_names(
+        &self,
+        py: Python<'_>,
+        model: &str,
+        provider: Option<&str>,
+        region: Option<&str>,
+    ) -> PyResult<(String, String)> {
+        let names = self
+            .cost_snapshot(py)?
+            .priced_names(model, provider, region);
+        Ok((names.model, names.model_without_prefix))
+    }
+
     /// Bills a cost a provider or the gateway in front of it reported, by the policy of the source that stated it: a
     /// receipt whose prompt and completion split the billed total as `split_by` does
     fn price_reported(&self, py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -526,6 +579,14 @@ impl NativeModelCostMap {
     }
 }
 
+/// The selected name, the candidate names and the Bedrock row `cost_candidates` answers with
+type CandidateNames = (
+    Option<String>,
+    Option<String>,
+    Vec<(Option<String>, Option<String>)>,
+    Option<(String, Option<String>, bool)>,
+);
+
 /// The dict Python publishes as `litellm.model_cost`, written through the host
 struct PublishedTable<'a, 'py> {
     map: &'a NativeModelCostMap,
@@ -689,7 +750,7 @@ def generation():
     return rows, (id(rows), len(rows), writes[0], 0), ({}, {}, [])
 
 def known_names():
-    return frozenset({"anthropic"}), frozenset()
+    return frozenset({"anthropic"}), {}, {}, frozenset()
 
 def write(key, row):
     rows[key] = row
@@ -700,13 +761,17 @@ def write(key, row):
     /// The input rate of the first row the snapshot tries for an Anthropic call to `claude-opus-5-5`
     fn priced_input_rate(snapshot: &CostSnapshot) -> Option<f64> {
         let call = litellm_model_catalog::CallIdentity {
-            provider: "anthropic".to_owned(),
+            provider: Some("anthropic".to_owned()),
             request_model: Some("claude-opus-5-5".to_owned()),
             response_model: Some("claude-opus-5-5".to_owned()),
+            loop_provider: Some("anthropic".to_owned()),
             ..Default::default()
         };
-        let candidates = snapshot.candidates(&call);
-        snapshot.row(&candidates.rows.first()?.row)?.lowered.fields["input_cost_per_token"].as_f64()
+        let candidates = snapshot.candidates(&call, &litellm_model_catalog::TableOnly);
+        let litellm_model_catalog::TriedRow::Table(row) = &candidates.rows.first()?.row else {
+            return None;
+        };
+        snapshot.row(row)?.lowered.fields["input_cost_per_token"].as_f64()
     }
 
     #[rstest]
