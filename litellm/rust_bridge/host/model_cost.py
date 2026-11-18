@@ -1,4 +1,4 @@
-"""The ``litellm.model_cost`` questions Rust asks while registering models."""
+"""The ``litellm.model_cost`` questions Rust asks while registering models and pricing calls."""
 
 from __future__ import annotations
 
@@ -16,6 +16,31 @@ def entry(fields: Mapping[str, object], names: tuple[str, ...]) -> AliasedCostEn
 
 published: Final = model_cost_table.published
 write: Final = model_cost_table.write
+
+
+def generation() -> tuple[Mapping[str, object], int, int, int, int, int]:
+    """The published table with what a pricing snapshot is keyed on: its ``ModelCostVersion`` and the identity of the
+    cost discount and margin configs, which are only ever replaced whole."""
+    import litellm
+
+    table: Final = model_cost_table.published()
+    version: Final = model_cost_table.model_cost_version()
+    return (
+        table,
+        version.table,
+        version.size,
+        version.writes,
+        id(litellm.cost_discount_config),
+        id(litellm.cost_margin_config),
+    )
+
+
+def known_names() -> tuple[frozenset[str], frozenset[str]]:
+    """Every provider name, and the model names ``get_model_info`` renames before it looks one up."""
+    import litellm
+    from litellm.types.utils import LlmProvidersSet
+
+    return frozenset(LlmProvidersSet), frozenset({**litellm.azure_llms, **litellm.azure_embedding_models})
 
 
 def resolve(
