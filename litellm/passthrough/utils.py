@@ -25,7 +25,16 @@ _PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
 )
 
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
-_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
+_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple[str, ...]] = ("x-amz-",)
+
+
+def _is_forwarded_pass_through_header(header_name: str) -> bool:
+    if not header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
+        return False
+    forwarded_name: Final = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
+    return forwarded_name not in _PASS_THROUGH_PROTECTED_HEADERS and not any(
+        forwarded_name.startswith(prefix) for prefix in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
+    )
 
 
 class BasePassthroughUtils:
@@ -54,6 +63,10 @@ class BasePassthroughUtils:
         merged_params.update(request_query_params)
 
         return merged_params
+
+    @staticmethod
+    def pass_through_prefixed_headers(request_headers: Mapping[str, str]) -> Mapping[str, str]:
+        return {name: value for name, value in request_headers.items() if _is_forwarded_pass_through_header(name)}
 
     @staticmethod
     def forward_headers_from_request(
