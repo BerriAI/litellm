@@ -189,6 +189,7 @@ mod tests {
 
     use http::Method;
     use litellm_config::{GeneralSettings, JwtAuthSettings};
+    use rstest::rstest;
     use serde_json::{Value, json};
 
     use super::*;
@@ -201,7 +202,10 @@ mod tests {
     };
 
     fn settings() -> Settings {
-        let general = GeneralSettings::default();
+        settings_from(&GeneralSettings::default())
+    }
+
+    fn settings_from(general: &GeneralSettings) -> Settings {
         let facts = HostFacts {
             master_key: Some(MasterKey::new("sk-master")),
             premium: false,
@@ -212,7 +216,41 @@ mod tests {
             metrics_require_auth: false,
             route_groups: crate::test_support::route_groups(),
         };
-        Settings::new(&general, facts, &|_| None)
+        Settings::new(general, facts, &|_| None)
+    }
+
+    #[rstest]
+    #[case::a_route_the_public_group_lists("/health/liveliness", true)]
+    #[case::any_other_route("/chat/completions", false)]
+    fn a_route_is_public_when_the_public_group_lists_it(
+        #[case] route: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_public_route(route, &settings()), expected);
+    }
+
+    #[rstest]
+    #[case::on_an_llm_route(true, true)]
+    #[case::on_a_route_introspection_does_not_cover(false, false)]
+    fn an_opaque_token_is_introspected_once_oauth2_auth_is_on(
+        #[case] is_llm_api_route: bool,
+        #[case] expected: bool,
+    ) {
+        let general = GeneralSettings {
+            enable_oauth2_auth: true,
+            ..GeneralSettings::default()
+        };
+        let token = Token::new("opaque");
+        let request = Request {
+            route: "/chat/completions",
+            token: Some(&token),
+            is_llm_api_route,
+            ..Request::default()
+        };
+        assert_eq!(
+            oauth2_introspection_applies(&request, &settings_from(&general)),
+            expected
+        );
     }
 
     #[tokio::test]

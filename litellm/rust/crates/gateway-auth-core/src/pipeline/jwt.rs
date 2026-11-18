@@ -1061,6 +1061,52 @@ mod tests {
         );
     }
 
+    /// `eng` names the team `t3`.
+    fn eng_alias() -> HashMap<&'static str, Result<AliasRead<String>, Error>> {
+        let aliased = Team {
+            team_id: "t3".to_owned(),
+            models: Some(Vec::new()),
+            row: "t3".to_owned(),
+            ..Team::default()
+        };
+        HashMap::from([("eng", Ok(AliasRead::Found(aliased)))])
+    }
+
+    #[rstest]
+    #[case::every_team_in_its_claims(
+        JwtAuthSettings { team_ids_jwt_field: Some("groups".into()), ..config() },
+        json!({"iss": "https://idp", "sub": "someone-else", "groups": ["t1", "t2"]}),
+        "delegated a1 team=t1 explicit=false allowed=t1,t2"
+    )]
+    #[case::the_team_its_alias_claim_resolves_to(
+        JwtAuthSettings { team_alias_jwt_field: Some("team_name".into()), ..config() },
+        json!({"iss": "https://idp", "sub": "someone-else", "team_name": "eng"}),
+        "delegated a1 team=t3 explicit=false allowed=t3"
+    )]
+    #[tokio::test]
+    async fn a_delegated_agent_may_only_act_for_the_teams_its_token_names(
+        #[case] config: JwtAuthSettings,
+        #[case] claims: Value,
+        #[case] expected: &str,
+    ) {
+        let host = ScriptedHost {
+            managed: Some(agent(AgentMode::Delegated)),
+            delegated_team: Some("t5"),
+            teams: HashMap::from([("t1", team("t1")), ("t2", team("t2")), ("t5", team("t5"))]),
+            aliases: eng_alias(),
+            users: HashMap::from([("u1", user("u1", "proxy_admin", &[]))]),
+            ..host(claims)
+        };
+
+        let identity = authorize_with(&host, request(CHAT), &settings(config), PROVISIONED).await;
+
+        assert_eq!(team_id_of(&identity), Ok(Some("t5")));
+        let asked = calls(&host)
+            .into_iter()
+            .find(|call| call.starts_with("delegated"));
+        assert_eq!(asked.as_deref(), Some(expected));
+    }
+
     /// A managed agent's authentication is recorded only once the request is allowed. An agent a
     /// later check refuses is never recorded, and that check's denial wins over a failed recording.
     #[rstest]
@@ -1828,19 +1874,13 @@ mod tests {
         #[case] team_id: Option<&str>,
         #[case] expected_calls: &[&str],
     ) {
-        let aliased = Team {
-            team_id: "t3".to_owned(),
-            models: Some(Vec::new()),
-            row: "t3".to_owned(),
-            ..Team::default()
-        };
         let host = ScriptedHost {
             teams: HashMap::from([
                 ("t1", team("t1")),
                 ("t2", team("t2")),
                 ("tdef", team("tdef")),
             ]),
-            aliases: HashMap::from([("eng", Ok(AliasRead::Found(aliased)))]),
+            aliases: eng_alias(),
             users: HashMap::from([("u1", user("u1", "internal_user", &["t1"]))]),
             ..host(claims)
         };
@@ -1853,6 +1893,35 @@ mod tests {
             .unwrap();
         assert_eq!(identity.team_id.as_deref(), team_id);
         assert_eq!(calls(&host), expected_calls);
+    }
+
+    #[rstest]
+    #[case::is_a_team_the_header_may_name(json!({"sub": "u1", "team": "t2"}), Some("t2"))]
+    #[case::wins_over_a_team_alias_claim(
+        json!({"sub": "u1", "team": "t2", "team_name": "eng"}),
+        None
+    )]
+    #[tokio::test]
+    async fn a_singular_team_claim(#[case] claims: Value, #[case] header: Option<&'static str>) {
+        let host = ScriptedHost {
+            teams: HashMap::from([("t2", team("t2"))]),
+            aliases: eng_alias(),
+            users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
+            ..host(claims)
+        };
+        let settings = settings(JwtAuthSettings {
+            team_id_jwt_field: Some("team".into()),
+            team_alias_jwt_field: Some("team_name".into()),
+            ..config()
+        });
+        let request = JwtRequest {
+            team_header: header,
+            ..request(CHAT)
+        };
+
+        let identity = authorize_with(&host, request, &settings, None).await;
+
+        assert_eq!(team_id_of(&identity), Ok(Some("t2")));
     }
 
     #[rstest]
