@@ -214,6 +214,13 @@ const customerPortalGroups: MenuGroup[] = [
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
       {
+        key: "apps",
+        page: "apps",
+        label: "apps.title",
+        icon: <Building2 {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
         key: "customer-settings",
         page: "customers/settings",
         label: "customerPortal.hierarchy.settings",

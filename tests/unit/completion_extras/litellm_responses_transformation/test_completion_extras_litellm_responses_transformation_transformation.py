@@ -441,9 +441,13 @@ async def _logged_text_completion(
 ) -> tuple[TextCompletionResponse, _LoggedSuccess, Mapping[str, object]]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _LoggedCallTypes()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
     response_body: Final = _searched_responses_body("openai/gpt-5.3-codex")
-    request: Final = {"model": "openai/gpt-5.3-codex", "prompt": "ping", "api_key": "test-key"}
+    request: Final = {
+        "model": "openai/gpt-5.3-codex",
+        "prompt": "ping",
+        "api_key": "test-key",
+        "success_callback": [recorder],
+    }
 
     with respx.mock(assert_all_called=True) as router:
         router.post(url__startswith="https://api.openai.com/v1/responses").mock(

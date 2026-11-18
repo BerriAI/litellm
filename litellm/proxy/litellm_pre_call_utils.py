@@ -1786,7 +1786,8 @@ def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
     """Names of the request fields through which the caller can change how the provider authenticates the call:
     ``api_key``, ``organization``, and ``headers``, ``extra_headers`` or a ``provider_specific_header`` entry's
     ``extra_headers`` that carry any header besides the key and user details the proxy adds under
-    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers."""
+    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers.
+    """
     carried: Final = {
         "api_key": "api_key" in data,
         "extra_headers": _carries_a_caller_header(data.get("extra_headers")),
@@ -2282,14 +2283,22 @@ class LiteLLMProxyRequestSetup:
             user_api_key_org_alias=user_api_key_dict.organization_alias,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
-            user_api_key_customer_member_id=customer.customer_member_id if customer else None,
-            user_api_key_customer_team_id=customer.customer_team_id if customer else None,
+            user_api_key_customer_member_id=(customer.customer_member_id if customer else None),
+            user_api_key_customer_team_id=(customer.customer_team_id if customer else None),
             user_api_key_customer_org_id=customer.customer_org_id if customer else None,
-            user_api_key_customer_org_alias=customer.customer_org_alias if customer else None,
-            user_api_key_customer_team_alias=customer.customer_team_alias if customer else None,
-            user_api_key_customer_member_alias=customer.customer_member_alias if customer else None,
+            user_api_key_customer_org_alias=(customer.customer_org_alias if customer else None),
+            user_api_key_customer_team_alias=(customer.customer_team_alias if customer else None),
+            user_api_key_customer_member_alias=(customer.customer_member_alias if customer else None),
             user_api_key_customer_budget_scopes=customer_budget_scopes_metadata(customer),
-            user_api_key_customer_hierarchy=customer.model_dump(mode="json") if customer else None,
+            user_api_key_customer_hierarchy=(customer.model_dump(mode="json") if customer else None),
+            **(
+                {
+                    "user_api_key_app_id": customer.app_id,
+                    "user_api_key_app_alias": customer.app_alias,
+                }
+                if customer is not None and customer.app_id is not None and customer.app_alias is not None
+                else {}
+            ),
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(
@@ -2353,6 +2362,13 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
+        if any(key in data[_metadata_variable_name] for key in ("user_api_key_app_id", "user_api_key_app_alias")):
+            incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
+            data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
+                key: value
+                for key, value in incoming_metadata.items()
+                if key not in ("user_api_key_app_id", "user_api_key_app_alias")
+            }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
 

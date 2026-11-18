@@ -50,6 +50,7 @@ MakeCore = Callable[..., RouterCore]
 GROUPS_AB: Final = [deployment("a", "a"), deployment("b", "b")]
 CREATED: Final = "response.created"
 IN_PROGRESS: Final = "response.in_progress"
+OUTPUT_ITEM_ADDED: Final = "response.output_item.added"
 TEXT_DELTA: Final = "response.output_text.delta"
 COMPLETED: Final = "response.completed"
 
@@ -518,6 +519,21 @@ async def test_after_text_the_stream_is_not_retried_in_the_group(make_core: Make
     with pytest.raises(litellm.RateLimitError, match="stream cut"):
         await drain_into(stream, seen)
     assert [getattr(event, "type") for event in seen] == [CREATED, TEXT_DELTA]
+    assert len(host.deployments_called()) == 1
+
+
+async def test_after_an_output_item_reached_the_client_the_stream_is_not_retried_in_the_group(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer(
+        "*", responses_stream(Event(CREATED), Event(IN_PROGRESS), Event(OUTPUT_ITEM_ADDED), error=cut()), retried_ok()
+    )
+    core = make_core(model_list=GROUP_A_TWICE, num_retries=1)
+    stream = await open_stream(core)
+    seen: list[object] = []
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await drain_into(stream, seen)
+    assert [getattr(event, "type") for event in seen] == [CREATED, IN_PROGRESS, OUTPUT_ITEM_ADDED]
     assert len(host.deployments_called()) == 1
 
 
