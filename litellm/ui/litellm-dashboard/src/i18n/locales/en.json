@@ -20921,15 +20921,14 @@
     "tokenUsage": {
       "tokenBreakdown": "Token breakdown",
       "viewTokenBreakdown": "{{total}} total tokens. View breakdown",
-      "cacheTokens": "Cache tokens",
       "cacheReadTokens": "Cache read tokens",
       "cacheWriteTokens": "Cache write tokens",
       "cacheCost": "Cache cost",
       "costUnavailable": "Unavailable",
       "partialCost": "Partial cost",
-      "otherTokens": "Other tokens",
+      "uncachedInputTokens": "Uncached input tokens",
       "unclassifiedTokens": "Unclassified tokens",
-      "inconsistent": "Days with inconsistent cache counts are shown as unclassified tokens."
+      "inconsistent": "Days with inconsistent token counts are shown as unclassified tokens."
     },
     "organizationGroups": {
       "title": "Organization budget groups",

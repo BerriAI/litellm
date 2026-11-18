@@ -15,7 +15,7 @@ import { StackedUsageChart } from "@/components/shared/charts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
 import CustomerCacheCost from "./CustomerCacheCost";
-import { customerCacheTokenSeries, customerUsageSeries } from "./customerUsageChartData";
+import { customerTokenBreakdownSeries, customerUsageSeries } from "./customerUsageChartData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
 import { ModelMark } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
 import type { CustomerUsageMetric } from "./useCustomerHierarchyUsage";
@@ -54,14 +54,14 @@ export default function CustomerUsageTrend({
   appFilter,
 }: CustomerUsageTrendProps) {
   const { t } = useTranslation();
-  const cacheMode = metric === "cache";
-  const displayMetric = cacheMode ? "tokens" : metric;
+  const tokenBreakdown = metric === "cache";
+  const displayMetric = tokenBreakdown ? "tokens" : metric;
   const dailySeries = useMemo(() => {
     if (!data) return { data: [], keys: [], labels: [], colors: [] };
-    return cacheMode
-      ? customerCacheTokenSeries(data.results)
+    return tokenBreakdown
+      ? customerTokenBreakdownSeries(data.results)
       : customerUsageSeries(data, dimension, displayMetric, colorByModel);
-  }, [data, dimension, cacheMode, displayMetric, colorByModel]);
+  }, [data, dimension, tokenBreakdown, displayMetric, colorByModel]);
   const series = useMemo(() => bucketSeries(dailySeries, bucket), [dailySeries, bucket]);
   const bucketValues = useMemo(() => bucketTotals(series), [series]);
   const empty = totals.requests === 0 && totals.tokens === 0 && totals.spend === 0;
@@ -71,7 +71,7 @@ export default function CustomerUsageTrend({
         <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.trend")}</h2>
         <div className="flex flex-wrap items-center gap-3">
           {appFilter}
-          {!cacheMode && (
+          {!tokenBreakdown && (
             <Select value={dimension} onValueChange={(value) => onDimensionChange(value as CustomerUsageDimension)}>
               <SelectTrigger size="sm" aria-label={t("customerPortal.analytics.breakDownBy")}>
                 <span className="text-muted-foreground">{t("customerPortal.analytics.breakDownBy")}</span>
@@ -92,7 +92,7 @@ export default function CustomerUsageTrend({
             options={[
               { value: "spend", label: t("customerPortal.analytics.spend") },
               { value: "tokens", label: t("customerPortal.analytics.tokens") },
-              { value: "cache", label: t("customerPortal.tokenUsage.cacheTokens") },
+              { value: "cache", label: t("customerPortal.tokenUsage.tokenBreakdown") },
               { value: "requests", label: t("customerPortal.analytics.requests") },
             ]}
             onChange={(metric) => onMetricChange(metric)}
@@ -135,7 +135,7 @@ export default function CustomerUsageTrend({
           <div className="mt-3 flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
             {series.labels.map((label, index) => (
               <span key={series.keys[index]} className="inline-flex items-center gap-1.5">
-                {!cacheMode && dimension === "models" ? (
+                {!tokenBreakdown && dimension === "models" ? (
                   <ModelMark model={label} color={series.colors[index]} />
                 ) : (
                   <span
@@ -148,7 +148,7 @@ export default function CustomerUsageTrend({
               </span>
             ))}
           </div>
-          {cacheMode && data && (
+          {tokenBreakdown && data && (
             <>
               <dl className="mt-3 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm tabular-nums">
                 <div className="flex gap-2">

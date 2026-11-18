@@ -15,10 +15,11 @@ import { customerModelBreakdown } from "./customerUsageTotals";
 
 const TOP_SERIES = 8;
 
-const CACHE_TOKEN_SERIES = [
+const TOKEN_BREAKDOWN_SERIES = [
+  { key: "uncachedInput", label: "customerPortal.tokenUsage.uncachedInputTokens", color: "#10b981" },
   { key: "cacheRead", label: "customerPortal.tokenUsage.cacheReadTokens", color: "#3b82f6" },
   { key: "cacheWrite", label: "customerPortal.tokenUsage.cacheWriteTokens", color: "#a855f7" },
-  { key: "other", label: "customerPortal.tokenUsage.otherTokens", color: "#cbd5e1" },
+  { key: "output", label: "usage.statStrip.tokenPopover.outputTokens", color: "#f59e0b" },
 ] as const;
 const UNCLASSIFIED_TOKEN_SERIES = {
   key: "unclassified",
@@ -26,20 +27,22 @@ const UNCLASSIFIED_TOKEN_SERIES = {
   color: "#64748b",
 } as const;
 
-export const customerCacheTokenSeries = (days: readonly DailyData[]): Series => {
+export const customerTokenBreakdownSeries = (days: readonly DailyData[]): Series => {
   const data = days.map(({ date, metrics }) => {
     const cacheRead = metrics.cache_read_input_tokens ?? 0;
     const cacheWrite = metrics.cache_creation_input_tokens ?? 0;
+    const output = metrics.completion_tokens;
+    const uncachedInput = metrics.prompt_tokens - cacheRead - cacheWrite;
     const total = metrics.total_tokens;
     const point = { date, label: formatDayLabel(date) };
-    if (cacheRead + cacheWrite > Math.min(metrics.prompt_tokens, total)) {
-      return { ...point, cacheRead: 0, cacheWrite: 0, other: 0, unclassified: total };
+    if (Math.min(cacheRead, cacheWrite, output, uncachedInput) < 0 || metrics.prompt_tokens + output !== total) {
+      return { ...point, cacheRead: 0, cacheWrite: 0, uncachedInput: 0, output: 0, unclassified: total };
     }
-    return { ...point, cacheRead, cacheWrite, other: total - cacheRead - cacheWrite, unclassified: 0 };
+    return { ...point, cacheRead, cacheWrite, uncachedInput, output, unclassified: 0 };
   });
   const segments = data.some(({ unclassified }) => unclassified > 0)
-    ? [...CACHE_TOKEN_SERIES, UNCLASSIFIED_TOKEN_SERIES]
-    : CACHE_TOKEN_SERIES;
+    ? [...TOKEN_BREAKDOWN_SERIES, UNCLASSIFIED_TOKEN_SERIES]
+    : TOKEN_BREAKDOWN_SERIES;
   return {
     data,
     keys: segments.map(({ key }) => key),

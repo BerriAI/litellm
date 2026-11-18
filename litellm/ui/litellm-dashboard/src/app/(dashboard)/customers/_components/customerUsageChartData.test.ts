@@ -11,7 +11,7 @@ import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActiv
 import type { DailyData, MetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
 import i18n from "@/i18n/i18n";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
-import { customerCacheTokenSeries, customerUsageSeries } from "./customerUsageChartData";
+import { customerTokenBreakdownSeries, customerUsageSeries } from "./customerUsageChartData";
 import type { CustomerUsageDimension } from "./CustomerUsageRankings";
 
 const metrics = (spend: number, tokens: number, requests: number): SpendMetrics => ({
@@ -104,27 +104,43 @@ const valueAt = (series: Series, label: string, date = "2026-11-01"): number => 
 const colorOf = (series: Series, label: string): string => series.colors[series.labels.indexOf(label)];
 const other = () => i18n.t("usage.overview.otherSeries");
 
-describe("customerCacheTokenSeries", () => {
-  it("stacks customer-wide cache tokens without double-counting total volume", () => {
-    const days = [
-      day("2026-11-01", {
+describe("customerTokenBreakdownSeries", () => {
+  it("stacks uncached input, output and cache tokens without double-counting total volume", () => {
+    const dailyMetrics = [
+      {
         ...metrics(1, 100, 1),
+        prompt_tokens: 85,
+        completion_tokens: 15,
         cache_read_input_tokens: 40,
         cache_creation_input_tokens: 20,
-      }),
-      day("2026-11-02", { ...metrics(2, 200, 1), cache_read_input_tokens: 150 }),
-      day("2026-11-03", { ...metrics(3, 150, 1), prompt_tokens: 100, cache_creation_input_tokens: 120 }),
+      },
+      {
+        ...metrics(2, 200, 1),
+        prompt_tokens: 190,
+        completion_tokens: 10,
+        cache_read_input_tokens: 150,
+      },
+      {
+        ...metrics(3, 150, 1),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        cache_creation_input_tokens: 120,
+      },
+      { ...metrics(4, 75, 1), prompt_tokens: 40, completion_tokens: 25 },
     ];
+    const days = dailyMetrics.map((daily, index) => day(`2026-11-0${index + 1}`, daily));
 
-    const series = customerCacheTokenSeries(days);
+    const series = customerTokenBreakdownSeries(days);
     const week = bucketSeries(series, "week");
     const read = i18n.t("customerPortal.tokenUsage.cacheReadTokens");
     const write = i18n.t("customerPortal.tokenUsage.cacheWriteTokens");
-    const other = i18n.t("customerPortal.tokenUsage.otherTokens");
+    const input = i18n.t("customerPortal.tokenUsage.uncachedInputTokens");
+    const output = i18n.t("usage.statStrip.tokenPopover.outputTokens");
     const unclassified = i18n.t("customerPortal.tokenUsage.unclassifiedTokens");
-    expect([read, write, other, unclassified].map((label) => valueAt(series, label))).toEqual([40, 20, 40, 0]);
-    expect([read, write, other, unclassified].map((label) => valueAt(week, label))).toEqual([190, 20, 90, 150]);
-    expect(bucketTotals(week).get("2026-11-01")).toBe(450);
+    const labels = [input, output, read, write, unclassified];
+    expect(labels.map((label) => valueAt(series, label))).toEqual([25, 15, 40, 20, 0]);
+    expect(labels.map((label) => valueAt(week, label))).toEqual([65, 25, 190, 20, 225]);
+    expect(bucketTotals(week).get("2026-11-01")).toBe(525);
   });
 });
 

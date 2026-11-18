@@ -386,16 +386,17 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(activityUrl("customer_organizations", "org-1")?.searchParams.get("end_date")).toBe("2026-11-03");
   });
 
-  it("shows the customer-wide cache breakdown in the Usage over time chart", async () => {
+  it("shows the customer-wide token breakdown in the Usage over time chart", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
     await screen.findByRole("table", { name: "Models" });
     const trend = within(screen.getByRole("region", { name: "Usage over time" }));
-    await user.click(trend.getByRole("radio", { name: "Cache tokens" }));
-    expect(trend.getByRole("radio", { name: "Cache tokens" })).toBeChecked();
+    await user.click(trend.getByRole("radio", { name: "Token breakdown" }));
+    expect(trend.getByRole("radio", { name: "Token breakdown" })).toBeChecked();
     expect(trend.getByText("Cache read tokens")).toBeInTheDocument();
     expect(trend.getByText("Cache write tokens")).toBeInTheDocument();
-    expect(trend.getByText("Other tokens")).toBeInTheDocument();
+    expect(trend.getByText("Uncached input tokens")).toBeInTheDocument();
+    expect(trend.getByText("Output tokens")).toBeInTheDocument();
     expect(trend.getByText("700")).toBeInTheDocument();
     expect(trend.getByText("$0.0123")).toBeInTheDocument();
     expect(trend.getByText("Partial cost")).toBeInTheDocument();
