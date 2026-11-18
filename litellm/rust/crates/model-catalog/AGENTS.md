@@ -62,6 +62,7 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 
 - `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
 - `bedrock.rs` reads Bedrock model id spellings. `litellm-llms` re-exports it, so the routes and the lookups share one copy
+- `image.rs` is `Snapshot::fal_sized_row`, fal's `fal_ai/{quality}/{W}-x-{H}/{model}` row nearest an image's pixels (`_keyed_rows`, `_keyed_cost_per_image`), read through `LiveTable::keys_with` in row order. `fal_parity.json` is main's fal.ai `cost_calculator` and `fal_ai_passthrough_cost` answer for each case, captured once, and the `fal_parity` tests pick and price each case over the bundled rows
 - `cost.rs` is `Snapshot::candidates`, the `/v1/messages` Claude providers only (`CostProvider`). Any call main would price by another path is `AfterRows::Deferred` with its `Deferral`, so Python keeps pricing it. Rows before a deferral are still tried first, because main tries them first
 - `cost_candidates.json` is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
 

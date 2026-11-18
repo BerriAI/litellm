@@ -15,6 +15,7 @@ use crate::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage, Web
 
 pub use crate::a2a::{A2aQuery, AgentUsage};
 pub use crate::batch::{BatchLineQuery, BatchUsage, WritesByTtl};
+pub use crate::fal::{FalCall, FalImage, FalQuery};
 pub use crate::guardrail::{GuardrailQuery, GuardrailUse, PromptShield};
 pub use crate::image::{ImageCalculator, ImageQuery};
 pub use crate::mcp::McpQuery;
@@ -62,6 +63,9 @@ pub enum PriceQuery {
     /// A cost a provider or the gateway in front of it reported
     #[cfg_attr(feature = "serde", serde(skip))]
     Reported(Box<ReportedQuery>),
+    /// A fal.ai image response or queue submission, whose size keyed rows the caller picked
+    #[cfg_attr(feature = "serde", serde(skip))]
+    Fal(Box<FalQuery>),
 }
 
 /// The kind of a query, named in `Unpriced::NotPorted`
@@ -424,7 +428,7 @@ impl PriceQuery {
     pub fn kind(&self) -> Kind {
         match self {
             Self::Tokens(_) => Kind::Tokens,
-            Self::Image(_) => Kind::Image,
+            Self::Image(_) | Self::Fal(_) => Kind::Image,
             Self::Speech(_) => Kind::Speech,
             Self::Transcription(_) => Kind::Transcription,
             Self::Ocr(_) => Kind::Ocr,
