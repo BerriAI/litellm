@@ -100,17 +100,33 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         with the image passed as base64 in the JSON body.
         """
         if prompt is None:
-            raise ValueError("FLUX 2 image edit requires a prompt.")
+            raise litellm.BadRequestError(
+                message="FLUX 2 image edit requires a prompt.",
+                model=model,
+                llm_provider="azure_ai",
+            )
 
         if image is None:
-            raise ValueError("FLUX 2 image edit requires an image.")
+            raise litellm.BadRequestError(
+                message="FLUX 2 image edit requires an image.",
+                model=model,
+                llm_provider="azure_ai",
+            )
 
         images: Final[Sequence[object]] = [*image] if isinstance(image, list) else [image]
         if not images:
-            raise ValueError("FLUX 2 image edit requires at least one image.")
+            raise litellm.BadRequestError(
+                message="FLUX 2 image edit requires at least one image.",
+                model=model,
+                llm_provider="azure_ai",
+            )
         max_reference_images: Final = 10 if "flex" in model.lower() else 8
         if len(images) > max_reference_images:
-            raise ValueError(f"{model} supports at most {max_reference_images} reference images.")
+            raise litellm.BadRequestError(
+                message=f"{model} supports at most {max_reference_images} reference images.",
+                model=model,
+                llm_provider="azure_ai",
+            )
 
         reference_images: Final[Mapping[str, str]] = MappingProxyType(
             {
