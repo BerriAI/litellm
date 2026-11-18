@@ -4506,6 +4506,7 @@ class PythonCore(DeprecatedRouterMembers):
         async def stream_with_fallbacks():
             held_lifecycle_events: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
             response_id_exposed = False  # rebind-ok: set once, before an early-released lifecycle event is yielded
+            output_started = False  # rebind-ok: set once, when the first event is yielded to the client
             try:
                 async for item in cast(  # cast-ok: response iterators are async streams
                     AsyncIterator[object], source_iterator
@@ -4520,6 +4521,7 @@ class PythonCore(DeprecatedRouterMembers):
                     for held_event in held_lifecycle_events:
                         yield held_event
                     held_lifecycle_events = ()
+                    output_started = True
                     yield item
                 for held_event in held_lifecycle_events:
                     yield held_event
@@ -4545,6 +4547,7 @@ class PythonCore(DeprecatedRouterMembers):
                         wrapper,
                         wrapper.adopt_fallback_headers,
                         held_lifecycle_events,
+                        output_started,
                     )
                 ) as recovered_stream:
                     async for recovered_item in recovered_stream:
@@ -4657,12 +4660,13 @@ class PythonCore(DeprecatedRouterMembers):
 
     @staticmethod
     def _responses_stream_retries(
-        e: "MidStreamFallbackError", source_iterator: "BaseResponsesAPIStreamingIterator"
+        e: "MidStreamFallbackError", source_iterator: "BaseResponsesAPIStreamingIterator", output_started: bool
     ) -> bool:
-        """Whether a broken Responses stream retries in its own group first: it broke before any output and
-        before a tool call, with an error the retry rule takes (408, 409, 429, 5xx, or no status), as a
-        ``/v1/messages`` stream does. After output the continuation fallback takes over instead."""
-        if not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
+        """Whether a broken Responses stream retries in its own group first: it broke before the client
+        received any event and before a tool call, with an error the retry rule takes (408, 409, 429, 5xx,
+        or no status), as a ``/v1/messages`` stream does. After output the continuation fallback takes over
+        instead."""
+        if output_started or not _mid_stream_error_before_output(e) or source_iterator.started_tool_call:
             return False
         status_code: Final = _stream_raised_error_status(_mid_stream_retry_trigger(e))
         return status_code is None or bool(python_host.invoke("should_retry")(status_code))
@@ -4675,11 +4679,12 @@ class PythonCore(DeprecatedRouterMembers):
         wrapper: object,
         adopt_headers: Callable[[object], tuple[dict[str, object], dict[str, object]]],  # mutable-ok: hidden params
         held_lifecycle_events: tuple[object, ...],
+        output_started: bool,
     ) -> AsyncGenerator[object, None]:
         """A Responses stream that broke before any output is retried in its own group, then falls back
         with the newest failure once the retries are spent. The primary's held lifecycle events are dropped
         when a retry or a fallback answers."""
-        if not PythonCore._responses_stream_retries(e, source_iterator):
+        if not PythonCore._responses_stream_retries(e, source_iterator, output_started):
             async with contextlib.aclosing(
                 self._aresponses_fallback_attempt(
                     e, source_iterator, initial_kwargs, adopt_headers, held_lifecycle_events
