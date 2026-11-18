@@ -1,4 +1,6 @@
+import os
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +11,7 @@ import anyio
 import pytest
 
 from litellm.proxy.rust_forward.platform import Platform, current_platform
+from litellm.proxy.rust_forward.platform.posix import PosixPlatform
 from litellm.proxy.rust_forward.platform.windows import WindowsPlatform
 from litellm.proxy.rust_forward.supervisor import supervise
 from litellm.proxy.rust_forward.supervisor.children import ChildSpec
@@ -57,6 +60,17 @@ def test_rust_opens_the_public_port_only_once_python_listens(tmp_path: Path, mon
     assert (tmp_path / "rust_saw_python_listening").read_text() == "True"
 POSIX_ONLY: Final = pytest.mark.skipif(sys.platform == "win32", reason="the child traps SIGTERM")
 RUST_MISSING: Final = SpawnFailed(FileNotFoundError("litellm-gateway"))
+
+
+@POSIX_ONLY
+def test_private_connections_disable_nagle_without_event_loop_configuration() -> None:
+    with PosixPlatform().private_listener() as private:
+        with socket.socket(fileno=os.dup(private.pass_fds[0])) as listener:
+            listener.listen()
+            with socket.create_connection(("127.0.0.1", private.port)):
+                connection, _ = listener.accept()
+                with connection:
+                    assert connection.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY) == 1
 
 
 def _children(argv: tuple[str, ...]) -> MappingProxyType[Child, ChildSpec]:

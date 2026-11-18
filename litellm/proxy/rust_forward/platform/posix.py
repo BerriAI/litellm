@@ -26,6 +26,7 @@ class PosixPlatform:
     @contextlib.contextmanager
     def private_listener(self) -> Generator[PlatformListener]:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as private:
+            private.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             private.bind((RUST_HOP, 0))
             _, port = _ADDRESS.validate_python(private.getsockname())
             yield PlatformListener(InheritedFd(private.fileno()), port, (private.fileno(),))
