@@ -35,7 +35,6 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.router_attempt import for_requested_model
 from litellm.router_python_host import python_host
-from litellm.router_rust.surface.model_info import operator_max_input_tokens
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.router import LiteLLM_Params
@@ -264,6 +263,20 @@ def _max_input_tokens(model_info: Mapping[str, object]) -> int | None:
     return max_input_tokens if isinstance(max_input_tokens, int) else None
 
 
+def _caps_below_catalog(
+    registry: PreCallRegistry, model: str, deployment: Mapping[str, object], window: int | None
+) -> bool:
+    model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
+    if window is None or "max_input_tokens" not in model_info:
+        return False
+    uncapped: Final = {
+        **deployment,
+        "model_info": {key: value for key, value in model_info.items() if key != "max_input_tokens"},
+    }
+    catalog_window: Final = _max_input_tokens(_router_model_info(registry, model, uncapped))
+    return catalog_window is not None and window < catalog_window
+
+
 def _items(value: object) -> tuple[object, ...]:
     """The items of a list, tuple or set; nothing for any other value."""
     return tuple(value) if isinstance(value, list | tuple | set | frozenset) else ()  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # the items are read as objects
@@ -400,8 +413,8 @@ class PreCallFacts:
         }
 
     def _window_is_exact(self, id: str) -> bool:  # a deployment id
-        return (
-            self._model_infos[id].get("mode") == "embedding" or operator_max_input_tokens(self._record(id)) is not None
+        return self._model_infos[id].get("mode") == "embedding" or _caps_below_catalog(
+            self._registry, self._model, self._record(id), self._windows[id]
         )
 
     def _estimated(self, models: Mapping[str, str | None]) -> frozenset[str]:

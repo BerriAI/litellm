@@ -122,7 +122,7 @@ pub(crate) struct SelectInputs {
     /// A fallback hop: `run_async_fallback` pops the request's `_target_order`, so only the
     /// hop's own order applies.
     pub fallback_hop: bool,
-    pub context_window_fallback: bool,
+    pub refuse_uncertain: bool,
 }
 
 /// `simple_shuffle`: weighted by `_router_weights[group]`, else `weight`, else `rpm`, else
@@ -535,7 +535,7 @@ impl Core {
                     &resolution.group,
                     filtered.kept,
                     &filtered.uncertain,
-                    inputs.context_window_fallback,
+                    inputs.refuse_uncertain,
                 )?;
             }
             // Only a priority group narrows a listed pass-through pick by order.
@@ -616,7 +616,7 @@ impl Core {
             &resolution.group,
             healthy,
             &uncertain,
-            inputs.context_window_fallback,
+            inputs.refuse_uncertain,
         )?;
 
         // `_without_declared_text_only_deployments`: an image request skips the deployments that

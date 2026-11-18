@@ -19667,19 +19667,30 @@ def test_pre_call_checks_steers_off_a_stand_in_overcount_when_another_deployment
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "deepseek/deepseek-v4-pro"])
+def test_pre_call_checks_enforce_an_operator_cap_below_the_cost_map_window_exactly(model: str):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    catalog_window: Final = litellm.get_model_info(model)["max_input_tokens"]
+    assert catalog_window is not None and catalog_window > tokens
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={tokens - 1}, Got={tokens}"):
+        _kept_ids(_single_deployment(model, tokens - 1), _RUSSIAN_PROMPT)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
     "deployed_model",
     [
-        pytest.param(lambda: "claude-sonnet-5-5", id="below-the-cost-map-window"),
         pytest.param(lambda: _cost_map_window("deepseek/my-small-deepseek-model", 1), id="above-the-cost-map-window"),
         pytest.param(lambda: "deepseek/my-unmapped-deepseek-model", id="not-in-the-cost-map"),
     ],
 )
-def test_pre_call_checks_enforce_an_operator_max_input_tokens_exactly(deployed_model: Callable[[], str]):
+def test_pre_call_checks_keep_the_margin_for_an_operator_window_the_cost_map_does_not_exceed(
+    deployed_model: Callable[[], str],
+):
     tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
 
-    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={tokens - 1}, Got={tokens}"):
-        _kept_ids(_single_deployment(deployed_model(), tokens - 1), _RUSSIAN_PROMPT)
+    assert _kept_ids(_single_deployment(deployed_model(), tokens - 1), _RUSSIAN_PROMPT) == ["only"]
 
 
 def test_pre_call_checks_keep_the_margin_for_a_cost_map_window_a_saved_model_info_echoes():
@@ -19825,6 +19836,44 @@ def test_a_sync_completion_sends_an_uncertain_stand_in_overflow_to_its_context_w
     response: Final = router.completion(model="m", messages=_RUSSIAN_PROMPT)
 
     assert response.choices[0].message.content == "fallback"
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_a_retry_policy_does_not_resend_an_uncertain_stand_in_overflow_the_provider_refused(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = respx_mock.post("https://refusing.local/v1/chat/completions").respond(
+        400,
+        json={
+            "error": {
+                "message": "This model's maximum context length is 1000 tokens",
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+            }
+        },
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {
+                    "model": _uncertain_overflow_model(),
+                    "api_key": "my-fake-key",
+                    "api_base": "https://refusing.local/v1",
+                },
+                "model_info": {"id": "m"},
+            }
+        ],
+        enable_pre_call_checks=True,
+        retry_policy=RetryPolicy(BadRequestErrorRetries=2),
+        retry_after=0,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="maximum context length is 1000 tokens"):
+        await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert provider.call_count == 1
 
 
 @pytest.mark.parametrize(

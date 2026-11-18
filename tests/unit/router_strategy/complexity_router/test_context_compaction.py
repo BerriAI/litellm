@@ -71,12 +71,6 @@ def make_router(
         context_window_fallbacks=[{"auto": ["large"]}] if context_fallback else [])
 
 
-def answer_catalog_window(monkeypatch: pytest.MonkeyPatch, window: int) -> None:
-    monkeypatch.setitem(litellm.model_cost, "arbitrary-answer", {
-        "litellm_provider": "openai", "mode": "chat", "max_input_tokens": window, "max_output_tokens": 64,
-    })
-
-
 def exchange(surface: Surface, phase: str) -> list[dict[str, object]]:
     identifier: Final = f"{phase}-call"
     result: Final = f"{phase} result"
@@ -422,19 +416,15 @@ async def test_client_managed_overflow_keeps_context_window_admission(
 
 
 async def test_client_managed_admission_leaves_an_estimated_overflow_within_the_margin_to_the_provider(
-    wire: tuple[respx.Route, respx.Route], monkeypatch: pytest.MonkeyPatch,
+    wire: tuple[respx.Route, respx.Route],
 ) -> None:
     payload: Final = history("chat")
     estimate: Final = litellm.token_counter(
         custom_tokenizer=stand_in_tokenizer(), messages=payload["messages"], tools=payload["tools"]
     )
-    answer_catalog_window(monkeypatch, 32000)
-    window: Final = min(
-        estimate, make_router(window=None)._count_pre_call_check_tokens(payload["messages"], None, payload)
-    ) - 1
+    window: Final = min(estimate, make_router()._count_pre_call_check_tokens(payload["messages"], None, payload)) - 1
     assert estimate <= window * STAND_IN_OVERCOUNT_MARGIN
-    answer_catalog_window(monkeypatch, window)
-    router: Final = make_router(window=None)
+    router: Final = make_router(window=window)
     deployment: Final = router.get_deployment(model_id="pinned-answer")
     assert deployment is not None
     request: Final = {**payload, "model": "small", "max_tokens": 64, "_context_compaction_state": CompactionState()}

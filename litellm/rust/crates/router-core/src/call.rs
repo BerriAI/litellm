@@ -941,7 +941,7 @@ impl Core {
             excluded_ids: target.excluded.clone(),
             requested: Some(target.group.clone()),
             fallback_hop: at.level > 0,
-            context_window_fallback: context_window_fallback_resolves(
+            refuse_uncertain: context_window_fallback_resolves(
                 snapshot, request, target, at, attempted,
             ),
             ..SelectInputs::default()
@@ -1096,6 +1096,9 @@ impl Core {
             {
                 inputs.skipped_ids.push(id.clone());
             }
+            let provider_refused_window =
+                failure.is_a("ContextWindowExceededError") && failed.error.attempt().is_some();
+            inputs.refuse_uncertain |= provider_refused_window;
             // An endpoint a deployment does not serve is retried on the others, until every
             // one refused (`_every_deployment_refused`).
             if failure.is_a("UnsupportedEndpointError")
@@ -1145,6 +1148,12 @@ impl Core {
                 }
                 Err(next) if next.error.attempt().is_some_and(AttemptError::ends_retries) => {
                     return Err(next);
+                }
+                Err(next)
+                    if provider_refused_window
+                        && matches!(*next.error, Error::ContextWindowExceeded { .. }) =>
+                {
+                    return Err(failed);
                 }
                 Err(next) => {
                     self.pick_failed(at, target, &next.error);

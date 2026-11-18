@@ -186,7 +186,7 @@ pub fn settle(
     model: &str,
     healthy: Vec<Arc<Deployment>>,
     uncertain: &BTreeMap<String, String>,
-    context_window_fallback: bool,
+    refuse_uncertain: bool,
 ) -> Result<Vec<Arc<Deployment>>, Error> {
     let (unsure, fitting): (Vec<_>, Vec<_>) = healthy
         .into_iter()
@@ -194,7 +194,7 @@ pub fn settle(
     if !fitting.is_empty() || unsure.is_empty() {
         return Ok(fitting);
     }
-    if context_window_fallback {
+    if refuse_uncertain {
         return Err(Error::ContextWindowExceeded {
             model: model.to_owned(),
             detail: unsure
@@ -265,7 +265,10 @@ mod tests {
     fn each_deployment_is_checked_against_its_own_count() {
         let a = deployment("a", json!({"model": "openai/a"}), json!({}));
         let b = deployment("b", json!({"model": "openai/b"}), json!({}));
-        let found = facts(&[("a", counted(100, 101, false)), ("b", counted(100, 99, false))]);
+        let found = facts(&[
+            ("a", counted(100, 101, false)),
+            ("b", counted(100, 99, false)),
+        ]);
         let filtered = filter("g", vec![a, b], &[], &found).unwrap();
         assert_eq!(ids(&filtered.kept), ["b"]);
     }
@@ -317,7 +320,10 @@ mod tests {
     fn only_uncertain_deployments_left_go_to_a_fallback_or_the_provider(#[case] fallback: bool) {
         let one = deployment("one", json!({"model": "cohere/a"}), json!({}));
         let two = deployment("two", json!({"model": "cohere/b"}), json!({}));
-        let found = facts(&[("one", counted(100, 150, true)), ("two", counted(120, 150, true))]);
+        let found = facts(&[
+            ("one", counted(100, 150, true)),
+            ("two", counted(120, 150, true)),
+        ]);
         let filtered = filter("g", vec![one, two], &[], &found).unwrap();
         let settled = settle("g", filtered.kept, &filtered.uncertain, fallback);
         if !fallback {
