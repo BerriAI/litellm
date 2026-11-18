@@ -55,7 +55,7 @@ class ElevenLabsTextToSpeechPassthroughLoggingHandler:
         client_frames: Final = _RECORDED_FRAMES.validate_python(
             request_body.get(WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY, ())
         )
-        model: Final = elevenlabs_tts_model(upstream_url)
+        model: Final = elevenlabs_tts_registry_key(upstream_url)
         characters: Final = elevenlabs_tts_characters(client_frames, upstream_frames)
         response_cost: Final = _speech_cost(upstream_url, characters)
 

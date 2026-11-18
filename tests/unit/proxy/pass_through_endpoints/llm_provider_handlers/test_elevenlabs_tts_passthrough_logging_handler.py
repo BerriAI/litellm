@@ -89,16 +89,16 @@ def test_handler_bills_the_characters_elevenlabs_spoke_at_the_registry_rate_and_
 
     expected_cost: Final = _registry_cost("eleven_flash_v2_5", characters)
     assert handler_result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
-    assert handler_result["kwargs"]["model"] == "eleven_flash_v2_5"
+    assert handler_result["kwargs"]["model"] == "elevenlabs/eleven_flash_v2_5"
     assert handler_result["kwargs"]["custom_llm_provider"] == "elevenlabs"
     assert handler_result["kwargs"]["litellm_params"] == {"metadata": {}}
-    assert logging_obj.model == "eleven_flash_v2_5"
-    assert logging_obj.model_call_details["model"] == "eleven_flash_v2_5"
+    assert logging_obj.model == "elevenlabs/eleven_flash_v2_5"
+    assert logging_obj.model_call_details["model"] == "elevenlabs/eleven_flash_v2_5"
     assert logging_obj.model_call_details["custom_llm_provider"] == "elevenlabs"
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
     assert handler_result["result"] == {
         "response": {
-            "model": "eleven_flash_v2_5",
+            "model": "elevenlabs/eleven_flash_v2_5",
             "characters": characters,
             "client_text_frames": len(SESSION_TEXT),
             "upstream_frames": len(upstream_frames),
@@ -122,7 +122,7 @@ def test_handler_bills_the_model_the_session_ran_on() -> None:
 
     assert flash["kwargs"]["response_cost"] == pytest.approx(_registry_cost("eleven_flash_v2_5", 1000))
     assert multilingual["kwargs"]["response_cost"] == pytest.approx(_registry_cost("eleven_multilingual_v2", 1000))
-    assert multilingual["kwargs"]["model"] == "eleven_multilingual_v2"
+    assert multilingual["kwargs"]["model"] == "elevenlabs/eleven_multilingual_v2"
 
 
 def test_handler_charges_in_proportion_to_the_text_spoken() -> None:
@@ -154,7 +154,7 @@ def test_handler_records_no_cost_rather_than_a_stand_in_rate_for_an_unpriced_mod
     )
 
     assert handler_result["kwargs"]["response_cost"] is None
-    assert handler_result["kwargs"]["model"] == "eleven_not_in_registry"
+    assert handler_result["kwargs"]["model"] == "elevenlabs/eleven_not_in_registry"
     assert handler_result["result"]["response"]["characters"] == len("Hello")
 
 
@@ -229,7 +229,7 @@ async def test_success_handler_dispatches_elevenlabs_tts_and_logs_character_spen
 
     assert len(capturing_logger.payloads) == 1
     payload: Final = capturing_logger.payloads[0]
-    assert payload["model"] == "eleven_flash_v2_5"
+    assert payload["model"] == "elevenlabs/eleven_flash_v2_5"
     assert payload["custom_llm_provider"] == "elevenlabs"
     assert payload["response_cost"] == pytest.approx(
         _registry_cost("eleven_flash_v2_5", sum(len(text) for text in SPOKEN_TEXT))
@@ -238,7 +238,7 @@ async def test_success_handler_dispatches_elevenlabs_tts_and_logs_character_spen
     assert payload["id"] == "call-el-e2e"
     assert payload["response"] == {
         "response": {
-            "model": "eleven_flash_v2_5",
+            "model": "elevenlabs/eleven_flash_v2_5",
             "characters": sum(len(text) for text in SPOKEN_TEXT),
             "client_text_frames": len(SESSION_TEXT),
             "upstream_frames": len(upstream_frames),
