@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - main
-      - "rc/**"
-      - "stable/**"
-      - "lts/**"
     paths:
       - "litellm/rust/crates/db/**"
       - "litellm/rust/crates/repositories/**"
