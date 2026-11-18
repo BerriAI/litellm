@@ -19,7 +19,7 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     directory: Final = tmp_path_factory.mktemp("native-search-fallbacks")
 
     def upstream(request):
-        primary: Final = "/primary/" in request.target
+        primary: Final = "/primary/" in request.target or b"all-fail" in request.body
         return Reply(status=503 if primary else 200, body=b'{"native_results":["document"]}')
 
     with wire_server(upstream) as wire, gateway_from_environment() as gateway:
@@ -72,7 +72,7 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
                 )
                 assert ordinary.status_code == 200, ordinary.text
         configuration: Final = yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
-        configuration["router_settings"] = {"cooldown_time": 0}
+        configuration["router_settings"] = {"cooldown_time": 60}
         configuration["vector_store_registry"] = [
             {
                 "vector_store_name": f"{role}-{provider}",
@@ -186,3 +186,18 @@ def test_ordinary_native_search_uses_config_and_db_stores_without_fallbacks(
     assert response.json() == {"native_results": ["document"]}
     assert "x-litellm-vector-store-id" not in response.headers
     assert [request.target for request in wire.drain()] == ["/backup" + expected_path]
+
+
+def test_all_cooled_native_stores_return_retry_after_without_upstream_calls(
+    native_search_gateway: tuple[Gateway, Wire],
+) -> None:
+    gateway, wire = native_search_gateway
+    path: Final = "/azure/indexes/fallback-azure_ai/docs/search"
+    first: Final = gateway.request("POST", path, {"search": "all-fail"})
+    assert first.status_code == 503, first.text
+    wire.drain()
+    cooled: Final = gateway.request("POST", path, {"search": "all-fail"})
+    assert cooled.status_code == 503, cooled.text
+    assert int(cooled.headers["retry-after"]) > 0
+    assert "All configured vector stores are in cooldown" in cooled.text
+    assert wire.drain() == ()

@@ -10,6 +10,7 @@ import httpx
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
 
+from litellm.exceptions import ServiceUnavailableError
 from litellm.llms.opensearch.vector_stores.index_passthrough import (
     IndexPath,
     IndexRefusal,
@@ -212,6 +213,13 @@ async def send_with_vector_store_fallbacks(
         return outcome.value
     if outcome.value is not None:
         return outcome.value
+    if isinstance(outcome.error, ServiceUnavailableError):
+        return httpx.Response(
+            503,
+            headers=outcome.error.response.headers,
+            json={"error": {"message": outcome.error.message, "type": "service_unavailable"}},
+            request=request,
+        )
     if outcome.error is not None:
         raise outcome.error
     raise HTTPException(503, "No vector store could serve the request")
