@@ -2216,13 +2216,6 @@ LLMS_ALIAS_CASES: Final = (
     ("litellm.llms.openai.chat.gpt_reasoning_transformation", "", "_get_effort_level", "get_effort_level", False),
     ("litellm.llms.openai.completion.utils", "", "_transform_prompt", "transform_prompt", False),
     (
-        "litellm.llms.openai.cost_calculation",
-        "",
-        "_video_output_cost_per_second",
-        "video_output_cost_per_second",
-        False,
-    ),
-    (
         "litellm.llms.openai.fine_tuning.handler",
         "",
         "_litellm_fine_tuning_job_from_response",

@@ -3,11 +3,10 @@ Helper util for handling openai-specific cost calculation
 - e.g.: prompt caching
 """
 
+import math
 from collections.abc import Mapping
-from typing import Final, Literal, SupportsFloat, SupportsIndex
-
-from pydantic import TypeAdapter, ValidationError
-from typing_extensions import Buffer
+from types import MappingProxyType
+from typing import Final, Literal
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
@@ -80,71 +79,38 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
     )
 
 
-def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
-    """Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys."""
-    r: Final = resolution.strip().lower()
-    if not r:
-        return None
-    safe: Final = "".join(c for c in r if c.isalnum() or c == "_")
-    if not safe or len(safe) > 24:
-        return None
-    return safe
-
-
-def _native_float(value: object) -> float:
-    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
-        return float(value)
-    raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
-
-
-def video_output_cost_per_second(
-    model_info: Mapping[str, object],
-    video_resolution: str | None,
-) -> float | None:
-    """
-    Per-second video output rate from model_info.
-
-    If ``video_resolution`` is set (e.g. ``1080p``, ``720p``, ``4k``), looks up
-    ``output_cost_per_second_<resolution>`` first (e.g. ``output_cost_per_second_1080p``),
-    then falls back to ``output_cost_per_second``.
-    """
-    r: Final = (video_resolution or "").strip().lower()
-    if r:
-        suffix: Final = _video_resolution_to_cost_field_suffix(r)
-        if suffix is not None:
-            tier_key: Final = f"output_cost_per_second_{suffix}"
-            tier_rate: Final = model_info.get(tier_key)
-            if tier_rate is not None:
-                return _native_float(tier_rate)
-    out: Final = model_info.get("output_cost_per_second")
-    if out is not None:
-        return _native_float(out)
-    return None
-
-
-_video_output_cost_per_second = video_output_cost_per_second
-
-
-_VIDEO_CLIP_PRICES: Final = TypeAdapter(Mapping[str, Mapping[str, float]])
-
-
-def video_clip_cost(model_info: Mapping[str, object], duration: object, resolution: object) -> float | None:
-    if not isinstance(resolution, str):
-        return None
-    try:
-        prices: Final = _VIDEO_CLIP_PRICES.validate_python(model_info.get("output_cost_per_video_clip"))
-    except ValidationError:
-        return None
+def clip_seconds(duration: object) -> float | None:
+    """A request's ``duration`` as the positive, finite seconds a clip table cell is rounded from, else ``None``."""
     if isinstance(duration, bool) or not isinstance(duration, (str, int, float)):
         return None
     try:
-        duration_seconds: Final = float(duration)
-        if duration_seconds <= 0:
-            return None
-        requested_key: Final = f"{round(duration_seconds)}s"
+        seconds: Final = float(duration)
     except (ValueError, OverflowError):
         return None
-    return prices.get(requested_key, {}).get(resolution.strip().lower())
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def video_clip_cost(model_info: Mapping[str, object], duration: object, resolution: object) -> float | None:
+    """The ``output_cost_per_video_clip`` cell for ``duration`` rounded to whole seconds and ``resolution``, ``None``
+    when the table has no such cell."""
+    seconds: Final = clip_seconds(duration)
+    if seconds is None or not isinstance(resolution, str):
+        return None
+    outcome: Final = price_units(
+        VideoDocument(
+            kind="video",
+            model="video_clip",
+            provider=None,
+            seconds=seconds,
+            resolution=resolution,
+            videos=1,
+            input_images=0,
+            deployment=False,
+            requested_row=False,
+        ),
+        catalog=MappingProxyType({"output_cost_per_video_clip": model_info.get("output_cost_per_video_clip")}),
+    )
+    return outcome.total if isinstance(outcome, NativeReceipt) else None
 
 
 def priced_video(

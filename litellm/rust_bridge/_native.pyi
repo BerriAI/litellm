@@ -251,6 +251,12 @@ class NativeModelCostMap:
         tables: Sequence[Mapping[str, object]] = ...,
         catalog: Mapping[str, object] | None = None,
     ) -> NativeReceipt | NativeUnpriced: ...
+    def price_fal(
+        self,
+        document: Mapping[str, object],
+        tables: Sequence[Mapping[str, object]] = ...,
+        catalog: Mapping[str, object] | None = None,
+    ) -> NativeReceipt | NativeUnpriced: ...
     def price_fee(self, document: Mapping[str, object]) -> NativeReceipt | NativeUnpriced: ...
     def price_session(
         self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]
