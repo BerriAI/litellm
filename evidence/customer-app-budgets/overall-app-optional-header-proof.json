@@ -1,0 +1,39 @@
+[
+  {
+    "phase": "before",
+    "request": "POST /v1/chat/completions",
+    "app": "chat",
+    "app_header_omitted": true,
+    "customer_headers_omitted": true,
+    "configured_overall_app_budget": 0,
+    "status": 200,
+    "usage": {
+      "completion_tokens": 4,
+      "prompt_tokens": 15,
+      "total_tokens": 19,
+      "completion_tokens_details": {
+        "reasoning_tokens": 0,
+        "text_tokens": 4
+      },
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "text_tokens": 15,
+        "cache_write_tokens": 0,
+        "cache_creation_tokens": 0
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    },
+    "source_revision": "6915477745473d1fe7d4fe879b11e509edbe0a19"
+  },
+  {
+    "phase": "after",
+    "request": "POST /v1/chat/completions",
+    "app": "chat",
+    "app_header_omitted": true,
+    "customer_headers_omitted": true,
+    "configured_overall_app_budget": 0,
+    "status": 422,
+    "source_revision": "9706a91a0cad9ca5097ca29a2eb1bee935ccf77b"
+  }
+]

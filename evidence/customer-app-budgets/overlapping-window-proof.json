@@ -1,0 +1,60 @@
+{
+  "proof_type": "Controlled replay through the real budget counter and accounting projection functions; no provider request or external database.",
+  "captured_at": "2026-11-18T07:34:46.434812+00:00",
+  "source_path": "litellm/types/proxy/auth/customer_hierarchy.py",
+  "before_revision": "6915477745473d1fe7d4fe879b11e509edbe0a19",
+  "before_helper_sha256": "fdf4d31562cd5acc8bc31c4e3548ae27d0091e7e61a00d05763be0ed52c02032",
+  "after_revision": "9706a91a0cad9ca5097ca29a2eb1bee935ccf77b",
+  "after_helper_sha256": "dee86bb57d094acd515aac8d141125fc5fa062835d151d9cd69a4f508320dfe9",
+  "input": {
+    "current_time": "2026-11-18T00:00:00+00:00",
+    "reset_timezone": "UTC",
+    "scalar_maximum_usd": 100,
+    "scalar_duration": "1mo",
+    "explicit_windows": [
+      {
+        "duration": "1mo",
+        "maximum_usd": 10,
+        "reset_at": "2026-12-01T00:00:00+00:00"
+      }
+    ],
+    "request_spend_usd": 1.0,
+    "scope": "app_customer_org",
+    "entity_id": "proof-app:proof-customer"
+  },
+  "before": {
+    "counter_count": 2,
+    "unique_counter_key_count": 1,
+    "effective_caps_usd": [
+      10.0,
+      100.0
+    ],
+    "counter_resets_at": [
+      "2026-12-01T00:00:00+00:00",
+      "2026-12-01T00:00:00+00:00"
+    ],
+    "projected_window_charge_count": 2,
+    "projected_window_increments_usd": [
+      1.0,
+      1.0
+    ],
+    "projected_window_increment_total_usd": 2.0,
+    "explicit_reset_preserved": true
+  },
+  "after": {
+    "counter_count": 1,
+    "unique_counter_key_count": 1,
+    "effective_caps_usd": [
+      10.0
+    ],
+    "counter_resets_at": [
+      "2026-12-01T00:00:00+00:00"
+    ],
+    "projected_window_charge_count": 1,
+    "projected_window_increments_usd": [
+      1.0
+    ],
+    "projected_window_increment_total_usd": 1.0,
+    "explicit_reset_preserved": true
+  }
+}
