@@ -134,6 +134,7 @@
       "request_path": true,
       "subscribable": true,
       "writes": [
+        "budget_reservation",
         "error"
       ],
       "outcomes": [
@@ -218,7 +219,9 @@
       "bit": 17,
       "request_path": false,
       "subscribable": true,
-      "writes": [],
+      "writes": [
+        "budget_reservation"
+      ],
       "outcomes": []
     },
     {
@@ -481,6 +484,16 @@
       "name": "limiter_request",
       "bit": 46,
       "tier": "small_record"
+    },
+    {
+      "name": "spend_log_id",
+      "bit": 47,
+      "tier": "small_record"
+    },
+    {
+      "name": "billed_retry_attempts",
+      "bit": 48,
+      "tier": "small_record"
     }
   ],
   "tiers": [
@@ -503,6 +516,7 @@
   ],
   "derived_only": [
     "attempt_timing",
+    "billed_retry_attempts",
     "budget_plan",
     "cold_storage_object_key",
     "cost",
@@ -521,6 +535,7 @@
     "output_cap",
     "rate_limit_state",
     "request_tags",
+    "spend_log_id",
     "standard_logging_payload_ref",
     "usage"
   ],

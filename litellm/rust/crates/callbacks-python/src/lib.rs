@@ -133,6 +133,19 @@ impl RustCallback {
         })
     }
 
+    fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let callback = Arc::clone(&self.callback);
+        let render_loop = payload::running_loop(py);
+        run_async_value(py, async move {
+            payload::on_render_loop(
+                render_loop,
+                AssertUnwindSafe(async move { callback.flush().await }).catch_unwind(),
+            )
+            .await
+            .map_err(panic_error)
+        })
+    }
+
     #[pyo3(signature = (hook, fields, call, state, host, /))]
     fn start<'py>(
         &self,
