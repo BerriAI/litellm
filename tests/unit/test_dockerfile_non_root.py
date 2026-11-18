@@ -11,7 +11,7 @@ kubelet cannot resolve /etc/passwd inside the image at admission time.
 import os
 import re
 
-DOCKERFILE_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "Dockerfile")
+DOCKERFILE_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "litellm", "deploy", "docker", "Dockerfile")
 
 
 def _final_user_directive(dockerfile_text: str) -> str:

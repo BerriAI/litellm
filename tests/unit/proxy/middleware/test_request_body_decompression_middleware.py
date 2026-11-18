@@ -255,6 +255,7 @@ def test_operator_request_size_limit_caps_the_decoded_body_when_it_is_lower(
     ("POST", "/claude-code/plugins/upload"),
     ("POST", "/skill-hub/skills/upload"),
     ("PUT", "/skill-hub/skills/example/upload"),
+    ("PUT", "/skill-hub/submissions/absent/upload"),
 ])
 def test_proxy_bounds_skill_uploads_before_authentication_or_body_parsing(
     coding: str, compress: Callable[[bytes], bytes], method: str, path: str,

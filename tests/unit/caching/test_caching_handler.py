@@ -290,6 +290,62 @@ async def test_existing_provider_response_cache_still_hits(copilot_response_cach
 
 
 @pytest.mark.asyncio
+async def test_cache_hit_logs_the_vertex_location_the_deployment_is_configured_with(
+    monkeypatch: pytest.MonkeyPatch, copilot_response_cache: Cache
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged_locations: Final[list[tuple[object, object]]] = []
+    both_logged: Final = asyncio.Event()
+
+    class LocationRecorder(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            payload: Final = TypeAdapter(Mapping[str, object]).validate_python(kwargs["standard_logging_object"])
+            breakdown: Final = TypeAdapter(Mapping[str, object]).validate_python(payload["cost_breakdown"])
+            logged_locations.append((payload["cache_hit"], breakdown.get("vertex_location")))
+            if len(logged_locations) == 2:
+                both_logged.set()
+
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [LocationRecorder()])
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "global-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_location": "global",
+                    "mock_response": "ok",
+                },
+            }
+        ]
+    )
+    for _ in range(2):
+        request: Final[dict[str, object]] = {
+            "model": "global-gemini",
+            "messages": [{"role": "user", "content": "cache hit location"}],
+            "caching": True,
+            "litellm_call_id": str(uuid.uuid4()),
+        }
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="acompletion", rules_obj=litellm.utils.Rules(), start_time=datetime(2026, 1, 1), **request
+        )
+        await router.acompletion(**request, litellm_logging_obj=logging_obj)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    await asyncio.wait_for(both_logged.wait(), timeout=10)
+    assert sorted(logged_locations, key=str) == [(None, "global"), (True, "global")], logged_locations
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_reports_zero_response_cost(copilot_response_cache: Cache) -> None:
     messages: Final = [{"role": "user", "content": "cache cost repro"}]
     first: Final = await litellm.acompletion(
@@ -3420,3 +3476,43 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
     assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
+
+
+@pytest.fixture
+def clamping_response_cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "modify_params", True)
+    return cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_async", [True, False], ids=["acompletion", "completion"])
+@pytest.mark.parametrize(
+    "first_request_controls",
+    [{}, {"cache": {"no-cache": True}}],
+    ids=["first_request_reads_the_cache", "first_request_skips_the_cache_read"],
+)
+async def test_a_repeat_of_a_request_whose_max_tokens_was_clamped_is_served_from_the_cache(
+    clamping_response_cache: Cache, call_async: bool, first_request_controls: Mapping[str, object]
+) -> None:
+    model: Final = "gpt-5.6"
+    max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
+    assert max_output_tokens is not None
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": f"clamped {uuid.uuid4()}"}],
+        "max_tokens": max_output_tokens * 10,
+        "mock_response": "fresh",
+    }
+
+    async def send(controls: Mapping[str, object]) -> ModelResponse:
+        if call_async:
+            return await litellm.acompletion(**request, **controls)
+        return litellm.completion(**request, **controls)
+
+    first: Final = await send(first_request_controls)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeat: Final = await send({})
+
+    assert repeat.id == first.id

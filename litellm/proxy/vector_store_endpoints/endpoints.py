@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.search_query import store_search_params, with_caller_query_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
@@ -80,20 +81,24 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
         )
 
 
-def reject_caller_opensearch_index_name(
+_REGISTRATION_ONLY_OPENSEARCH_PARAMS: Final = frozenset(
+    ("opensearch_index_name", "opensearch_search_pipeline", "opensearch_hybrid_search")
+)
+
+
+def reject_caller_opensearch_store_params(
     caller_body: Mapping[str, object], request_fields: Mapping[str, object], source: str
 ) -> None:
     provider: Final = request_fields.get("custom_llm_provider")
-    if (
-        isinstance(provider, str)
-        and provider.split("/", 1)[0] == LlmProviders.OPENSEARCH.value
-        and "opensearch_index_name" in caller_body
-    ):
+    if not isinstance(provider, str) or provider.split("/", 1)[0] != LlmProviders.OPENSEARCH.value:
+        return
+    blocked: Final = next((key for key in caller_body if key in _REGISTRATION_ONLY_OPENSEARCH_PARAMS), None)
+    if blocked is not None:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"'opensearch_index_name' cannot be set in {source}. "
-                "The index comes from the vector store's server-side registration."
+                "error": f"'{blocked}' cannot be set in {source}. "
+                "It comes from the vector store's server-side registration."
             },
         )
 
@@ -113,8 +118,8 @@ def build_request_data_from_managed_vector_store(
             if key in vector_store
         }
     )
-    litellm_params: Final = vector_store.get("litellm_params") or MappingProxyType({})
-    return MappingProxyType({**top_level, **litellm_params})
+    litellm_params: Final[Mapping[str, object]] = vector_store.get("litellm_params") or MappingProxyType({})
+    return MappingProxyType({**top_level, **store_search_params(litellm_params)})
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
@@ -187,10 +192,15 @@ async def vector_store_search(
     caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
 
     # Check for legacy vector store registry (non-managed vector stores)
-    data = await _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    data = dict(  # rebind-ok: pre-existing rebinding of the request body
+        with_caller_query_params(
+            await _update_request_data_with_litellm_managed_vector_store_registry(
+                data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+            ),
+            caller_body.get("extra_body"),
+        )
     )
-    reject_caller_opensearch_index_name(
+    reject_caller_opensearch_store_params(
         caller_body=caller_body,
         request_fields=JSON_OBJECT_ADAPTER.validate_python(data),
         source="the search request body",

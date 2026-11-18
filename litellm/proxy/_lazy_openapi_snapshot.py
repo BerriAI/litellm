@@ -7,7 +7,7 @@ features without importing them. test-linting.yml (mirrored locally by
 `make check`) regenerates this file and fails when the committed copy differs,
 then rebuilds schema.d.ts from app.openapi() with the snapshot injected. After
 changing any lazily loaded route or this generator, rerun the module and commit
-the JSON, then run `npm run gen:api` in ui/litellm-dashboard and commit schema.d.ts.
+the JSON, then run `npm run gen:api` in litellm/ui/litellm-dashboard and commit schema.d.ts.
 """
 
 import json

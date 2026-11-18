@@ -1,6 +1,7 @@
 import asyncio
 import io
 from collections.abc import Sequence
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, get_type_hints
@@ -167,6 +168,16 @@ async def image_generation(
         if isinstance(messages, list) and messages:
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
+
+        if "prompt" in data:
+            logging_obj, data = litellm.utils.function_setup(
+                original_function="aimage_generation",
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+                is_async_call=True,
+                **data,
+            )
+            data["litellm_logging_obj"] = logging_obj
 
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(

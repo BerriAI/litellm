@@ -685,6 +685,24 @@ def _configure_callback_scoping(
 _ParamsT = TypeVar("_ParamsT", bound=BaseModel)
 
 
+SECRET_REFERENCE_PARAMS: Final = ("api_key", "api_base")
+
+
+def resolve_secret_reference(value: str | None) -> str | None:
+    return str(get_secret(value)) if value and value.startswith("os.environ/") else value
+
+
+def _with_resolved_secret_references(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **params,
+        **{
+            key: resolve_secret_reference(value)
+            for key in SECRET_REFERENCE_PARAMS
+            if isinstance(value := params.get(key), str)
+        },
+    }
+
+
 def parse_tolerant_litellm_params(
     litellm_params_data: Mapping[str, object],
     guardrail_name: str,
@@ -788,11 +806,8 @@ class InMemoryGuardrailHandler:
             )
             litellm_params.category_thresholds = lakera_category_thresholds
 
-        if litellm_params.api_key and litellm_params.api_key.startswith("os.environ/"):
-            litellm_params.api_key = str(get_secret(litellm_params.api_key))
-
-        if litellm_params.api_base and litellm_params.api_base.startswith("os.environ/"):
-            litellm_params.api_base = str(get_secret(litellm_params.api_base))
+        litellm_params.api_key = resolve_secret_reference(litellm_params.api_key)
+        litellm_params.api_base = resolve_secret_reference(litellm_params.api_base)
 
         guardrail_type: Final = litellm_params.guardrail
 
@@ -1068,7 +1083,9 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return parse_tolerant_litellm_params(with_tolerated_stream_scope(params), guardrail_name).model_dump()
+                return _with_resolved_secret_references(
+                    parse_tolerant_litellm_params(with_tolerated_stream_scope(params), guardrail_name).model_dump()
+                )
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",

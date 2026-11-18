@@ -27,7 +27,7 @@ from typing import (
 from collections.abc import Mapping
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
-from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
+from litellm.litellm_core_utils.core_helpers import drop_params_env_flag, env_flag
 from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm.types.integrations.zerobus import ZerobusInitParams
 from litellm._logging import (
@@ -130,6 +130,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
+    "prefix_block_hashes",
     "generic_api",
     "resend_email",
     "sendgrid_email",
@@ -214,6 +215,7 @@ overwrite_user_with_key_hash: bool = (
 bedrock_request_metadata_fields: Optional[Sequence[str]] = (
     None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
+vertex_request_label_fields: Optional[Sequence[str]] = None
 store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -227,7 +229,7 @@ token: Optional[str] = (
 )
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = drop_params_env_flag(os.environ, verbose_logger)
-modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+modify_params = env_flag(os.environ, "LITELLM_MODIFY_PARAMS", verbose_logger)
 bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
@@ -506,6 +508,22 @@ public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 if TYPE_CHECKING:
+    from .harness.evaluation import (
+        CheckResult as CheckResult,
+        CommandCheck as CommandCheck,
+        EvalCheck as EvalCheck,
+        EvalRun as EvalRun,
+        EvalScorecard as EvalScorecard,
+        EvalStatus as EvalStatus,
+        EvalSummary as EvalSummary,
+        EvalTarget as EvalTarget,
+        EvalTask as EvalTask,
+        JudgeCheck as JudgeCheck,
+        PredicateCheck as PredicateCheck,
+        aagent_eval as aagent_eval,
+        agent_eval as agent_eval,
+    )
+
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
@@ -685,6 +703,7 @@ streamlake_models: Final[Set[str]] = set()
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
+vispark_models: Final[Set[str]] = set()
 morph_models: Set = set()
 opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 lambda_ai_models: Set = set()
@@ -985,6 +1004,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
+        elif value.get("litellm_provider") == "vispark":
+            vispark_models.add(key)
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
         elif value.get("litellm_provider") == "opencode_go":
@@ -1165,6 +1186,7 @@ model_list = list(
     | wally_models
     | zerogpu_models
     | v0_models
+    | vispark_models
     | morph_models
     | opencode_go_models
     | lambda_ai_models
@@ -1297,6 +1319,7 @@ def _build_models_by_provider() -> dict:
         "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
+        "vispark": vispark_models,
         "morph": morph_models,
         "opencode_go": opencode_go_models,
         "lambda_ai": lambda_ai_models,
@@ -1464,6 +1487,7 @@ from .exceptions import (
     RateLimitError,
     RateLimitErrorCategory,
     RateLimitType,
+    RequestOverDeploymentTpmError as RequestOverDeploymentTpmError,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
@@ -1613,6 +1637,7 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
+from .google_genai import generate_content as generate_content  # pyright: ignore[reportUnknownVariableType]  # native request types require the optional google-genai SDK
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Mapping[str, object]] = None
@@ -1735,6 +1760,9 @@ if TYPE_CHECKING:
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
     )
+    from .llms.gemini.decisions.transformation import (
+        GeminiDecisionsConfig as GeminiDecisionsConfig,
+    )
     from .llms.nace.decisions.transformation import (
         NaceDecisionsConfig as NaceDecisionsConfig,
     )
@@ -1791,6 +1819,9 @@ if TYPE_CHECKING:
     )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
+    )
+    from .llms.vercel_ai_gateway.decisions.transformation import (
+        VercelAIGatewayDecisionsConfig as VercelAIGatewayDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

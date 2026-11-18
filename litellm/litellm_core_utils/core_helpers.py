@@ -6,6 +6,7 @@ import math
 import re
 import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -18,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
+from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -109,6 +111,25 @@ def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
 
+_OBJECT_ENTRIES: Final = TypeAdapter(list[object])
+_OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
+_PARAM_NAME: Final = re.compile(r"\w+")
+
+
+def allowed_openai_param_names(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(_PARAM_NAME.findall(value))
+    if isinstance(value, Mapping):
+        return tuple(key for key in _OBJECT_KEYS.validate_python(value) if isinstance(key, str))
+    try:
+        entries: Final = _OBJECT_ENTRIES.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
+
+
 _Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
 
@@ -141,6 +162,13 @@ def without(
     return {key: value for key, value in mapping.items() if key not in keys}
 
 
+def only(
+    mapping: Mapping[_Key, _Value], *keys: object
+) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns
+    """``mapping`` with only ``keys``, as a new dict in the same order; ``mapping`` is unchanged."""
+    return {key: value for key, value in mapping.items() if key in keys}
+
+
 def decoded_json_object(value: object) -> Mapping[str, object]:
     mapping: Final = as_str_mapping(value)
     if mapping is not None:
@@ -163,6 +191,23 @@ def attribute_or_none(source: object, name: str) -> object:
 
 
 _Shape: Final = TypeVar("_Shape")
+
+
+@dataclass(frozen=True, slots=True)
+class FinishEvidence:
+    """Finish reasons a stream received from the provider. ``unindexed`` is a received reason whose
+    choice the stream could not tell, so it is only evidence for a single-choice response."""
+
+    by_choice: Mapping[int, str]
+    unindexed: str | None
+
+
+NO_FINISH_EVIDENCE: Final = FinishEvidence(by_choice=MappingProxyType({}), unindexed=None)
+
+
+def finish_evidence_of(stream: object) -> FinishEvidence:
+    evidence: Final[object] = getattr(stream, "finish_evidence", None)
+    return evidence if isinstance(evidence, FinishEvidence) else NO_FINISH_EVIDENCE
 
 
 def has_attributes(
@@ -259,17 +304,19 @@ def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
 
 
-def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
-    configured: Final = environ.get(DROP_PARAMS_ENV_VAR, "").strip()
+def env_flag(environ: Mapping[str, str], name: str, logger: logging.Logger) -> bool:
+    configured: Final = environ.get(name, "").strip()
     if configured == "":
         return False
-    normalized: Final = normalize_drop_params(configured)
+    normalized: Final = lax_bool(configured)
     if normalized is None:
-        logger.warning(
-            "%s=%r is not a flag value, treating it as on. Set it to true or false", DROP_PARAMS_ENV_VAR, configured
-        )
+        logger.warning("%s=%r is not a flag value, treating it as on. Set it to true or false", name, configured)
         return True
     return normalized
+
+
+def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
+    return env_flag(environ, DROP_PARAMS_ENV_VAR, logger)
 
 
 def safe_divide(
@@ -977,36 +1024,8 @@ def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
         return data
 
 
-def filter_internal_params(data: dict, additional_internal_params: set | None = None) -> dict:
-    """
-    Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
-
-    This removes internal/MCP-related parameters that are used by LiteLLM internally
-    but should not be included in API requests to providers.
-
-    Args:
-        data: Dictionary of parameters to filter
-        additional_internal_params: Optional set of additional internal parameter names to filter
-
-    Returns:
-        Filtered dictionary with internal parameters removed
-    """
-    if not isinstance(data, dict):
-        return data
-
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params: Final = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
-
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
-    return {k: v for k, v in data.items() if k not in internal_params}
+def filter_internal_params(data: Mapping[str, _Value]) -> dict[str, _Value]:
+    return {k: v for k, v in data.items() if k not in MCP_HANDLER_KWARG_NAMES}
 
 
 def redact_nested_match_and_regex_keys(

@@ -2,6 +2,7 @@
 Constants for Copilot integration
 """
 
+import os
 from collections.abc import MutableMapping
 from typing import Final
 from uuid import uuid4
@@ -16,6 +17,9 @@ EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
 USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
+DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
+VSCODE_CHAT_INTEGRATION_ID: Final = "vscode-chat"
+COPILOT_CLI_INTEGRATION_ID: Final = "copilot-developer-cli"
 
 
 class GithubCopilotError(BaseLLMException):
@@ -46,6 +50,14 @@ class GetAccessTokenError(GithubCopilotError):
     pass
 
 
+def copilot_integration_id() -> str:
+    """Copilot serves a custom GitHub App's user tokens only as the Copilot CLI integration."""
+    client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+    if client_id in ("", DEFAULT_GITHUB_CLIENT_ID):
+        return VSCODE_CHAT_INTEGRATION_ID
+    return COPILOT_CLI_INTEGRATION_ID
+
+
 def get_copilot_default_headers(
     api_key: str,
 ) -> dict[str, str]:  # mutable-ok: callers merge caller headers into the returned dict
@@ -57,7 +69,7 @@ def get_copilot_default_headers(
     return {
         "Authorization": f"Bearer {api_key}",
         "content-type": "application/json",
-        "copilot-integration-id": "vscode-chat",
+        "copilot-integration-id": copilot_integration_id(),
         "editor-version": "vscode/1.95.0",  # Fixed version for stability
         "editor-plugin-version": EDITOR_PLUGIN_VERSION,
         "user-agent": USER_AGENT,
@@ -71,6 +83,7 @@ def get_copilot_default_headers(
 def pin_session_authorization(
     headers: MutableMapping[str, str],  # mutable-ok: the helper fixes caller-owned headers in place
     session_token: str,
+    integration_id: str | None = None,
 ) -> None:
     """The stored per-user session token owns Authorization outright: drop every
     caller-supplied bearer header (any casing) so it can never displace the
@@ -78,3 +91,7 @@ def pin_session_authorization(
     for key in tuple(k for k in headers if k.lower() == "authorization"):
         del headers[key]
     headers["Authorization"] = f"Bearer {session_token}"
+    if integration_id is not None:
+        for key in tuple(k for k in headers if k.lower() == "copilot-integration-id"):
+            del headers[key]  # rebind-ok: pin the authenticated identity in caller-owned headers
+        headers["copilot-integration-id"] = integration_id  # rebind-ok: pin the authenticated identity
