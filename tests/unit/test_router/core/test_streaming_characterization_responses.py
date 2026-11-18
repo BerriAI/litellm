@@ -247,6 +247,25 @@ async def test_a_content_policy_cut_before_output_uses_the_content_policy_chain(
 # --- continuation after output -----------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    ("response.output_item.added", "response.reasoning_summary_text.delta", "response.content_part.added", TEXT_DELTA),
+)
+@pytest.mark.parametrize("fallback", (False, True))
+async def test_non_text_output_prevents_a_fresh_response_on_retry_or_fallback(
+    make_core: MakeCore, host: ScriptedHost, event_type: str, fallback: bool
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(event_type), error=cut()), fallback_ok())
+    host.answer("openai/b", fallback_ok())
+    core: Final = build(make_core, num_retries=0 if fallback else 2, fallbacks=[{"a": ["b"]}] if fallback else [])
+    stream: Final = await open_stream(core)
+    seen: Final[list[object]] = []
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await drain_into(stream, seen)
+    assert tuple(getattr(event, "type", None) for event in seen) == (CREATED, event_type)
+    assert host.deployments_called() == ["a"]
+
+
 async def test_after_text_the_fallback_receives_the_partial_output_and_a_request_to_continue(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -747,11 +766,10 @@ async def test_a_primary_cut_after_text_whose_continuation_fallback_fails_raises
     assert host.deployments_called() == ["a", "b"]
 
 
-@pytest.mark.parametrize("generated", ["", "partial"])
 async def test_a_primary_cut_after_output_whose_fallback_stream_fails_before_output_raises_the_fallbacks_error(
-    make_core: MakeCore, host: ScriptedHost, generated: str
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut(generated, rate_limit())))
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut("partial", rate_limit())))
     host.answer("openai/b", responses_stream(Event(CREATED), error=server_error()))
     core = with_router_debug(make_core, host)
     with pytest.raises(litellm.InternalServerError) as raised:
