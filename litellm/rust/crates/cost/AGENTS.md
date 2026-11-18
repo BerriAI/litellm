@@ -8,6 +8,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
 - Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`, `search.rs`, `video.rs`, `image.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
   - Where main billed a call nothing on purpose (no row, no rate, no units) the core answers `Unpriced`, never 0.0, and the adapter maps it to each calculator's legacy return
+- The fee kinds (`a2a.rs`, `mcp.rs`, `guardrail.rs`) price what the caller configured (`PriceSource::PerQuery`, `FlatPerToken`, an MCP server's tool prices, Azure Prompt Shield's price per thousand records) or the guardrail rows the header lists. A hook-set `response_cost` that beats them stays in the adapter. A call billed as several separately priced units lists each in `Receipt::parts`, where a unit no price covers stays `Unpriced` and never reads as free
 
 ## Parity fixtures
 
@@ -38,9 +39,12 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - The default image calculator bills `input_cost_per_image` for returned images when a row lists it, ahead of `output_cost_per_image`, and reads the deployment's table whole before the catalog row, so a deployment pixel rate beats a catalog per-image rate (`default_image_cost_calculator`)
 - A per-image provider bills a returned image the deployment or catalog prices at 0, and one neither prices at 0.0 rather than failing (`recraft`, `aiml`, `cometapi`, `runwayml` cost calculators)
 
+- A Bedrock guardrail counter its pricing row does not list is unknown in the per-counter rollup but adds 0 to the billed total (`guardrail_cost_total`), and Azure Prompt Shield bills nothing on the free tier whatever its usage
+
 ## Not copied from main
 - `video_generation_cost` read a catalog row through `get_model_info`, which drops every `output_cost_per_second_<resolution>` key but six. The core reads any resolution the row lists. No shipped row lists another
 
 - Main's stored breakdown raises on an unreadable speed or geo value, which fails the candidate when a logging object is attached. Rust leaves those uplifts out of the breakdown rates instead
 - A call whose web search price main would read off the served model's row answers `NotPorted`
+- A negative or non-numeric configured agent, MCP tool or Prompt Shield price fails the call's pricing instead of billing a negative amount, and a guardrail row whose `guardrail_cost_per_unit` lists a negative rate prices none of its counters, where main billed the negative rate. An MCP tool listed with a null price fails too, where main returned `None`
 - The breakdown bills unattributed writes and 5m/30m writes as one `CacheTtl::Default` count. Main multiplies each count by the rate separately, so the two can differ in the last bit when a call reports both
