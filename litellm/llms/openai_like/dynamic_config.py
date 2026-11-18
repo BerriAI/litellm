@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final, Literal, overload
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     handle_messages_with_text_only_content_lists_as_str,
@@ -15,7 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.router_utils.reasoning_effort_capability import (
-    declared_reasoning_efforts_for_model,
+    declared_reasoning_efforts,
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -37,11 +38,16 @@ def _flattened_messages(
     return messages
 
 
+def _catalog_reasoning_efforts(model: str, provider_slug: str) -> tuple[str, ...] | None:
+    entry: Final = GetModelCostMap.loaded_model_cost_map().get(f"{provider_slug}/{model}")
+    return declared_reasoning_efforts(entry) if entry is not None else None
+
+
 def _with_declared_reasoning_effort(
     params: Mapping[str, object], *, model: str, provider_slug: str, drop_params: bool
 ) -> Mapping[str, object]:
     requested: Final = params.get("reasoning_effort")
-    declared: Final = declared_reasoning_efforts_for_model(model, provider_slug)
+    declared: Final = _catalog_reasoning_efforts(model, provider_slug)
     if declared is None or not isinstance(requested, str):
         return params
     accepted: Final = nearest_declared_reasoning_effort(requested, declared)
@@ -163,11 +169,15 @@ def create_config_class(provider: SimpleProviderConfig):
             """Apply parameter mappings and constraints"""
 
             supported_params: Final = self.get_supported_openai_params(model)
-            requested_params: Final = _with_declared_reasoning_effort(
-                non_default_params,
-                model=model,
-                provider_slug=provider.slug,
-                drop_params=drop_params or litellm.drop_params is True,
+            requested_params: Final = (
+                _with_declared_reasoning_effort(
+                    non_default_params,
+                    model=model,
+                    provider_slug=provider.slug,
+                    drop_params=drop_params or litellm.drop_params is True,
+                )
+                if provider.special_handling_for(model).get("round_reasoning_effort_to_declared_levels")
+                else non_default_params
             )
 
             # Apply supported params

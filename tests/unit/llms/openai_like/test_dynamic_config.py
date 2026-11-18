@@ -4,6 +4,7 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.openai_like import dynamic_config
 from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
@@ -221,3 +222,24 @@ class TestModelSpecialHandling:
             model=model, messages=list(self._TEXT_LIST), optional_params={}, litellm_params={}, headers={}
         )
         assert body["messages"][0]["content"] == expected_content
+
+
+class TestReasoningEffortRounding:
+    _CATALOG_KEY: Final = "sarvam/glm5.3"
+
+    @pytest.mark.parametrize("rounds", [False, True], ids=["without_the_flag", "with_the_flag"])
+    def test_only_a_flagged_provider_rounds_to_the_declared_levels(self, rounds: bool) -> None:
+        declared: Final = GetModelCostMap.loaded_model_cost_map()[self._CATALOG_KEY]["reasoning_effort_levels"]
+        assert "medium" not in declared
+        config: Final = create_config_class(
+            _provider("sarvam", special_handling={"round_reasoning_effort_to_declared_levels": rounds})
+        )()
+
+        sent: Final = config.map_openai_params(
+            non_default_params={"reasoning_effort": "medium"},
+            optional_params={},
+            model="glm5.3",
+            drop_params=False,
+        )["reasoning_effort"]
+
+        assert (sent in declared) if rounds else (sent == "medium")

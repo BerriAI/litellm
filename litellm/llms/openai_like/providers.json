@@ -90,6 +90,9 @@
       "sarvam-105b": {"convert_text_content_list_to_string": true},
       "sarvam-105b-conversations": {"convert_text_content_list_to_string": true}
     },
+    "special_handling": {
+      "round_reasoning_effort_to_declared_levels": true
+    },
     "api_key_env": "SARVAM_API_KEY",
     "base_class": "openai_gpt",
     "param_mappings": {

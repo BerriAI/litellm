@@ -256,6 +256,32 @@ def test_sarvam_105b_drops_reasoning_off_only_under_drop_params(
     assert _sent_body("sarvam-105b", reasoning_effort="none", **per_call).get("reasoning_effort") == expected
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_sibling_deployments_declared_levels_leave_the_sarvam_request_alone() -> None:
+    deployment: Final = {"model": "sarvam/sarvam-105b", "api_key": "sarvam-test-key"}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "declared",
+                "litellm_params": deployment,
+                "model_info": {"reasoning_effort_levels": ["low", "high"]},
+            },
+            {"model_name": "sibling", "litellm_params": deployment},
+        ]
+    )
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{_sarvam_config().default_base_url('sarvam-105b')}/chat/completions").respond(
+            200, json=_chat_response()
+        )
+        router.completion(
+            model="sibling",
+            messages=[{"role": "user", "content": "Is 221 a prime number?"}],
+            reasoning_effort="medium",
+        )
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "medium"
+
+
 def test_sarvam_responses_request_is_bridged_to_chat_completions() -> None:
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.sarvam.ai/v1/chat/completions").respond(
