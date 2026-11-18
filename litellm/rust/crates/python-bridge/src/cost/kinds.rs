@@ -8,8 +8,9 @@
 use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::query::{
     AdjustmentPolicy, Basis, BatchLineQuery, BatchUsage, Candidate, Header, ImageCalculator,
-    ImageQuery, OcrQuery, PriceQuery, PriceSource, Provider, RerankQuery, SearchQuery, SpeechQuery,
-    TokenBilled, TokenUsage, TranscriptionQuery, VectorStoreSearchQuery, VideoQuery,
+    ImageQuery, OcrQuery, PriceQuery, PriceSource, Provider, ReportSource, ReportedCost,
+    RerankQuery, SearchQuery, SpeechQuery, TokenBilled, TokenUsage, TranscriptionQuery,
+    VectorStoreSearchQuery, VideoQuery,
 };
 use litellm_cost::receipt::{PriceOutcome, Unpriced};
 use litellm_cost::row::RowRef;
@@ -81,6 +82,12 @@ enum UnitsDocument {
         input_images: u64,
         #[serde(default)]
         vertex_location: Option<Box<str>>,
+        /// The `output_cost_per_image_<size>` label the xAI calculator reads
+        #[serde(default)]
+        size: Option<Box<str>>,
+        /// The USD figure of the `cost_in_usd_ticks` an xAI response reported, when the deployment sets no price
+        #[serde(default)]
+        reported_usd: Option<f64>,
     },
     Video {
         #[serde(flatten)]
@@ -302,7 +309,16 @@ impl UnitsDocument {
                 },
                 _ => AdjustmentPolicy::None,
             },
-            reported: None,
+            reported: match &self {
+                Self::Image {
+                    reported_usd: Some(usd),
+                    ..
+                } => Some(ReportedCost {
+                    source: ReportSource::CostInUsdTicks,
+                    usd: *usd,
+                }),
+                _ => None,
+            },
         };
         match self {
             Self::Rerank {
@@ -358,6 +374,7 @@ impl UnitsDocument {
                 images,
                 pixels,
                 input_images,
+                size,
                 ..
             } => PriceQuery::Image(Box::new(ImageQuery {
                 header,
@@ -365,6 +382,7 @@ impl UnitsDocument {
                 images,
                 pixels,
                 input_images,
+                size,
             })),
             Self::Video {
                 seconds,
