@@ -1,0 +1,120 @@
+{
+ "source": "Captured once from main's Python (532df6ef85, LITELLM_LOCAL_MODEL_COST_MAP=True). `images` holds the per-image fallback of the Vertex AI image calculator with no token usage: the row fields the calculator read, the images and Vertex location of the call and main's total",
+ "images": [
+  {
+   "name": "vertex_catalog_regional",
+   "model": "gemini-3.1-flash-image",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 2,
+   "vertex_location": "us-east5",
+   "row": {
+    "output_cost_per_image": 0.0672,
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "expected": 0.14784
+  },
+  {
+   "name": "vertex_catalog_global",
+   "model": "gemini-3.1-flash-image",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 2,
+   "vertex_location": "global",
+   "row": {
+    "output_cost_per_image": 0.0672,
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "expected": 0.1344
+  },
+  {
+   "name": "vertex_catalog_global_upper",
+   "model": "gemini-3.1-flash-image",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 3,
+   "vertex_location": "GLOBAL",
+   "row": {
+    "output_cost_per_image": 0.0672,
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "expected": 0.2016
+  },
+  {
+   "name": "vertex_catalog_no_location",
+   "model": "gemini-3.1-flash-image",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 1,
+   "vertex_location": null,
+   "row": {
+    "output_cost_per_image": 0.0672,
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "expected": 0.0672
+  },
+  {
+   "name": "vertex_deployment_uplift",
+   "model": "imagen-test-only",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 3,
+   "vertex_location": "europe-west4",
+   "row": {
+    "output_cost_per_image": 0.04,
+    "regional_endpoint_uplift_multiplier": 1.25
+   },
+   "expected": 0.15
+  },
+  {
+   "name": "vertex_deployment_text_uplift",
+   "model": "imagen-test-only",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 2,
+   "vertex_location": "us-central1",
+   "row": {
+    "output_cost_per_image": 0.03,
+    "regional_endpoint_uplift_multiplier": "1.2"
+   },
+   "expected": 0.072
+  },
+  {
+   "name": "vertex_deployment_bad_uplift",
+   "model": "imagen-test-only",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 2,
+   "vertex_location": "us-central1",
+   "row": {
+    "output_cost_per_image": 0.03,
+    "regional_endpoint_uplift_multiplier": "not-a-number"
+   },
+   "expected": 0.06
+  },
+  {
+   "name": "vertex_deployment_no_rate",
+   "model": "imagen-test-only",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 2,
+   "vertex_location": "us-central1",
+   "row": {
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "expected": 0.0
+  },
+  {
+   "name": "vertex_catalog_pro_image",
+   "model": "gemini-3-pro-image",
+   "provider": "vertex_ai",
+   "calculator": "per_image",
+   "images": 4,
+   "vertex_location": "us-central1",
+   "row": {
+    "output_cost_per_image": 0.134
+   },
+   "expected": 0.536
+  }
+ ]
+}

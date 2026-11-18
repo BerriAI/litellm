@@ -5,7 +5,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
-from litellm.litellm_core_utils.llm_cost_calc.utils import get_vertex_regional_endpoint_uplift
+from litellm.rust_bridge._native import regional_endpoint_uplift
 from litellm.types.router import DeploymentPricing, PriceTier
 
 _RAW_PRICE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
@@ -61,7 +61,7 @@ def deployment_pricing(
     carry the Vertex regional-endpoint uplift billing applies at the deployment's location."""
     billed_model_info: Final = deployment_pricing_model_info(model_id=deployment_id, deployment_model=deployment_model)
     model_info: Final = resolved_model_info if billed_model_info is None else billed_model_info
-    token_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    token_uplift: Final = regional_endpoint_uplift(model_info, vertex_location)
     costs: Final = _cost_fields(model_info, token_uplift)
     tiers: Final = _price_tiers(model_info.get("tiered_pricing"), token_uplift)
     if not costs and not tiers:
