@@ -2176,6 +2176,37 @@ def test_model_key_breakdown_separates_guardrail_spend_from_model_spend():
     assert aggregated["totals"].guardrail_spend == pytest.approx(0.00015)
 
 
+def test_grouped_daily_activity_reports_the_customer_surcharge_at_every_level():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_API_KEY,
+        _GROUP_DATE_MODEL,
+        _GROUP_DATE_MODEL_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(_GROUP_DATE_MODEL, model="surcharged", spend=1.02, customer_margin_spend=0.02),
+        _grouping_row(_GROUP_DATE_MODEL, model="internal", spend=2.0),
+        _grouping_row(
+            _GROUP_DATE_MODEL_API_KEY, model="surcharged", api_key="key", spend=1.02, customer_margin_spend=0.02
+        ),
+        _grouping_row(_GROUP_DATE_MODEL_API_KEY, model="internal", api_key="key", spend=2.0),
+        _grouping_row(_GROUP_DATE_API_KEY, api_key="key", spend=3.02, customer_margin_spend=0.02),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=3.02, customer_margin_spend=0.02),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+    day = aggregated["results"][0]
+
+    surcharged = day.breakdown.models["surcharged"].api_key_breakdown["key"].metrics
+    assert surcharged.spend - surcharged.customer_margin_spend == pytest.approx(1.0)
+    assert day.breakdown.models["internal"].api_key_breakdown["key"].metrics.customer_margin_spend == 0.0
+    assert day.breakdown.models["surcharged"].metrics.customer_margin_spend == pytest.approx(0.02)
+    assert day.breakdown.api_keys["key"].metrics.customer_margin_spend == pytest.approx(0.02)
+    assert aggregated["totals"].customer_margin_spend == pytest.approx(0.02)
+
+
 def test_grouping_sets_dispatcher_populates_every_breakdown_level(ptu_cost_attribution_enabled):
     """Every GROUPING SETS level lands in its bucket, and the flat-cost sentinel
     is kept out of the model_group and provider api_key sub-breakdowns too."""

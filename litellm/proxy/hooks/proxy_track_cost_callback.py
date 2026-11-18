@@ -51,6 +51,7 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_callback_customer_cost_margin,
+    apply_customer_cost_margin_to_estimate,
     customer_cost_margin,
     request_has_customer,
 )
@@ -320,6 +321,25 @@ def _billed_failed_attempts(request_data: Mapping[str, object]) -> tuple[BilledF
         return ()
     lifted: Final = cast("tuple[object, ...]", attempts)  # cast-ok: lifted by _failure_fields_to_lift, checked below
     return tuple(attempt for attempt in lifted if isinstance(attempt, BilledFailedAttempt))
+
+
+def _failure_row_with_customer_surcharge(
+    row_cost: float, row_kwargs: Mapping[str, object]
+) -> tuple[float, Mapping[str, object]]:
+    """A failure row the provider billed is charged to the customer like a completed request, surcharge included."""
+    metadata: Final = _str_keyed_fields(_str_keyed_fields(row_kwargs.get("litellm_params")).get("metadata"))
+    margin: Final = customer_cost_margin(request_has_customer(metadata))
+    if margin is None or row_cost <= 0:
+        return row_cost, row_kwargs
+    snapshot: Final = row_kwargs.get("standard_logging_object")
+    if not isinstance(snapshot, dict):
+        return apply_customer_cost_margin_to_estimate(row_cost, margin) or row_cost, row_kwargs
+    payload: Final = cast("StandardLoggingPayload", {**snapshot})  # cast-ok: a copy of the failure snapshot dict
+    surcharged_cost: Final = apply_callback_customer_cost_margin(payload, row_cost, margin)
+    return (
+        surcharged_cost if surcharged_cost is not None else row_cost,
+        {**row_kwargs, "standard_logging_object": payload},
+    )
 
 
 def _failure_spend_rows(
@@ -642,11 +662,14 @@ class _ProxyDBLogger(CustomLogger):
             user_api_key_dict=user_api_key_dict,
             original_exception=original_exception,
             start_time=actual_start_time,
-            spend_rows=_failure_spend_rows(
-                cast("Mapping[str, object]", request_data),  # cast-ok: request dict, copied per row below
-                recovered_response_cost,
-                failure_snapshot_with_late_guardrails,
-                self._deployment_lookup,
+            spend_rows=tuple(
+                _failure_row_with_customer_surcharge(row_cost, row_kwargs)
+                for row_cost, row_kwargs in _failure_spend_rows(
+                    cast("Mapping[str, object]", request_data),  # cast-ok: request dict, copied per row below
+                    recovered_response_cost,
+                    failure_snapshot_with_late_guardrails,
+                    self._deployment_lookup,
+                )
             ),
         )
 

@@ -600,7 +600,10 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
 @pytest.mark.parametrize(
     "metadata_buckets, expected",
     [
-        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}}, False),
+        (
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}},
+            False,
+        ),
         ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_id": "caller"}}, None),
         ({"metadata": {"used_client_oauth_token": "yes"}}, None),
     ],
@@ -685,7 +688,6 @@ async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_t
         end_time=datetime.now(),
     )
     assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
-
 
 
 @pytest.mark.asyncio
@@ -807,7 +809,10 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
     [
         (None, ["detect-only-scanner"]),
         ([], ["detect-only-scanner"]),
-        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
+        (
+            [{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}],
+            ["logged-before-the-failure"],
+        ),
     ],
 )
 async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
@@ -3170,9 +3175,7 @@ async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live
     for key, spend in _LIVE_COUNTERS.items():
         live_spend_counters.set_local(key, spend)
 
-    await _fail_request(
-        ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}
-    )
+    await _fail_request(ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}})
 
     assert await _counter_values(live_spend_counters) == pytest.approx(
         {key: spend + 0.125 for key, spend in _LIVE_COUNTERS.items()}
@@ -3298,8 +3301,7 @@ async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_
     )
 
     assert {
-        group: live_spend_counters.get_local(f"spend:model_access_group:{group}")
-        for group in ("premium", "pool")
+        group: live_spend_counters.get_local(f"spend:model_access_group:{group}") for group in ("premium", "pool")
     } == pytest.approx({"premium": 0.25, "pool": 1.25})
 
 
@@ -4101,7 +4103,9 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
-async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
+async def test_autonomous_llm_callback_persists_without_human_or_key(
+    identity_field: str,
+) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
     kwargs: Final = {
         "call_type": "acompletion",
         "model": "test-model",
@@ -4125,9 +4129,12 @@ async def test_autonomous_llm_callback_persists_without_human_or_key(identity_fi
 
 @pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
 def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
-    assert _should_track_cost_callback(
-        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
-    ) is expected
+    assert (
+        _should_track_cost_callback(
+            user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+        )
+        is expected
+    )
 
 
 _CALL_START: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -4167,6 +4174,7 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
 
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
+
 
 class _SharedCounter:
     def __init__(self) -> None:
@@ -4211,7 +4219,9 @@ def _grounded_gemini_kwargs(response_cost: float) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("opted_in", "finalized"), [(True, False), (False, False), (True, True)])
-async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(monkeypatch, opted_in, finalized):
+async def test_track_cost_callback_frees_grounding_under_the_allowance_only_when_opted_in(
+    monkeypatch, opted_in, finalized
+):
     monkeypatch.setattr(litellm, "apply_search_free_tier", opted_in, raising=False)
     counter = _SharedCounter()
     kwargs = _grounded_gemini_kwargs(response_cost=1.0)
@@ -4536,3 +4546,55 @@ async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails
 
     assert await _charge_request_cost(charge_spend, dict(poll), 0.43, reservation) == charged
     assert charge_spend.calls == ((0.43, 0.43, reservation), *(() if second_call is None else (second_call,)))
+
+
+def _billed_failure_row(metadata: Mapping[str, object], snapshot: object) -> Mapping[str, object]:
+    return {"litellm_params": {"metadata": metadata}, "standard_logging_object": snapshot}
+
+
+def test_a_billed_failure_for_a_customer_carries_the_surcharge_and_records_it() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    snapshot: Final = {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}}
+    row: Final = _billed_failure_row({"user_api_key_customer_org_id": "org-1"}, snapshot)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(1.0, row)
+    assert cost == pytest.approx(1.02)
+    recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
+    assert recorded["cost_breakdown"]["customer_margin_percent"] == 0.02
+    assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.02)
+    assert snapshot == {"response_cost": 1.0, "cost_breakdown": {"total_cost": 1.0}}
+
+
+@pytest.mark.parametrize(
+    ("metadata", "row_cost", "snapshot"),
+    [
+        ({"user_api_key_team_id": "team-1"}, 1.0, {"response_cost": 1.0}),
+        ({"user_api_key_customer_org_id": "org-1"}, 0.0, {"response_cost": 0.0}),
+        (
+            {"user_api_key_customer_org_id": "org-1"},
+            1.02,
+            {"response_cost": 1.02, "cost_finalized": True, "cost_breakdown": {"customer_margin_amount": 0.02}},
+        ),
+    ],
+    ids=["no customer", "nothing billed", "already surcharged"],
+)
+def test_a_failure_row_is_not_surcharged_without_a_customer_a_cost_or_twice(
+    metadata: Mapping[str, object], row_cost: float, snapshot: Mapping[str, object]
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = _billed_failure_row(metadata, dict(snapshot))
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, kwargs = _failure_row_with_customer_surcharge(row_cost, row)
+    assert cost == row_cost
+    assert kwargs["standard_logging_object"] == snapshot
+
+
+def test_a_billed_failure_with_no_snapshot_is_still_surcharged() -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import _failure_row_with_customer_surcharge
+
+    row: Final = _billed_failure_row({"user_api_key_customer_org_id": "org-1"}, None)
+    with patch.dict(litellm.cost_margin_config, {"customer": 0.02}, clear=True):
+        cost, _ = _failure_row_with_customer_surcharge(2.0, row)
+    assert cost == pytest.approx(2.04)
