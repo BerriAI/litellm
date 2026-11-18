@@ -4348,7 +4348,7 @@ def test_non_streamed_tool_turn_hands_messages_clients_every_reasoning_item(
         request_data={"model": "gpt-5.4-nano"},
         messages=[{"role": "user", "content": "Oslo or Lyon?"}],
         optional_params={},
-        litellm_params={"custom_llm_provider": "azure"},
+        litellm_params={"custom_llm_provider": "chatgpt"},
         encoding=Mock(),
     )
 
