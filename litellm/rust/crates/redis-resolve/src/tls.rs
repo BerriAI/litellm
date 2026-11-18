@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{
     Entry, Error, Expected,
-    keys::{self, FromUrl},
+    keys::{self, FromUrl, Kwarg},
     options::{self, TlsInput, flag, invalid, secret, text},
 };
 
@@ -105,33 +105,33 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, Error> {
             FromUrl::No => false,
         })
     });
-    let get = |key: &str| {
+    let get = |kwarg: Kwarg| {
         query
             .iter()
-            .find(|(name, _)| name == key)
+            .find(|(name, _)| name == kwarg.name())
             .map(|(_, entry)| entry.clone())
     };
-    let seconds = |key: &str| {
+    let seconds = |kwarg: Kwarg| {
         query_number(
-            get(key).as_ref(),
+            get(kwarg).as_ref(),
             number::float,
             Expected::Seconds,
             |seconds| Duration::try_from_secs_f64(seconds).ok(),
         )
     };
-    let integer = |key: &str| {
+    let integer = |kwarg: Kwarg| {
         query_number(
-            get(key).as_ref(),
+            get(kwarg).as_ref(),
             number::int,
             Expected::Integer,
             |number| i64::try_from(number).ok(),
         )
     };
-    let db = integer("db")?;
+    let db = integer(Kwarg::Db)?;
     let settings = QuerySettings {
-        timeout: seconds("socket_timeout")?,
-        connect_timeout: seconds("socket_connect_timeout")?,
-        health_check_interval: integer("health_check_interval")?,
+        timeout: seconds(Kwarg::SocketTimeout)?,
+        connect_timeout: seconds(Kwarg::SocketConnectTimeout)?,
+        health_check_interval: integer(Kwarg::HealthCheckInterval)?,
         ignored: ignored
             .iter()
             .filter_map(|(name, entry)| keys::ignored_query(&entry.source, name, &entry.value))
@@ -139,14 +139,14 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, Error> {
     };
     let tls = match tls_scheme {
         true => Some(TlsOptions {
-            ca_certs: text(get("ssl_ca_certs").as_ref()).map(Into::into),
-            ca_data: text(get("ssl_ca_data").as_ref()),
-            ca_path: text(get("ssl_ca_path").as_ref()).map(Into::into),
-            certfile: text(get("ssl_certfile").as_ref()).map(Into::into),
-            keyfile: text(get("ssl_keyfile").as_ref()).map(Into::into),
-            key_password: secret(get("ssl_password").as_ref()),
-            verify_certificate: verify_certificate(get("ssl_cert_reqs").as_ref())?,
-            check_hostname: text(get("ssl_check_hostname").as_ref())
+            ca_certs: text(get(Kwarg::SslCaCerts).as_ref()).map(Into::into),
+            ca_data: text(get(Kwarg::SslCaData).as_ref()),
+            ca_path: text(get(Kwarg::SslCaPath).as_ref()).map(Into::into),
+            certfile: text(get(Kwarg::SslCertfile).as_ref()).map(Into::into),
+            keyfile: text(get(Kwarg::SslKeyfile).as_ref()).map(Into::into),
+            key_password: secret(get(Kwarg::SslPassword).as_ref()),
+            verify_certificate: verify_certificate(get(Kwarg::SslCertReqs).as_ref())?,
+            check_hostname: text(get(Kwarg::SslCheckHostname).as_ref())
                 .is_some_and(|text| url_bool(&text)),
         }),
         false => None,
@@ -154,8 +154,8 @@ pub(super) fn url_query(url: &str) -> Result<UrlQuery, Error> {
     Ok(UrlQuery {
         tls,
         db,
-        username: secret(get("username").as_ref()),
-        password: secret(get("password").as_ref()),
+        username: secret(get(Kwarg::Username).as_ref()),
+        password: secret(get(Kwarg::Password).as_ref()),
         settings,
     })
 }

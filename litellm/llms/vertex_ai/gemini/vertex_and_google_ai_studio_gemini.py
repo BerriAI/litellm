@@ -81,6 +81,7 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
+    PromptFeedback,
     RequestBody,
     ToolConfig,
     Tools,
@@ -255,6 +256,19 @@ def _warn_gemini_sampling_params_deprecated(model: str) -> None:
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
+
+
+def _prompt_block_fields(feedback: PromptFeedback) -> Mapping[str, str]:
+    return MappingProxyType({"block_reason": feedback["blockReason"]})
+
+
+def _names_its_finish(candidate: Candidates) -> bool:
+    return (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+
+
+def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
+    reason: Final = candidate.get("finishReason")
+    return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -2802,6 +2816,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 delta=Delta(content=None, role="assistant"),
                 logprobs=None,
                 enhancements=None,
+                provider_specific_fields=dict(_prompt_block_fields(prompt_feedback)),
             )
 
             model_response: Final = ModelResponseStream(choices=[choice], id=response_id, model=model)
@@ -2864,6 +2879,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         annotations: Final = chat_completion_message.get("annotations")
         provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
+        finish_fields: Final = _candidate_finish_fields(candidate) if _names_its_finish(candidate) else None
         # create a streaming choice object
         choice: Final = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -2882,6 +2898,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
+            **({"provider_specific_fields": dict(finish_fields)} if finish_fields is not None else {}),
         )
         return choice
 
@@ -3217,17 +3234,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
-                native_finish_reason = candidate.get("finishReason")
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
-                        chat_completion_message, native_finish_reason
+                        chat_completion_message, candidate.get("finishReason")
                     ),
                     index=candidate.get("index", idx),
                     message=chat_completion_message,
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                     provider_specific_fields=(
-                        {"native_finish_reason": native_finish_reason} if native_finish_reason is not None else None
+                        dict(finish_fields)
+                        if (finish_fields := _candidate_finish_fields(candidate)) is not None
+                        else None
                     ),
                 )
                 model_response.choices.append(choice)
@@ -3316,17 +3334,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return self._content_filter_response(
                 model_response=model_response,
                 completion_response=completion_response,
-                provider_specific_fields={"block_reason": completion_response["promptFeedback"]["blockReason"]},
+                provider_specific_fields=_prompt_block_fields(completion_response["promptFeedback"]),
             )
 
         _candidates: Final = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
             content_policy_violations: Final = VertexGeminiConfig().get_flagged_finish_reasons()
-            if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations:
+            flagged_fields: Final = _candidate_finish_fields(_candidates[0])
+            if flagged_fields is not None and flagged_fields["native_finish_reason"] in content_policy_violations:
                 return self._content_filter_response(
                     model_response=model_response,
                     completion_response=completion_response,
-                    provider_specific_fields={"native_finish_reason": _candidates[0]["finishReason"]},
+                    provider_specific_fields=flagged_fields,
                 )
 
         model_response.choices = []
@@ -4182,17 +4201,20 @@ def _transform_long_decode_hops(
 
 
 def _provider_finish_reasons(
-    candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"]
+    candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"], blocked_indices: frozenset[int]
 ) -> tuple[tuple[int, str], ...]:
     """Every streamed choice carries a finish_reason, "stop" when the candidate sent none or Google's
-    FINISH_REASON_UNSPECIFIED, so only a candidate that named how it ended is evidence of it."""
+    FINISH_REASON_UNSPECIFIED, so only a candidate that named how it ended, or a blocked prompt, is evidence of it."""
     finished: Final = frozenset(
         candidate.get("index", position)
         for position, candidate in enumerate(candidates)
-        if (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+        if _names_its_finish(candidate)
     )
+    finished_or_blocked: Final = finished | blocked_indices
     return tuple(
-        (choice.index, choice.finish_reason) for choice in choices if choice.index in finished and choice.finish_reason
+        (choice.index, choice.finish_reason)
+        for choice in choices
+        if choice.index in finished_or_blocked and choice.finish_reason
     )
 
 
@@ -4442,7 +4464,13 @@ class ModelResponseIterator:
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
 
-            provider_finish_reasons: Final = _provider_finish_reasons(_candidates or (), model_response.choices)
+            provider_finish_reasons: Final = _provider_finish_reasons(
+                _candidates or (),
+                model_response.choices,
+                frozenset(choice.index for choice in blocked_response.choices)
+                if blocked_response is not None
+                else frozenset(),
+            )
             if provider_finish_reasons:
                 set_hidden_param(model_response, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, provider_finish_reasons)
             model_response.hidden_params["is_finished"] = False
@@ -4484,6 +4512,8 @@ class ModelResponseIterator:
         for choice in model_response.choices:
             delta_fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
             choice.finish_reason = None
+            if hasattr(choice, "provider_specific_fields"):
+                delattr(choice, "provider_specific_fields")
             choice.delta.provider_specific_fields = {
                 key: value for key, value in delta_fields.items() if key != "continuation_token"
             } or None

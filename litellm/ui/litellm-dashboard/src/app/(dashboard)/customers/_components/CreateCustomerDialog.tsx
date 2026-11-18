@@ -8,14 +8,7 @@ import { toast } from "sonner";
 import { $api } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -67,7 +60,6 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
         <form onSubmit={submit} className="space-y-5">
           <DialogHeader>
             <DialogTitle>{t("customerPortal.createDialog.title")}</DialogTitle>
-            <DialogDescription>{t("customerPortal.createDialog.description")}</DialogDescription>
           </DialogHeader>
           <fieldset disabled={create.isPending} className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2">
@@ -104,7 +96,6 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
                 value={fields.monthlyBudget}
                 onChange={(monthlyBudget) => setFields({ ...fields, monthlyBudget })}
               />
-              <p className="text-xs text-muted-foreground">{t("customerPortal.createDialog.budgetHelp")}</p>
             </div>
             <CustomerBudgetGroupsEditor
               groups={fields.groups}

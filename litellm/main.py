@@ -2970,14 +2970,19 @@ def _complete_custom_openai(
         if is_app_session:
             headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
+    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
     request_headers: Final = cast("dict[str, object] | None", headers)  # cast-ok: untyped request header boundary
+    attribution_source: Final = (
+        provider_config if provider_config is not None else JSONProviderRegistry.get(custom_llm_provider)
+    )
+    attribution_client: Final = (
+        client if isinstance(client, (openai.OpenAI, openai.AsyncOpenAI)) and not use_base_llm_http_handler else None
+    )
     outbound_headers: Final = (
         request_headers
-        if provider_config is None
-        else with_attribution_headers(provider_config.get_attribution_headers(), request_headers)
+        if attribution_source is None
+        else with_attribution_headers(attribution_source.get_attribution_headers(), request_headers, attribution_client)
     )
-
-    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
 
     if extra_headers is not None and not use_base_llm_http_handler:
         optional_params["extra_headers"] = extra_headers

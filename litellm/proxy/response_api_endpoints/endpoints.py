@@ -106,6 +106,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     ROUTER_RESERVED_METADATA_FIELDS,
     add_guardrails_from_policy_engine,
     anthropic_user_profile_id,
+    client_pricing_fields_stripped_for,
     is_chat_completions_body,
     pinned_anthropic_user_profile_id,
 )
@@ -1897,11 +1898,12 @@ async def _responses_input_tokens(
         )
 
     request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
+    left_out_fields: Final = counted_fields.keys() | client_pricing_fields_stripped_for(user_api_key_dict)
     try:
         responses_request: Final = await _with_managed_file_id_mapping(
             _with_authorized_previous_response(
                 {
-                    **{name: value for name, value in request_fields.items() if name not in counted_fields},
+                    **{name: value for name, value in request_fields.items() if name not in left_out_fields},
                     **token_fields,
                 },
                 response_id_security,

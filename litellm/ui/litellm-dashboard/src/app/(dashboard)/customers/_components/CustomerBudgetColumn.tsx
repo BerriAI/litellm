@@ -16,8 +16,8 @@ export function CustomerBudgetSortHeader({
   const Icon = sort ? SortIcon : ArrowUpDown;
   const direction = sort === "budget_desc" ? "descending" : "ascending";
   return (
-    <TableHead aria-sort={sort ? direction : "none"}>
-      <Button variant="ghost" size="sm" onClick={onSort}>
+    <TableHead className="px-4" aria-sort={sort ? direction : "none"}>
+      <Button variant="ghost" size="sm" className="-mx-2" onClick={onSort}>
         {t("customerPortal.hierarchy.maxBudget")}
         <Icon aria-hidden="true" className="size-3.5" />
       </Button>

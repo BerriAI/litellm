@@ -119,9 +119,19 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     CustomKeyPolicyRequest,
 )
 from litellm.types.utils import CredentialItem
+from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
+    CascadingJWTMappingTable,
+    JWTMappingRow,
+)
+from tests.unit.proxy.rust_auth_stores import JwtMapping, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @pytest.mark.asyncio
@@ -5727,27 +5737,6 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
     assert len(deleted_keys) == 2
 
 
-class _JWTMappingRow:
-    def __init__(self, token, jwt_claim_name, jwt_claim_value, jwt_issuer=None):
-        self.token = token
-        self.jwt_claim_name = jwt_claim_name
-        self.jwt_claim_value = jwt_claim_value
-        self.jwt_issuer = jwt_issuer
-
-
-class _CascadingJWTMappingTable:
-    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key is deleted."""
-
-    def __init__(self, rows):
-        self.rows = rows
-
-    async def find_many(self, where, **kwargs):
-        return [row for row in self.rows if row.token == where["token"]]
-
-    def cascade(self, deleted_tokens):
-        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
-
-
 class _RecordingEvict:
     def __init__(self):
         self.cache_keys = ()
@@ -5757,18 +5746,19 @@ class _RecordingEvict:
 
 
 @pytest.mark.asyncio
-async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypatch):
+async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypatch, rust_auth_stores: RustAuthStores):
     """Deleting a key must evict its jwt_key_mapping cache entries (LIT-5380).
 
     The FK cascade removes the mapping rows, so a surviving cache entry would keep
     resolving the deleted token hash and 401 every JWT call from that identity until
     virtual_key_mapping_cache_ttl expires, instead of auto-registering again.
     """
-    jwt_table = _CascadingJWTMappingTable(
+    jwt_table = CascadingJWTMappingTable(
+        rust_auth_stores.jwt_key_mapping,
         [
-            _JWTMappingRow("hashed-token-1", "email", "user@example.com"),
-            _JWTMappingRow("hashed-token-1", "email", "user@example.com", "https://issuer.example"),
-        ]
+            JWTMappingRow("hashed-token-1", "email", "user@example.com"),
+            JWTMappingRow("hashed-token-1", "email", "user@example.com", "https://issuer.example"),
+        ],
     )
 
     key1 = LiteLLM_VerificationToken(
@@ -5793,7 +5783,6 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[key1]
     )
-    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
     mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
 
     async def cascading_delete_data(tokens):
@@ -5928,7 +5917,6 @@ def _owned_key_row(hashed_token: str) -> LiteLLM_VerificationToken:
 def _prisma_with_key_row(key_row: LiteLLM_VerificationToken) -> AsyncMock:
     prisma_client: Final = AsyncMock()
     prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key_row])
-    prisma_client.db.litellm_jwtkeymapping = _CascadingJWTMappingTable([])
     prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
     prisma_client.delete_data = AsyncMock(return_value=[key_row.token])
     prisma_client.get_data = AsyncMock(return_value=None)
@@ -14641,7 +14629,9 @@ async def test_enforce_custom_key_policy_never_builds_the_request_without_a_hook
 
 
 @pytest.mark.asyncio
-async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new_token(monkeypatch):
+async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new_token(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+):
     """
     LIT-5379: /key/regenerate rewrites the JWT mapping row to the new token (FK
     cascade) but left the jwt_key_mapping cache entry pointing at the old hash,
@@ -14666,12 +14656,16 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
     stale_cache_key = jwt_key_mapping_cache_key("sub", "user1", None)
     existing_key = _make_regenerate_existing_key()
     mock_prisma_client = _make_regenerate_mock_prisma()
-    mock_prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(
-        return_value=[MagicMock(jwt_claim_name="sub", jwt_claim_value="user1", jwt_issuer=None)]
-    )
-    mock_prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
-        return_value=MagicMock(token="new-hashed-token")
-    )
+    mappings = rust_auth_stores.jwt_key_mapping
+    mappings.mappings.append(JwtMapping(jwt_claim_name="sub", jwt_claim_value="user1", token="abc123"))
+    claim_lookups: list[list[str]] = []
+    read_mapped_claims = mappings.mapped_claims
+
+    async def recording_mapped_claims(tokens):
+        claim_lookups.append(list(tokens))
+        return await read_mapped_claims(tokens)
+
+    monkeypatch.setattr(mappings, "mapped_claims", recording_mapped_claims)
     user_api_key_cache = proxy_server.user_api_key_cache
     await user_api_key_cache.async_set_cache(key=stale_cache_key, value="abc123")
 
@@ -14713,7 +14707,8 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
 
     assert await user_api_key_cache.async_get_cache(stale_cache_key) is None
     publish_mock.assert_any_await(cache_key=stale_cache_key)
-    mock_prisma_client.db.litellm_jwtkeymapping.find_many.assert_awaited_once_with(where={"token": "abc123"})
+    assert claim_lookups == [["abc123"]]
+    mappings.mappings[:] = [JwtMapping(jwt_claim_name="sub", jwt_claim_value="user1", token="new-hashed-token")]
 
     rotated_key = UserAPIKeyAuth(token="new-hashed-token", user_id="user-1")
     rotated_principal = IdentityStore._principal_from_key(

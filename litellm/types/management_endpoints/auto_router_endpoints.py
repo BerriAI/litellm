@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import Field, computed_field, field_validator, model_validator
+from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -246,6 +246,12 @@ SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
 
 SHADOW_EVAL_MAX_ROUTERS: Final[int] = 4
 
+SHADOW_EVAL_RUBRIC_MAX_CHARS: Final[int] = 4_000
+
+# Identifies the rubric grading contract (prompt, anchors, 1-5 scale) a job was created
+# under. A sampler only runs rubric jobs whose version it implements.
+SHADOW_EVAL_RUBRIC_VERSION: Final[int] = 1
+
 
 class StartShadowEvalRequest(LiteLLMBaseModel):
     """Start duplicating one or more targets' traffic for blind comparison against an auto-router.
@@ -444,6 +450,27 @@ class StartShadowEvalRequest(LiteLLMBaseModel):
         # normalization must land as a self attribute store to hold for every caller.
         self.router_names = routers
         return self
+
+
+class StartShadowEvalRubricRequest(StartShadowEvalRequest):  # frozen-ok: parent validator assigns router_names
+    """A shadow eval whose judge also grades each response from 1 to 5 against an operator rubric."""
+
+    rubric: str = Field(
+        min_length=1,
+        max_length=SHADOW_EVAL_RUBRIC_MAX_CHARS,
+        description=(
+            "The criteria the judge grades both responses against, in plain language, at most "
+            f"{SHADOW_EVAL_RUBRIC_MAX_CHARS} characters. Each response gets an integer grade on a fixed scale "
+            "where 1 fails the criteria and 5 fully meets them. Stored unchanged with the job and never edited"
+        ),
+    )
+
+    @field_validator("rubric")
+    @classmethod
+    def _rubric_is_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("rubric must contain criteria, not only whitespace")
+        return value
 
 
 class ShadowEvalSlice(LiteLLMBaseModel):
@@ -695,6 +722,65 @@ class ShadowEvalJobResponse(LiteLLMBaseModel):
         if all(target.stopped_at is not None for target in self.targets):
             return "stopped"
         return "running"
+
+
+class ShadowEvalRubricJobResponse(ShadowEvalJobResponse):
+    """A rubric shadow eval job: the regular job view plus the rubric it grades against."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rubric: str = Field(description="The criteria both responses are graded against, as stored at start")
+    rubric_version: int = Field(description="The grading contract (prompt, anchors, 1-5 scale) the job runs under")
+
+
+class ShadowEvalGradePair(LiteLLMBaseModel):
+    """How many judged turns gave the real and shadow responses this pair of grades."""
+
+    model_config = ConfigDict(frozen=True)
+
+    real_grade: int = Field(description="Grade of the response the caller actually received, 1 to 5")
+    shadow_grade: int = Field(description="Grade of the duplicated response nobody was served, 1 to 5")
+    turn_count: int
+
+
+class ShadowEvalRubricSlice(LiteLLMBaseModel):
+    """Rubric grades for one router arm, or for every arm together."""
+
+    model_config = ConfigDict(frozen=True)
+
+    group: str
+    graded_count: int = Field(description="Judged turns that carry both grades")
+    ungraded_count: int = Field(
+        description=(
+            "Judged turns with a preference but no grades, such as turns a worker without rubric support "
+            "judged. They are excluded from grade_distribution, never counted as low grades"
+        )
+    )
+    grade_distribution: tuple[ShadowEvalGradePair, ...] = Field(
+        description=(
+            "Joint counts of (real_grade, shadow_grade) over graded turns, ordered by real then shadow grade, "
+            "so turns where both responses were good or both were bad stay distinguishable"
+        )
+    )
+
+
+class ShadowEvalRubricResultResponse(LiteLLMBaseModel):
+    """A rubric job's grades so far. Error attempts are excluded, like the job's preference results."""
+
+    model_config = ConfigDict(frozen=True)
+
+    job_id: str
+    rubric: str
+    rubric_version: int
+    overall: ShadowEvalRubricSlice = Field(
+        description=(
+            "Every arm together. A judged turn is one (request, router arm) pair, so a multi-router job "
+            "counts each real response once per arm; compare routers with by_router"
+        )
+    )
+    by_router: tuple[ShadowEvalRubricSlice, ...] = Field(
+        description="One slice per router arm, ordered by router name, each graded against the same real responses"
+    )
 
 
 def __getattr__(name: str) -> object:

@@ -1286,7 +1286,7 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
 
         assert_eq!(
             denial.public(),
-            Some(PublicDenial::Plain {
+            Some(PublicDenial::NoMatchingJwtPublicKey {
                 message: format!(
                     "No matching public key found. keys=[\"{JWKS}\",\"{OTHER_JWKS}\"], kid=c"
                 )
