@@ -48,7 +48,7 @@ def _is_decimal(value: str) -> bool:
 
 def _parsed_limit(value: object, default: int, drop_malformed: bool) -> int | InvalidInputItemsQuery:
     match value:
-        case None:
+        case None | "":
             return default
         case int() if not isinstance(value, bool) and value >= 0:
             return value
@@ -64,7 +64,7 @@ def _parsed_order(
     value: object, default: Literal["asc", "desc"], drop_malformed: bool
 ) -> Literal["asc", "desc"] | InvalidInputItemsQuery:
     match value:
-        case None:
+        case None | "":
             return default
         case "asc":
             return "asc"

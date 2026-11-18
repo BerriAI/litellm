@@ -1866,7 +1866,7 @@ async def _list_items_through_proxy(
             ],
         ),
         (
-            (("after", ""), ("before", ""), ("include", ""), ("include[]", "")),
+            (("after", ""), ("before", ""), ("include", ""), ("include[]", ""), ("limit", ""), ("order", "")),
             [("limit", "20"), ("order", "desc")],
         ),
         ((), [("limit", "20"), ("order", "desc")]),
