@@ -211,12 +211,16 @@ async fn an_admitted_request_gets_the_native_404_when_no_route_takes_it() {
 const MASTER_KEY: &str = "Bearer gateway-key";
 
 /// The native gateway built from `config` the way `main` builds it in front of `python`, with the
-/// real `Admit`.
+/// real `Admit` and no variable in its environment.
 async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
     litellm_gateway::install_crypto_provider();
     let config = Config::from_yaml(config).unwrap();
-    let state = litellm_gateway::AppState::build(&config).await.unwrap();
-    let admit = litellm_gateway::Admit::new(&config);
+    let resources =
+        litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
+    let state = litellm_gateway::AppState::over(&config, &resources)
+        .await
+        .unwrap();
+    let admit = litellm_gateway::Admit::new(&config, &resources, &state).await;
     let native = middleware::global(
         litellm_gateway::router(state, &config),
         &middleware::Settings::default(),
@@ -272,9 +276,9 @@ async fn provider() -> wiremock::MockServer {
     provider
 }
 
-fn serving(provider: &wiremock::MockServer) -> String {
+fn serving(provider: &wiremock::MockServer, settings: &str) -> String {
     format!(
-        "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_base: {}\n      api_key: provider-key\n    model_info:\n      id: claude-a\ngeneral_settings:\n  master_key: gateway-key\n",
+        "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_base: {}\n      api_key: provider-key\n    model_info:\n      id: claude-a\ngeneral_settings:\n  master_key: gateway-key\n{settings}",
         provider.uri()
     )
 }
@@ -284,7 +288,7 @@ fn serving(provider: &wiremock::MockServer) -> String {
 async fn a_master_key_callers_messages_request_is_answered_natively() {
     let (python, mut received) = python().await;
     let provider = provider().await;
-    let gateway = configured_gateway(python, &serving(&provider)).await;
+    let gateway = configured_gateway(python, &serving(&provider, "")).await;
 
     let response = post_as(gateway, "/v1/messages", MASTER_KEY).await;
 
@@ -303,22 +307,56 @@ async fn a_master_key_callers_messages_request_is_answered_natively() {
 }
 
 #[rstest]
-#[case::another_route("/v1/chat/completions", MASTER_KEY, "python; reason=route")]
-#[case::another_caller("/v1/messages", "Bearer sk-virtual", "python; reason=credential")]
+#[case::another_route("", "/v1/chat/completions", MASTER_KEY, "python; reason=route")]
+#[case::another_caller("", "/v1/messages", "Bearer sk-virtual", "python; reason=credential")]
+#[case::a_setting_only_python_honors(
+    "litellm_settings:\n  callbacks: [prometheus]\n",
+    "/v1/messages",
+    MASTER_KEY,
+    "python; reason=settings"
+)]
 #[tokio::test]
-async fn python_answers_another_route_and_another_caller(
+async fn python_answers_what_the_native_app_would_not_answer_the_same(
+    #[case] settings: &str,
     #[case] path: &str,
     #[case] authorization: &str,
     #[case] answered_by: &str,
 ) {
     let (python, mut received) = python().await;
     let provider = provider().await;
-    let gateway = configured_gateway(python, &serving(&provider)).await;
+    let gateway = configured_gateway(python, &serving(&provider, settings)).await;
 
     let response = post_as(gateway, path, authorization).await;
 
     assert_eq!(response.headers()[ANSWERED_BY_HEADER], answered_by);
     assert_eq!(received.recv().await.unwrap().path, path);
+    assert!(provider.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn python_answers_a_body_with_a_param_only_it_reads_as_the_client_sent_it() {
+    let (python, mut received) = python().await;
+    let provider = provider().await;
+    let gateway = configured_gateway(python, &serving(&provider, "")).await;
+    let sent = r#"{"model":"claude","max_tokens":8,"user":"end-user","messages":[{"role":"user","content":"hi"}]}"#;
+    let request = Request::post(format!("http://{gateway}/v1/messages"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, MASTER_KEY)
+        .body(Body::from(sent))
+        .unwrap();
+
+    let response = Client::builder(TokioExecutor::new())
+        .build_http::<Body>()
+        .request(request)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.headers()[ANSWERED_BY_HEADER],
+        "python; reason=body"
+    );
+    assert_eq!(received.recv().await.unwrap().body, sent);
     assert!(provider.received_requests().await.unwrap().is_empty());
 }
 
