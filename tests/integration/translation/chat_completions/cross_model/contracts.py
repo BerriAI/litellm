@@ -350,3 +350,25 @@ def followup_request(request: Mapping[str, JsonValue], response: Mapping[str, Js
         **request,
         "messages": [*list_value(request["messages"]), assistant, *tool_results(message), FOLLOWUP],
     }
+
+
+def without_replay_record(response: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    choices: Final = response["choices"]
+    assert isinstance(choices, list) and isinstance(choices[0], dict), choices
+    message: Final = choices[0]["message"]
+    assert isinstance(message, dict), message
+    fields: Final = message["provider_specific_fields"]
+    assert isinstance(fields, dict), fields
+    kept: Final = {key: value for key, value in fields.items() if key != "openai_responses_replay"}
+    return {
+        **response,
+        "choices": [
+            {
+                **choices[0],
+                "message": {
+                    **{key: value for key, value in message.items() if key != "provider_specific_fields"},
+                    **({"provider_specific_fields": kept} if kept else {}),
+                },
+            }
+        ],
+    }

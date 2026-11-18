@@ -15,7 +15,11 @@ from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_v
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.assertions import assert_exact
 from integration.cost_calculation.conftest import poll_rows, poll_rows_where, read_rows_now
-from integration.cost_calculation.catalog import BATCH_CASES, REALTIME_CASES
+from integration.cost_calculation.catalog import (
+    BATCH_CASES,
+    BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+    REALTIME_CASES,
+)
 from integration.cost_calculation.cost_tracking_case import (
     BatchCostCase,
     JsonResponse,
@@ -252,9 +256,18 @@ async def _run_realtime(url: str, key: str, model_name: str, turn_count: int) ->
         return session
 
 
+def _realtime_marks(case: RealtimeCostCase) -> tuple[pytest.MarkDecorator, ...]:
+    billed: Final = (
+        (pytest.mark.billed_against_real_provider_by_cost_tracking_reconciliation_automation,)
+        if case.name in BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION
+        else ()
+    )
+    return (pytest.mark.covers(case.covers), *billed)
+
+
 @pytest.mark.parametrize(
     "case",
-    tuple(pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name) for case in REALTIME_CASES),
+    tuple(pytest.param(case, marks=_realtime_marks(case), id=case.name) for case in REALTIME_CASES),
 )
 def test_realtime_costs(gateway: Gateway, case: RealtimeCostCase) -> None:
     with gateway.scenario() as scenario:

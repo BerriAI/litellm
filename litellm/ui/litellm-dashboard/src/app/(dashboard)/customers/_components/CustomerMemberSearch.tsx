@@ -31,11 +31,11 @@ export default function CustomerMemberSearch({
     setDraft(value);
   }, [debouncer, value]);
   return (
-    <div className="relative mb-4 w-full max-w-xs">
+    <div className="relative w-full max-w-xs">
       <Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         type="search"
-        className="h-8 pl-9 text-xs"
+        className="pl-9"
         value={draft}
         onChange={(event) => {
           setDraft(event.target.value);

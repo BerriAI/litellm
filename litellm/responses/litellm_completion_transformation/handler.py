@@ -270,6 +270,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_client_ids=previous_response_client_ids,
                 stored_turns=stored_turns,
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
+                request_input=request_input,
             )
 
         _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request)

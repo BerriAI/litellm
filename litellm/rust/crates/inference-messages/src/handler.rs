@@ -471,7 +471,7 @@ async fn provider_call(
         .await?;
     let stream = wire.body.get("stream").map_or(
         stream_moved_to_url,
-        litellm_llms_types::recognized::python_truthy,
+        litellm_python_compat::truthy::json_truthy,
     );
     Ok(ProviderCall {
         identity,

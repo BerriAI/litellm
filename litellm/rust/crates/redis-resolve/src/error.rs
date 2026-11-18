@@ -25,6 +25,10 @@ pub enum Error {
     AwsIamWithoutTls,
     #[error("AWS ElastiCache IAM Redis authentication requires: {}", missing.join(", "))]
     AwsIamIncomplete { missing: Vec<&'static str> },
+    #[error("Redis setting {setting} is not plain data")]
+    NotPlainData { setting: String },
+    #[error(transparent)]
+    Secret(#[from] litellm_secrets::Error),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::Display)]
@@ -74,7 +78,7 @@ impl Error {
                 Some(PythonException::TypeError)
             }
             Self::DbInCluster { .. } => Some(PythonException::RedisClusterException),
-            Self::ProviderWithoutHandle => None,
+            Self::ProviderWithoutHandle | Self::NotPlainData { .. } | Self::Secret(_) => None,
         }
     }
 }

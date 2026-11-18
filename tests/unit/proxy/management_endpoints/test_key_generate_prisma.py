@@ -99,8 +99,14 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 request_data = {
@@ -2196,7 +2202,7 @@ async def test_auth_vertex_ai_route(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_db_unavailable(monkeypatch):
+async def test_user_api_key_auth_db_unavailable(monkeypatch, rust_auth_stores: RustAuthStores):
     """
     Test that user_api_key_auth handles DB connection failures appropriately when:
     1. DB connection fails during token validation
@@ -2223,6 +2229,8 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch):
 
         async def set_cache(self, *args, **kwargs):
             pass
+
+    rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
@@ -2253,10 +2261,11 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch):
     assert isinstance(result, UserAPIKeyAuth)
     assert result.key_name == "failed-to-connect-to-db"
     assert result.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID
+    assert rust_auth_stores.key.lookups == [(hash_token("sk-987656789"), False)]
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
+async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch, rust_auth_stores: RustAuthStores):
     """
     Test that user_api_key_auth raises an exception when:
     This is default behavior
@@ -2285,6 +2294,8 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
         async def set_cache(self, *args, **kwargs):
             pass
 
+    rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
+
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
@@ -2301,6 +2312,7 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
             request=request,
             api_key="Bearer sk-987656789",
         )
+    assert rust_auth_stores.key.lookups == [(hash_token("sk-987656789"), False)]
 
 
 ## E2E Virtual Key + Secret Manager Tests #########################################

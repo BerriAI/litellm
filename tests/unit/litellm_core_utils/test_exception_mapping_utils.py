@@ -19,11 +19,14 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
+    provider_origin_status,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_CLIENT_ID
+from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.proxy.common_utils.openai_error_payload import openai_error_type
@@ -3525,3 +3528,304 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+_PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", api_base="https://api.githubcopilot.com")
+_APP_SESSION: Final = GithubCopilotUserSession(token="ghs-app", api_base="https://api.githubcopilot.com", is_app=True)
+
+
+def _copilot_model_not_supported_message(request_kwargs: dict[str, object]) -> str:
+    copilot_body: Final = {
+        "error": {
+            "message": "The requested model is not supported.",
+            "code": "model_not_supported",
+            "param": "model",
+            "type": "invalid_request_error",
+        }
+    }
+    request: Final = httpx.Request("POST", "https://api.githubcopilot.com/chat/completions")
+    original: Final = OpenAIError(
+        status_code=400,
+        message=json.dumps(copilot_body),
+        request=request,
+        response=httpx.Response(400, request=request),
+        body=copilot_body["error"],
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="claude-opus-4.6",
+            original_exception=original,
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs=request_kwargs,
+        )
+    assert caught.value.status_code == 400
+    assert "The requested model is not supported." in caught.value.message
+    assert "gho-" not in caught.value.message
+    assert "ghu-" not in caught.value.message
+    assert "ghs-" not in caught.value.message
+    return caught.value.message
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "account"),
+    [
+        pytest.param(
+            {"litellm_credential_name": "shared-copilot"},
+            "the GitHub account this LiteLLM proxy signed in to GitHub Copilot with",
+            id="shared-device-login",
+        ),
+        pytest.param(
+            {
+                "litellm_credential_name": "team-copilot",
+                "github_copilot_user_session": _PER_USER_SESSION,
+                "secret_fields": {
+                    "user_provider_credentials_user_id": "dev-alice",
+                    "user_provider_credentials": {
+                        "team-copilot": {"access_token": "gho-alice", "github_login": "alice-gh"},
+                        "other-copilot": {"access_token": "gho-other", "github_login": "someone-else"},
+                    },
+                },
+            },
+            "GitHub account 'alice-gh', which LiteLLM user 'dev-alice' connected for LiteLLM credential "
+            "'team-copilot'",
+            id="per-user-connected-login",
+        ),
+        pytest.param(
+            {
+                "litellm_credential_name": "team-copilot",
+                "github_copilot_user_session": _PER_USER_SESSION,
+                "secret_fields": {
+                    "user_provider_credentials_user_id": "dev-alice",
+                    "user_provider_credentials": {"team-copilot": {"access_token": "gho-alice"}},
+                },
+            },
+            "the GitHub account LiteLLM user 'dev-alice' connected for LiteLLM credential 'team-copilot'",
+            id="per-user-without-saved-login",
+        ),
+        pytest.param(
+            {"litellm_credential_name": "team-copilot", "github_copilot_user_session": _PER_USER_SESSION},
+            "the GitHub account you connected for LiteLLM credential 'team-copilot'",
+            id="per-user-outside-the-proxy",
+        ),
+        pytest.param(
+            {"litellm_credential_name": "org-app", "github_copilot_user_session": _APP_SESSION},
+            "the GitHub App installation on LiteLLM credential 'org-app'",
+            id="github-app",
+        ),
+    ],
+)
+def test_github_copilot_model_not_supported_names_the_github_account_used(
+    request_kwargs: dict[str, object], account: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("GITHUB_COPILOT_CLIENT_ID", raising=False)
+    assert (
+        f"GitHub Copilot rejected model 'claude-opus-4.6' because it is not available for {account}. That can be "
+        "a different account from the one signed in to your editor. Ask your GitHub admin to enable the model in "
+        "that account's Copilot model policy, or use a model its Copilot plan includes. This is not a LiteLLM error."
+    ) in _copilot_model_not_supported_message(request_kwargs)
+
+
+_CUSTOM_APP_HINT: Final = (
+    "That can be a different account from the one signed in to your editor. LiteLLM signs in to GitHub Copilot "
+    "with a custom GitHub App (GITHUB_COPILOT_CLIENT_ID). Check that the app's 'Copilot Requests' permission is set "
+    "to 'Read-only'"
+)
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        pytest.param({"litellm_credential_name": "shared-copilot"}, id="shared-device-login"),
+        pytest.param(
+            {"litellm_credential_name": "team-copilot", "github_copilot_user_session": _PER_USER_SESSION},
+            id="per-user-device-login",
+        ),
+    ],
+)
+def test_github_copilot_model_not_supported_names_a_custom_sign_in_app(
+    request_kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23custom")
+    assert _CUSTOM_APP_HINT in _copilot_model_not_supported_message(request_kwargs)
+
+
+@pytest.mark.parametrize(
+    ("client_id", "request_kwargs"),
+    [
+        pytest.param(DEFAULT_GITHUB_CLIENT_ID, {"litellm_credential_name": "shared-copilot"}, id="default-app"),
+        pytest.param(
+            "Iv23custom",
+            {"litellm_credential_name": "org-app", "github_copilot_user_session": _APP_SESSION},
+            id="github-app-installation",
+        ),
+    ],
+)
+def test_github_copilot_model_not_supported_skips_the_app_hint_without_a_custom_sign_in_app(
+    client_id: str, request_kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", client_id)
+    assert "GITHUB_COPILOT_CLIENT_ID" not in _copilot_model_not_supported_message(request_kwargs)
+
+
+def test_openai_model_not_supported_keeps_the_upstream_message():
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=400,
+        message='{"error": {"message": "The requested model is not supported.", "code": "model_not_supported"}}',
+        request=request,
+        response=httpx.Response(400, request=request),
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-5.4",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert "GitHub Copilot" not in caught.value.message, caught.value.message
+
+
+_COPILOT_APP_HINT: Final = "Check that the app's 'Copilot Requests' permission is set to 'Read-only'"
+
+
+def _copilot_error(status_code: int, body: dict[str, str]) -> OpenAIError:
+    request: Final = httpx.Request("POST", "https://api.githubcopilot.com/chat/completions")
+    return OpenAIError(
+        status_code=status_code,
+        message=json.dumps({"error": body}),
+        request=request,
+        response=httpx.Response(status_code, request=request),
+        body=body,
+    )
+
+
+@pytest.mark.parametrize(
+    ("client_id", "hint_expected"),
+    [(None, False), ("Iv1.b507a08c87ecfe98", False), ("Iv23liCustomApp", True)],
+    ids=["default_app", "default_app_set_explicitly", "custom_github_app"],
+)
+def test_github_copilot_model_not_supported_tells_custom_app_users_to_check_copilot_requests(
+    monkeypatch, client_id: str | None, hint_expected: bool
+):
+    if client_id is None:
+        monkeypatch.delenv("GITHUB_COPILOT_CLIENT_ID", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", client_id)
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="claude-sonnet-4.5",
+            original_exception=_copilot_error(
+                400, {"message": "The requested model is not supported.", "code": "model_not_supported"}
+            ),
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert caught.value.status_code == 400
+    assert "GitHub Copilot rejected model 'claude-sonnet-4.5'" in caught.value.message, caught.value.message
+    assert (_COPILOT_APP_HINT in caught.value.message) is hint_expected, caught.value.message
+    assert caught.value.message.count(_COPILOT_APP_HINT) == (1 if hint_expected else 0), caught.value.message
+
+
+def test_github_copilot_integration_mismatch_tells_custom_app_users_where_the_permission_lives(monkeypatch):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
+    upstream_text: Final = (
+        "bad request: the Copilot-Integration-Id header does not match the GitHub App that issued this "
+        "installation access token"
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-4o",
+            original_exception=_copilot_error(400, {"message": upstream_text}),
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert caught.value.status_code == 400
+    assert upstream_text in caught.value.message, caught.value.message
+    assert _COPILOT_APP_HINT in caught.value.message, caught.value.message
+    assert "https://github.com/settings/apps" in caught.value.message, caught.value.message
+
+
+def test_github_copilot_app_installation_error_skips_the_device_login_app_hint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
+    upstream_text: Final = "bad request: Personal Access Tokens are not supported for this endpoint"
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-4o",
+            original_exception=_copilot_error(400, {"message": upstream_text}),
+            custom_llm_provider="github_copilot",
+            completion_kwargs={},
+            extra_kwargs={"litellm_credential_name": "org-app", "github_copilot_user_session": _APP_SESSION},
+        )
+    assert upstream_text in caught.value.message, caught.value.message
+    assert "Copilot Requests" not in caught.value.message, caught.value.message
+
+
+def test_openai_error_never_mentions_the_copilot_app_permission(monkeypatch):
+    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
+    request: Final = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=400,
+        message='{"error": {"message": "The requested model is not supported.", "code": "model_not_supported"}}',
+        request=request,
+        response=httpx.Response(400, request=request),
+    )
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-5.4",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert "Copilot Requests" not in caught.value.message, caught.value.message
+
+
+@pytest.mark.parametrize(
+    ("provider", "provider_status", "mapped_error", "public_status"),
+    [
+        ("anthropic", 529, litellm.InternalServerError, 500),
+        ("anthropic", 429, litellm.RateLimitError, 429),
+        ("openai", 529, litellm.APIError, 529),
+        ("openai", 429, litellm.RateLimitError, 429),
+    ],
+)
+def test_a_mapped_provider_error_keeps_the_providers_own_status_beside_its_public_one(
+    provider: str,
+    provider_status: int,
+    mapped_error: type[litellm.InternalServerError | litellm.RateLimitError | litellm.APIError],
+    public_status: int,
+    quiet_exception_mapping: None,
+) -> None:
+    with pytest.raises(mapped_error, match="upstream failure") as raised:
+        exception_type(
+            model="model-under-test",
+            original_exception=_UpstreamHTTPError(status_code=provider_status, message="upstream failure"),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is mapped_error
+    assert (raised.value.status_code, provider_origin_status(raised.value)) == (public_status, provider_status)
+
+
+def test_an_error_litellm_raised_itself_carries_no_provider_status(quiet_exception_mapping: None) -> None:
+    synthetic: Final = litellm.RateLimitError(message="deployment at capacity", llm_provider="", model="m")
+
+    returned: Final = exception_type(model="m", original_exception=synthetic, custom_llm_provider="openai")
+
+    assert returned is synthetic
+    assert provider_origin_status(returned) is None
+
+
+def test_a_status_litellm_made_up_for_a_provider_error_is_not_kept_as_the_providers(
+    quiet_exception_mapping: None,
+) -> None:
+    made_up: Final = BaseLLMException(status_code=429, message="no status upstream", status_code_is_synthesized=True)
+
+    with pytest.raises(litellm.RateLimitError, match="no status upstream") as raised:
+        exception_type(model="m", original_exception=made_up, custom_llm_provider="openai")
+
+    assert provider_origin_status(raised.value) is None

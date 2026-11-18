@@ -125,7 +125,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CustomerBudgetExceededError,
-    customer_identity_from_headers,
+    customer_identity_from_request,
     resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.host import identity as auth_identity
@@ -183,6 +183,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     pre_call_served_model,
     request_served_model,
 )
+from litellm.proxy.request_auth_context import REQUEST_AUTH
 from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_committed_budget_spend,
     carry_team_and_user_budget_state,
@@ -1838,7 +1839,10 @@ async def _reject_from_headers_before_reading_body(
         return
     from litellm.proxy import proxy_server
     from litellm.proxy.common_request_processing import proxy_exception_from_http_exception
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        ParallelRequestLimiterHook,
+        raise_if_over_limit_before_body,
+    )
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     configured_header: Final = proxy_server.general_settings_view().get("litellm_key_header_name")
@@ -1884,7 +1888,7 @@ async def _reject_from_headers_before_reading_body(
     if RouteChecks.is_unbilled_route(route) or _is_bodyless_get(request):
         return
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+    if not isinstance(limiter, ParallelRequestLimiterHook):
         return
     team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
     rate_limited: Final = cached_key.model_copy(
@@ -1896,7 +1900,7 @@ async def _reject_from_headers_before_reading_body(
         }
     )
     try:
-        await limiter.raise_if_over_limit_before_body(rate_limited)
+        await raise_if_over_limit_before_body(limiter, rate_limited)
     except HTTPException as rejection:
         if team_fields is None and _refused_by_team_limit(rejection):
             return
@@ -3191,6 +3195,7 @@ async def _authorize_authenticated_request_checks(
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
         from litellm.proxy.proxy_server import (
             general_settings,
+            litellm_jwtauth,
             llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
             llm_router,
             prisma_client,
@@ -3198,8 +3203,10 @@ async def _authorize_authenticated_request_checks(
             user_model,
         )
 
-        customer_identity: Final = customer_identity_from_headers(
-            safe_get_request_headers(request)  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+        customer_identity: Final = customer_identity_from_request(
+            safe_get_request_headers(request),  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+            user_api_key_auth_obj.jwt_claims,
+            litellm_jwtauth,
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
         if customer_identity is not None and not RustAuth.is_public_route(route, core.proxy_settings()):
@@ -3510,6 +3517,7 @@ async def user_api_key_auth(
         model=request_data.get("model") if isinstance(request_data, dict) else None,
     )
     user_api_key_auth_obj.request_route = normalize_request_route(route)
+    REQUEST_AUTH.set(user_api_key_auth_obj)
 
     if body_parse_exception is not None:
         await _record_unparsable_body_failure(
