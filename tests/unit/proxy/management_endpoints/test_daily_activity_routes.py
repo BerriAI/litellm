@@ -46,6 +46,7 @@ from litellm.types.repositories.daily_activity import (
     UserPage,
     UserSpendRow,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @dataclass(frozen=True, slots=True)
@@ -630,9 +631,12 @@ def _daily_activity_test_client(repository: _FakeRepository, prisma_client: obje
 
 
 @pytest.fixture
-def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
+def daily_activity_client(rust_auth_stores: RustAuthStores) -> Iterator[tuple[TestClient, _FakeRepository]]:
     repository: Final = _FakeRepository(_seeded_activity())
-    with _daily_activity_test_client(repository, _prisma_client()) as client:
+    prisma_client: Final = _prisma_client()
+    for user in prisma_client.db.litellm_usertable._rows:
+        rust_auth_stores.user.rows[user.user_id] = user.model_dump(mode="json")
+    with _daily_activity_test_client(repository, prisma_client) as client:
         yield client, repository
 
 

@@ -213,7 +213,7 @@ def customer_identity_from_request(
     return identity if identity.customer_member_id is not None or identity.customer_org_alias is not None else None
 
 
-def _scope(
+def customer_scope(
     key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget | None, budget_reset_at: datetime | None = None
 ) -> CustomerScopeAuth:
     if budget is None:
@@ -237,7 +237,7 @@ def _scope(
 def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
     budget: Final = related_budget(team.budget, now)
     override: Final = related_budget(team.budget_override, now, budget.max_budget if budget is not None else None)
-    return _scope(
+    return customer_scope(
         "customer_team",
         team.customer_team_id,
         team.spend,
@@ -249,7 +249,8 @@ def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
 def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime) -> CustomerHierarchyAuth:
     """The org, team and member scopes of one member row loaded with ``_MEMBER_INCLUDE`` plus its ``teams`` rows.
     The member's limits are its effective budget: the selected organization template under any unexpired override.
-    ``scopes`` charges the first team in ``parent_team_ids``; ``select_customer_team`` swaps in another."""
+    ``scopes`` charges the first team in ``parent_team_ids``; ``select_customer_team`` swaps in another.
+    """
     member: Final = _MemberRow.model_validate(row)
     organization: Final = member.parent_org
     template: Final = related_budget(member.budget, now)
@@ -266,7 +267,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -274,7 +275,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
                 customer_row_reset_at(organization, now),
             ),
             *team_scopes[:1],
-            _scope(
+            customer_scope(
                 "customer_member",
                 member.customer_member_id,
                 member.spend,
@@ -307,7 +308,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -413,7 +414,7 @@ async def _accounting_scope(
     if row is None:
         return None
     values: Final = row.model_dump()
-    return _scope(
+    return customer_scope(
         key, entity_id, _SPEND.validate_python(values.get("spend", 0)), related_budget(values.get("budget"), now)
     )
 
@@ -560,7 +561,8 @@ def check_customer_hierarchy_model_access(
 
 def _untracked(message: str, header: str) -> None:
     """An id the proxy does not know is logged and the request runs without that customer level, never refused:
-    the headers are attribution, and a customer whose rows are not set up yet must keep working."""
+    the headers are attribution, and a customer whose rows are not set up yet must keep working.
+    """
     verbose_proxy_logger.warning("Customer %s not tracked, %s", header, message)
 
 
@@ -590,7 +592,8 @@ async def _register_organization(
     key_metadata: Mapping[str, object],
 ) -> CustomerHierarchyAuth | None:
     """An alias the proxy has never seen becomes an organization with that id and alias, so a customer's first
-    request is charged to it instead of running untracked. A key pinned to another organization is refused first."""
+    request is charged to it instead of running untracked. A key pinned to another organization is refused first.
+    """
     if not _registrable(customer_org_alias):
         verbose_proxy_logger.warning(
             "Could not register customer organization: alias is not a valid customer identifier"
@@ -656,7 +659,7 @@ async def _register_member(
 ) -> CustomerHierarchyAuth | None:
     """A member the request named for the first time joins the aliased organization's default team. Without an
     alias there is no organization to place it in, and the member stays unknown."""
-    if organization is None:
+    if organization is None or organization.customer_org_id is None:
         return None
     if not _registrable(customer_member_id):
         verbose_proxy_logger.warning(
@@ -717,7 +720,8 @@ async def load_customer_hierarchy(
     """The hierarchy the headers name, or None when the proxy knows none of the ids, in which case the request runs
     untracked. An alias the proxy has never seen is registered as a new organization first. A member header next to an alias header must name a member of that organization; a member the
     organization has never seen is registered in its default team first, and when that fails the organization
-    alone is charged. A key pinned to another organization is refused before any row is created."""
+    alone is charged. A key pinned to another organization is refused before any row is created.
+    """
     organization: Final = (
         await _organization_named_by_alias(
             identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization, key_metadata
@@ -769,7 +773,8 @@ async def resolve_customer_hierarchy(
     register_organization: OrganizationRegistrar = ensure_customer_organization,
 ) -> CustomerHierarchyAuth | None:
     """Load the hierarchy the headers name and admit the request against it, or None when no id is known.
-    ``request_model`` is the model the route will actually serve, which may differ from the body."""
+    ``request_model`` is the model the route will actually serve, which may differ from the body.
+    """
     from litellm.proxy.proxy_server import get_current_spend
 
     metadata: Final = key_metadata or {}
@@ -807,6 +812,8 @@ async def check_customer_hierarchy_access(
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    if hierarchy.customer_org_id is None:
+        return
     _check_key_scope(hierarchy.customer_org_id, key_metadata)
 
 

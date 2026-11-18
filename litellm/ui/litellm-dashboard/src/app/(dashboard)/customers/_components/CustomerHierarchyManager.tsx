@@ -20,6 +20,8 @@ import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./Custom
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
+import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
+import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
 import CustomerMemberSearch from "./CustomerMemberSearch";
 import { customerUsageEntity, isCustomerUsageIdentifier, type CustomerUsageEntity } from "./customerUsageApi";
 import { CustomerSpendCells, CustomerSpendHeaders, CustomerSpendIdentity } from "./CustomerSpendCells";
@@ -249,7 +251,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
                   )}
                 </TableCell>
               )}
-              <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} />
+              <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} rateLimits={row.entity.rateLimits} />
               <TableCell className="pr-0 text-right">
                 <div className="flex justify-end gap-2">
                   <a
@@ -410,6 +412,16 @@ export default function CustomerHierarchyManager() {
       aria-label={t("customerPortal.hierarchy.title")}
     >
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
+      {entity.kind === "organization" && tab !== "budget_groups" && (
+        <CustomerOrganizationApps
+          key={scope.org}
+          organizationId={scope.org}
+          organizationAlias={selected.organization.alias}
+        />
+      )}
+      {selected.member && (
+        <CustomerMemberApps key={selected.member.customer_member_id} memberId={selected.member.customer_member_id} />
+      )}
       <CustomerHierarchyNavigation scope={currentScope} active={tab} />
       <section>
         {tab === "budget_groups" ? (

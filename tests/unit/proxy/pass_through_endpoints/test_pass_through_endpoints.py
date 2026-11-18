@@ -11844,8 +11844,8 @@ class _StoredConfigRow:
 class _InMemoryConfigTable:
     def __init__(self, rows: Mapping[str, Mapping[str, object]]) -> None:
         self.rows: dict[str, Mapping[str, object]] = dict(rows)
-        self.db: Final = SimpleNamespace(litellm_config=self)
-        self.writer_db: Final = SimpleNamespace(litellm_config=self)
+        self.db: Final = MagicMock(litellm_config=self)
+        self.writer_db: Final = MagicMock(litellm_config=self)
 
     def _row(self, param_name: str) -> _StoredConfigRow | None:
         value: Final = self.rows.get(param_name)

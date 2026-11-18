@@ -14,7 +14,7 @@ crates/repositories/
     database.rs               # Database, Side, Session: what every repository runs through
     raw_json.rs               # row helpers shared by more than one repository
     utc_timestamp.rs
-    test_support.rs           # the database_pool fixture
+    test_support.rs           # the database_pool fixture and shared fixture inserts
     jwt_key_mapping/
       mod.rs                  # mod lines and pub use of the public types, nothing else
       repository.rs           # the public repository

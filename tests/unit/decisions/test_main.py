@@ -156,6 +156,10 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
         "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
     },
 }
+_OPENAI_PREDICATE_RESPONSE: Final[Mapping[str, object]] = {
+    **_OPENAI_RESPONSE,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+}
 
 
 class _RecordingLogger(CustomLogger):
@@ -403,7 +407,7 @@ async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
     respx_mock: respx.MockRouter,
     decisions_pricing_fields: None,
 ) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
     response: Final = await litellm.adecisions(
         model="openai/gpt-6-luna",
         input="The package arrived broken.",
@@ -466,7 +470,7 @@ async def test_openai_decisions_honors_base_url_alias(
     expected_api_base: str,
 ) -> None:
     monkeypatch.setenv("OPENAI_BASE_URL", "https://fallback.example/v1")
-    route: Final = respx_mock.post(f"{expected_api_base}/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post(f"{expected_api_base}/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
     response: Final = await litellm.adecisions(
         model="openai/gpt-6-luna",
         input="The package arrived broken.",
@@ -498,7 +502,7 @@ async def test_openai_systemone_honors_base_url_alias(respx_mock: respx.MockRout
 
 @pytest.mark.asyncio
 async def test_openai_decisions_api_base_wins_over_base_url_alias(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
     await litellm.adecisions(
         model="openai/gpt-6-luna",
         input="The package arrived broken.",
@@ -1816,7 +1820,7 @@ def test_openai_decisions_use_the_same_settings_as_other_openai_calls(
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    route: Final = respx_mock.post(url).respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     litellm.systemone(
         model="openai/gpt-6-luna",
@@ -2000,7 +2004,7 @@ async def test_safety_identifier_reaches_openai_whether_or_not_params_are_droppe
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await getattr(litellm, f"a{api}")(
         model="openai/gpt-6-luna",
@@ -2044,7 +2048,7 @@ async def test_non_string_safety_identifier_is_dropped_from_the_wire_under_drop_
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
     dropped_safety_identifier: Final[Mapping[str, object]] = MappingProxyType(
         {"safety_identifier": 7, "drop_params": True}
     )
@@ -2069,7 +2073,7 @@ def _openai_decisions_route(respx_mock: respx.MockRouter, monkeypatch: pytest.Mo
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    return respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    return respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
 
 @pytest.mark.asyncio
@@ -2502,7 +2506,7 @@ async def test_remote_input_images_reach_openai_unfetched(
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await litellm.adecisions(
         model="openai/gpt-6-luna",
@@ -2601,7 +2605,7 @@ async def test_prompt_cache_controls_reach_openai_on_the_wire(
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await litellm.adecisions(
         model="openai/gpt-6-luna",
@@ -2638,7 +2642,7 @@ async def test_typed_prompt_cache_values_reach_openai_on_the_wire(
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await litellm.adecisions(
         model="openai/gpt-6-luna",
@@ -2669,7 +2673,7 @@ async def test_drop_params_trims_a_breakpoint_in_a_typed_message_before_openai(
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
     typed_policy: Final = OpenAIDecisionInputMessage(
         role="developer",
         content=[
@@ -3009,7 +3013,7 @@ async def test_empty_images_next_to_input_are_ignored(
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await litellm.adecisions(
         model="openai/gpt-6-luna",
@@ -3034,7 +3038,7 @@ async def test_images_next_to_input_are_dropped_under_drop_params(
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await litellm.adecisions(
         model="openai/gpt-6-luna",
@@ -3321,7 +3325,7 @@ _CLOUDFLARE_TYPE_REFUSAL: Final = "cloudflare takes only image/jpeg, image/jpg, 
 
 @pytest.mark.usefixtures("openai_default_base")
 def test_a_data_url_with_media_type_parameters_reaches_openai_unchanged(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     litellm.decisions(
         model="openai/gpt-6-luna",
@@ -4107,7 +4111,9 @@ async def test_a_chat_models_media_flags_do_not_count_for_decisions(
     if cost_map_entry is not None:
         monkeypatch.setitem(litellm.model_cost, model, cost_map_entry)
     assert litellm.supports_audio_input(model) is True
-    route: Final = respx_mock.post(url).respond(200, json=dict(_RESPONSE if "systemone" in url else _OPENAI_RESPONSE))
+    route: Final = respx_mock.post(url).respond(
+        200, json=dict(_RESPONSE if "systemone" in url else _OPENAI_PREDICATE_RESPONSE)
+    )
     questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
@@ -4143,7 +4149,9 @@ async def test_a_chat_models_media_flags_do_not_count_for_decisions(
 
 
 def test_positional_arguments_keep_the_order_the_sdk_had_before_media(respx_mock: respx.MockRouter) -> None:
-    decisions_route: Final = respx_mock.post("https://example.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    decisions_route: Final = respx_mock.post("https://example.com/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE
+    )
     systemone_route: Final = respx_mock.post("https://example.com/v1/systemone").respond(json=_RESPONSE)
     openai_questions: Final = [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]
     systemone_questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
@@ -4603,7 +4611,7 @@ async def test_an_unflagged_deployment_keeps_box_questions_a_same_model_deployme
 async def test_a_model_info_object_instead_of_a_dict_still_reaches_the_provider(
     respx_mock: respx.MockRouter,
 ) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     response: Final = await litellm.adecisions(
         model="openai/gpt-6-luna",
