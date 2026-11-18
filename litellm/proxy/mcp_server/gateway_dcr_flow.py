@@ -1253,7 +1253,7 @@ async def complete_connect_flow(
         await _SingleUseGuard(cache).claim(
             f"{_USED_FLOW_CACHE_PREFIX}{opened.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
         ),
-        replayed=_oauth_error(
+        replayed=lambda: _oauth_error(
             400, "invalid_request", "this connect flow was already completed; restart the connection"
         ),
     )
@@ -1392,16 +1392,17 @@ ClaimOutcome = Literal["first", "replayed", "unavailable"]
 _CLAIM_UNAVAILABLE_DESCRIPTION: Final = "the single-use record is unavailable right now; try again shortly"
 
 
-def _claim_refusal(outcome: ClaimOutcome, replayed: Response) -> Response | None:
+def _claim_refusal(outcome: ClaimOutcome, replayed: Callable[[], Response]) -> Response | None:
     """A claim that is not the first caller's is refused, but the two reasons must stay apart on the
     wire: a replay is the grant's own 4xx, while a shared backend that could not record the claim is
     a 503 (RFC 7009 section 2.2.1, RFC 6749 section 5.2 ``temporarily_unavailable``), so the client
-    keeps the still-valid token and retries instead of being told it was already used."""
+    keeps the still-valid token and retries instead of being told it was already used. ``replayed``
+    is a thunk so the error body (and its log) is built only when a replay actually happened."""
     match outcome:
         case "first":
             return None
         case "replayed":
-            return replayed
+            return replayed()
         case "unavailable":
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
         case _:
@@ -1750,7 +1751,7 @@ class _ProxyCredentialIssuer:
             return _mint_failure_response(minted)
         refusal: Final = _claim_refusal(
             await self._guard.claim(claim_key, claim_ttl_seconds),
-            replayed=_oauth_error(400, "invalid_grant", replayed),
+            replayed=lambda: _oauth_error(400, "invalid_grant", replayed),
         )
         if refusal is not None:
             return refusal
@@ -1807,7 +1808,7 @@ class _GrantIssuer:
             return _reload_failure_response(failure)
         refusal: Final = _claim_refusal(
             await self._guard.claim(claim_key, claim_ttl_seconds),
-            replayed=_oauth_error(400, "invalid_grant", replayed),
+            replayed=lambda: _oauth_error(400, "invalid_grant", replayed),
         )
         if refusal is not None:
             return refusal
@@ -1859,7 +1860,7 @@ class _GrantIssuer:
             return _subject_token_refusal_response(identity)
         refused: Final = _claim_refusal(
             await self._guard.claim(identity.replay_key, identity.replay_ttl_seconds),
-            _oauth_error(400, "invalid_grant", "the assertion has already been redeemed"),
+            lambda: _oauth_error(400, "invalid_grant", "the assertion has already been redeemed"),
         )
         if refused is not None:
             return refused
