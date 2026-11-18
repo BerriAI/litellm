@@ -3,7 +3,7 @@ import json
 import logging
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from itertools import chain
 from types import MappingProxyType
 from typing import Callable, Final, Iterator, Literal, NoReturn, Optional, cast
@@ -3136,6 +3136,16 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             {"content": "hello"},
             "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected ['content']",
             id="content-key",
+        ),
+        pytest.param(
+            OrderedDict(content="hello"),
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected ['content']",
+            id="dict-subclass-content-key",
+        ),
+        pytest.param(
+            MappingProxyType({"content": "hello"}),
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected ['content']",
+            id="mapping-content-key",
         ),
         pytest.param(
             {"choices": [{"delta": {"content": "hello"}}], "usage": None},
