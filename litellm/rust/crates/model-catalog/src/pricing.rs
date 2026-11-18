@@ -319,7 +319,7 @@ mod tests {
             raw: Default::default(),
             decisions: false,
             breakdown: Default::default(),
-            tool_fees: 0.0,
+            tools: Default::default(),
             router_fee: None,
         }))
     }

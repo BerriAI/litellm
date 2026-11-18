@@ -307,9 +307,10 @@ impl NativeModelCostMap {
     }
 
     /// Prices a token call from the facts in `document`, `None` when Python prices it the old way. `row` is a price
-    /// row the caller passes for this call alone, `breakdown_row` the row it looked up for the stored breakdown and
-    /// `fee_row` the Azure AI Model Router row whose fee the call bills
-    #[pyo3(signature = (document, row=None, breakdown_row=None, fee_row=None))]
+    /// row the caller passes for this call alone, `breakdown_row` the row it looked up for the stored breakdown,
+    /// `fee_row` the Azure AI Model Router row whose fee the call bills and `tool_rows` the rows its built-in tools
+    /// name by index
+    #[pyo3(signature = (document, row=None, breakdown_row=None, fee_row=None, tool_rows=Vec::new()))]
     fn price(
         &self,
         py: Python<'_>,
@@ -317,6 +318,7 @@ impl NativeModelCostMap {
         row: Option<&Bound<'_, PyMapping>>,
         breakdown_row: Option<&Bound<'_, PyMapping>>,
         fee_row: Option<&Bound<'_, PyMapping>>,
+        tool_rows: Vec<Bound<'_, PyMapping>>,
     ) -> PyResult<Option<NativeReceipt>> {
         cost::price(
             py,
@@ -325,7 +327,19 @@ impl NativeModelCostMap {
             row,
             breakdown_row,
             fee_row,
+            &tool_rows,
         )
+    }
+
+    /// The built-in tool fees `document` names, every fee a call's tools bill or one tool's calculator, `None` where
+    /// main's calculator returned `None`. `rows` are the rows the document names by index
+    fn price_tools(
+        &self,
+        py: Python<'_>,
+        document: &Bound<'_, PyAny>,
+        rows: Vec<Bound<'_, PyMapping>>,
+    ) -> PyResult<Option<f64>> {
+        cost::price_tools(&*self.cost_snapshot(py)?, document, &rows)
     }
 
     /// Prices a per-unit call (rerank, vector store search, OCR) from the facts in `document`, a receipt or why it is
