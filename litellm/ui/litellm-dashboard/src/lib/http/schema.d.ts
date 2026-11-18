@@ -20322,6 +20322,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/upstream_proxies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Upstream Proxies */
+        get: operations["list_upstream_proxies_upstream_proxies_get"];
+        put?: never;
+        /** Create Upstream Proxy */
+        post: operations["create_upstream_proxy_upstream_proxies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/upstream_proxies/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Upstream Proxy */
+        delete: operations["delete_upstream_proxy_upstream_proxies__name__delete"];
+        options?: never;
+        head?: never;
+        /** Update Upstream Proxy */
+        patch: operations["update_upstream_proxy_upstream_proxies__name__patch"];
+        trace?: never;
+    };
     "/user/available_roles": {
         parameters: {
             query?: never;
@@ -34486,6 +34522,26 @@ export interface components {
         CreateSearchToolRequest: {
             search_tool: components["schemas"]["SearchTool"];
         };
+        /** CreateUpstreamProxy */
+        CreateUpstreamProxy: {
+            /** Description */
+            description?: string | null;
+            /** Host */
+            host: string;
+            /** Name */
+            name: string;
+            /** Password */
+            password?: string | null;
+            /** Port */
+            port: number;
+            /**
+             * Protocol
+             * @enum {string}
+             */
+            protocol: "http" | "https";
+            /** Username */
+            username?: string | null;
+        };
         /** CredentialItem */
         CredentialItem: {
             /** Credential Info */
@@ -39589,6 +39645,8 @@ export interface components {
             tpd?: number | null;
             /** Tpm */
             tpm?: number | null;
+            /** Upstream Proxy */
+            upstream_proxy?: string | null;
             /** Use Chat Completions Api */
             use_chat_completions_api?: boolean | null;
             /**
@@ -54767,6 +54825,24 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /**
+         * UpdateUpstreamProxy
+         * @description Fields left out keep their stored value; an empty `password` clears it.
+         */
+        UpdateUpstreamProxy: {
+            /** Description */
+            description?: string | null;
+            /** Host */
+            host?: string | null;
+            /** Password */
+            password?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Protocol */
+            protocol?: ("http" | "https") | null;
+            /** Username */
+            username?: string | null;
+        };
         /** UpdateUsefulLinksRequest */
         UpdateUsefulLinksRequest: {
             /** Useful Links */
@@ -55046,6 +55122,35 @@ export interface components {
              * @default 1.0.0
              */
             version: string | null;
+        };
+        /** UpstreamProxyList */
+        UpstreamProxyList: {
+            /** Proxies */
+            proxies: components["schemas"]["UpstreamProxyView"][];
+        };
+        /** UpstreamProxyView */
+        UpstreamProxyView: {
+            /** Description */
+            description: string | null;
+            /** Has Password */
+            has_password: boolean;
+            /** Host */
+            host: string;
+            /** Name */
+            name: string;
+            /** Port */
+            port: number;
+            /**
+             * Protocol
+             * @enum {string}
+             */
+            protocol: "http" | "https";
+            /** Used By Credentials */
+            used_by_credentials: string[];
+            /** Used By Models */
+            used_by_models: string[];
+            /** Username */
+            username: string | null;
         };
         /** UsageChartPoint */
         UsageChartPoint: {
@@ -57113,6 +57218,8 @@ export interface components {
             tpd?: number | null;
             /** Tpm */
             tpm?: number | null;
+            /** Upstream Proxy */
+            upstream_proxy?: string | null;
             /** Use Chat Completions Api */
             use_chat_completions_api?: boolean | null;
             /**
@@ -86273,6 +86380,125 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_upstream_proxies_upstream_proxies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamProxyList"];
+                };
+            };
+        };
+    };
+    create_upstream_proxy_upstream_proxies_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUpstreamProxy"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamProxyList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_upstream_proxy_upstream_proxies__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamProxyList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_upstream_proxy_upstream_proxies__name__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUpstreamProxy"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamProxyList"];
                 };
             };
             /** @description Validation Error */

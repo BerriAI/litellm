@@ -11,6 +11,10 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/upstreamProxies/useUpstreamProxies", () => ({
+  useUpstreamProxies: () => ({ data: { proxies: [] } }),
+}));
+
 const PTU_LABELS = ["PTU Count", "Calculated Cost per PTU / Hour (USD)", "PTU Effective From (UTC)"];
 
 const KubernetesPodDiscoveryValue = () => {

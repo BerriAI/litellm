@@ -7,6 +7,10 @@ import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
 import CredentialModal from "./CredentialModal";
 
+vi.mock("@/app/(dashboard)/hooks/upstreamProxies/useUpstreamProxies", () => ({
+  useUpstreamProxies: () => ({ data: { proxies: [] } }),
+}));
+
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   const { readFileSync } = await import("node:fs");

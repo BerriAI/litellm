@@ -100,7 +100,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (value === "") {
           continue;
         }
-        if (key === "litellm_credential_name" && value == null) {
+        if ((key === "litellm_credential_name" || key === "upstream_proxy") && value == null) {
           continue;
         }
         // Skip the custom_pricing and pricing_model fields as they're only used for UI control

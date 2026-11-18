@@ -20,6 +20,7 @@ from typing_extensions import ReadOnly, Self, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.upstream_proxy import current_upstream_proxy
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -526,6 +527,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         )
 
     async def _get_proxy_settings(self, request: httpx.Request):
+        upstream_proxy: Final = current_upstream_proxy()
+        if upstream_proxy is not None:
+            return upstream_proxy
         proxy = None
         if not (litellm.disable_aiohttp_trust_env or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False"))):
             try:

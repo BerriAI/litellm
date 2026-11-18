@@ -159,6 +159,22 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.timeout).toBe(5);
   });
 
+  it.each([
+    ["a picked proxy", "jp", "jp"],
+    ["the environment default", null, undefined],
+  ])("sends upstream_proxy for %s", async (_case, picked, sent) => {
+    const formValues = {
+      model_mappings: [{ public_name: "Public Model", litellm_model: "litellm/public" }],
+      model_name: "custom-model-name",
+      upstream_proxy: picked,
+    };
+
+    const [deployment] = (await prepareModelAddRequest({ ...formValues }, "token", null))!;
+
+    expect(deployment.litellmParamsObj.upstream_proxy).toBe(sent);
+    expect("upstream_proxy" in deployment.litellmParamsObj).toBe(sent !== undefined);
+  });
+
   it("keeps litellm_credential_name from LiteLLM Params JSON when no credential is selected", async () => {
     const formValues = {
       model_mappings: [

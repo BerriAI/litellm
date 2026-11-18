@@ -19823,7 +19823,8 @@
         "retrySettings": "Model Retry Settings",
         "modelGroupAlias": "Model Group Alias",
         "accessGroupBudgets": "Model Access Group Budgets",
-        "priceData": "Price Data Reload"
+        "priceData": "Price Data Reload",
+        "upstreamProxies": "Upstream Proxies"
       }
     },
     "allModelsTab": {
@@ -20501,6 +20502,9 @@
       },
       "team": {
         "label": "Team"
+      },
+      "upstreamProxy": {
+        "label": "Upstream Proxy"
       }
     },
     "validation": {
@@ -21838,6 +21842,61 @@
       "infrastructure": "One place, your infrastructure",
       "findProblems": "Find what needs fixing",
       "nextRun": "Insights for the next run"
+    }
+  },
+  "upstreamProxies": {
+    "fieldLabel": "Upstream Proxy",
+    "fieldHint": "Send this traffic through a proxy from the Upstream Proxies tab. A model's own choice wins over its credential's, and leaving both empty uses the HTTP_PROXY / HTTPS_PROXY environment.",
+    "environmentDefault": "Environment default (HTTP_PROXY / HTTPS_PROXY)",
+    "noProxies": "No upstream proxies yet. Add one under Models + Endpoints > Upstream Proxies.",
+    "panel": {
+      "description": "Outbound proxies a model or credential can pick for its upstream traffic. Anything that picks none uses the HTTP_PROXY / HTTPS_PROXY environment.",
+      "addProxy": "Add Proxy",
+      "loading": "Loading upstream proxies…",
+      "emptyTitle": "No upstream proxies configured",
+      "emptyDescription": "Every model goes out through HTTP_PROXY / HTTPS_PROXY until one picks a proxy here.",
+      "added": "Upstream proxy {{name}} added",
+      "updated": "Upstream proxy {{name}} updated",
+      "deleted": "Upstream proxy {{name}} deleted",
+      "deleteTitle": "Delete Upstream Proxy?",
+      "deleteMessage": "Models and credentials that still pick this proxy block the delete. Point them at another proxy first.",
+      "deleteInfoTitle": "Upstream Proxy"
+    },
+    "columns": {
+      "name": "Name",
+      "address": "Address",
+      "authentication": "Authentication",
+      "none": "None",
+      "usedBy": "Used by",
+      "unused": "Unused",
+      "models": "{{count}} model(s)",
+      "credentials": "{{count}} credential(s)",
+      "openActions": "Open actions for {{name}}",
+      "edit": "Edit",
+      "delete": "Delete",
+      "actions": "Actions"
+    },
+    "modal": {
+      "addTitle": "Add Upstream Proxy",
+      "editTitle": "Edit Upstream Proxy",
+      "name": "Name",
+      "namePlaceholder": "e.g. jp-tokyo",
+      "nameLocked": "Models and credentials reference the proxy by this name, so it cannot change.",
+      "protocol": "Protocol",
+      "host": "Host",
+      "port": "Port",
+      "username": "Username (optional)",
+      "password": "Password (optional)",
+      "passwordSaved": "A password is saved. Leave blank to keep it, or clear the username to stop sending it.",
+      "description": "Description (optional)",
+      "cancel": "Cancel",
+      "create": "Create",
+      "save": "Save",
+      "nameInvalid": "Letters, digits, '.', '_' or '-', at most 64 characters",
+      "hostRequired": "Enter the proxy host",
+      "hostInvalid": "Enter only the host, without a scheme or path",
+      "portInvalid": "Port must be a whole number between 1 and 65535",
+      "hostPlaceholder": "10.0.0.1"
     }
   }
 }

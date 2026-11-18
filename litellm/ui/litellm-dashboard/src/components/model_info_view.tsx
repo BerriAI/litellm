@@ -314,6 +314,11 @@ export default function ModelInfoView({
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
+      const storedUpstreamProxy: string | null = localModelData?.litellm_params?.upstream_proxy ?? null;
+      const selectedUpstreamProxy: string | null = values.upstream_proxy ?? null;
+      if (selectedUpstreamProxy !== storedUpstreamProxy) {
+        updatedLitellmParams.upstream_proxy = selectedUpstreamProxy;
+      }
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
