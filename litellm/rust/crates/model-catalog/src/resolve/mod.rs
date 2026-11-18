@@ -1,5 +1,13 @@
+mod bedrock;
+mod cost;
 mod image;
+mod names;
 
+pub use bedrock::{
+    bedrock_base_model, bedrock_model_name_from_arn, is_bedrock_cross_region_profile_of,
+    split_bedrock_region_path, strip_bedrock_routing_prefix,
+};
+pub use cost::*;
 pub use image::*;
 
 use serde_json::Value;
@@ -8,7 +16,7 @@ use crate::{Catalog, wire::Fields};
 
 const BACKFILL_MODES: [&str; 2] = ["chat", "responses"];
 
-/// The seven names main's `get_model_info` tries, built by Python, walked in this order by Rust
+/// The seven names main's `get_model_info` tries, built by `Candidates::potential` and walked in `in_lookup_order`
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Candidates {
     pub combined_model_name: Option<String>,
@@ -89,6 +97,7 @@ impl Catalog {
     }
 }
 
+/// Port of main's `_check_provider_match`: a row without a `litellm_provider` matches every provider
 fn provider_matches(entry_provider: Option<&str>, provider: &str) -> bool {
     let Some(entry_provider) = entry_provider else {
         return true;

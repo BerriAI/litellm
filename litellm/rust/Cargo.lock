@@ -4560,6 +4560,7 @@ dependencies = [
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
+ "litellm-auth-aws",
  "litellm-cost",
  "litellm-error",
  "litellm-python-compat",
