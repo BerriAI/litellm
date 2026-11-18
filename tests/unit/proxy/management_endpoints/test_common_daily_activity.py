@@ -2098,7 +2098,7 @@ def _grouping_row(
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         guardrail_spend=guardrail_spend,
-        customer_margin_spend=0,
+        customer_margin_spend=customer_margin_spend,
         total_response_time_ms=0,
         timed_requests=0,
         api_requests=0,
