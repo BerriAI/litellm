@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.fallback_generalizations import match_capability
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.types.utils import SearchFreeRequests
+from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
 from litellm.utils import ProviderConfigManager
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -127,15 +127,100 @@ def test_bedrock_mantle_route_rows_price_like_their_bedrock_mantle_provider_rows
 
 
 @pytest.mark.parametrize("model", ("anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5"))
-def test_claude_5_5_costs_the_same_on_both_bedrock_mantle_prefixes(
+def test_claude_5_5_costs_the_same_on_both_govcloud_bedrock_prefixes(
     model: str, local_model_cost_map: None, prices: dict
 ) -> None:
-    litellm.register_model({f"bedrock/mantle/{model}": prices[f"bedrock/mantle/{model}"]})
-    litellm.register_model({f"bedrock_mantle/{model}": prices[f"bedrock_mantle/{model}"]})
+    litellm.register_model({f"bedrock/us-gov-west-1/{model}": prices[f"bedrock/us-gov-west-1/{model}"]})
+    litellm.register_model({f"bedrock_mantle/us-gov-west-1/{model}": prices[f"bedrock_mantle/us-gov-west-1/{model}"]})
     tokens: Final = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
-    assert litellm.cost_per_token(model=f"bedrock/mantle/{model}", **tokens) == litellm.cost_per_token(
-        model=f"bedrock_mantle/{model}", **tokens
+    assert litellm.cost_per_token(model=f"bedrock/us-gov-west-1/{model}", **tokens) == litellm.cost_per_token(
+        model=f"bedrock_mantle/us-gov-west-1/{model}", **tokens
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+        ("bedrock", "ap-southeast-1", "apac.amazon.nova-lite-v1:0"),
+        ("azure", None, "us-gov/o3-mini-2025-01-31"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_region(
+    provider: str, region: str | None, model: str, local_model_cost_map: None, prices: dict
+) -> None:
+    key: Final = f"{provider}/{region}/{model}" if region is not None else f"{provider}/{model}"
+    row: Final = prices[key]
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider=provider, region_name=region, prompt_tokens=1, completion_tokens=1
+    ) == pytest.approx((row["input_cost_per_token"], row["output_cost_per_token"]))
+
+
+@pytest.mark.parametrize("service_tier", ("priority", "flex"))
+@pytest.mark.parametrize(
+    ("provider", "region", "model"),
+    (
+        ("bedrock_mantle", "ap-northeast-1", "deepseek.v3.1"),
+        ("bedrock", "ap-south-1", "amazon.nova-pro-v1:0"),
+    ),
+)
+def test_regional_catalog_rows_price_the_requested_service_tier(
+    provider: str, region: str, model: str, service_tier: str, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"{provider}/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider=provider,
+        region_name=region,
+        service_tier=service_tier,
+        prompt_tokens=1,
+        completion_tokens=1,
+    ) == pytest.approx(
+        (row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"])
+    )
+
+
+@pytest.mark.parametrize("tokens", (0, 1))
+@pytest.mark.parametrize("region", ("ap-northeast-1", "eu-north-1", "us-west-2"))
+@pytest.mark.parametrize("model", ("amazon.nova-2-5-sonic", "amazon.nova-2-sonic-v1:0"))
+def test_regional_sonic_catalog_rows_price_audio_tokens(
+    model: str, region: str, tokens: int, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[f"bedrock/{region}/{model}"]
+    assert litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="bedrock",
+        region_name=region,
+        prompt_tokens=tokens,
+        completion_tokens=tokens,
+        usage_object=Usage(
+            prompt_tokens=tokens,
+            completion_tokens=tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+            completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=tokens, text_tokens=0),
+        ),
+    ) == pytest.approx((tokens * row["input_cost_per_audio_token"], tokens * row["output_cost_per_audio_token"]))
+
+
+@pytest.mark.parametrize("above_threshold", (False, True))
+@pytest.mark.parametrize(
+    ("model", "threshold"),
+    (
+        ("ca.anthropic.claude-haiku-5-5", 100_000),
+        ("in.openai.gpt-5.6-luna", 272_000),
+        ("in.openai.gpt-5.6-terra", 272_000),
+    ),
+)
+def test_geo_catalog_rows_price_the_declared_long_context_boundary(
+    model: str, threshold: int, above_threshold: bool, local_model_cost_map: None, prices: dict
+) -> None:
+    row: Final = prices[model]
+    prompt_tokens: Final = threshold + int(above_threshold)
+    suffix: Final = f"_above_{threshold // 1000}k_tokens" if above_threshold else ""
+    assert litellm.cost_per_token(
+        model=model, custom_llm_provider="bedrock", prompt_tokens=prompt_tokens, completion_tokens=1
+    ) == pytest.approx((prompt_tokens * row[f"input_cost_per_token{suffix}"], row[f"output_cost_per_token{suffix}"]))
 
 
 @pytest.mark.parametrize("model", ("openai.gpt-6.2-sol", "openai.gpt-6.2-astra"))

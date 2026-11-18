@@ -32565,6 +32565,16 @@ export interface components {
              */
             custom_auth?: string | null;
             /**
+             * Customer Member Id Header
+             * @description Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_member_id_header?: string | null;
+            /**
+             * Customer Org Alias Header
+             * @description Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_org_alias_header?: string | null;
+            /**
              * Dangerously Permit Weak Or Unset Master Key
              * @description local development only: start even when master_key is unset, empty, or a publicly known default
              */

@@ -588,7 +588,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 return True
         return False
 
-    def _resolve_batch_input_file_fetch_params(
+    async def _resolve_batch_input_file_fetch_params(
         self,
         file_id: str,
         custom_llm_provider: str,
@@ -607,7 +607,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             explicit_request_credentials,
             get_credentials_for_model,
             get_original_file_id,
-            get_team_provider_credentials,
+            model_less_provider_credentials,
         )
         from litellm.proxy.proxy_server import llm_router
 
@@ -652,11 +652,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return file_id, fetch_kwargs
 
         team_credentials: Final = (
-            get_team_provider_credentials(
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
+            await model_less_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider)
             if user_api_key_dict is not None
             else None
         )
@@ -1048,7 +1044,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     user_api_key_dict=user_api_key_dict,
                 )
             else:
-                provider_file_id, fetch_kwargs = self._resolve_batch_input_file_fetch_params(
+                provider_file_id, fetch_kwargs = await self._resolve_batch_input_file_fetch_params(
                     file_id=file_id,
                     custom_llm_provider=custom_llm_provider,
                     data=data or {},
