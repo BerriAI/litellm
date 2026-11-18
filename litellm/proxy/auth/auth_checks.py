@@ -1681,6 +1681,13 @@ async def common_checks(
                     valid_token=valid_token,
                 ),
                 _team_multi_budget_check(team_object=team_object),
+                virtual_key_max_budget_check(
+                    valid_token=valid_token, proxy_logging_obj=proxy_logging_obj, user_obj=user_object
+                )
+                if valid_token is not None
+                and valid_token.authenticated_by_custom_auth
+                and RouteChecks.runs_inference_checks(route=route)
+                else None,
                 _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
                 _team_soft_budget_check(
                     team_object=team_object,
