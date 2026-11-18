@@ -707,7 +707,10 @@ async def model_the_caller_may_use_team_deployment_by(
     models: Final = (
         itertools.chain(
             _models_the_key_reaches_deployment_by(
-                public_model_name, key_model_allowlist, user_api_key_dict.team_models or (), custom_llm_provider
+                public_model_name,
+                key_model_allowlist,
+                (*(user_api_key_dict.team_models or ()), *await _project_models(user_api_key_dict)),
+                custom_llm_provider,
             ),
             () if _key_reaches(public_model_name, key_model_allowlist) else (public_model_name,),
         )
@@ -718,6 +721,21 @@ async def model_the_caller_may_use_team_deployment_by(
         if await caller_may_use_model(model, llm_router, user_api_key_dict):
             return model
     return None
+
+
+async def _project_models(user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import get_project_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if user_api_key_dict.project_id is None:
+        return ()
+    project: Final = await get_project_object(
+        project_id=user_api_key_dict.project_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    return () if project is None else tuple(project.models)
 
 
 async def caller_may_use_model(
@@ -839,7 +857,7 @@ def _models_the_key_names_for(public_model_name: str, key_model_allowlist: Seque
 def _models_the_key_reaches_deployment_by(
     public_model_name: str,
     key_model_allowlist: Sequence[str],
-    team_models: Sequence[str],
+    allowed_models: Sequence[str],
     custom_llm_provider: str,
 ) -> Iterator[str]:
     named: Final = _models_the_key_names_for(public_model_name, key_model_allowlist)
@@ -849,7 +867,7 @@ def _models_the_key_reaches_deployment_by(
     yield from (
         model
         for model in _models_only_wildcards_reach(
-            public_model_name, key_model_allowlist, team_models, custom_llm_provider
+            public_model_name, key_model_allowlist, allowed_models, custom_llm_provider
         )
         if model not in named
     )
@@ -858,25 +876,25 @@ def _models_the_key_reaches_deployment_by(
 def _models_only_wildcards_reach(
     public_model_name: str,
     key_model_allowlist: Sequence[str],
-    team_models: Sequence[str],
+    allowed_models: Sequence[str],
     custom_llm_provider: str,
 ) -> tuple[str, ...]:
     from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 
     key_patterns: Final = tuple(model for model in key_model_allowlist if "*" in model)
-    team_patterns: Final = tuple(model for model in team_models if "*" in model)
-    team_models_under_the_deployment: Final = (
+    allowed_patterns: Final = tuple(model for model in allowed_models if "*" in model)
+    allowed_models_under_the_deployment: Final = (
         model
-        for model in team_models
+        for model in allowed_models
         if "*" not in model
         and model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=key_patterns)
         and model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(public_model_name,))
     )
     known_models_both_wildcards_reach: Final = itertools.chain.from_iterable(
-        _models_both_wildcards_reach(key_pattern, public_model_name, team_patterns, custom_llm_provider)
+        _models_both_wildcards_reach(key_pattern, public_model_name, allowed_patterns, custom_llm_provider)
         for key_pattern in key_patterns
     )
-    return tuple(dict.fromkeys(itertools.chain(team_models_under_the_deployment, known_models_both_wildcards_reach)))
+    return tuple(dict.fromkeys(itertools.chain(allowed_models_under_the_deployment, known_models_both_wildcards_reach)))
 
 
 def _spelled_like(model: str, pattern: str, custom_llm_provider: str) -> bool:
@@ -884,7 +902,7 @@ def _spelled_like(model: str, pattern: str, custom_llm_provider: str) -> bool:
 
 
 def _models_both_wildcards_reach(
-    key_pattern: str, public_model_name: str, team_patterns: Sequence[str], custom_llm_provider: str
+    key_pattern: str, public_model_name: str, allowed_patterns: Sequence[str], custom_llm_provider: str
 ) -> Iterator[str]:
     import litellm
     from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
@@ -900,19 +918,19 @@ def _models_both_wildcards_reach(
         if _spelled_like(model, key_pattern, custom_llm_provider)
         and _spelled_like(model, public_model_name, custom_llm_provider)
     )
-    first_known_model_per_team_pattern: Final = (
+    first_known_model_per_allowed_pattern: Final = (
         next(
             (
                 model
                 for model in known_models_spelled_like_both
-                if _spelled_like(model, team_pattern, custom_llm_provider) and _reached_by_both(model)
+                if _spelled_like(model, allowed_pattern, custom_llm_provider) and _reached_by_both(model)
             ),
             None,
         )
-        for team_pattern in (*team_patterns, "*")
+        for allowed_pattern in (*allowed_patterns, "*")
     )
     return itertools.chain(
-        (model for model in first_known_model_per_team_pattern if model is not None),
+        (model for model in first_known_model_per_allowed_pattern if model is not None),
         (model for model in (key_pattern.replace("*", ""),) if _reached_by_both(model)),
     )
 

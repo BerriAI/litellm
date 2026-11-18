@@ -2,7 +2,7 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -851,6 +851,36 @@ async def test_a_wildcard_key_gets_the_team_key_through_the_one_model_its_team_a
     data: Final[dict[str, object]] = {}
 
     await _apply_team_a_openai_credentials(data, _team_a_caller([key_wildcard], [family_models[-1]]))
+
+    assert data.get("api_key") == "team-openai-key"
+
+
+@pytest.mark.asyncio
+async def test_a_wildcard_key_gets_the_team_key_through_the_one_model_its_project_allows():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+
+    key_wildcard, family_models = _a_family_with_several_models(litellm.open_ai_chat_completion_models)
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_id:team-a", value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["openai/*"])
+    )
+    await cache.async_set_cache(
+        key=project_cache_key("proj-1"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=[family_models[-1]]),
+    )
+    data: Final[dict[str, object]] = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        await _apply_team_a_openai_credentials(
+            data,
+            UserAPIKeyAuth(
+                api_key="test-key", team_id="team-a", team_models=["openai/*"], models=[key_wildcard], project_id="proj-1"
+            ),
+        )
 
     assert data.get("api_key") == "team-openai-key"
 
