@@ -11,18 +11,21 @@ import { Providers } from "../provider_info_helpers";
 interface LiteLLMModelNameFieldProps {
   selectedProvider: string | null;
   providerModels: string[];
+  hasUpstreamModels?: boolean;
   getPlaceholder: (provider: string) => string;
 }
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   selectedProvider,
   providerModels,
+  hasUpstreamModels = false,
   getPlaceholder,
 }) => {
   const { t } = useTranslation();
   const form = useFormContext<MountedFormValues>();
   const modelValue = useWatch({ control: form.control, name: "model" });
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
+  const isManualOllama = selectedProvider === Providers.Ollama && !hasUpstreamModels;
   const isLiteLLMGateway = selectedProvider === "LITELLM_PROXY" || selectedProvider === Providers.LITELLM_PROXY;
 
   const handleModelChange = (value: string | string[]) => {
@@ -124,9 +127,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         className="mb-0"
       >
         {(control) =>
-          selectedProvider === Providers.Azure ||
-          selectedProvider === Providers.OpenAI_Compatible ||
-          selectedProvider === Providers.Ollama ? (
+          selectedProvider === Providers.Azure || selectedProvider === Providers.OpenAI_Compatible || isManualOllama ? (
             <Input
               id={control.id}
               value={(control.value as string | undefined) ?? ""}

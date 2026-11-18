@@ -11,7 +11,7 @@ import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.credential_endpoints.nim_model_discovery import nim_http_client, router
+from litellm.proxy.credential_endpoints.upstream_model_discovery import nim_http_client, ollama_http_client, router
 from litellm.types.utils import CredentialItem
 
 
@@ -28,7 +28,7 @@ def client(app: FastAPI) -> Iterator[TestClient]:
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch.object(litellm, "credential_list", []),
-        patch("litellm.proxy.credential_endpoints.nim_model_discovery._CACHE", InMemoryCache(clock=lambda: 0.0)),
+        patch("litellm.proxy.credential_endpoints.upstream_model_discovery._CACHE", InMemoryCache(clock=lambda: 0.0)),
     ):
         with TestClient(app) as test_client:
             yield test_client
@@ -121,7 +121,9 @@ def test_unresolved_saved_api_base_does_not_contact_the_default_endpoint(
 
     app.dependency_overrides[nim_http_client] = connection
     with patch.object(litellm, "credential_list", [credential]):
-        response: Final = client.post("/credentials/nvidia_nim/models", json={"credential_name": credential.credential_name})
+        response: Final = client.post(
+            "/credentials/nvidia_nim/models", json={"credential_name": credential.credential_name}
+        )
 
     assert response.status_code == 200, response.text
     assert requests == []
@@ -244,3 +246,60 @@ def test_saved_credential_can_still_resolve_its_configured_secret(
         response: Final = client.post("/credentials/nvidia_nim/models", json={"credential_name": "nim-reference"})
     assert response.status_code == 200, response.text
     assert response.json() == {"status": "success", "models": ["nvidia_nim/saved"]}
+
+
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+def test_ollama_discovery_uses_installed_tags_and_the_selected_routing_prefix(
+    client: TestClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    monkeypatch.setenv("OLLAMA_API_KEY", "environment-key")
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://ollama.example/subpath/api/tags"
+        assert "authorization" not in request.headers
+        return httpx.Response(
+            200,
+            json={"models": [{"name": "custom:latest"}, {"model": "custom:latest"}, {"name": "org/another:qa"}]},
+        )
+
+    async def connection() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    with patch.dict(app.dependency_overrides, {ollama_http_client: connection}):
+        response: Final = client.post(
+            f"/credentials/{provider}/models",
+            json={"credential_values": {"api_base": "https://ollama.example/subpath/api/chat"}},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "status": "success",
+        "models": [f"{provider}/custom:latest", f"{provider}/org/another:qa"],
+    }
+
+
+def test_saved_ollama_chat_connection_resolves_the_selected_server(client: TestClient, app: FastAPI) -> None:
+    credential: Final = CredentialItem(
+        credential_name="ollama-chat-saved",
+        credential_info={"custom_llm_provider": "ollama_chat"},
+        credential_values={"api_key": "saved-key", "api_base": "https://ollama.example"},
+    )
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://ollama.example/api/tags"
+        assert request.headers["authorization"] == "Bearer saved-key"
+        return httpx.Response(200, json={"models": [{"name": "saved-model:latest"}]})
+
+    async def connection() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    with (
+        patch.dict(app.dependency_overrides, {ollama_http_client: connection}),
+        patch.object(litellm, "credential_list", [credential]),
+    ):
+        response: Final = client.post("/credentials/ollama_chat/models", json={"credential_name": "ollama-chat-saved"})
+        wrong_provider: Final = client.post("/credentials/ollama/models", json={"credential_name": "ollama-chat-saved"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "success", "models": ["ollama_chat/saved-model:latest"]}
+    assert wrong_provider.status_code == 400

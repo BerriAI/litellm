@@ -4237,6 +4237,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/{provider}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Ollama Models
+         * @description List model IDs on the selected Ollama server for the Add Model picker.
+         *
+         *     Requires a proxy administrator. Uses a saved credential or explicitly submitted connection settings.
+         *     Returns unavailable when the server cannot list models so the UI can use its catalog.
+         */
+        post: operations["discover_ollama_models_credentials__provider__models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor-cli/{endpoint}": {
         parameters: {
             query?: never;
@@ -42714,32 +42737,6 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
-        /** NimModelDiscoveryConnection */
-        NimModelDiscoveryConnection: {
-            /** Api Base */
-            api_base?: string | null;
-            /** Api Key */
-            api_key?: string | null;
-        };
-        /** NimModelDiscoveryRequest */
-        NimModelDiscoveryRequest: {
-            /** Credential Name */
-            credential_name?: string | null;
-            credential_values?: components["schemas"]["NimModelDiscoveryConnection"] | null;
-        };
-        /** NimModelDiscoveryResponse */
-        NimModelDiscoveryResponse: {
-            /**
-             * Models
-             * @default []
-             */
-            models: string[];
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "success" | "unavailable";
-        };
         /** NoulAnswer */
         NoulAnswer: {
             /** Noul */
@@ -53672,6 +53669,32 @@ export interface components {
              */
             version: string | null;
         };
+        /** UpstreamModelDiscoveryConnection */
+        UpstreamModelDiscoveryConnection: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** UpstreamModelDiscoveryRequest */
+        UpstreamModelDiscoveryRequest: {
+            /** Credential Name */
+            credential_name?: string | null;
+            credential_values?: components["schemas"]["UpstreamModelDiscoveryConnection"] | null;
+        };
+        /** UpstreamModelDiscoveryResponse */
+        UpstreamModelDiscoveryResponse: {
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "unavailable";
+        };
         /** UsageChartPoint */
         UsageChartPoint: {
             /** Blocked */
@@ -62151,7 +62174,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["NimModelDiscoveryRequest"];
+                "application/json": components["schemas"]["UpstreamModelDiscoveryRequest"];
             };
         };
         responses: {
@@ -62161,7 +62184,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NimModelDiscoveryResponse"];
+                    "application/json": components["schemas"]["UpstreamModelDiscoveryResponse"];
                 };
             };
             /** @description Validation Error */
@@ -62382,6 +62405,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserConnectionStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_ollama_models_credentials__provider__models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: "ollama" | "ollama_chat";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpstreamModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamModelDiscoveryResponse"];
                 };
             };
             /** @description Validation Error */

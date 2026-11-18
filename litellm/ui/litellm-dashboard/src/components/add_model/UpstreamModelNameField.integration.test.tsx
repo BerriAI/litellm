@@ -6,7 +6,7 @@ import { MountedFormHost } from "../../../tests/mounted-form-host";
 import type { MountedFormValues } from "../common_components/MountedFormField";
 import { apiClient } from "../networking";
 import { getPlaceholder, Providers } from "../provider_info_helpers";
-import NimModelNameField from "./NimModelNameField";
+import UpstreamModelNameField from "./UpstreamModelNameField";
 import i18n from "@/i18n/i18n";
 
 vi.mock("../networking", () => ({ apiClient: { post: vi.fn() } }));
@@ -40,7 +40,7 @@ function Form({
   return (
     <MountedFormHost defaultValues={{ litellm_credential_name: credentialName, api_key: apiKey, api_base: apiBase }}>
       <ConnectionFields />
-      <NimModelNameField
+      <UpstreamModelNameField
         selectedProvider={provider}
         providerModels={[catalogModel]}
         getPlaceholder={getPlaceholder}
@@ -53,7 +53,7 @@ function Form({
 
 beforeEach(() => vi.resetAllMocks());
 
-describe("NIM model discovery", () => {
+describe("upstream model discovery", () => {
   it("uses the selected credential and makes discovered models selectable", async () => {
     vi.mocked(apiClient.post).mockResolvedValue({ status: "success", models: [discoveredModel] });
     render(<Form />);
@@ -68,6 +68,23 @@ describe("NIM model discovery", () => {
     expect(screen.getByRole("option", { name: discoveredModel })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: catalogModel })).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Custom Model Name (Enter below)" })).toBeInTheDocument();
+  });
+
+  it.each([
+    [Providers.Ollama, "ollama"],
+    [Providers.OLLAMA_CHAT, "ollama_chat"],
+  ])("offers installed models for %s", async (provider, slug) => {
+    const model = `${slug}/local-model:qa`;
+    vi.mocked(apiClient.post).mockResolvedValue({ status: "success", models: [model] });
+    render(<Form provider={provider} credentialName="ollama-saved" />);
+    expect(await screen.findByText(/Models installed on your Ollama server/)).toBeInTheDocument();
+    expect(apiClient.post).toHaveBeenCalledWith(`/credentials/${slug}/models`, {
+      accessToken: "proxy-token",
+      body: { credential_name: "ollama-saved", credential_values: undefined },
+      signal: expect.any(AbortSignal),
+    });
+    await userEvent.setup().click(screen.getByRole("combobox", { name: "Select models" }));
+    expect(screen.getByRole("option", { name: model })).toBeInTheDocument();
   });
 
   it("requires explicit refresh for inline settings and never sends keys while editing", async () => {
