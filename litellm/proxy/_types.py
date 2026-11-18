@@ -4737,7 +4737,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # `x-litellm-timeout`/`x-litellm-stream-timeout` headers, or a `timeout`/`request_timeout`/
     # `stream_timeout` field in the request body) rather than deployment config, so a
     # deliberately tiny value isn't treated as a deployment health signal (see
-    # cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    # router_rust.surface.health.RustHealthCallbacks.blocked_failure_exempt).
     client_side_timeout: bool
     keepalive_seconds: float | None
 

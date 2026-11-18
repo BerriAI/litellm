@@ -2366,7 +2366,11 @@ def client(original_function):
                 kwargs=kwargs,
                 call_type=call_type,
             ):
-                if "complete_response" in kwargs and kwargs["complete_response"] is True:
+                if (
+                    "complete_response" in kwargs
+                    and kwargs["complete_response"] is True
+                    and not isinstance(result, Awaitable)
+                ):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
@@ -2474,10 +2478,18 @@ def client(original_function):
             end_time = datetime.datetime.now()
             if _returns_requested_stream(kwargs, call_type, result) or _is_converted_stream_result(result):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
+                    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    assembly_chunks: Final = (
+                        result.chunks
+                        if isinstance(result, CustomStreamWrapper)
+                        and result.custom_llm_provider == LlmProviders.BEDROCK.value
+                        else chunks
+                    )
+                    return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
                 else:
                     logging_obj.stream = True
                     logging_obj.model_call_details["stream"] = True
@@ -2795,10 +2807,19 @@ def client(original_function):
                         result=result, request_data=kwargs, call_type=call_type
                     )
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
-                    chunks: Final = []
-                    for idx, chunk in enumerate(result):
-                        chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
+                    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+                    bedrock_stream: Final = (
+                        result
+                        if isinstance(result, CustomStreamWrapper)
+                        and result.custom_llm_provider == LlmProviders.BEDROCK.value
+                        else None
+                    )
+                    if bedrock_stream is not None:
+                        async for _ in bedrock_stream:
+                            pass
+                    assembly_chunks: Final = bedrock_stream.chunks if bedrock_stream is not None else list(result)
+                    return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
                 else:
                     if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
                         from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
@@ -9752,6 +9773,14 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
     # Check if it has thinking_blocks
     thinking_blocks: Final = last_assistant_with_tools.get("thinking_blocks")
     return thinking_blocks is None or (hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0)
+
+
+def thinking_param_needs_replayed_thinking_blocks(thinking: object) -> bool:
+    match thinking:
+        case None | {"type": "adaptive"}:
+            return False
+        case _:
+            return True
 
 
 def add_dummy_tool(custom_llm_provider: str) -> list[ChatCompletionToolParam]:
