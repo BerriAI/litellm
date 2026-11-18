@@ -3148,7 +3148,7 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             id="mapping-content-key",
         ),
         pytest.param(
-            {1: "x", "content": "hello"},
+            {"content": "hello", 1: "x"},
             "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected [1, 'content']",
             id="mixed-type-keys",
         ),
@@ -3188,6 +3188,11 @@ def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
     assert f"from my-custom-llm is not a GenericStreamingChunk: {message}" in str(excinfo.value)
 
 
+class _UnprintableKey:
+    def __str__(self) -> str:
+        raise TypeError("this key has no string form")
+
+
 @pytest.mark.parametrize(
     "chunks",
     [
@@ -3198,6 +3203,10 @@ def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
         pytest.param(
             [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, 1: "x", "id": "chunk-1"}],
             id="complete-with-mixed-type-keys",
+        ),
+        pytest.param(
+            [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, _UnprintableKey(): "x"}],
+            id="complete-with-unprintable-key",
         ),
         pytest.param(
             [
