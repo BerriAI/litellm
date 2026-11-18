@@ -1281,6 +1281,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_continuation": {"type": "boolean"},
             "supports_multimodal": {"type": "boolean"},
             "uses_embed_content": {"type": "boolean"},
+            "supports_logprobs": {"type": "boolean"},
             "supports_reasoning": {"type": "boolean"},
             "supports_minimal_reasoning_effort": {"type": "boolean"},
             "supports_low_reasoning_effort": {"type": "boolean"},

@@ -8,7 +8,7 @@ description = "Rust repositories for the auth objects the proxy reads from Postg
 include = ["Cargo.toml", "README.md", "src/**", ".sqlx/**"]
 
 [dependencies]
-chrono.workspace = true
+chrono = { workspace = true, features = ["serde"] }
 litellm-db.workspace = true
 litellm-error.workspace = true
 litellm-python-compat.workspace = true
@@ -16,6 +16,7 @@ macro_rules_attribute.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 sqlx.workspace = true
+tokio = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 veil.workspace = true
 

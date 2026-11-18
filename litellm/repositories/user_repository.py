@@ -14,10 +14,12 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.rust_bridge._native import RustUserRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -108,6 +110,39 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     async def find_by_id(self, id_value: str, id_field: str = "user_id") -> LiteLLM_UserTable | None:
         return await super().find_by_id(id_value, id_field)
+
+    async def resolve_for_auth(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None,
+        user_email: str | None,
+        email_verified: bool | None,
+        links_any_user: bool,
+        use_writer: bool = False,
+    ) -> LiteLLM_UserTable | None:
+        """The user a sign-in resolves to by id, SSO id or email, linking the SSO id or email it proves, or None."""
+        payload: Final = await rust_database.required_repository(RustUserRepository).resolve(
+            user_id,
+            sso_user_id=sso_user_id,
+            user_email=user_email,
+            email_verified=email_verified,
+            links_any_user=links_any_user,
+            use_writer=use_writer,
+        )
+        return rust_database.decode(LiteLLM_UserTable, payload)
+
+    async def email_belongs_to_another_user(self, user_email: str, user_id: str) -> bool:
+        return await rust_database.required_repository(RustUserRepository).email_belongs_to_another_user(
+            user_email, user_id
+        )
+
+    async def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> str | None:
+        """The email stored on ``user_id`` once a null email is filled with ``user_email``, or None when another
+        user holds it or the row is gone."""
+        return await rust_database.required_repository(RustUserRepository).backfill_email(
+            user_id, user_email, links_any_user=links_any_user
+        )
 
     async def find_by_email(self, user_email: str) -> LiteLLM_UserTable | None:
         """Find a user by email."""
@@ -320,30 +355,6 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
             data["object_permission_id"] = object_permission_id
 
         return await self.update(user_id, data, id_field="user_id")
-
-    async def link_null_sso_user_id(self, user_id: str, sso_user_id: str) -> bool:
-        """Set sso_user_id only when the stored value is null, atomically; False if another row already holds it."""
-        from prisma.errors import UniqueViolationError
-
-        try:
-            updated_count: Final[int] = await self.table.update_many(
-                where={"user_id": user_id, "sso_user_id": None},
-                data={"sso_user_id": sso_user_id},
-            )
-        except UniqueViolationError:
-            return False
-        return updated_count == 1
-
-    async def backfill_null_user_email(self, user_id: str, user_email: str) -> int:
-        """Set user_email only when the stored value is null, atomically at the database.
-
-        Returns the number of rows updated: 0 means another writer already set an email.
-        """
-        updated_count: Final[int] = await self.table.update_many(
-            where={"user_id": user_id, "user_email": None},
-            data={"user_email": user_email},
-        )
-        return updated_count
 
     async def delete_user(self, user_id: str) -> LiteLLM_UserTable | None:
         """Delete a user."""
