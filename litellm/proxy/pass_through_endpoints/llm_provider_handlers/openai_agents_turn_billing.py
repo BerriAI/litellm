@@ -890,7 +890,11 @@ class OpenAIAgentsTurnBiller:
         try:
             return page_type.model_validate_json(content)
         except ValidationError as e:
-            verbose_proxy_logger.warning("OpenAI Agents passthrough: GET %s returned an unreadable body: %s", path, e)
+            verbose_proxy_logger.warning(
+                "OpenAI Agents passthrough: GET %s returned an unreadable body: %s",
+                path,
+                tuple((error["type"], error["loc"]) for error in e.errors(include_url=False)),
+            )
             return _FetchFailed(reason=f"GET {path} returned an unreadable body", retryable=False)
 
     async def _fetch_settled_page(

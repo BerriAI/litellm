@@ -1306,6 +1306,37 @@ async def test_a_turn_whose_messages_cannot_be_read_is_never_claimed_by_the_call
 
 
 @pytest.mark.asyncio
+async def test_an_unreadable_turn_items_page_never_logs_the_conversation_text(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+):
+    conversation_text: Final = "my pin is 4821"
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),),
+        session=_session(),
+        replies={
+            f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?order=asc&limit=100": (
+                _page({"type": "message", "role": "user", "content": {"text": conversation_text}}),
+            )
+        },
+    )
+    rows: Final = _SpendRows()
+
+    with caplog.at_level(logging.WARNING):
+        await _relay_call(
+            _biller(api, _Clock()),
+            rows,
+            EVENTS_URL,
+            {"events": [INPUT_MESSAGE]},
+            None,
+            "4d6f8b0d-2f4b-4d6f-8b0d-0f2b4d6f8b01",
+        )
+        _ = await rows.only_row()
+
+    assert "unreadable body" in caplog.text
+    assert conversation_text not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_two_workers_without_a_shared_claim_store_bill_each_message_its_own_turn(local_model_cost_map: None):
     api: Final = _AgentsApi(
         turn_pages=(
