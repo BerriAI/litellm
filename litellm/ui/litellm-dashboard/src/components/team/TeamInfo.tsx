@@ -377,8 +377,8 @@ const SUPPRESSED_BY_DESCRIPTION = "";
 
 const numericInputSchema = z.union([z.string(), z.number()]).nullish();
 
-const buildTeamUpdateFieldsSchema = (t: TFunction) =>
-  z.object({
+const buildTeamUpdateFieldsSchema = (t: TFunction) => {
+  const fields = {
     team_alias: z.string().min(1, t("teams.teamInfo.validation.teamNameRequired")),
     models: z.array(z.string()).optional(),
     max_budget: numericInputSchema,
@@ -459,7 +459,9 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
     logging_settings: z.array(z.unknown()).optional(),
     secret_manager_settings: z.string().optional(),
     metadata: metadataPairsSchema.optional(),
-  });
+  };
+  return z.object(fields);
+};
 
 type TeamUpdateFormValues = z.infer<ReturnType<typeof buildTeamUpdateFieldsSchema>>;
 
@@ -1721,7 +1723,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
-                  <FormField control={form.control} name="cost_margin_percent" label="Cost margin (%)">
+                  <FormField control={form.control} name="cost_margin_percent" label={t("teams.costMarginPercent")}>
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} min={0} max={1000} step={0.01} />
                     )}
@@ -2499,7 +2501,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </div>
               <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.teamBudget")}</p>
-                <div>Cost margin (%) {info.cost_margin_percent ?? 0}</div>
+                <div>
+                  {t("teams.costMarginPercent")} {info.cost_margin_percent ?? 0}
+                </div>
                 <div>
                   {t("teams.teamInfo.settingsView.maxBudget")}
                   {info.max_budget !== null

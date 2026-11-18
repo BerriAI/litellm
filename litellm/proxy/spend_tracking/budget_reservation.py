@@ -66,6 +66,7 @@ from litellm.proxy.spend_tracking.native_budgets import (
     settle_native_reservation,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
+from litellm.proxy.spend_tracking.team_cost_margin import apply_team_cost_margin_to_estimate
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     end_user_counter,
@@ -285,12 +286,15 @@ async def reserve_budget_for_request(
         path_params=path_params,
     )
 
-    reservation_cost: Final = estimate_request_max_cost(
-        request_body=request_body,
-        route=route,
-        llm_router=llm_router,
-        input_token_counts=input_token_counts,
-        path_params=path_params,
+    reservation_cost: Final = apply_team_cost_margin_to_estimate(
+        estimate_request_max_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+            path_params=path_params,
+        ),
+        valid_token.team_cost_margin_percent,
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -302,12 +306,15 @@ async def reserve_budget_for_request(
         valid_token=valid_token,
         reservation_cost=reservation_cost,
         input_token_counts=input_token_counts,
-        input_cost=estimate_request_input_cost(
-            request_body=request_body,
-            route=route,
-            llm_router=llm_router,
-            input_token_counts=input_token_counts,
-            path_params=path_params,
+        input_cost=apply_team_cost_margin_to_estimate(
+            estimate_request_input_cost(
+                request_body=request_body,
+                route=route,
+                llm_router=llm_router,
+                input_token_counts=input_token_counts,
+                path_params=path_params,
+            ),
+            valid_token.team_cost_margin_percent,
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )

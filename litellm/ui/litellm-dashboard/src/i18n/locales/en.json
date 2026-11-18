@@ -16627,6 +16627,7 @@
     }
   },
   "teams": {
+    "costMarginPercent": "Cost margin (%)",
     "teamInfo": {
       "tabs": {
         "overview": "Overview",

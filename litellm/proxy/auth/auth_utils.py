@@ -1881,6 +1881,22 @@ def _requested_output_token_estimates(
     )
 
 
+def enforce_team_cost_margin_is_admin_only(
+    data: NewTeamRequest | UpdateTeamRequest,
+    existing_margin_percent: float | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    requested: Final = (
+        data.cost_margin_percent if "cost_margin_percent" in data.model_fields_set else existing_margin_percent
+    )
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN or requested == existing_margin_percent:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can change cost_margin_percent on a team."},
+    )
+
+
 def enforce_output_token_estimates_are_admin_only(
     data: OutputTokenEstimateRequest,
     existing_metadata: Mapping[str, object] | None,

@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import pytest
 from pydantic import TypeAdapter
@@ -11,10 +11,29 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cost
 from litellm.proxy.spend_tracking.team_cost_margin import apply_callback_team_cost_margin
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, StandardLoggingPayload, Usage
 from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
+
+
+def test_callback_team_margin_accepts_a_legacy_payload_without_a_breakdown() -> None:
+    payload: Final = cast(
+        StandardLoggingPayload, {"response_cost": 0.5}
+    )  # cast-ok: legacy callbacks supply partial payloads
+    assert apply_callback_team_cost_margin(payload, 0.5, 2) == pytest.approx(0.51)
+    assert payload["cost_breakdown"] is not None
+    assert payload["cost_breakdown"]["team_cost_before_margin"] == 0.5
+    assert payload["cost_breakdown"]["team_cost_margin_percent"] == 2
+
+
+def test_callback_without_team_margin_preserves_a_legacy_payload() -> None:
+    payload: Final = cast(
+        StandardLoggingPayload, {"response_cost": 0.5}
+    )  # cast-ok: legacy callbacks supply partial payloads
+    assert apply_callback_team_cost_margin(payload, 0.5, None) == 0.5
+    assert payload == {"response_cost": 0.5}
+
 
 NOW: Final = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
 MODEL: Final = "gemini-finalization-test"
@@ -331,8 +350,8 @@ async def test_guardrail_json_response_uses_finalized_header_when_cost_is_known(
     logging_obj: Logging, monkeypatch: pytest.MonkeyPatch, known_cost: bool
 ) -> None:
     import httpx
-
     from fastapi import Response
+
     from litellm.caching.dual_cache import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.utils import ProxyLogging
@@ -378,6 +397,7 @@ async def test_malformed_passthrough_logging_preserves_response_dispatch_contrac
 ) -> None:
 
     import httpx
+
     from litellm.llms.anthropic.common_utils import AnthropicError
     from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
     from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload

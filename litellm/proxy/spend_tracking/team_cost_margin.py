@@ -37,6 +37,19 @@ def apply_team_cost_margin(cost: FinalizedCost, percent: object) -> FinalizedCos
     )
 
 
+def apply_team_cost_margin_to_estimate(amount: float | None, percent: object) -> float | None:
+    if amount is None:
+        return None
+    return apply_team_cost_margin(finalize_cost(amount, None), percent).amount
+
+
+def _callback_cost(payload: StandardLoggingPayload, amount: float) -> FinalizedCost:
+    try:
+        return finalize_cost(amount, payload["cost_breakdown"])
+    except KeyError:
+        return finalize_cost(amount, None)
+
+
 def apply_callback_team_cost_margin(
     payload: StandardLoggingPayload | None, amount: float | None, percent: object
 ) -> float | None:
@@ -44,7 +57,10 @@ def apply_callback_team_cost_margin(
         return amount
     if _cost_is_finalized(payload):
         return amount
-    cost: Final = apply_team_cost_margin(finalize_cost(amount, payload["cost_breakdown"]), percent)
+    original: Final = _callback_cost(payload, amount)
+    cost: Final = apply_team_cost_margin(original, percent)
+    if cost is original:
+        return amount
     payload["response_cost"] = cost.amount  # rebind-ok: the legacy spend writer consumes this callback payload
     payload["cost_breakdown"] = cost.logging_breakdown()  # rebind-ok: persist reconciliation with the billed cost
     return cost.amount

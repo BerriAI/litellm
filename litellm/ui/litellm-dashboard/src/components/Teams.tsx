@@ -838,7 +838,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                     )}
                   </FormField>
 
-                  <FormField control={form.control} name="cost_margin_percent" label="Cost margin (%)">
+                  <FormField control={form.control} name="cost_margin_percent" label={t("teams.costMarginPercent")}>
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} min={0} max={1000} step={0.01} />
                     )}

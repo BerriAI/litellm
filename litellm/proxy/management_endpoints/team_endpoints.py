@@ -122,6 +122,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
+    enforce_team_cost_margin_is_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1708,6 +1709,7 @@ async def new_team(
     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - cost_margin_percent: Optional[float] - Team chargeback surcharge from 0 to 1000 percent, applied after provider margins. Only proxy admins can change it.
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -1830,6 +1832,7 @@ async def new_team(
                         },
                     )
 
+        enforce_team_cost_margin_is_admin_only(data, None, user_api_key_dict)
         enforce_output_token_estimates_are_admin_only(
             data=data,
             existing_metadata=None,
@@ -2505,6 +2508,7 @@ async def update_team(
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - cost_margin_percent: Optional[float] - Team chargeback surcharge from 0 to 1000 percent. Only proxy admins can change it. Unchanged values are accepted from other callers.
     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -2631,6 +2635,7 @@ async def update_team(
         access_role: Final = await get_team_access().strongest_role(user_api_key_dict, existing_team)
         if access_role is None:
             team_access_denied()
+        enforce_team_cost_margin_is_admin_only(data, existing_team.cost_margin_percent, user_api_key_dict)
         if access_role == "team_admin":
             permitted: Final = resolve_team_admin_editable_fields(
                 _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS

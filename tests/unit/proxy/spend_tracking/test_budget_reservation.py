@@ -20,26 +20,27 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     project_cache_key,
     team_membership_reservation_cache_key,
 )
-from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.spend_tracking.budget_reservation import (
-    _get_team_member_budget_counter,
     _get_budget_counters,
+    _get_team_member_budget_counter,
+    count_request_input_tokens,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
-    count_request_input_tokens,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
+from litellm.router import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -187,6 +188,50 @@ def _tiered_deployment(input_cost_per_token: float) -> Deployment:
 
 
 TIERED_BODY: Final = {"model": "tiered-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+
+
+@pytest.mark.asyncio
+async def test_large_team_margin_is_included_in_the_reservation_with_little_budget_left(spend_counter_store) -> None:
+    router: Final = Router(model_list=[_tiered_deployment(0.1).model_dump()])
+    estimate: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+    assert estimate is not None and estimate > 0
+    reservation: Final = await reserve_budget_for_request(
+        request_body=TIERED_BODY,
+        route="/chat/completions",
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token="margin-reserved", max_budget=estimate * 2, team_cost_margin_percent=1000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(estimate * 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("percent", [None, 0, 2, 1000])
+async def test_team_margin_scales_reservation_and_cancellation_cost(spend_counter_store, percent: float | None) -> None:
+    router: Final = Router(model_list=[_tiered_deployment(0.1).model_dump()])
+    estimate: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+    input_estimate: Final = estimate_request_input_cost(
+        request_body=TIERED_BODY, route="/chat/completions", llm_router=router
+    )
+    reservation: Final = await reserve_budget_for_request(
+        request_body={**TIERED_BODY, "metadata": {"user_api_key_team_cost_margin_percent": 999}},
+        route="/chat/completions",
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token="margin-allowed", max_budget=10000, team_cost_margin_percent=percent),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+    assert estimate is not None and input_estimate is not None and reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(estimate * (1 + (percent or 0) / 100))
+    assert reservation["input_cost"] == pytest.approx(input_estimate * (1 + (percent or 0) / 100))
 
 
 def test_repeated_estimates_reuse_cached_model_cost_info() -> None:
