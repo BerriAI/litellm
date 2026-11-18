@@ -132,11 +132,11 @@ impl Side {
         let Some((host, port)) = &self.address else {
             return pending().await;
         };
-        tokio::time::sleep(REFUSAL_CHECK_AFTER).await;
-        if self.probe.refuses(host, *port).await {
-            io::ErrorKind::ConnectionRefused.into()
-        } else {
-            pending().await
+        loop {
+            tokio::time::sleep(REFUSAL_CHECK_AFTER).await;
+            if self.probe.refuses(host, *port).await {
+                return io::ErrorKind::ConnectionRefused.into();
+            }
         }
     }
 }
@@ -223,7 +223,7 @@ mod tests {
     use rstest::rstest;
     use sqlx::{Connection as _, PgConnection};
 
-    use super::{Pools, Recycled, RefusalProbe};
+    use super::{Pools, Recycled, RefusalProbe, Side};
     use crate::{Endpoint, Error, ErrorKind, PoolLimits, SslMode, test_support::database_endpoint};
 
     #[rstest]
@@ -496,16 +496,10 @@ mod tests {
         Ok(())
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn a_refusing_server_fails_the_acquire_long_before_its_timeout()
-    -> Result<(), Box<dyn StdError>> {
-        let closed_port = std::net::TcpListener::bind("127.0.0.1:0")?
-            .local_addr()?
-            .port();
-        let refusing = Endpoint {
+    fn local_endpoint(port: u16) -> Endpoint {
+        Endpoint {
             host: "127.0.0.1".to_owned(),
-            port: closed_port,
+            port,
             socket: None,
             username: "litellm".to_owned(),
             password: None,
@@ -522,7 +516,35 @@ mod tests {
                 idle_timeout_seconds: None,
                 socket_timeout_seconds: None,
             },
-        };
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_waiter_fails_once_the_server_starts_refusing() -> Result<(), Box<dyn StdError>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let side = Side::new(&local_endpoint(port))?;
+        let started = Instant::now();
+        let waiter = tokio::spawn(async move { side.refused().await });
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(listener);
+        let refused = tokio::time::timeout(Duration::from_secs(5), waiter).await??;
+
+        assert_eq!(refused.kind(), std::io::ErrorKind::ConnectionRefused);
+        assert!(started.elapsed() > Duration::from_millis(300));
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_refusing_server_fails_the_acquire_long_before_its_timeout()
+    -> Result<(), Box<dyn StdError>> {
+        let closed_port = std::net::TcpListener::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port();
+        let refusing = local_endpoint(closed_port);
         let pools = Pools::new(&refusing, None)?;
         let started = Instant::now();
 
