@@ -1738,12 +1738,11 @@ def _adjusted_provider_billed_cost(
     return adjusted.cost
 
 
-def _hidden_params_of(completion_response: object) -> Mapping[str, object]:
-    hidden_params: Final[object] = getattr(completion_response, "_hidden_params", None)
-    return hidden_params if isinstance(hidden_params, Mapping) else _NO_HIDDEN_PARAMS
-
-
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _hidden_params_of(completion_response: object) -> Mapping[str, object]:
+    return as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or _NO_HIDDEN_PARAMS
 
 
 def _web_search_requests_for_rust(completion_response: object, usage: Usage) -> int | None | Literal[False]:
@@ -1782,32 +1781,33 @@ def _rust_priced_cost(
     """``completion_cost`` of a Claude token call on the /v1/messages providers, priced in Rust. ``None`` where
     ``completion_cost`` prices the call the old way: another provider or call kind, built-in tools other than a
     reported web search, a provider-stated cost, or a call the Rust core leaves to Python."""
-    if (
-        call_type not in _RUST_PRICED_CALL_TYPES
-        or not isinstance(custom_llm_provider, str)
-        or custom_llm_provider not in _RUST_PRICED_PROVIDERS
-        or model is None
-        or usage is None
-        or not isinstance(completion_response, (ModelResponse, dict))
-        or (reported_cost_applies and billed_usage_cost(completion_response, custom_llm_provider) is not None)
-    ):
+    if call_type not in _RUST_PRICED_CALL_TYPES or model is None or usage is None:
         return None
-    hidden_params: Final = _hidden_params_of(completion_response)
+    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _RUST_PRICED_PROVIDERS:
+        return None
+    response: Final = (
+        completion_response if isinstance(completion_response, ModelResponse) else as_str_mapping(completion_response)
+    )
+    if response is None:
+        return None
+    if reported_cost_applies and billed_usage_cost(response, custom_llm_provider) is not None:
+        return None
+    hidden_params: Final = _hidden_params_of(response)
     hidden_region: Final[object] = hidden_params.get("region_name", region_name)
     hidden_models: Final = (hidden_params.get("model"), hidden_params.get("litellm_model_name"))
     tools_params: Final[Mapping[str, object]] = standard_built_in_tools_params or _NO_HIDDEN_PARAMS
     web_search_options: Final[object] = tools_params.get("web_search_options")
-    web_search_requests: Final = _web_search_requests_for_rust(completion_response, usage)
-    if (
-        hidden_params.get("custom_llm_provider", custom_llm_provider) != custom_llm_provider
-        or not (hidden_region is None or isinstance(hidden_region, str))
-        or any(isinstance(name, str) and azure_ai_is_model_router_name(name) for name in hidden_models)
-        or any(value for key, value in tools_params.items() if key != "web_search_options")
-        or web_search_requests is False
-    ):
+    web_search_requests: Final = _web_search_requests_for_rust(response, usage)
+    if hidden_params.get("custom_llm_provider", custom_llm_provider) != custom_llm_provider:
+        return None
+    if not (hidden_region is None or isinstance(hidden_region, str)) or web_search_requests is False:
+        return None
+    if any(isinstance(name, str) and azure_ai_is_model_router_name(name) for name in hidden_models):
+        return None
+    if any(value for key, value in tools_params.items() if key != "web_search_options"):
         return None
     region: Final = hidden_region if isinstance(hidden_region, str) and hidden_region else None
-    response_model: Final = _get_response_model(completion_response)
+    response_model: Final = _get_response_model(response)
     hidden_model: Final[object] = hidden_params.get("model")
     receipt: Final = price(
         CallFacts(
@@ -1828,7 +1828,7 @@ def _rust_priced_cost(
         priced_usage(
             usage,
             web_search_requests,
-            web_search_options.get("search_context_size") if isinstance(web_search_options, Mapping) else None,
+            (as_str_mapping(web_search_options) or _NO_HIDDEN_PARAMS).get("search_context_size"),
         ),
         service_tier=service_tier,
         data_residency=data_residency,

@@ -113,11 +113,11 @@ def priced_usage(
 
 
 def _search_context(size: object) -> SearchContextSize | None:
-    match size:
-        case "low" | "medium" | "high":
-            return size
-        case _:
-            return None
+    if size == "low":
+        return "low"
+    if size == "medium":
+        return "medium"
+    return "high" if size == "high" else None
 
 
 def _billed_at(current_time: datetime | None) -> str:
