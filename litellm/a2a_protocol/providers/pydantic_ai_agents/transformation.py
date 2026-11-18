@@ -332,6 +332,9 @@ class PydanticAITransformation:
         Returns:
             Standard A2A non-streaming response format
         """
+        if "error" in response_data:
+            return {"jsonrpc": "2.0", "id": request_id, "error": response_data["error"]}
+
         # Extract the agent response text
         full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 
@@ -391,8 +394,8 @@ class PydanticAITransformation:
                 if full_text:
                     return full_text, message_id, parts
 
-        # Fall back to message field (original format)
-        message: Final = result.get("message", {})
+        # Fall back to a message field, or to a result that is itself the agent's Message
+        message: Final = result.get("message") or (result if result.get("kind") == "message" else {})
         if message:
             message_dict: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
             parts = _LIST_ADAPTER.validate_python(message_dict.get("parts", []))
@@ -430,6 +433,10 @@ class PydanticAITransformation:
         Yields:
             A2A streaming response events
         """
+        if "error" in response_data:
+            yield {"jsonrpc": "2.0", "id": request_id, "error": response_data["error"]}
+            return
+
         # Extract the response text from completed task
         full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 

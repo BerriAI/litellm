@@ -4,12 +4,14 @@ Test A2A model routing in proxy.
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
 
+import asyncio
 import base64
 import json
-from collections.abc import Iterator
+import uuid
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
-
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import httpx
 import pytest
@@ -17,11 +19,19 @@ import respx
 from fastapi import HTTPException
 
 import litellm
+from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.databricks_oauth import databricks_app_oauth_token_cache
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.agents import AgentResponse
+from litellm.types.utils import CallTypes
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 @pytest.mark.asyncio
@@ -206,6 +216,23 @@ A2A_REPLY = {
     "jsonrpc": "2.0",
     "id": "1",
     "result": {"kind": "message", "role": "agent", "messageId": "m-1", "parts": [{"kind": "text", "text": "pong"}]},
+}
+A2A_TASK_REPLY = {
+    "jsonrpc": "2.0",
+    "id": "1",
+    "result": {
+        "id": "task-1",
+        "kind": "task",
+        "status": {"state": "completed"},
+        "history": [
+            {
+                "kind": "message",
+                "role": "agent",
+                "messageId": "m-1",
+                "parts": [{"kind": "text", "text": "pong"}],
+            }
+        ],
+    },
 }
 
 
@@ -470,24 +497,41 @@ async def test_route_a2a_url_agent_chat_keeps_the_client_authorization_over_its_
 
 
 @respx.mock
+@pytest.mark.parametrize("agent_reply", [A2A_REPLY, A2A_TASK_REPLY], ids=["message", "task"])
 async def test_route_a2a_agent_with_another_provider_keeps_calling_its_card_url_over_a2a(
-    httpx_transport: None,
+    httpx_transport: None, agent_reply: dict[str, object]
 ) -> None:
-    agent_url = "https://pydantic-agent.example.com"
-    agent = AgentResponse(
-        agent_id="pydantic-agent-id",
-        agent_name="pydantic-agent",
-        agent_card_params={"url": agent_url},
-        litellm_params={"custom_llm_provider": "pydantic_ai_agents", "model": "pydantic-agent"},
+    agent_endpoint: Final = respx.post("https://pydantic-agent.example.com").mock(
+        return_value=httpx.Response(200, json=agent_reply)
     )
-    agent_endpoint = respx.post(agent_url).mock(return_value=httpx.Response(200, json=A2A_REPLY))
-    data = {"model": "a2a/pydantic-agent", "messages": [{"role": "user", "content": "ping"}]}
+    data: Final = {"model": "a2a/pydantic-agent", "timeout": 5, "messages": [{"role": "user", "content": "ping"}]}
 
-    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
-        response = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        response: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
 
-    assert json.loads(agent_endpoint.calls.last.request.content)["method"] == "message/send"
+    sent: Final = agent_endpoint.calls.last.request
+    sent_body: Final = json.loads(sent.content)
+    assert sent_body["method"] == "message/send"
+    assert sent_body["params"]["message"]["kind"] == "message"
+    assert sent_body["params"]["configuration"] == {"acceptedOutputModes": ["text"], "blocking": True}
+    assert sent.extensions["timeout"]["read"] == 5
     assert response.choices[0].message.content == "pong"
+
+
+@respx.mock
+@pytest.mark.parametrize("agent_reply", [A2A_REPLY, A2A_TASK_REPLY], ids=["message", "task"])
+async def test_route_a2a_agent_with_another_provider_streams_its_answer_as_openai_chunks(
+    httpx_transport: None, agent_reply: dict[str, object]
+) -> None:
+    respx.post("https://pydantic-agent.example.com").mock(return_value=httpx.Response(200, json=agent_reply))
+    data: Final = {"model": "a2a/pydantic-agent", "stream": True, "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        stream: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "pong"
+    assert chunks[-1].choices[0].finish_reason == "stop"
 
 
 @respx.mock
@@ -667,3 +711,335 @@ async def test_route_a2a_bridge_agent_calls_without_client_extra_headers_it_drop
     assert app.calls.last.request.headers["Authorization"] == "Bearer p"
     assert "X-N" not in app.calls.last.request.headers
     assert response.choices[0].message.content == "pong"
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_sends_its_registered_api_key(
+    httpx_transport: None,
+) -> None:
+    agent_url = "https://pydantic-agent.example.com"
+    agent = AgentResponse(
+        agent_id="pydantic-agent-id",
+        agent_name="pydantic-agent",
+        agent_card_params={"url": agent_url},
+        litellm_params={
+            "custom_llm_provider": "pydantic_ai_agents",
+            "model": "pydantic-agent",
+            "api_key": "agent-token",
+            "headers": {"X-Tenant": "t"},
+        },
+    )
+    agent_endpoint = respx.post(agent_url).mock(return_value=httpx.Response(200, json=A2A_TASK_REPLY))
+    data = {"model": "a2a/pydantic-agent", "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        response = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    sent = agent_endpoint.calls.last.request
+    assert sent.headers["Authorization"] == "Bearer agent-token"
+    assert sent.headers["X-Tenant"] == "t"
+    assert response.choices[0].message.content == "pong"
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_raises_on_a_json_rpc_error(
+    httpx_transport: None,
+) -> None:
+    agent_url = "https://pydantic-agent.example.com"
+    agent = AgentResponse(
+        agent_id="pydantic-agent-id",
+        agent_name="pydantic-agent",
+        agent_card_params={"url": agent_url},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents", "model": "pydantic-agent"},
+    )
+    respx.post(agent_url).mock(
+        return_value=httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32602, "message": "Invalid params"}}
+        )
+    )
+    data = {"model": "a2a/pydantic-agent", "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        with pytest.raises(Exception, match="Invalid params"):
+            await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+
+def _pydantic_agent(litellm_params: dict[str, object] | None = None) -> AgentResponse:
+    return AgentResponse(
+        agent_id="pydantic-agent-id",
+        agent_name="pydantic-agent",
+        agent_card_params={"url": "https://pydantic-agent.example.com"},
+        litellm_params={
+            "custom_llm_provider": "pydantic_ai_agents",
+            "model": "pydantic-agent",
+            **(litellm_params or {}),
+        },
+    )
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.responses: Final[list[object]] = []  # mutable-ok: records what each success callback received
+        self.failures: Final[list[object]] = []  # mutable-ok: records what each failure callback received
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.responses.append(response_obj)
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failures.append(kwargs.get("exception"))
+
+
+def _request_logging_obj(stream: bool, recorder: _SuccessRecorder) -> LiteLLMLogging:
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.acompletion.value,
+        model="a2a/pydantic-agent",
+        messages=[{"role": "user", "content": "ping"}],
+        function_id=str(uuid.uuid4()),
+        stream=stream,
+        start_time=datetime(2026, 1, 1),  # noqa: DTZ001  # Logging subtracts it from naive end times
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.defer_async_logging = not stream
+    return logging_obj
+
+
+async def _settle_logging() -> None:
+    await drain_logging_tasks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+
+@respx.mock
+@pytest.mark.parametrize("guardrail_blocked", [False, True])
+async def test_route_a2a_agent_with_another_provider_logs_success_only_after_the_post_call_guardrails(
+    httpx_transport: None, guardrail_blocked: bool
+) -> None:
+    respx.post("https://pydantic-agent.example.com").mock(return_value=httpx.Response(200, json=A2A_TASK_REPLY))
+    recorder: Final = _SuccessRecorder()
+    logging_obj: Final = _request_logging_obj(stream=False, recorder=recorder)
+    data: Final = {
+        "model": "a2a/pydantic-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "litellm_logging_obj": logging_obj,
+    }
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        response: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+    await _settle_logging()
+    logged_before_guardrails: Final = tuple(recorder.responses)
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+        logging_obj=logging_obj, exception_raised=guardrail_blocked
+    )
+    await _settle_logging()
+
+    assert logged_before_guardrails == ()
+    assert recorder.responses == ([] if guardrail_blocked else [response])
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_logs_the_whole_streamed_answer_once(
+    httpx_transport: None,
+) -> None:
+    respx.post("https://pydantic-agent.example.com").mock(return_value=httpx.Response(200, json=A2A_TASK_REPLY))
+    recorder: Final = _SuccessRecorder()
+    data: Final = {
+        "model": "a2a/pydantic-agent",
+        "stream": True,
+        "messages": [{"role": "user", "content": "ping"}],
+        "litellm_logging_obj": _request_logging_obj(stream=True, recorder=recorder),
+    }
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        stream: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+        chunks: Final = [chunk async for chunk in stream]
+    await _settle_logging()
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "pong"
+    assert [response.choices[0].message.content for response in recorder.responses] == ["pong"]
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_fails_a_stream_before_it_opens_on_a_json_rpc_error(
+    httpx_transport: None,
+) -> None:
+    respx.post("https://pydantic-agent.example.com").mock(
+        return_value=httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32602, "message": "Invalid params"}}
+        )
+    )
+    data: Final = {"model": "a2a/pydantic-agent", "stream": True, "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        with pytest.raises(litellm.InternalServerError, match="Invalid params"):
+            await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+
+async def test_route_a2a_agent_with_another_provider_and_no_url_is_not_found() -> None:
+    agent: Final = AgentResponse(
+        agent_id="pydantic-agent-id",
+        agent_name="pydantic-agent",
+        agent_card_params={},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents", "model": "pydantic-agent"},
+    )
+    data: Final = {"model": "a2a/pydantic-agent", "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        with pytest.raises(ProxyModelNotFoundError):
+            await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_logs_a_failed_call_with_the_agents_status(
+    httpx_transport: None,
+) -> None:
+    respx.post("https://pydantic-agent.example.com").mock(return_value=httpx.Response(503, json={"detail": "busy"}))
+    recorder: Final = _SuccessRecorder()
+    data: Final = {
+        "model": "a2a/pydantic-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "litellm_logging_obj": _request_logging_obj(stream=False, recorder=recorder),
+    }
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        with pytest.raises(litellm.ServiceUnavailableError) as raised:
+            await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+    await _settle_logging()
+
+    assert raised.value.status_code == 503
+    assert recorder.failures == [raised.value]
+    assert recorder.responses == []
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_reports_estimated_usage(httpx_transport: None) -> None:
+    respx.post("https://pydantic-agent.example.com").mock(return_value=httpx.Response(200, json=A2A_TASK_REPLY))
+    data: Final = {"model": "a2a/pydantic-agent", "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        response: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    assert response.usage.prompt_tokens > 0
+    assert response.usage.completion_tokens > 0
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_answers_the_responses_api(httpx_transport: None) -> None:
+    agent_endpoint: Final = respx.post("https://pydantic-agent.example.com").mock(
+        return_value=httpx.Response(200, json=A2A_TASK_REPLY)
+    )
+    data: Final = {"model": "a2a/pydantic-agent", "input": "ping"}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        response: Final = await (await route_a2a_agent_request(data=data, route_type="aresponses"))
+
+    sent_parts: Final = json.loads(agent_endpoint.calls.last.request.content)["params"]["message"]["parts"]
+    assert "ping" in sent_parts[0]["text"]
+    assert response.output_text == "pong"
+
+
+class _RecordingAgentProvider(BaseA2AProviderConfig):
+    def __init__(self, events: Sequence[Mapping[str, object]]) -> None:
+        self.events: Final = events
+        self.calls: Final[list[str]] = []  # mutable-ok: records which agent method each request used
+        self.stream_closed: Final[list[bool]] = []  # mutable-ok: records whether the agent stream was closed
+
+    async def handle_non_streaming(
+        self, request_id: str, params: dict[str, object], api_base: str | None = None, **kwargs: object
+    ) -> dict[str, object]:
+        self.calls.append("send")
+        return dict(self.events[-1])
+
+    async def handle_streaming(
+        self, request_id: str, params: dict[str, object], api_base: str | None = None, **kwargs: object
+    ) -> AsyncIterator[dict[str, object]]:
+        self.calls.append("stream")
+        try:
+            for event in self.events:
+                yield dict(event)
+        finally:
+            self.stream_closed.append(True)
+
+
+def _agent_with_card(capabilities: Mapping[str, object]) -> AgentResponse:
+    return AgentResponse(
+        agent_id="pydantic-agent-id",
+        agent_name="pydantic-agent",
+        agent_card_params={"url": "https://pydantic-agent.example.com", "capabilities": capabilities},
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents", "model": "pydantic-agent"},
+    )
+
+
+_PONG_EVENT: Final = {"jsonrpc": "2.0", "id": "1", "result": A2A_REPLY["result"]}
+
+
+async def test_route_a2a_agent_with_another_provider_fakes_the_stream_for_an_agent_that_cannot_stream() -> None:
+    provider: Final = _RecordingAgentProvider([_PONG_EVENT])
+    data: Final = {"model": "a2a/pydantic-agent", "stream": True, "messages": [{"role": "user", "content": "ping"}]}
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            _registry_with(_agent_with_card({"streaming": False})),
+        ),
+        patch(
+            "litellm.a2a_protocol.providers.config_manager.A2AProviderConfigManager.get_provider_config",
+            return_value=provider,
+        ),
+    ):
+        stream: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert provider.calls == ["send"]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "pong"
+
+
+async def test_route_a2a_agent_with_another_provider_closes_the_agent_stream_when_the_caller_stops_reading() -> None:
+    provider: Final = _RecordingAgentProvider([_PONG_EVENT, _PONG_EVENT, _PONG_EVENT])
+    data: Final = {"model": "a2a/pydantic-agent", "stream": True, "messages": [{"role": "user", "content": "ping"}]}
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            _registry_with(_agent_with_card({"streaming": True})),
+        ),
+        patch(
+            "litellm.a2a_protocol.providers.config_manager.A2AProviderConfigManager.get_provider_config",
+            return_value=provider,
+        ),
+    ):
+        stream: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+        first: Final = await anext(aiter(stream))
+        await stream.aclose()
+
+    assert first.choices[0].delta.content == "pong"
+    assert (provider.calls, provider.stream_closed) == (["stream"], [True])
+
+
+@respx.mock
+async def test_route_a2a_agent_with_another_provider_asks_a_streamed_agent_to_wait_for_its_answer(
+    httpx_transport: None,
+) -> None:
+    agent_endpoint: Final = respx.post("https://pydantic-agent.example.com").mock(
+        return_value=httpx.Response(200, json=A2A_TASK_REPLY)
+    )
+    data: Final = {
+        "model": "a2a/pydantic-agent",
+        "stream": True,
+        "messages": [{"role": "user", "content": "ping"}],
+    }
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(_pydantic_agent())):
+        stream: Final = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+        chunks: Final = [chunk async for chunk in stream]
+
+    sent: Final = agent_endpoint.calls.last.request
+    assert json.loads(sent.content)["params"]["configuration"] == {"acceptedOutputModes": ["text"], "blocking": True}
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "pong"
