@@ -111,6 +111,8 @@ enum UnitsDocument {
         #[serde(default)]
         additional_results: u64,
         #[serde(default)]
+        max_results: Option<f64>,
+        #[serde(default)]
         adjust: Option<AdjustFacts>,
     },
 }
@@ -346,11 +348,13 @@ impl UnitsDocument {
             Self::Search {
                 queries,
                 additional_results,
+                max_results,
                 ..
             } => PriceQuery::Search(Box::new(SearchQuery {
                 header,
                 queries,
                 additional_results,
+                max_results,
             })),
             Self::BatchLine { usage, .. } => {
                 PriceQuery::BatchLine(Box::new(BatchLineQuery { header, usage }))

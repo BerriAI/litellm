@@ -4,6 +4,7 @@ from typing import Final
 
 from openai.types.image import Image
 
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import per_image_cost
 from litellm.llms.bedrock.common_utils import BedrockError, get_cached_model_info
 from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageRequest,
@@ -127,8 +128,4 @@ class AmazonStability3Config:
             custom_llm_provider="bedrock",
         )
 
-        output_cost_per_image: Final[float] = model_info.get("output_cost_per_image") or 0.0
-        num_images: int = 0
-        if image_response.data:
-            num_images = len(image_response.data)
-        return output_cost_per_image * num_images
+        return per_image_cost(model, "bedrock", len(image_response.data or ()), model_info)

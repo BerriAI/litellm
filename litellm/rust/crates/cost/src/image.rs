@@ -2,10 +2,10 @@
 //! the per-image calculators of AI/ML, CometAPI, Recraft and RunwayML, and the DashScope one, which adds billable
 //! input images. Which calculator a call takes is the route's choice, as `route_image_generation_cost_calculator`
 //! makes it, so the query names it. The header's `Rows` are the deployment's own prices, read ahead of the catalog
-//! row. The per-image fallback of the Vertex AI calculator is the per-image calculator, and a call served at a Vertex
-//! AI regional endpoint bills the priced row's regional endpoint uplift on its images. Calls main bills from token
-//! usage, and the Bedrock, fal, xAI, Azure AI and Gemini calculators, are not ported, and their routes keep main's
-//! calculators. Discount and margin never apply
+//! row. The per-image fallback of the Bedrock, Gemini and Vertex AI calculators is the per-image calculator, and a
+//! call served at a Vertex AI regional endpoint bills the priced row's regional endpoint uplift on its images. Calls
+//! main bills from token usage, and the fal, xAI and Azure AI calculators, are not ported, and their routes keep
+//! main's calculators. Discount and margin never apply
 
 use crate::price::{Channel, InputUnit, Meter, OutputUnit};
 use crate::priced::{Line, Quantity, Side};

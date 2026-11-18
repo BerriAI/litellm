@@ -8,6 +8,7 @@ from typing import Final
 
 from openai.types.image import Image
 
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import per_image_cost
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasImageGenerationConfig,
     AmazonTitanImageGenerationRequestBody,
@@ -152,8 +153,4 @@ class AmazonTitanImageGenerationConfig:
         optional_params: dict | None = None,
     ) -> float:
         model_info: Final = get_model_info(model=model)
-        output_cost_per_image: Final = model_info.get("output_cost_per_image") or 0.0
-        if not image_response.data:
-            return 0.0
-        num_images: Final = len(image_response.data)
-        return output_cost_per_image * num_images
+        return per_image_cost(model, "bedrock", len(image_response.data or ()), model_info)
