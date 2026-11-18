@@ -128,7 +128,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     messages_have_pdf_file_part,
     messages_without_pdf_file_parts,
 )
-from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header, get_stable_session_id
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
     model_group_from_metadata,
@@ -9758,19 +9758,25 @@ async def ahealth_check(
             "extraction": "aextraction",
             "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
         }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
+        validated_params: Final = TypeAdapter(dict[str, object]).validate_python(model_params)
+        probe_params: Final = (
+            {**validated_params, "litellm_session_id": get_stable_session_id(validated_params) or str(uuid.uuid4())}
+            if custom_llm_provider == "opencode_go"
+            else validated_params
+        )
         if "*" in model:
             with without_global_fallbacks():
                 return await HealthCheckHelpers.ahealth_check_wildcard_models(
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    model_params=model_params,
+                    model_params=probe_params,
                     litellm_logging_obj=litellm_logging_obj,
                 )
 
         mode_handlers: Final = HealthCheckHelpers.get_mode_handlers(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            model_params=model_params,
+            model_params=probe_params,
             prompt=prompt,
             input=input,
         )

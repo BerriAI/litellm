@@ -18,6 +18,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import httpx
 import pytest
@@ -109,6 +110,59 @@ def preserve_litellm_completion_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("opencode_go/health-model", "opencode_go/health-*"))
+@pytest.mark.parametrize(
+    "session_params,expected",
+    (
+        ({}, None),
+        ({"session_id": "caller-session"}, "caller-session"),
+        ({"litellm_session_id": ""}, None),
+        ({"metadata": {"session_id": "metadata-session"}}, "metadata-session"),
+        ({"litellm_session_id": "litellm-session"}, "litellm-session"),
+        ({"extra_headers": {"X-OpenCode-Session": "header-session"}}, "header-session"),
+        (
+            {"session_id": "caller-session", "extra_headers": {"X-OpenCode-Session": "header-session"}},
+            "header-session",
+        ),
+    ),
+)
+async def test_opencode_go_health_check_sends_session_header(
+    model: str, session_params: dict[str, object], expected: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "opencode_go/health-model",
+        {"litellm_provider": "opencode_go", "mode": "chat", "input_cost_per_token": 0, "output_cost_per_token": 0},
+    )
+    with respx.mock:
+        route: Final = respx.post("https://health-test.example/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "health-probe",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "health-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        result: Final = await litellm.ahealth_check(
+            model_params={
+                "model": model,
+                "api_base": "https://health-test.example/v1",
+                "api_key": "test-key",
+                **session_params,
+            },
+            mode="chat",
+        )
+    assert "error" not in result, result
+    header: Final = route.calls.last.request.headers.get("x-opencode-session")
+    assert header
+    assert header == (expected or str(UUID(header)))
 
 
 @pytest.mark.asyncio
