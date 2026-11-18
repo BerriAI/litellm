@@ -471,18 +471,14 @@ else:
     PolicyMatchContext = Any
 
 
-def parse_cache_control(cache_control):
-    cache_dict: Final = {}
-    directives: Final = cache_control.split(", ")
+def _cache_control_directive(directive: str) -> tuple[str, str | bool]:
+    key, separator, value = directive.partition("=")
+    return (key.strip().lower(), value.strip() if separator else True)
 
-    for directive in directives:
-        if "=" in directive:
-            key, value = directive.split("=")
-            cache_dict[key] = value
-        else:
-            cache_dict[directive] = True
 
-    return cache_dict
+def parse_cache_control(cache_control: str) -> Mapping[str, str | bool]:
+    directives: Final = (directive.strip() for directive in cache_control.split(","))
+    return dict(_cache_control_directive(directive) for directive in directives if directive)
 
 
 LITELLM_METADATA_ROUTES: Final = (
@@ -3089,10 +3085,10 @@ async def add_litellm_data_to_request(
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
-    cache_control_header: Final = _headers.get("Cache-Control", None)
-    if cache_control_header:
-        cache_dict: Final = parse_cache_control(cache_control_header)
-        data["ttl"] = cache_dict.get("s-maxage")
+    cache_control_header: Final = _headers.get("cache-control")
+    header_s_maxage: Final = parse_cache_control(cache_control_header).get("s-maxage") if cache_control_header else None
+    if header_s_maxage is not None:
+        data["ttl"] = header_s_maxage
 
     # requester_metadata is snapshotted AFTER the strip below so
     # downstream consumers (e.g. PANW guardrail reading user_ip /

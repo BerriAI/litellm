@@ -8553,6 +8553,44 @@ async def test_key_cache_controls_merge_into_request_cache_controls(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "cache_control_header, expected_ttl",
+    [
+        pytest.param(b"s-maxage=200", "200", id="header-s-maxage-overrides-the-body-ttl"),
+        pytest.param(b"no-store", 300, id="header-without-s-maxage-keeps-the-body-ttl"),
+        pytest.param(b"max-age=0,s-maxage=200", "200", id="directives-joined-without-a-space"),
+        pytest.param(b"Max-Age=0, S-MAXAGE=200", "200", id="directive-names-in-any-case"),
+    ],
+)
+async def test_cache_control_header_sets_the_ttl_only_when_it_carries_s_maxage(
+    cache_control_header: bytes, expected_ttl: str | int
+):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"cache-control", cache_control_header)],
+        }
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}], "ttl": 300},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+
+    assert updated["ttl"] == expected_ttl
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "allowed_cache_controls, request_cache, expected_cache",
     [
         pytest.param(["no-store"], {"use-cache": True}, {"ttl": 600}, id="opt-in-not-allowed-is-replaced"),
