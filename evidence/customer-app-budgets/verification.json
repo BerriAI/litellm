@@ -1,6 +1,6 @@
 {
   "baseline_commit": "5041501b707b732d0a134d8d1acf6ecb7a80a4ce",
-  "implementation_commit": "6915477745473d1fe7d4fe879b11e509edbe0a19",
+  "implementation_commit": "9706a91a0cad9ca5097ca29a2eb1bee935ccf77b",
   "context": "Isolated test customer and members; actual dashboard interactions and live Anthropic responses through a two-worker proxy.",
   "requests": [
     {
@@ -218,66 +218,123 @@
         "cache_read_input_tokens": 0
       },
       "response_cost": "3.85e-06"
+    },
+    {
+      "phase": "initial",
+      "app": "chat",
+      "member": "demo-alex",
+      "route": "/v1/chat/completions",
+      "status": 200,
+      "provider": "Anthropic",
+      "time": "2026-11-18T07:47:57.690592+00:00",
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 15,
+        "total_tokens": 19,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "text_tokens": 4
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 15,
+          "cache_write_tokens": 0,
+          "cache_creation_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "response_cost": "3.85e-06",
+      "capture_note": "Final successful workflow recheck at 9706a91a0c"
+    },
+    {
+      "phase": "initial",
+      "app": "search",
+      "member": "demo-alex",
+      "route": "/v1/chat/completions",
+      "status": 200,
+      "provider": "Anthropic",
+      "time": "2026-11-18T07:47:58.952285+00:00",
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 15,
+        "total_tokens": 19,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "text_tokens": 4
+        },
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "text_tokens": 15,
+          "cache_write_tokens": 0,
+          "cache_creation_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+      },
+      "response_cost": "3.85e-06",
+      "capture_note": "Final successful workflow recheck at 9706a91a0c"
     }
   ],
   "final_accounting": {
-    "database_global_spend": 2.31e-05,
+    "database_global_spend": 3.0799999999999996e-05,
     "global_equals_app_sum": true,
     "member_total_equals_global": true,
     "daily_split_equals_global": true,
     "app_member_total_equals_global": true,
     "app_totals_equal_global": true,
     "database_app_spend": {
-      "search": 7.7e-06,
-      "chat": 1.54e-05
+      "chat": 1.925e-05,
+      "search": 1.1550000000000001e-05
     }
   },
   "usage_api_checks": [
     {
       "endpoint": "paginated",
       "app": "all",
-      "spend": 2.31e-05,
-      "requests": 14,
+      "spend": 3.08e-05,
+      "requests": 16,
       "matches_database": true
     },
     {
       "endpoint": "paginated",
       "app": "chat",
-      "spend": 1.54e-05,
-      "requests": 5,
+      "spend": 1.925e-05,
+      "requests": 6,
       "matches_database": true
     },
     {
       "endpoint": "paginated",
       "app": "search",
-      "spend": 7.7e-06,
-      "requests": 4,
+      "spend": 1.1550000000000001e-05,
+      "requests": 5,
       "matches_database": true
     },
     {
       "endpoint": "aggregated",
       "app": "all",
-      "spend": 2.31e-05,
-      "requests": 14,
+      "spend": 3.08e-05,
+      "requests": 16,
       "matches_database": true
     },
     {
       "endpoint": "aggregated",
       "app": "chat",
-      "spend": 1.54e-05,
-      "requests": 5,
+      "spend": 1.925e-05,
+      "requests": 6,
       "matches_database": true
     },
     {
       "endpoint": "aggregated",
       "app": "search",
-      "spend": 7.7e-06,
-      "requests": 4,
+      "spend": 1.1550000000000001e-05,
+      "requests": 5,
       "matches_database": true
     }
   ],
   "coverage_limits": [
     "Project creation and key regeneration live cases require an Enterprise entitlement unavailable in this test environment.",
     "Global budget and mismatched app-header rejections may retain global-only failure attribution."
-  ]
+  ],
+  "ui_capture_revision": "6915477745473d1fe7d4fe879b11e509edbe0a19"
 }
