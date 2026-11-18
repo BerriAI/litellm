@@ -1,0 +1,226 @@
+{
+  "proof_type": "Controlled replay through actual managed-object attribution, billing metadata parsers, spend payload, counter and accounting projection functions; synthetic stored object, IDs and a $1 finalized provider charge. No provider request, live database, or retry/claim idempotence assertion.",
+  "before_revision": "bdb6fb335e52c8baf295a5e9e6b50321c9b491ae",
+  "after_revision": "8675b70a4ed191e6238a68e2246008819c347aa3",
+  "captured_before_at": "2026-11-18T16:29:36.285555+00:00",
+  "captured_after_at": "2026-11-18T16:32:18.108222+00:00",
+  "before_attribution_source_sha256": "7ca3a7d9b82b285ab557d971320ef9e3fea38aa12ddfdc2838a79e07cc2781e3",
+  "after_attribution_source_sha256": "7ca3a7d9b82b285ab557d971320ef9e3fea38aa12ddfdc2838a79e07cc2781e3",
+  "input": {
+    "request_start": "2026-11-30T23:59:58+00:00",
+    "poll_time": "2026-12-01T00:10:00+00:00",
+    "final_charge_usd": 1.0,
+    "creating_key_live_row": "unavailable; creator-owned snapshot is independent of current key settings"
+  },
+  "before": {
+    "batch": {
+      "stored_context_present": false,
+      "billing_start_time": "2026-12-01T00:10:00+00:00",
+      "identity_restored": false,
+      "admitted_scope_count": 0,
+      "lifetime_projection": [],
+      "period_projection": [],
+      "daily_projection": [],
+      "unique_lifetime_destinations": 0,
+      "unique_period_destinations": 0
+    },
+    "background_response": {
+      "stored_context_present": false,
+      "billing_start_time": "2026-12-01T00:10:00+00:00",
+      "identity_restored": false,
+      "admitted_scope_count": 0,
+      "lifetime_projection": [],
+      "period_projection": [],
+      "daily_projection": [],
+      "unique_lifetime_destinations": 0,
+      "unique_period_destinations": 0
+    }
+  },
+  "after": {
+    "batch": {
+      "stored_context_present": true,
+      "billing_start_time": "2026-11-30T23:59:58+00:00",
+      "identity_restored": true,
+      "admitted_scope_count": 5,
+      "lifetime_projection": [
+        {
+          "table": "LiteLLM_CustomerOrganizationTable",
+          "identity": {
+            "customer_org_id": "proof-customer"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_CustomerMemberTable",
+          "identity": {
+            "customer_member_id": "proof-member"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_AppTable",
+          "identity": {
+            "app_id": "proof-app"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_AppCustomerOrgTable",
+          "identity": {
+            "app_id": "proof-app",
+            "customer_org_id": "proof-customer"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_AppCustomerMemberTable",
+          "identity": {
+            "app_id": "proof-app",
+            "customer_member_id": "proof-member"
+          },
+          "spend_usd": 1.0
+        }
+      ],
+      "period_projection": [
+        {
+          "scope": "customer_org",
+          "identity": "proof-customer",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "customer_member",
+          "identity": "proof-member",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "app",
+          "identity": "proof-app",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "app_customer_org",
+          "identity": "proof-app:proof-customer",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "app_customer_member",
+          "identity": "proof-app:proof-member",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        }
+      ],
+      "daily_projection": [
+        {
+          "table": "LiteLLM_DailyCustomerMemberSpend",
+          "date": "2026-11-30",
+          "app_id": "proof-app",
+          "spend_usd": 1.0
+        }
+      ],
+      "unique_lifetime_destinations": 5,
+      "unique_period_destinations": 5
+    },
+    "background_response": {
+      "stored_context_present": true,
+      "billing_start_time": "2026-11-30T23:59:58+00:00",
+      "identity_restored": true,
+      "admitted_scope_count": 5,
+      "lifetime_projection": [
+        {
+          "table": "LiteLLM_CustomerOrganizationTable",
+          "identity": {
+            "customer_org_id": "proof-customer"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_CustomerMemberTable",
+          "identity": {
+            "customer_member_id": "proof-member"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_AppTable",
+          "identity": {
+            "app_id": "proof-app"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_AppCustomerOrgTable",
+          "identity": {
+            "app_id": "proof-app",
+            "customer_org_id": "proof-customer"
+          },
+          "spend_usd": 1.0
+        },
+        {
+          "table": "LiteLLM_AppCustomerMemberTable",
+          "identity": {
+            "app_id": "proof-app",
+            "customer_member_id": "proof-member"
+          },
+          "spend_usd": 1.0
+        }
+      ],
+      "period_projection": [
+        {
+          "scope": "customer_org",
+          "identity": "proof-customer",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "customer_member",
+          "identity": "proof-member",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "app",
+          "identity": "proof-app",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "app_customer_org",
+          "identity": "proof-app:proof-customer",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        },
+        {
+          "scope": "app_customer_member",
+          "identity": "proof-app:proof-member",
+          "duration": "1mo",
+          "window_start": "2026-11-01T00:00:00+00:00",
+          "spend_usd": 1.0
+        }
+      ],
+      "daily_projection": [
+        {
+          "table": "LiteLLM_DailyCustomerMemberSpend",
+          "date": "2026-11-30",
+          "app_id": "proof-app",
+          "spend_usd": 1.0
+        }
+      ],
+      "unique_lifetime_destinations": 5,
+      "unique_period_destinations": 5
+    }
+  },
+  "coverage_note": "One captured finalized charge reaches each projected destination once. This controlled replay does not test provider execution, database persistence, or repeated-poll claim idempotence."
+}
