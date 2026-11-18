@@ -14,9 +14,11 @@ the normal unit-test run and exercised only where an image has been built (the
 image-scan workflow). Requires a working docker CLI.
 """
 
+import json
 import shlex
 import shutil
 import subprocess
+import time
 import uuid
 
 import os
@@ -26,6 +28,8 @@ IMAGE = os.getenv("LITELLM_IMAGE")
 POSTGRES_IMAGE = os.getenv("LITELLM_TEST_POSTGRES_IMAGE", "postgres:16-alpine")
 MIN_TABLES = int(os.getenv("LITELLM_TEST_MIN_TABLES", "20"))
 NON_ROOT_UID = "12345:0"  # arbitrary uid in GID 0, as OpenShift restricted-v2 assigns
+
+PROXY_STARTUP_TIMEOUT_SECONDS = int(os.getenv("LITELLM_PROXY_STARTUP_TIMEOUT", "300"))
 
 MIGRATION_ARGS = tuple(shlex.split(os.getenv("LITELLM_MIGRATION_ARGS", "migrations")))
 
@@ -126,6 +130,96 @@ def test_migration_offline_as_non_root_uid(offline_postgres):
         "writable HOME/cache, so OpenShift and air-gapped deployments start on an "
         f"empty database.\nstdout:\n{migrate.stdout}\nstderr:\n{migrate.stderr}"
     )
+
+
+PROCESS_TABLE_PROBE = """
+import json
+from pathlib import Path
+
+
+def row(stat):
+    pid, rest = stat.split(" (", 1)
+    comm, fields = rest.rsplit(") ", 1)
+    state, ppid = fields.split()[:2]
+    return {"pid": int(pid), "comm": comm, "state": state, "ppid": int(ppid)}
+
+
+def rows():
+    for path in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            yield row(path.read_text())
+        except OSError:
+            continue
+
+
+print(json.dumps(list(rows())))
+"""
+
+LIVELINESS_PROBE = """
+import urllib.request
+
+print(urllib.request.urlopen("http://127.0.0.1:4000/health/liveliness", timeout=5).status)
+"""
+
+
+def _process_table(container: str) -> list[dict]:
+    probe = _docker("exec", container, "python", "-c", PROCESS_TABLE_PROBE)
+    return json.loads(probe.stdout)
+
+
+def _is_live(container: str) -> bool:
+    probe = _docker("exec", container, "python", "-c", LIVELINESS_PROBE, check=False)
+    return probe.returncode == 0 and probe.stdout.strip() == "200"
+
+
+def _wait_for(condition, container: str, what: str) -> None:
+    deadline = time.time() + PROXY_STARTUP_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if condition():
+            return
+        time.sleep(2)
+    logs = _docker("logs", container, check=False)
+    pytest.fail(
+        f"{what} within {PROXY_STARTUP_TIMEOUT_SECONDS}s\n"
+        f"stdout:\n{logs.stdout}\nstderr:\n{logs.stderr}"
+    )
+
+
+def test_proxy_startup_leaves_no_zombie_processes(offline_postgres):
+    """A proxy that migrated its database at startup has no defunct children left.
+
+    The proxy is PID 1 in the container and never reaps processes it did not
+    start, so any helper the Prisma CLI detaches during the startup migrations
+    is reparented to it and stays in the process table as a zombie once it
+    exits. Host monitoring then reports the container as leaking zombies.
+    """
+    network, pg = offline_postgres
+    assert IMAGE is not None
+    proxy = f"{pg}-proxy"
+
+    try:
+        _docker(
+            "run", "-d", "--name", proxy, "--network", network,
+            "-e", f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
+            "-e", "LITELLM_MASTER_KEY=sk-offline-migration-test",
+            "-e", "LITELLM_LOCAL_MODEL_COST_MAP=True",
+            IMAGE, "--port", "4000",
+        )
+        _wait_for(lambda: _is_live(proxy), proxy, "the proxy did not answer /health/liveliness")
+        _wait_for(
+            lambda: not [p for p in _process_table(proxy) if p["comm"].startswith("node") and p["state"] != "Z"],
+            proxy,
+            "node processes started by the startup migrations were still running",
+        )
+
+        zombies = [p for p in _process_table(proxy) if p["state"] == "Z"]
+        assert not zombies, (
+            f"the proxy left defunct processes behind after startup: {zombies}. "
+            "Something the startup migrations launched outlived its parent and was "
+            "reparented to the proxy, which never collects it."
+        )
+    finally:
+        _docker("rm", "-f", proxy, check=False)
 
 
 QUERY_ENGINE_PROBE = """
