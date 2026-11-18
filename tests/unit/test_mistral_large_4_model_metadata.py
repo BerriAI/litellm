@@ -85,7 +85,7 @@ def test_completion_cost(model):
     )
 
 
-def test_large_latest_alias_matches_large_4():
+def test_latest_alias_matches_large_4():
     info: Final = litellm.get_model_info("mistral/mistral-large-latest")
     canonical: Final = litellm.get_model_info(MODELS[0])
     assert info == {**canonical, "key": "mistral/mistral-large-latest"}
