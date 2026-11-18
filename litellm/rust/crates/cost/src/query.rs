@@ -21,7 +21,10 @@ pub use crate::mcp::McpQuery;
 pub use crate::ocr::OcrQuery;
 pub use crate::rerank::RerankQuery;
 pub use crate::search::SearchQuery;
-pub use crate::session::{ClipUsage, Metered, SessionQuery, TranscriptionClip, Translation};
+pub use crate::session::{
+    ClipUsage, Metered, SessionQuery, SessionTokens, SessionTurn, TokenCandidate,
+    TranscriptionClip, Translation,
+};
 pub use crate::speech::SpeechQuery;
 pub use crate::transcription::TranscriptionQuery;
 pub use crate::vector_store::VectorStoreSearchQuery;
@@ -133,13 +136,8 @@ pub enum Provider {
 pub enum PriceSource {
     /// The first candidate the catalog has a row for
     Catalog,
-    /// One row the caller resolved, priced under the first candidate's provider. `breakdown_by_name` is set for
-    /// `requested_model_info_override`, whose stored breakdown main reads off the row the candidate names instead
-    Row {
-        row: RowRef,
-        #[cfg_attr(feature = "serde", serde(default))]
-        breakdown_by_name: bool,
-    },
+    /// One row the caller resolved, priced under the first candidate's provider
+    Row { row: RowRef },
     /// `custom_cost_per_token`. A missing cache rate is the input rate
     FlatPerToken(FlatRates),
     /// `custom_cost_per_second`
@@ -245,6 +243,55 @@ pub struct TokensQuery {
     /// A `/v1/decisions` or `/v1/systemone` call, which reads the row's `_decisions` prices
     #[cfg_attr(feature = "serde", serde(default))]
     pub decisions: bool,
+    /// The row the stored token-type breakdown and its billed rates are read off
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub breakdown: BreakdownRow,
+    /// Built-in tool fees the caller priced, for the tools this crate does not price yet. They join the receipt's
+    /// tools before discount and margin
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub tool_fees: f64,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub router_fee: Option<RouterFee>,
+}
+
+/// Which row main's `get_token_type_cost_breakdown` read, which is not always the row that priced the total
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize),
+    serde(tag = "from", rename_all = "snake_case")
+)]
+pub enum BreakdownRow {
+    /// The row that priced the call
+    #[default]
+    Priced,
+    /// The catalog row the candidate names, for `requested_model_info_override`
+    Named,
+    /// A row the caller looked up apart from the one that priced the total
+    Row { row: RowRef },
+    /// Main's lookup found no row, so the breakdown is zero and no rates are billed
+    Absent,
+}
+
+/// The Azure AI Model Router fee: the router row's flat input token rate on every prompt token, `Prompt` when main adds
+/// it to the prompt cost (`azure_ai/cost_calculator.py` `cost_per_token`) and `Additional` when it is the
+/// `Azure Model Router Flat Cost` beside it (`completion_cost`'s `_get_additional_costs`)
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+pub struct RouterFee {
+    pub row: RowRef,
+    pub billed: FeeBilling,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize),
+    serde(rename_all = "snake_case")
+)]
+pub enum FeeBilling {
+    Prompt,
+    Additional,
 }
 
 /// Which of main's token pricing paths prices the row
@@ -260,6 +307,8 @@ pub enum TokenRules {
     Branch,
     /// `generic_cost_per_token`: the row with every basis fact the caller gave
     Generic,
+    /// `generic_cost_per_token` handed the service tier alone, as the Azure AI and registered Bedrock branches call it
+    GenericTier,
     /// `requested_model_info_override`: a row billed by the second, then Anthropic's uplifts for Anthropic, else
     /// `Generic`
     Override,
@@ -283,7 +332,9 @@ pub struct CharacterCounts {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default))]
 pub struct RawCounts {
+    pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub total_tokens: u64,
     /// `prompt_tokens_details.cached_tokens`
     pub cached_tokens: u64,
     pub cache_creation_tokens: u64,
@@ -392,6 +443,9 @@ impl TokensQuery {
             embedding: false,
             raw: RawCounts::default(),
             decisions: false,
+            breakdown: BreakdownRow::Priced,
+            tool_fees: 0.0,
+            router_fee: None,
         }
     }
 }

@@ -167,7 +167,7 @@ class BatchUsage(TypedDict):
     video_tokens: ReadOnly[int]
 
 
-TokenRules = Literal["branch", "generic", "override"]
+TokenRules = Literal["branch", "generic", "generic_tier", "override"]
 
 
 class Elapsed(TypedDict):
@@ -187,7 +187,9 @@ class Characters(TypedDict):
 class RawCounts(TypedDict):
     """Counts as the provider reported them, for the provider branches that bill those rather than the billed split."""
 
+    prompt_tokens: ReadOnly[int]
     completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
     cached_tokens: ReadOnly[int]
     cache_creation_tokens: ReadOnly[int]
     cache_writes: ReadOnly[WritesByTtl | None]
@@ -216,6 +218,15 @@ class CustomPricing(TypedDict):
     per_second: ReadOnly[float | None]
 
 
+BreakdownFrom = Literal["priced", "named", "row", "absent"]
+
+FeeBilling = Literal["prompt", "additional"]
+
+
+class RouterFeeUse(TypedDict):
+    billed: ReadOnly[FeeBilling]
+
+
 class _PriceDocument(TypedDict):
     named: ReadOnly[CallFacts | ModelFacts]
     usage: ReadOnly[PricedUsage]
@@ -233,6 +244,9 @@ class _PriceDocument(TypedDict):
     reported: ReadOnly[ReportedCost | None]
     custom: ReadOnly[CustomPricing | None]
     decisions: ReadOnly[bool]
+    breakdown: ReadOnly[BreakdownFrom]
+    tool_fees: ReadOnly[float]
+    router_fee: ReadOnly[RouterFeeUse | None]
 
 
 class BatchLineDocument(TypedDict):
@@ -336,15 +350,40 @@ class MeteredUse(TypedDict):
     rows: ReadOnly[Sequence[int]]
 
 
+class SessionCandidate(TypedDict):
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+
+
+class TokenCandidateUse(TypedDict):
+    candidate: ReadOnly[SessionCandidate]
+    row: ReadOnly[int]
+    declares: ReadOnly[bool]
+
+
+class SessionTokensUse(TypedDict):
+    usage: ReadOnly[PricedUsage]
+    candidates: ReadOnly[Sequence[TokenCandidateUse]]
+
+
+class SessionTurnUse(TypedDict):
+    candidate: ReadOnly[SessionCandidate]
+    usage: ReadOnly[PricedUsage]
+    row: ReadOnly[int | None]
+
+
 class SessionDocument(TypedDict):
-    """What a realtime or Live session bills beside its tokens. Each part names its rows by index among the rows
-    passed beside the document, in the order main tries the session's models."""
+    """What a realtime or Live session bills: its tokens, its Live turns and the parts beside them. Each names its rows
+    by index among the rows passed beside the document, in the order main tries the session's models."""
 
     transcription: ReadOnly[Sequence[ClipUse]]
     translation: ReadOnly[TranslationUse | None]
     live_voice: ReadOnly[MeteredUse | None]
     audio_duration: ReadOnly[MeteredUse | None]
     text_messages: ReadOnly[MeteredUse | None]
+    tokens: ReadOnly[NotRequired[SessionTokensUse | None]]
+    turns: ReadOnly[NotRequired[Sequence[SessionTurnUse]]]
+    data_residency: ReadOnly[NotRequired[str | None]]
 
 
 FeeDocument: TypeAlias = A2aDocument | McpDocument | GuardrailDocument | PromptShieldDocument
@@ -362,6 +401,18 @@ class BranchFacts:
     reported: ReportedCost | None = None
     custom: CustomPricing | None = None
     decisions: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiptFacts:
+    """What ``completion_cost`` prices beside a token call's own tokens: the row its stored breakdown reads, the built-in
+    tool fees Python still prices and the Azure AI Model Router fee off ``fee_row``."""
+
+    breakdown: BreakdownFrom = "priced"
+    breakdown_row: Mapping[str, object] | None = None
+    tool_fees: float = 0.0
+    router_fee: FeeBilling | None = None
+    fee_row: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,7 +467,9 @@ def raw_counts(usage: Usage) -> RawCounts:
     details: Final = usage.prompt_tokens_details
     stated_reasoning: Final = _count(getattr(usage, "reasoning_tokens", 0))
     return RawCounts(
+        prompt_tokens=_count(usage.prompt_tokens),
         completion_tokens=_count(usage.completion_tokens),
+        total_tokens=_count(usage.total_tokens),
         cached_tokens=_count(prompt["cache_hit_tokens"]),
         cache_creation_tokens=_count(prompt["cache_creation_tokens"]),
         cache_writes=_writes_by_ttl(prompt["cache_creation_token_details"]),
@@ -455,8 +508,10 @@ def price(
     row: Mapping[str, object] | None = None,
     current_time: datetime | None = None,
     branch: BranchFacts | None = None,
+    receipt: ReceiptFacts | None = None,
 ) -> NativeReceipt | None:
     facts: Final = branch or BranchFacts()
+    beside: Final = receipt or ReceiptFacts()
     document: Final = _PriceDocument(
         named=named,
         usage=usage,
@@ -474,8 +529,59 @@ def price(
         reported=facts.reported,
         custom=facts.custom,
         decisions=facts.decisions,
+        breakdown=beside.breakdown,
+        tool_fees=beside.tool_fees,
+        router_fee=None if beside.router_fee is None else RouterFeeUse(billed=beside.router_fee),
     )
-    return model_cost_inputs.price(document, row)
+    return model_cost_inputs.price(document, row, beside.breakdown_row, beside.fee_row)
+
+
+def branch_receipt(
+    model: str,
+    provider: str,
+    usage: Usage,
+    row: Mapping[str, object] | None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    branch: BranchFacts | None = None,
+    row_provider: str | None = None,
+    current_time: datetime | None = None,
+    receipt: ReceiptFacts | None = None,
+    adjust: AdjustFacts | None = None,
+) -> NativeReceipt:
+    """The receipt of ``usage`` on ``row``, the row ``provider``'s branch of ``cost_per_token`` looked up for ``model``,
+    priced by that branch's rules in Rust. Raises where main's branch raised."""
+    facts: Final = branch or BranchFacts()
+    named: Final = (
+        ModelFacts(by="model", model=model, provider=provider, region=None)
+        if row_provider is None
+        else ModelFacts(by="model", model=model, provider=provider, region=None, row_provider=row_provider)
+    )
+    priced: Final = price(
+        named,
+        priced_usage(usage, web_search=None),
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        adjust=adjust,
+        row=row,
+        current_time=current_time,
+        branch=BranchFacts(
+            rules=facts.rules,
+            elapsed=facts.elapsed,
+            characters=facts.characters,
+            embedding=facts.embedding,
+            raw=raw_counts(usage),
+            reported=facts.reported,
+            custom=facts.custom,
+            decisions=facts.decisions,
+        ),
+        receipt=receipt,
+    )
+    if priced is None:
+        raise ValueError(f"No price for model={model}, custom_llm_provider={provider}")
+    return priced
 
 
 def branch_cost(
@@ -492,33 +598,18 @@ def branch_cost(
 ) -> tuple[float, float]:
     """``cost_per_token``'s prompt and completion cost of ``usage`` on ``row``, the row ``provider``'s branch looked up
     for ``model``, priced by that branch's rules in Rust."""
-    facts: Final = branch or BranchFacts()
-    named: Final = (
-        ModelFacts(by="model", model=model, provider=provider, region=None)
-        if row_provider is None
-        else ModelFacts(by="model", model=model, provider=provider, region=None, row_provider=row_provider)
-    )
-    receipt: Final = price(
-        named,
-        priced_usage(usage, web_search=None),
+    receipt: Final = branch_receipt(
+        model,
+        provider,
+        usage,
+        row,
         service_tier=service_tier,
         data_residency=data_residency,
         vertex_location=vertex_location,
-        row=row,
+        branch=branch,
+        row_provider=row_provider,
         current_time=current_time,
-        branch=BranchFacts(
-            rules=facts.rules,
-            elapsed=facts.elapsed,
-            characters=facts.characters,
-            embedding=facts.embedding,
-            raw=raw_counts(usage),
-            reported=facts.reported,
-            custom=facts.custom,
-            decisions=facts.decisions,
-        ),
     )
-    if receipt is None:
-        raise ValueError(f"No price for model={model}, custom_llm_provider={provider}")
     return receipt.prompt_cost, receipt.completion_cost
 
 
@@ -536,18 +627,23 @@ def decisions_request_cost(provider: str, row: Mapping[str, object]) -> float:
 
 
 def custom_pricing_usage(
-    prompt_tokens: int, completion_tokens: int, cached_tokens: int, cache_creation_tokens: int
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int,
+    cache_creation_tokens: int,
+    reasoning_tokens: int = 0,
 ) -> PricedUsage:
     """The counts ``custom_cost_per_token`` bills: the prompt with every cache read and write in it, and the
-    completion."""
+    completion, its reasoning tokens counted apart for the stored breakdown."""
     no_tokens: Final = ModalityCounts(text=0, audio=0, image=0, video=0)
+    reasoning: Final = min(reasoning_tokens, completion_tokens)
     return PricedUsage(
         prompt_tokens=prompt_tokens,
         input=no_tokens,
         cache_read=CacheReadCounts(text=cached_tokens, audio=0, image=0, explicit=False),
         cache_write=CacheWriteCounts(default=cache_creation_tokens, one_hour=0, twelve_hours=0),
-        output=ModalityCounts(text=completion_tokens, audio=0, image=0, video=0),
-        reasoning=0,
+        output=ModalityCounts(text=completion_tokens - reasoning, audio=0, image=0, video=0),
+        reasoning=reasoning,
         input_characters=0,
         input_images=0,
         input_audio_seconds=0.0,
@@ -559,25 +655,35 @@ def custom_pricing_usage(
     )
 
 
-def custom_cost(
+def custom_receipt(
     model: str,
     provider: str,
     usage: PricedUsage,
     custom: CustomPricing,
     response_time_ms: float | None,
-) -> tuple[float, float]:
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    receipt: ReceiptFacts | None = None,
+    adjust: AdjustFacts | None = None,
+) -> NativeReceipt:
     """``custom_cost_per_token`` or ``custom_cost_per_second`` applied to ``usage``."""
-    receipt: Final = price(
+    priced: Final = price(
         ModelFacts(by="model", model=model, provider=provider, region=None),
         usage,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        adjust=adjust,
         branch=BranchFacts(
             elapsed=Elapsed(response_ms=response_time_ms or 0.0, audio_seconds=0.0),
             custom=custom,
         ),
+        receipt=receipt,
     )
-    if receipt is None:
+    if priced is None:
         raise ValueError(f"Custom pricing left model={model} unpriced")
-    return receipt.prompt_cost, receipt.completion_cost
+    return priced
 
 
 def price_units(
@@ -624,8 +730,9 @@ def price_fee(document: FeeDocument) -> NativeReceipt | NativeUnpriced:
 
 
 def price_session(document: SessionDocument, rows: Sequence[Mapping[str, object]]) -> NativeReceipt | NativeUnpriced:
-    """A session's parts beside its tokens, one receipt part each: ``transcription_cost``, ``translation_cost``,
-    ``live_voice_cost``, ``audio_duration_cost`` and ``text_message_cost``."""
+    """A session's tokens and Live turns on the receipt's prompt and completion, and the parts beside them, one
+    receipt part each: ``transcription_cost``, ``translation_cost``, ``live_voice_cost``, ``audio_duration_cost`` and
+    ``text_message_cost``."""
     return model_cost_inputs.price_session(document, rows)
 
 
