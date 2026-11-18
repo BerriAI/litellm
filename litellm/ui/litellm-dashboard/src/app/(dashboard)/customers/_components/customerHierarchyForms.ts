@@ -24,15 +24,18 @@ export type CustomerHierarchyPatch =
   | { kind: "team"; body: components["schemas"]["TeamPatch"] }
   | { kind: "member"; body: components["schemas"]["MemberPatch"] };
 
-export interface CustomerHierarchyFields {
-  alias: string;
-  budgetEnabled: boolean;
+export interface BudgetFields {
   maxBudget: string;
   softBudget: string;
   budgetDuration: string;
   tpm: string;
   rpm: string;
   allowedModels: readonly string[];
+}
+
+export interface CustomerHierarchyFields extends BudgetFields {
+  alias: string;
+  budgetEnabled: boolean;
   templateId: string;
   overrideExpiry: string;
 }
@@ -72,7 +75,7 @@ const localDateTime = (value: string | null | undefined): string => {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 };
 
-export const budgetFields = (budget: Budget | null | undefined) => ({
+export const budgetFields = (budget: Budget | null | undefined): BudgetFields => ({
   maxBudget: asText(budget?.max_budget),
   softBudget: asText(budget?.soft_budget),
   budgetDuration: budget?.budget_duration ?? "",
@@ -120,7 +123,7 @@ const numericLimit = (raw: string, integer = false): number | null | undefined =
   return number;
 };
 
-export const parseBudget = (fields: CustomerHierarchyFields): Budget | null => {
+export const parseBudget = (fields: BudgetFields): Budget | null => {
   const max = numericLimit(fields.maxBudget);
   const soft = numericLimit(fields.softBudget);
   const tpm = numericLimit(fields.tpm, true);

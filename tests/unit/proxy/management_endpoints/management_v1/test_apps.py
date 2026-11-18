@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
@@ -15,6 +16,7 @@ from tests.unit.proxy.management_helpers.test_apps import (
     profile,
     seed_resources,
 )
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW
 
 
@@ -33,7 +35,7 @@ def client(
 
 
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
-    http, _ = client()
+    http, store = client()
     assert http.get("/management/v1/apps/definition").json() == {"resource_type": None, "auto_create_customers_without_app": True}
     assert http.get("/management/v1/apps/resources").json() == []
     preview: Final = http.get("/management/v1/apps/resources", params={"resource_type": "team"})
@@ -54,7 +56,7 @@ def test_choose_definition_discover_and_configure_existing_resource() -> None:
     again: Final = http.post("/management/v1/apps", json={"resource_id": "chat"})
     assert again.status_code == 201 and again.json()["app_id"] == app_id
     assert http.put("/management/v1/apps/definition", json={"resource_type": "project"}).status_code == 409
-    assert http.delete(f"/management/v1/apps/{app_id}").status_code == 204
+    asyncio.run(store.apps.delete(where={"app_id": app_id}))
     assert http.get(f"/management/v1/apps/{app_id}").status_code == 404
     assert http.put("/management/v1/apps/definition", json={"resource_type": None}).status_code == 409
 
@@ -115,3 +117,95 @@ def test_virtual_key_discovery_never_returns_credentials_or_hashes() -> None:
     assert set(resource) == {"resource_type", "resource_id", "alias", "app_id"}
     assert resource["resource_type"] == "virtual_key" and resource["resource_id"] != "token-a"
     assert "token-a" not in response.text
+
+
+
+def test_list_and_get_apps_return_saved_budgets_and_period_usage() -> None:
+    http, _ = client()
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    created: Final = http.post(
+        "/management/v1/apps",
+        json={"resource_id": "chat", "budget": {"max_budget": 20, "budget_duration": "1mo"}},
+    )
+    assert created.status_code == 201, created.text
+    saved: Final = created.json()
+    assert saved["budget"] == Budget(max_budget=20, budget_duration="1mo", allowed_models=()).model_dump(mode="json")
+    assert saved["budget_usage"][0]["spend"] == 0
+    assert saved["budget_usage"][0]["max_budget"] == 20
+    assert http.get(f"/management/v1/apps/{saved['app_id']}").json() == saved
+    listed: Final = http.get("/management/v1/apps", params={"offset": 0, "limit": 1})
+    assert listed.status_code == 200 and listed.json() == [saved]
+    assert http.get("/management/v1/apps", params={"offset": 1, "limit": 1}).json() == []
+
+
+def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
+    http, store = client()
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-a"}))
+    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-b"}))
+    asyncio.run(store.customers.members.create({"customer_member_id": "member", "parent_org_id": "org-a"}))
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    chat: Final = http.post("/management/v1/apps", json={"resource_id": "chat"}).json()["app_id"]
+    search: Final = http.post(
+        "/management/v1/apps",
+        json={"resource_id": "search", "default_customer_member_budget": {"max_budget": 20}},
+    ).json()["app_id"]
+    chat_org: Final = f"/management/v1/apps/{chat}/customer_organizations/org-a"
+    search_org: Final = f"/management/v1/apps/{search}/customer_organizations/org-a"
+    missing: Final = http.get(chat_org)
+    assert missing.status_code == 404 and missing.json() == {"detail": "App customer organization not found."}
+    chat_saved: Final = http.put(
+        chat_org, json={"budget_override": {"max_budget": 3}, "customer_member_budget": {"max_budget": 2}}
+    )
+    search_saved: Final = http.put(search_org, json={"budget_override": {"max_budget": 8}})
+    assert chat_saved.status_code == 200, chat_saved.text
+    assert search_saved.status_code == 200, search_saved.text
+    assert chat_saved.json()["effective_budget"] == Budget(max_budget=3, allowed_models=()).model_dump(mode="json")
+    assert search_saved.json()["effective_budget"] == Budget(max_budget=8, allowed_models=()).model_dump(mode="json")
+    assert http.get(chat_org).json() == chat_saved.json()
+    assert http.get(search_org).json() == search_saved.json()
+    other_org: Final = http.put(
+        f"/management/v1/apps/{chat}/customer_organizations/org-b", json={"budget_override": {"max_budget": 9}}
+    )
+    assert other_org.status_code == 200, other_org.text
+    assert http.get(f"/management/v1/apps/{chat}/customer_organizations/org-b").json() == other_org.json()
+    assert http.get(chat_org).json() == chat_saved.json()
+    chat_member: Final = f"/management/v1/apps/{chat}/customer_members/member"
+    search_member: Final = f"/management/v1/apps/{search}/customer_members/member"
+    inherited: Final = http.get(chat_member)
+    assert inherited.status_code == 200
+    assert inherited.json()["effective_budget"] == Budget(max_budget=2, allowed_models=()).model_dump(mode="json")
+    assert inherited.json()["budget_source"] == "customer_default"
+    override: Final = http.put(search_member, json={"budget_override": {"max_budget": 1}})
+    assert override.status_code == 200, override.text
+    assert override.json()["effective_budget"] == Budget(max_budget=1, allowed_models=()).model_dump(mode="json")
+    assert override.json()["budget_source"] == "member_override"
+    assert http.get(search_member).json() == override.json()
+    assert http.get(chat_member).json() == inherited.json()
+    restored: Final = http.put(search_member, json={})
+    assert restored.status_code == 200
+    assert restored.json()["effective_budget"] == Budget(max_budget=20, allowed_models=()).model_dump(mode="json")
+    assert restored.json()["budget_source"] == "app_default"
+    assert http.get(f"/management/v1/apps/{chat}/customer_members/missing").status_code == 404
+
+
+@pytest.mark.parametrize("available", (True, False))
+def test_app_definition_uses_database_or_reports_unavailability(
+    monkeypatch: pytest.MonkeyPatch, available: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = AppDatabase()
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database) if available else None)
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    with TestClient(app) as http:
+        response: Final = http.get("/management/v1/apps/definition")
+    assert response.status_code == (200 if available else 503)
+    assert response.json() == (
+        {"resource_type": None, "auto_create_customers_without_app": True}
+        if available
+        else {"detail": "Database unavailable."}
+    )
