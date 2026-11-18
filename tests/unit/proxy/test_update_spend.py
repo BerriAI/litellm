@@ -129,7 +129,7 @@ async def test_queued_baseline_observation_is_persisted_during_recovery_cooldown
     client.db.query_raw.side_effect = query
     client.db.execute_raw.return_value = 1
     await update_spend_logs_job(client, None, logging)
-    client.baseline_accounting_transactions.append(record)
+    client.baseline_accounting_transactions = [record]
     await update_spend_logs_job(client, None, logging)
 
     writes: Final = [
