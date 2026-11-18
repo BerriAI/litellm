@@ -2,29 +2,26 @@ import math
 from collections.abc import Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
-from typing import Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
     redact_nested_match_and_regex_keys,  # pyright: ignore[reportUnknownVariableType]  # signature uses bare dict
 )
+from litellm.rust_bridge._native import NativeReceipt, NativeUnpriced
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CostBreakdown, GuardrailStatus, StandardLoggingGuardrailInformation
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import FeeDocument
+
 BEDROCK_GUARDRAIL_PRICING_KEY: Final = "bedrock/guardrails"
 BEDROCK_TRACE_FIELDS: Final = ("trace", "amazon-bedrock-trace")
 _INTERVENING_ACTIONS: Final = frozenset({"BLOCKED", "ANONYMIZED"})
-
-
-class GuardrailPricing(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    guardrail_cost_per_unit: Mapping[str, float]
 
 
 class GuardrailCostEntry(LiteLLMBaseModel):
@@ -65,20 +62,29 @@ def billed_guardrail_cost_by_unit(raw: object) -> Mapping[str, float | None] | N
     return None if entry.guardrail_cost_in_spend is False else entry.guardrail_cost_by_unit
 
 
-def _bedrock_guardrail_pricing(aws_region_name: str | None) -> GuardrailPricing | None:
-    regional_key: Final = f"bedrock/{aws_region_name}/guardrails" if aws_region_name else None
-    for key in (regional_key, BEDROCK_GUARDRAIL_PRICING_KEY):
-        if key is None or key not in litellm.model_cost:
-            continue
-        try:
-            return GuardrailPricing.model_validate(litellm.model_cost[key])
-        except ValidationError as e:
-            verbose_logger.warning("Ignoring malformed guardrail pricing entry %s: %s", key, e)
-    return None
+def _bedrock_guardrail_pricing_keys(aws_region_name: str | None) -> tuple[str, ...]:
+    regional: Final = (f"bedrock/{aws_region_name}/guardrails",) if aws_region_name else ()
+    return (*regional, BEDROCK_GUARDRAIL_PRICING_KEY)
 
 
-def _priced_units(units: int, price_per_unit: float | None) -> float | None:
-    return None if price_per_unit is None else units * price_per_unit
+def _priced(document: "FeeDocument") -> NativeReceipt | NativeUnpriced:
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (  # noqa: PLC0415  # the bridge imports litellm.utils, which imports this module
+        price_fee,
+    )
+
+    return price_fee(document)
+
+
+def _bedrock_guardrail_outcome(
+    usage_units: Mapping[str, int], aws_region_name: str | None
+) -> NativeReceipt | NativeUnpriced:
+    return _priced(
+        {
+            "kind": "guardrail",
+            "keys": _bedrock_guardrail_pricing_keys(aws_region_name),
+            "units": tuple({"counter": counter, "units": units} for counter, units in usage_units.items()),
+        }
+    )
 
 
 def bedrock_guardrail_cost_by_unit(
@@ -86,13 +92,8 @@ def bedrock_guardrail_cost_by_unit(
 ) -> Mapping[str, float | None] | None:
     """USD per counter, keyed like ``usage_units``; None when no pricing entry exists,
     and None for a counter the entry has no price for, since only an explicit 0.0 means free."""
-    pricing: Final = _bedrock_guardrail_pricing(aws_region_name)
-    if pricing is None:
-        return None
-    return {
-        counter: _priced_units(units, pricing.guardrail_cost_per_unit.get(counter))
-        for counter, units in usage_units.items()
-    }
+    outcome: Final = _bedrock_guardrail_outcome(usage_units, aws_region_name)
+    return dict(outcome.parts) if isinstance(outcome, NativeReceipt) else None
 
 
 def guardrail_cost_total(cost_by_unit: Mapping[str, float | None] | None) -> float:
@@ -102,7 +103,8 @@ def guardrail_cost_total(cost_by_unit: Mapping[str, float | None] | None) -> flo
 
 
 def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str | None) -> float:
-    return guardrail_cost_total(bedrock_guardrail_cost_by_unit(usage_units, aws_region_name))
+    outcome: Final = _bedrock_guardrail_outcome(usage_units, aws_region_name)
+    return outcome.total if isinstance(outcome, NativeReceipt) else 0.0
 
 
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -273,11 +275,15 @@ def azure_prompt_shield_guardrail_cost(
     Returns 0.0 on the free tier, ``text_records * price / 1000`` when a price is
     configured, and None when pricing is not configured (usage-only tracking).
     """
-    if cost_tier == "free":
-        return 0.0
-    if price_per_1000_text_records is None:
-        return None
-    return usage_units.get(AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT, 0) * price_per_1000_text_records / 1000.0
+    outcome: Final = _priced(
+        {
+            "kind": "prompt_shield",
+            "units": tuple({"counter": counter, "units": units} for counter, units in usage_units.items()),
+            "free_tier": cost_tier == "free",
+            "per_thousand": price_per_1000_text_records,
+        }
+    )
+    return outcome.total if isinstance(outcome, NativeReceipt) else None
 
 
 def _billable_entry_cost(entry: GuardrailCostEntry) -> float:

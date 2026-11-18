@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -162,6 +162,47 @@ UnitsDocument = (
 )
 
 
+class AgentUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+
+
+class A2aDocument(TypedDict):
+    kind: ReadOnly[Literal["a2a"]]
+    cost_per_query: ReadOnly[float | None]
+    input_cost_per_token: ReadOnly[float | None]
+    output_cost_per_token: ReadOnly[float | None]
+    usage: ReadOnly[AgentUsage | None]
+
+
+class McpDocument(TypedDict):
+    kind: ReadOnly[Literal["mcp"]]
+    tool: ReadOnly[str]
+    tool_prices: ReadOnly[Mapping[str, float]]
+    default_price: ReadOnly[float | None]
+
+
+class GuardrailUse(TypedDict):
+    counter: ReadOnly[str]
+    units: ReadOnly[int]
+
+
+class GuardrailDocument(TypedDict):
+    kind: ReadOnly[Literal["guardrail"]]
+    keys: ReadOnly[Sequence[str]]
+    units: ReadOnly[Sequence[GuardrailUse]]
+
+
+class PromptShieldDocument(TypedDict):
+    kind: ReadOnly[Literal["prompt_shield"]]
+    units: ReadOnly[Sequence[GuardrailUse]]
+    free_tier: ReadOnly[bool]
+    per_thousand: ReadOnly[float | None]
+
+
+FeeDocument: TypeAlias = A2aDocument | McpDocument | GuardrailDocument | PromptShieldDocument
+
+
 @dataclass(frozen=True, slots=True)
 class AdjustedCost:
     cost: float
@@ -259,6 +300,16 @@ def price_units(
     """A per-unit call priced from ``document``'s facts, or why no row prices it. ``tables`` are the deployment's own
     price tables, read in order ahead of ``catalog``, the row ``get_model_info`` found for the call."""
     return model_cost_inputs.price_units(document, tables, catalog)
+
+
+def price_fee(document: FeeDocument) -> NativeReceipt | NativeUnpriced:
+    """An agent call, MCP tool call or guardrail run priced from ``document``'s facts, or why nothing prices it."""
+    return model_cost_inputs.price_fee(document)
+
+
+def total_or_zero(outcome: NativeReceipt | NativeUnpriced) -> float:
+    """The receipt's total, 0.0 for a call nothing prices, the legacy return of the flat-priced kinds."""
+    return outcome.total if isinstance(outcome, NativeReceipt) else 0.0
 
 
 def prompt_and_completion(outcome: NativeReceipt | NativeUnpriced) -> tuple[float, float]:

@@ -95,6 +95,7 @@ pub(super) fn price<S: RowSource>(
         additional: Usd::ZERO,
         discount: Default::default(),
         margin: Default::default(),
+        parts: Vec::new(),
         cache_savings: None,
         basis: query.header.basis.clone(),
         total: 0.0,

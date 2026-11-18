@@ -74,6 +74,9 @@ pub struct RowFacts {
     /// The row lists `tiered_pricing`, which main's search pricing reads ahead of a flat query rate as tiers by the
     /// results the request asks for. Billing lowering leaves result tiers out
     pub prices_by_results: bool,
+    /// The row lists `guardrail_cost_per_unit` as a mapping of numbers, which main reads as a guardrail pricing row
+    /// even when it prices none of a call's counters
+    pub guardrail_units: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

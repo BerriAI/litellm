@@ -21,8 +21,9 @@ pub enum Unpriced {
     NoRow { tried: Vec<Candidate> },
     /// The row prices none of the meters the call used
     MissingRates { row: RowRef, missing: Vec<Meter> },
-    /// The row prices the call by a meter whose quantity the call did not report
-    MissingUsage { row: RowRef, meter: Meter },
+    /// The row or price source bills the call by a meter whose quantity the call did not report. `row` is `None` for
+    /// a price the caller configured rather than a row
+    MissingUsage { row: Option<RowRef>, meter: Meter },
     /// The rows given do not price the call, and the caller has not fetched the catalog row it deferred
     CatalogDeferred,
     /// This crate does not price this kind, or this case of it, yet. The caller prices it the old way
@@ -53,11 +54,41 @@ pub struct Receipt {
     pub discount: Discount,
     pub margin: Margin,
     pub breakdown: Breakdown,
+    /// The rows or units a call billed as separately priced parts, such as each guardrail counter. A part no price
+    /// covers stays `Unpriced` beside the others, and the totals count only the priced ones
+    pub parts: Vec<Part>,
     /// Read discount minus write premium, main's `calculate_prompt_caching_savings`. `None` for custom pricing
     pub cache_savings: Option<f64>,
     pub basis: Basis,
     /// The cost after discount and margin
     pub total: f64,
+}
+
+/// One separately priced part of a call
+#[derive(Clone, Debug, PartialEq)]
+pub struct Part {
+    /// What the part bills, such as a guardrail counter name
+    pub label: Box<str>,
+    pub outcome: PartOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PartOutcome {
+    Priced {
+        row: Option<RowRef>,
+        amount: Usd,
+    },
+    /// No price covers this part. It adds nothing to the total and is never read as free
+    Unpriced,
+}
+
+impl Part {
+    pub fn amount(&self) -> Option<Usd> {
+        match self.outcome {
+            PartOutcome::Priced { amount, .. } => Some(amount),
+            PartOutcome::Unpriced => None,
+        }
+    }
 }
 
 /// `BilledTokenRates`
@@ -154,6 +185,7 @@ impl Receipt {
             discount: Discount::default(),
             margin: Margin::default(),
             breakdown: Breakdown::default(),
+            parts: Vec::new(),
             cache_savings: None,
             basis: Basis {
                 service_tier: crate::price::ServiceTier::default(),
