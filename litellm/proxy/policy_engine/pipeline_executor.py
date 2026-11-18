@@ -135,6 +135,9 @@ class _StreamRewriteObserver(CustomGuardrail):
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
 
+    def inspects_choices_separately(self) -> bool:
+        return self.inner.inspects_choices_separately()
+
     @_logged_by_inner_guardrail
     async def apply_guardrail(
         self,
@@ -219,6 +222,9 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
 
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
+
+    def inspects_choices_separately(self) -> bool:
+        return False
 
     @_logged_by_inner_guardrail
     async def apply_guardrail(

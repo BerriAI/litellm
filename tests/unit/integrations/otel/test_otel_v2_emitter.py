@@ -344,6 +344,19 @@ def test_guardrail_block_span_is_error_and_carries_verdict():
     assert a[LiteLLM.GUARDRAIL_MASKED_ENTITY_COUNT] == 2
 
 
+def test_guardrail_span_carries_the_choice_index():
+    """A per-choice guardrail entry must say on the span which choice it inspected."""
+    engine, exporter = _engine()
+    engine.emit(
+        SpanRole.GUARDRAIL,
+        GuardrailSpanData.from_logging_entry(
+            {"guardrail_name": "g", "guardrail_status": "success", "choice_index": 1}
+        ),
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.GUARDRAIL_CHOICE_INDEX] == 1
+
+
 def test_guardrail_success_span_is_unset():
     """On success the status is left UNSET (semconv default) — not forced OK."""
     engine, exporter = _engine()
