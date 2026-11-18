@@ -274,25 +274,27 @@ def _unmatched_answers(reason: str) -> DecisionsResponseValidationError:
 
 def _answers_in_question_order(
     questions: Sequence[DecisionsIRQuestion], answers: Sequence[OpenAIDecisionAnswer]
-) -> tuple[OpenAIDecisionAnswer | None, ...]:
+) -> tuple[OpenAIDecisionAnswer | None, ...] | DecisionsResponseValidationError:
     question_names: Final = tuple(question.name for question in questions)
     answer_names: Final = tuple(answer.name for answer in answers)
     if answer_names == question_names[: len(answer_names)]:
         return (*answers, *(None for _ in questions[len(answers) :]))
     unknown: Final = tuple(name for name in answer_names if name not in question_names)
     if unknown:
-        raise _unmatched_answers(f"no requested question is named {unknown[0]!r}")
+        return _unmatched_answers(f"no requested question is named {unknown[0]!r}")
     ambiguous: Final = tuple(
         name for name in answer_names if answer_names.count(name) > 1 or question_names.count(name) > 1
     )
     if ambiguous:
-        raise _unmatched_answers(f"answers are out of order and the name {ambiguous[0]!r} is used more than once")
+        return _unmatched_answers(f"answers are out of order and the name {ambiguous[0]!r} is used more than once")
     by_name: Final = {answer.name: answer for answer in answers}
     return tuple(by_name.get(name) for name in question_names)
 
 
 def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
     answers: Final = _answers_in_question_order(request.questions, response.answers)
+    if isinstance(answers, DecisionsResponseValidationError):
+        raise answers
     return DecisionsIRResponse(
         model=response.model,
         answers=tuple(
