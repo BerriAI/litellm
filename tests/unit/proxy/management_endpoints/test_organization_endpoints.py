@@ -13,6 +13,12 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 @pytest.mark.asyncio
@@ -1571,7 +1577,7 @@ def test_organization_routes_reach_their_handler_with_enterprise_license(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monkeypatch):
+async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monkeypatch, rust_auth_stores: RustAuthStores):
     """/organization/delete bulk-deletes the org's keys without going through /key/delete, so the
     key objects and the jwt_key_mapping entries (issuer-scoped ones included) pointing at them
     must be evicted here, or a deleted key keeps authenticating and a JWT identity keeps resolving
@@ -1590,6 +1596,7 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     kept_cache_keys: Final = ("hashed-other-key", jwt_key_mapping_cache_key("sub", "other-account", None))
     kept_row: Final = JWTMappingRow("hashed-other-key", "sub", "other-account")
     jwt_table: Final = CascadingJWTMappingTable(
+        rust_auth_stores.jwt_key_mapping,
         [
             JWTMappingRow("hashed-org-key", "sub", "svc-account"),
             JWTMappingRow("hashed-org-key", "sub", "svc-account", "https://issuer.example"),
