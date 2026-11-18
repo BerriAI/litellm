@@ -18,6 +18,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     segment: "projects",
     linkName: /^Projects(?: Beta)?$/,
     content: { role: "heading", name: "Projects" },
+    unlicensedText: "This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key here.",
   },
   "access-groups": {
     segment: "access-groups",

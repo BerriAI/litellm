@@ -32,6 +32,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUs
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
@@ -4654,6 +4655,28 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
     ) == pytest.approx((expected_rate * 1.5, 0.0))
 
 
+def test_completion_cost_prefers_a_direct_row_over_the_together_size_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "openrouter/togethercomputer/direct-row-4b"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-08,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            }
+        }
+    )
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=100, completion_tokens=0, total_tokens=100))
+
+    assert litellm.completion_cost(completion_response=response, custom_llm_provider="openrouter") == pytest.approx(
+        100 * 3e-08
+    )
+
+
 def _logging_obj_with_call_window(duration_ms: float) -> Logging:
     start_time: Final = datetime.datetime(2026, 9, 21, 12, 0, 0)
     logging_obj: Final = Logging(
@@ -6124,6 +6147,40 @@ def test_realtime_explicitly_free_session_model_still_bills_zero(
     )
 
     assert cost == 0.0
+
+
+@pytest.mark.parametrize("returned_model", ["cost-test-decider", "cost-test-decider-20261006"])
+@pytest.mark.parametrize("explicit_model", [None, "openrouter/cost-test-decider"])
+def test_decisions_cost_uses_mapped_model_when_vendor_echo_is_unmapped(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    returned_model: str,
+    explicit_model: str | None,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/cost-test-decider",
+        {
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "openrouter",
+            "mode": "decisions",
+        },
+    )
+    response: Final = DecisionsResponse(
+        model=returned_model, answers={}, usage=DecisionsUsage(input_tokens=100, output_tokens=50)
+    )
+    response.set_hidden_params(
+        {
+            "custom_llm_provider": "openrouter",
+            "provider_response_model": "openrouter/cost-test-decider",
+        }
+    )
+
+    cost: Final = litellm.completion_cost(completion_response=response, model=explicit_model)
+
+    assert response.model == returned_model
+    assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
 
 
 def test_completion_cost_prefers_private_provider_response_model(

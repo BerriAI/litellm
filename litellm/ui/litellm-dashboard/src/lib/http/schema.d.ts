@@ -4660,7 +4660,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -5339,7 +5339,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -9678,6 +9678,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Apps */
+        get: operations["list_apps_management_v1_apps_get"];
+        put?: never;
+        /**
+         * Create App
+         * @description Configure budget policy for an existing resource of the gateway app type. Proxy admins only.
+         */
+        post: operations["create_app_management_v1_apps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/definition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Definition */
+        get: operations["get_app_definition_management_v1_apps_definition_get"];
+        /** Put App Definition */
+        put: operations["put_app_definition_management_v1_apps_definition_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Resources */
+        get: operations["list_app_resources_management_v1_apps_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App */
+        get: operations["get_app_management_v1_apps__app_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch App */
+        patch: operations["patch_app_management_v1_apps__app_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}/customer_members/{customer_member_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Member */
+        get: operations["get_app_member_management_v1_apps__app_id__customer_members__customer_member_id__get"];
+        /** Put App Member */
+        put: operations["put_app_member_management_v1_apps__app_id__customer_members__customer_member_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Organization */
+        get: operations["get_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__get"];
+        /** Put App Organization */
+        put: operations["put_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/budgets": {
         parameters: {
             query?: never;
@@ -9837,7 +9947,7 @@ export interface paths {
         };
         /**
          * Customer Member Daily Activity
-         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. Proxy admins only.
+         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
         put?: never;
@@ -9896,6 +10006,30 @@ export interface paths {
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
         trace?: never;
     };
+    "/management/v1/customer_organization_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Organization Budget Groups
+         * @description List reusable organization budget groups and their revision. Proxy admins only.
+         */
+        get: operations["get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure Customer Organization Budget Groups
+         * @description Save the complete organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch"];
+        trace?: never;
+    };
     "/management/v1/customer_organizations": {
         parameters: {
             query?: never;
@@ -9929,7 +10063,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity
-         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. Proxy admins only.
+         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
         put?: never;
@@ -9949,7 +10083,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key/app filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
@@ -10109,7 +10243,7 @@ export interface paths {
         };
         /**
          * Customer Team Daily Activity
-         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. Proxy admins only.
+         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
         put?: never;
@@ -28223,6 +28357,162 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** App */
+        App: {
+            /** Alias */
+            alias: string;
+            /** App Id */
+            app_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Default Customer Member Budget Id */
+            default_customer_member_budget_id?: string | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** AppCreate */
+        AppCreate: {
+            budget?: components["schemas"]["Budget"] | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type?: components["schemas"]["AppResourceType"] | null;
+        };
+        /** AppDefinition */
+        AppDefinition: {
+            resource_type?: components["schemas"]["AppResourceType"] | null;
+        };
+        /** AppDurationLimit */
+        AppDurationLimit: {
+            /** Budget Duration */
+            budget_duration: string;
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+        };
+        /** AppMember */
+        AppMember: {
+            /** App Id */
+            app_id: string;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /** @default none */
+            budget_source: components["schemas"]["AppMemberBudgetSource"];
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Customer Member Id */
+            customer_member_id: string;
+            effective_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+        };
+        /**
+         * AppMemberBudgetSource
+         * @enum {string}
+         */
+        AppMemberBudgetSource: "member_override" | "customer_default" | "app_default" | "none";
+        /** AppMemberPut */
+        AppMemberPut: {
+            budget_override?: components["schemas"]["Budget"] | null;
+        };
+        /** AppOrganization */
+        AppOrganization: {
+            /** App Id */
+            app_id: string;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Customer Member Budget Id */
+            customer_member_budget_id?: string | null;
+            /** Customer Org Id */
+            customer_org_id: string;
+            effective_budget?: components["schemas"]["Budget"] | null;
+            effective_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+            /** Tier Budget Id */
+            tier_budget_id?: string | null;
+        };
+        /** AppOrganizationPut */
+        AppOrganizationPut: {
+            budget_override?: components["schemas"]["Budget"] | null;
+            customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Tier Budget Id */
+            tier_budget_id?: string | null;
+        };
+        /** AppPatch */
+        AppPatch: {
+            budget?: components["schemas"]["Budget"] | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+        };
+        /** AppResource */
+        AppResource: {
+            /** Alias */
+            alias: string;
+            /** App Id */
+            app_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+        };
+        /**
+         * AppResourceType
+         * @enum {string}
+         */
+        AppResourceType: "team" | "project" | "virtual_key";
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
             /** Entities */
@@ -29931,6 +30221,18 @@ export interface components {
             soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** BudgetGroups */
+        BudgetGroups: {
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
         };
         /** BudgetGroupsUpdate */
         BudgetGroupsUpdate: {
@@ -32230,6 +32532,16 @@ export interface components {
              */
             custom_auth?: string | null;
             /**
+             * Customer Member Id Header
+             * @description Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_member_id_header?: string | null;
+            /**
+             * Customer Org Alias Header
+             * @description Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_org_alias_header?: string | null;
+            /**
              * Dangerously Permit Weak Or Unset Master Key
              * @description local development only: start even when master_key is unset, empty, or a publicly known default
              */
@@ -33713,31 +34025,8 @@ export interface components {
             /** Window Start */
             window_start?: string | null;
         };
-        /**
-         * CustomerHierarchyAuth
-         * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
-         */
         CustomerHierarchyAuth: {
-            /** Customer Member Alias */
-            customer_member_alias?: string | null;
-            /** Customer Member Id */
-            customer_member_id?: string | null;
-            /** Customer Org Alias */
-            customer_org_alias?: string | null;
-            /** Customer Org Id */
-            customer_org_id: string;
-            /** Customer Team Alias */
-            customer_team_alias?: string | null;
-            /** Customer Team Id */
-            customer_team_id?: string | null;
-            /** Scopes */
-            scopes: components["schemas"]["CustomerScopeAuth"][];
-            /**
-             * Team Scopes
-             * @description Every team the member belongs to, in parent_team_ids order; scopes holds the selected one
-             * @default []
-             */
-            team_scopes: components["schemas"]["CustomerScopeAuth"][];
+            [key: string]: unknown;
         };
         /** CustomerMember */
         CustomerMember: {
@@ -33854,7 +34143,7 @@ export interface components {
              * Budget Limits
              * @default []
              */
-            budget_limits: components["schemas"]["BudgetLimit"][];
+            budget_limits: (components["schemas"]["BudgetLimit"] | components["schemas"]["AppDurationLimit"])[];
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Cap Policy */
@@ -33865,7 +34154,7 @@ export interface components {
              * Key
              * @enum {string}
              */
-            key: "customer_org" | "customer_team" | "customer_member";
+            key: "customer_org" | "customer_team" | "customer_member" | "app" | "app_customer_org" | "app_customer_member";
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -34033,6 +34322,12 @@ export interface components {
              * @default 0
              */
             total_compression_savings_spend: number;
+            /**
+             * Total Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in total_spend
+             * @default 0
+             */
+            total_customer_margin_spend: number;
             /**
              * Total Failed Requests
              * @default 0
@@ -37273,6 +37568,8 @@ export interface components {
             id?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -39166,6 +39463,8 @@ export interface components {
             expires?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -43137,6 +43436,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -43227,6 +43531,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43272,6 +43581,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Default Budget Template Id */
             default_budget_template_id?: string | null;
         };
@@ -43320,6 +43634,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43339,6 +43658,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -50025,6 +50349,12 @@ export interface components {
              */
             compression_savings_spend: number;
             /**
+             * Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend
+             * @default 0
+             */
+            customer_margin_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
@@ -54063,6 +54393,8 @@ export interface components {
             } | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -69819,6 +70151,359 @@ export interface operations {
             };
         };
     };
+    list_apps_management_v1_apps_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_app_management_v1_apps_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_definition_management_v1_apps_definition_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDefinition"];
+                };
+            };
+        };
+    };
+    put_app_definition_management_v1_apps_definition_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_resources_management_v1_apps_resources_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                resource_type?: components["schemas"]["AppResourceType"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResource"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_management_v1_apps__app_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_app_management_v1_apps__app_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_member_management_v1_apps__app_id__customer_members__customer_member_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_member_management_v1_apps__app_id__customer_members__customer_member_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppMemberPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppOrganization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppOrganizationPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppOrganization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_budgets_management_v1_budgets_get: {
         parameters: {
             query?: never;
@@ -70085,6 +70770,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_member_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -70240,6 +70927,59 @@ export interface operations {
             };
         };
     };
+    get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_customer_organizations_management_v1_customer_organizations_get: {
         parameters: {
             query?: {
@@ -70318,6 +71058,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_org_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -70358,6 +71100,8 @@ export interface operations {
                 customer_org_id?: string | null;
                 model?: string | null;
                 api_key?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -70751,6 +71495,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_team_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
