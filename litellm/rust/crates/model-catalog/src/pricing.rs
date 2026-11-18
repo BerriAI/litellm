@@ -19,7 +19,7 @@ use litellm_python_compat::truthy::json_truthy;
 use serde_json::Value;
 
 use crate::lower::BilledPrices;
-use crate::snapshot::{LiveTable, LoweredRow, RowProvenance, RowRef, Snapshot};
+use crate::snapshot::{CostConfig, LiveTable, LoweredRow, RowProvenance, RowRef, Snapshot};
 use crate::wire::Fields;
 
 /// The rows a query may read, each fetched once, and the discount and margin config of the snapshot
@@ -27,8 +27,7 @@ use crate::wire::Fields;
 pub struct PricingRows {
     named: Vec<(Candidate, PricedRef)>,
     rows: Vec<(PricedRef, Arc<LoweredRow>)>,
-    discounts: Arc<Discounts>,
-    margins: Arc<Margins>,
+    config: Arc<CostConfig>,
 }
 
 impl<T: LiveTable> Snapshot<T> {
@@ -54,8 +53,7 @@ impl<T: LiveTable> Snapshot<T> {
                 .into_iter()
                 .map(|(candidate, row)| (candidate, priced_ref(&row)))
                 .collect(),
-            discounts: Arc::clone(&self.discounts),
-            margins: Arc::clone(&self.margins),
+            config: Arc::clone(&self.config),
         }
     }
 
@@ -121,11 +119,11 @@ impl RowSource for PricingRows {
     }
 
     fn discounts(&self) -> &Discounts {
-        &self.discounts
+        &self.config.discounts
     }
 
     fn margins(&self) -> &Margins {
-        &self.margins
+        &self.config.margins
     }
 }
 
@@ -258,15 +256,14 @@ mod tests {
     fn snapshot(discount: f64) -> Snapshot<Store<TestRows>> {
         Snapshot::new(
             GENERATION,
+            CostConfig {
+                discounts: Discounts::new([("anthropic".to_owned(), discount)]),
+                margins: Margins::new([("global".to_owned(), MarginRule::Percent(0.0))]),
+            },
             SnapshotInputs {
                 table: Store::new(bundled_rows()),
                 rules: Arc::new(bundled_rules()),
                 names: Arc::new(names(&["anthropic"])),
-                discounts: Arc::new(Discounts::new([("anthropic".to_owned(), discount)])),
-                margins: Arc::new(Margins::new([(
-                    "global".to_owned(),
-                    MarginRule::Percent(0.0),
-                )])),
             },
         )
     }

@@ -7,8 +7,9 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use litellm_host_python::{from_py_argument, to_py};
 use litellm_model_catalog::{
-    CapabilityRules, CostMap, FallbackRule, IntegrityLimits, Landed, Pass, Placed, Provenance,
-    RegistrationTable, Registrations, Snapshot, SnapshotInputs, Snapshots, Store, write_pass,
+    CapabilityRules, CostConfig, CostMap, FallbackRule, IntegrityLimits, Landed, Pass, Placed,
+    Provenance, RegistrationTable, Registrations, Snapshot, SnapshotInputs, Snapshots, Store,
+    write_pass,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -371,14 +372,13 @@ impl NativeModelCostMap {
     /// The pricing snapshot of the published table at its current generation, built only when the generation moved
     pub(crate) fn cost_snapshot(&self, py: Python<'_>) -> PyResult<Arc<CostSnapshot>> {
         let read = host::generation(py)?;
-        self.snapshots.at(read.generation, || {
-            let (discounts, margins) = cost::adjustment_config(&read.discounts, &read.margins)?;
+        let (discounts, margins) = cost::adjustment_config(&read.discounts, &read.margins)?;
+        let config = CostConfig { discounts, margins };
+        self.snapshots.at(read.generation, config, || {
             Ok(SnapshotInputs {
                 table: self.index_over(&read.rows),
                 rules: Arc::new(capability_rules(&read.rules)),
                 names: Arc::new(host::known_names(py)?),
-                discounts: Arc::new(discounts),
-                margins: Arc::new(margins),
             })
         })
     }
@@ -615,7 +615,7 @@ rows = {"claude-opus-5-5": Row(litellm_provider="anthropic", input_cost_per_toke
 writes = [0]
 
 def generation():
-    return rows, (id(rows), len(rows), writes[0]), (0, 0, 0, {}, {}, [])
+    return rows, (id(rows), len(rows), writes[0], 0), ({}, {}, [])
 
 def known_names():
     return frozenset({"anthropic"}), frozenset()

@@ -22,12 +22,12 @@ write: Final = model_cost_table.write
 
 def generation() -> tuple[
     Mapping[str, object],
-    tuple[int, int, int],
-    tuple[int, int, int, Mapping[str, object], Mapping[str, object], Sequence[object]],
+    tuple[int, int, int, int],
+    tuple[Mapping[str, object], Mapping[str, object], Sequence[object]],
 ]:
-    """The published table and what a pricing snapshot of it is keyed on: its ``ModelCostVersion``, then the identity
-    of the cost discount and margin configs and of the ``fallback_generalizations`` rule list, which are only ever
-    replaced whole, followed by those three."""
+    """The published table, what a pricing snapshot of it is keyed on (its ``ModelCostVersion`` and the version of the
+    installed ``fallback_generalizations`` rules), then the cost discount and margin configs as they read now, which
+    the snapshot compares by value, and the installed rules."""
     import litellm
 
     table: Final = model_cost_table.published()
@@ -36,15 +36,8 @@ def generation() -> tuple[
     rules: Final = installed if installed is not None else ()
     return (
         table,
-        (version.table, version.size, version.writes),
-        (
-            id(litellm.cost_discount_config),
-            id(litellm.cost_margin_config),
-            id(rules),
-            litellm.cost_discount_config,
-            litellm.cost_margin_config,
-            rules,
-        ),
+        (version.table, version.size, version.writes, fallback_generalizations.fallback_generalizations_version()),
+        (litellm.cost_discount_config, litellm.cost_margin_config, rules),
     )
 
 

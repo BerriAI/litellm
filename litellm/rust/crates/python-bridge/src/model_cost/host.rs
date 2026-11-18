@@ -74,18 +74,19 @@ pub(crate) fn kept<'py>(
 
 /// The published table, the generation a pricing snapshot of it is keyed on, and the Python-held state it reads
 pub(crate) fn generation(py: Python<'_>) -> PyResult<GenerationRead<'_>> {
-    let (rows, version, configs): (Bound<'_, PyDict>, (usize, usize, u64), Bound<'_, PyTuple>) =
-        call(py, "generation", ())?.extract()?;
-    let (table, size, writes) = version;
-    let (discount, margin, rules, discounts, margins, rule_list) = configs.extract()?;
+    let (rows, version, configs): (
+        Bound<'_, PyDict>,
+        (usize, usize, u64, u64),
+        Bound<'_, PyTuple>,
+    ) = call(py, "generation", ())?.extract()?;
+    let (table, size, writes, rules) = version;
+    let (discounts, margins, rule_list) = configs.extract()?;
     Ok(GenerationRead {
         rows,
         generation: Generation {
             table,
             size,
             writes,
-            discount,
-            margin,
             rules,
         },
         discounts,
