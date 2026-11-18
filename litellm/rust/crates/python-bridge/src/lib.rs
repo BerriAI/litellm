@@ -273,6 +273,7 @@ mod tests {
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
                 "NativeBudgets",
+                "billable_service_tier",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",
