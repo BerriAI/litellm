@@ -78,9 +78,18 @@ fn retry_after(headers: &[(String, String)]) -> Option<Duration> {
     Duration::try_from_secs_f64(seconds.trim().parse().ok()?).ok()
 }
 
+/// A call the provider never answered. The route reports it as a 500, and Python's router reads
+/// it as an `InternalServerError`: retried, and counted toward the deployment's cooldown.
+fn unanswered() -> AttemptError {
+    AttemptError::new(FailureKind::InternalServer, Some(500))
+}
+
 /// What a route's failure says about the deployment it called, `None` for one that says
-/// nothing about it.
-pub(crate) fn route_failure(route: &InferenceError) -> Option<AttemptError> {
+/// nothing about it. `unanswered` is what a call that got no answer says where it happened.
+pub(crate) fn route_failure(
+    route: &InferenceError,
+    unanswered: fn() -> AttemptError,
+) -> Option<AttemptError> {
     match route.upstream_response() {
         Some((status, body)) => Some(AttemptError::from_provider(
             status,
@@ -95,14 +104,14 @@ pub(crate) fn route_failure(route: &InferenceError) -> Option<AttemptError> {
         }
         None if route.declined().is_some() => None,
         None if route.is_request() => Some(AttemptError::new(FailureKind::BadRequest, Some(400))),
-        None => Some(AttemptError::new(FailureKind::ApiConnection, None)),
+        None => Some(unanswered()),
     }
 }
 
 /// A route's failed attempt as router-core reads it to decide retries and cooldowns.
 pub fn attempt_failure(error: Error) -> AttemptFailure<Error> {
     let facts = match &error {
-        Error::Route(route) => route_failure(route),
+        Error::Route(route) => route_failure(route, unanswered),
         Error::Ocr(ocr) => ocr
             .upstream_response()
             .map(|(status, body, ..)| AttemptError::from_provider(status, body, None)),

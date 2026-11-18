@@ -417,6 +417,60 @@ async fn a_failed_deployment_is_retried_on_another_deployment_of_its_group() {
     );
 }
 
+/// A port nothing listens on, so a call to it never gets an answer.
+async fn closed_port() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    format!("http://{}", listener.local_addr().unwrap())
+}
+
+#[tokio::test]
+async fn a_deployment_the_gateway_cannot_reach_cools_down_and_its_group_keeps_serving() {
+    let healthy = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&healthy)
+        .await;
+    let unreachable = closed_port().await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {unreachable}\n      api_key: test-key\n      weight: 1\n    model_info:\n      id: unreachable\n  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n      weight: 0\n    model_info:\n      id: healthy\nrouter_settings:\n  num_retries: 0\n  cooldown_time: 30\ngeneral_settings:\n  master_key: gateway-key\n",
+        healthy.uri()
+    ))
+    .unwrap();
+    let app = global(litellm_gateway::router(
+        without_stores(inference_for(&config).await),
+        &config,
+    ));
+    let call = || {
+        let request = Request::post("/v1/messages")
+            .header("authorization", "Bearer gateway-key")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"model": "primary", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+                    .to_string(),
+            ))
+            .unwrap();
+        app.clone().oneshot(request)
+    };
+
+    let failed = [
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+        call().await.unwrap().status().as_u16(),
+    ];
+    let served = call().await.unwrap();
+
+    assert_eq!(failed, [500; 5]);
+    assert_eq!(
+        (
+            served.status().as_u16(),
+            served.headers()["x-litellm-model-id"].to_str().unwrap()
+        ),
+        (200, "healthy")
+    );
+}
+
 #[rstest]
 #[case::strategy("routing_strategy: usage-based-routing-v2", "usage-based-routing-v2")]
 #[case::pre_call_checks("enable_pre_call_checks: true", "enable_pre_call_checks")]

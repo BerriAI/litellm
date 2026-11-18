@@ -91,12 +91,15 @@ pub(crate) fn responses_event(told: Told, event: &Map<String, Value>) -> Told {
 /// How a stream went: the tokens it counted, or the failure that ended it.
 pub(crate) type Outcome = Result<u64, AttemptError>;
 
+fn lost_connection() -> AttemptError {
+    AttemptError::new(FailureKind::ApiConnection, None)
+}
+
 /// A stream that broke under the client, as router-core reads it.
 pub(crate) fn broke(error: &litellm_host_http::Error<InferenceError>) -> AttemptError {
-    let lost_connection = || AttemptError::new(FailureKind::ApiConnection, None);
     match error {
         litellm_host_http::Error::Call(route) => {
-            routing::route_failure(route).unwrap_or_else(lost_connection)
+            routing::route_failure(route, lost_connection).unwrap_or_else(lost_connection)
         }
         litellm_host_http::Error::Protocol => lost_connection(),
     }
