@@ -213,6 +213,13 @@ const customerPortalGroups: MenuGroup[] = [
         icon: <Building2 {...ICON} />,
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
+      {
+        key: "customer-settings",
+        page: "customers/settings",
+        label: "customerPortal.hierarchy.settings",
+        icon: <SettingsIcon {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
     ],
   },
 ];
@@ -509,7 +516,10 @@ const HOME_ROUTE = "home";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
-const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
+const routeForPathname = (pathname: string): string =>
+  pathname.replace(/\/$/, "").endsWith("/customers/settings")
+    ? "customers/settings"
+    : routeSegmentForPathname(pathname) || HOME_ROUTE;
 
 const findParentKey = (route: string): string | null => {
   for (const group of menuGroups) {
