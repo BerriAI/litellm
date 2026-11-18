@@ -2021,7 +2021,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     @staticmethod
     def _iter_file_ids_from_messages(messages: Sequence[AllMessageValues]) -> Iterator[str]:
         for message in messages:
-            if (role := message.get("role")) not in ("user", "tool", "function"):
+            if (role := message.get("role")) not in ("user", "assistant", "tool", "function"):
                 continue
             if not _is_object_iterable(content := _keyed_get(message, "content")) or isinstance(
                 content, (str, Mapping)
