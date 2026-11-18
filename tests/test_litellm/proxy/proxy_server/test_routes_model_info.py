@@ -166,6 +166,69 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
 
 
+def test_get_direct_access_models_expands_access_group():
+    """User granted models by access-group name resolves to the group's members.
+
+    Regression for issue #34096: ``/v2/model/info`` reported "No models found" for
+    users whose model list is an access group (e.g. ``economy``) because
+    ``get_direct_access_models`` matched the group name literally instead of
+    expanding it the way ``get_key_models``/``get_team_models`` do.
+    """
+    import litellm
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-fake"},
+                "model_info": {"id": "id-gpt4", "access_groups": ["economy"]},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-fake"},
+                "model_info": {"id": "id-gpt35", "access_groups": ["economy"]},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "id-gpt4o", "access_groups": ["premium"]},
+            },
+        ]
+    )
+    user = LiteLLM_UserTable(user_id="u1", max_budget=None, spend=0.0, models=["economy"])
+
+    result = proxy_server.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert set(result) == {"id-gpt4", "id-gpt35"}
+
+
+def test_get_direct_access_models_mixes_group_and_explicit_models():
+    """A model list mixing an access group with an explicit model resolves both."""
+    import litellm
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-fake"},
+                "model_info": {"id": "id-gpt4", "access_groups": ["economy"]},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"id": "id-gpt4o", "access_groups": ["premium"]},
+            },
+        ]
+    )
+    user = LiteLLM_UserTable(user_id="u1", max_budget=None, spend=0.0, models=["economy", "gpt-4o"])
+
+    result = proxy_server.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert set(result) == {"id-gpt4", "id-gpt4o"}
+
+
 # ---------------------------------------------------------------------------
 # GET /model/info — team BYOK scoping (issue #30983)
 # ---------------------------------------------------------------------------
