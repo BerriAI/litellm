@@ -54,6 +54,7 @@ import oracleLogo from "../../public/assets/logos/oracle.svg";
 import parallelAiLogo from "../../public/assets/logos/parallel_ai.png";
 import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
 import qwenLogo from "../../public/assets/logos/qwen.png";
+import quicksilverproLogo from "../../public/assets/logos/quicksilverpro.svg";
 import recraftLogo from "../../public/assets/logos/recraft.svg";
 import replicateLogo from "../../public/assets/logos/replicate.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
@@ -174,6 +175,7 @@ export enum Providers {
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
+  QUICKSILVERPRO = "QuickSilver Pro",
   Qwen_AI_Platform = "Qianwen AI Platform",
   QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
@@ -310,6 +312,7 @@ export const provider_map: Record<string, string> = {
   PETALS: "petals",
   PG_VECTOR: "pg_vector",
   PREDIBASE: "predibase",
+  QUICKSILVERPRO: "quicksilverpro",
   Qwen_AI_Platform: "qwen_ai_platform",
   QwenCloud: "qwencloud",
   RECRAFT: "recraft",
@@ -430,6 +433,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Oracle]: oracleLogo.src,
   [Providers.PARALLEL_AI]: parallelAiLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
+  [Providers.QUICKSILVERPRO]: quicksilverproLogo.src,
   [Providers.Qwen_AI_Platform]: qwenLogo.src,
   [Providers.QwenCloud]: qwenLogo.src,
   [Providers.RECRAFT]: recraftLogo.src,
@@ -521,6 +525,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Bespoke]: "bespoke/nimble",
   [Providers.Laya]: "laya/english",
+  [Providers.QUICKSILVERPRO]: "quicksilverpro/claude-sonnet-5-5",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
