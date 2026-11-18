@@ -5325,12 +5325,12 @@ class _Driver:
         """Only an async non-streaming chat attempt waits, on the deployment its ordinary pick chose."""
         request_queue: Final = current_request_queue()
         capacity: Final = capacity_of(deployment)
+        if request_queue is None or capacity is None:
+            return None
         if (
-            request_queue is None
-            or self._plan.sync
+            self._plan.sync
             or self._plan.kind != "chat"
             or call.kwargs.get("stream")
-            or capacity is None
             or not self._core.queues_on(self._attempt_request(step))(deployment)
         ):
             return None
