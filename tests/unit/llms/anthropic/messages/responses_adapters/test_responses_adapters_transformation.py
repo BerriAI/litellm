@@ -2226,6 +2226,35 @@ class TestPromptCacheBreakpointToResponses:
         assert kwargs["instructions"] == "Be concise."
         assert kwargs["input"][0]["role"] == "user"
 
+    def test_system_as_developer_sends_a_string_system_as_the_first_input_item(self):
+        kwargs = _ADAPTER.translate_request(_make_request(system="Be concise."), system_as_developer=True)
+        assert "instructions" not in kwargs
+        assert kwargs["input"] == [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be concise."}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+        ]
+
+    def test_system_as_developer_keeps_each_text_block_of_a_list_system(self):
+        request = _make_request(
+            system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}]
+        )
+        kwargs = _ADAPTER.translate_request(request, system_as_developer=True)
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful."},
+            ],
+        }
+
+    @pytest.mark.parametrize("system", ["", [], [{"type": "text", "text": ""}]])
+    def test_system_as_developer_adds_no_item_for_an_empty_system(self, system):
+        kwargs = _ADAPTER.translate_request(_make_request(system=system), system_as_developer=True)
+        assert [item["role"] for item in kwargs["input"]] == ["user"]
+        assert not kwargs.get("instructions")
+
     def test_system_with_breakpoint_skips_non_text_blocks(self):
         request = _make_request(
             system=[

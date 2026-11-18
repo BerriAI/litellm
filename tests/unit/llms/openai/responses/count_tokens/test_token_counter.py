@@ -237,6 +237,39 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "deployment_fields"),
+    [
+        pytest.param("gpt-6.2", {}, id="model-name"),
+        pytest.param("alias", {"model_info": {"base_model": "gpt-6.2"}}, id="model-info-base-model"),
+    ],
+)
+async def test_anthropic_format_counts_the_system_prompt_where_inference_sends_it(
+    monkeypatch: pytest.MonkeyPatch, model: str, deployment_fields: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        await OpenAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}, **deployment_fields},
+            request_model=model,
+            system="Be brief.",
+            messages_format="anthropic",
+        )
+        sent: Final = json.loads(route.calls.last.request.content)
+
+    assert "instructions" not in sent
+    assert sent["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Be brief."}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_openai_format_keeps_the_chat_conversion(monkeypatch: pytest.MonkeyPatch) -> None:
     messages: Final[list[dict[str, object]]] = [
         {"role": "system", "content": "Be brief."},

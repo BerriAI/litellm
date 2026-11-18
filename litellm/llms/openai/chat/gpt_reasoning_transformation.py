@@ -1,7 +1,7 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
@@ -17,6 +17,7 @@ from litellm.utils import (
 from .gpt_transformation import OpenAIGPTConfig
 
 _GPT_SERIES_VERSION: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?(?=[.-]|$)")
+_PROVIDERS_CACHING_DEVELOPER_SYSTEM_PROMPT: Final = frozenset({"openai", "chatgpt"})
 
 
 def refused_reasoning_effort_warning(*, suggest_declared_levels: bool, suggest_base_model: bool) -> str:
@@ -210,6 +211,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     def is_model_gpt_6_plus_model(cls, model: str) -> bool:
         version: Final = cls._gpt_series_version(model)
         return version is not None and version >= (6, 0)
+
+    @classmethod
+    def is_model_gpt_6_2_plus_model(cls, model: str) -> bool:
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (6, 2)
 
     @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
@@ -481,3 +487,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             model=model,
             drop_params=drop_params,
         )
+
+
+def sends_system_prompt_as_developer_message(
+    model: str, custom_llm_provider: str | None, declared_base_models: Iterable[str] = ()
+) -> bool:
+    """From GPT-6.2 on the Responses API bills ``instructions`` uncached, after ``input``."""
+    return custom_llm_provider in _PROVIDERS_CACHING_DEVELOPER_SYSTEM_PROMPT and any(
+        OpenAIGPT5Config.is_model_gpt_6_2_plus_model(name) for name in (model, *declared_base_models)
+    )

@@ -36,7 +36,10 @@ import pytest
 
 import litellm
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
-from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
+    OpenAIGPT5Config,
+    sends_system_prompt_as_developer_message,
+)
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
 # ---------------------------------------------------------------------------
@@ -219,6 +222,30 @@ GPT_PRE_6_MODELS = [
     "gpt-4o",
 ]
 
+GPT6_2_PLUS_MODELS = [
+    "gpt-6.2",
+    "gpt-6.2-sol",
+    "gpt-6.2-2026-11-01",
+    "openai/gpt-6.2-sol",
+    "chatgpt/gpt-6.2",
+    "gpt-6.3",
+    "gpt-6.10",
+    "gpt-7",
+    "gpt-7-mini",
+]
+
+GPT_PRE_6_2_MODELS = [
+    "gpt-6",
+    "gpt-6-sol",
+    "gpt-6-2026-09-22",
+    "gpt-6.1",
+    "gpt-6.1-sol",
+    "openai/gpt-6.1-sol",
+    "gpt-5.6-sol",
+    "gpt-4o",
+    "my-deployment",
+]
+
 
 class TestOpenAIGPT5ConfigSeriesBoundaries:
 
@@ -237,6 +264,35 @@ class TestOpenAIGPT5ConfigSeriesBoundaries:
     @pytest.mark.parametrize("model", GPT_PRE_6_MODELS)
     def test_pre_6_models_are_not_classified_as_6_plus(self, model: str):
         assert not OpenAIGPT5Config.is_model_gpt_6_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT6_2_PLUS_MODELS)
+    def test_gpt6_2_plus_models_are_classified_as_6_2_plus(self, model: str):
+        assert OpenAIGPT5Config.is_model_gpt_6_2_plus_model(model)
+
+    @pytest.mark.parametrize("model", GPT_PRE_6_2_MODELS)
+    def test_pre_6_2_models_are_not_classified_as_6_2_plus(self, model: str):
+        assert not OpenAIGPT5Config.is_model_gpt_6_2_plus_model(model)
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "declared_base_models", "expected"),
+    [
+        pytest.param("gpt-6.2", "openai", (), True, id="openai-boundary"),
+        pytest.param("gpt-7", "chatgpt", (), True, id="chatgpt-future-major"),
+        pytest.param("my-deployment", "openai", ("gpt-6.2-sol",), True, id="alias-with-declared-base"),
+        pytest.param("gpt-6.1", "openai", ("my-base", "gpt-6.3"), True, id="second-declared-base"),
+        pytest.param("gpt-6.1", "openai", ("gpt-6.1-sol",), False, id="older-model-and-base"),
+        pytest.param("my-deployment", "openai", (), False, id="alias-without-base"),
+        pytest.param("gpt-6.2", "azure", (), False, id="azure"),
+        pytest.param("gpt-6.2", "bedrock_mantle", (), False, id="bedrock-mantle"),
+        pytest.param("gpt-6.2", "github_copilot", ("gpt-6.2",), False, id="github-copilot"),
+        pytest.param("gpt-6.2", None, (), False, id="unknown-provider"),
+    ],
+)
+def test_system_prompt_moves_to_a_developer_message_only_for_verified_providers_and_versions(
+    model: str, provider: str | None, declared_base_models: tuple[str, ...], expected: bool
+) -> None:
+    assert sends_system_prompt_as_developer_message(model, provider, declared_base_models) is expected
 
 
 # ---------------------------------------------------------------------------

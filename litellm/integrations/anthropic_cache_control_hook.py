@@ -403,6 +403,10 @@ class _DeclaredBaseModels(BaseModel):
         return tuple(name for name in candidates if isinstance(name, str) and name)
 
 
+def declared_base_model_names(litellm_params: object) -> tuple[str, ...]:
+    return _DeclaredBaseModels.model_validate(litellm_params).names()
+
+
 def deployment_model_info(litellm_params: object) -> Mapping[str, object] | None:
     return routed_model_info(_DeclaredBaseModels.model_validate(litellm_params).model_info)
 

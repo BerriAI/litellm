@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    declared_base_model_names,
     routed_model_info,
     supports_openai_prompt_cache_breakpoint,
 )
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
+from litellm.llms.openai.chat.gpt_reasoning_transformation import sends_system_prompt_as_developer_message
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
@@ -238,6 +240,13 @@ def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[s
     )
 
 
+def _system_goes_in_developer_message(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    return sends_system_prompt_as_developer_message(
+        model, provider if isinstance(provider, str) else None, declared_base_model_names(forwarded_kwargs)
+    )
+
+
 def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
 
@@ -367,6 +376,7 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        system_as_developer=_system_goes_in_developer_message(model, forwarded_kwargs),
     )
 
     # Normalize reasoning effort based on model capabilities

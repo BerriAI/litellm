@@ -614,6 +614,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         auto_summary_level: str = "detailed",
         *,
         drop_params: bool = True,
+        system_as_developer: bool = False,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -623,7 +624,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         on every call, so a reasoning model's items can be replayed intact next turn even
         when the client sent no ``thinking`` block; pass False for a provider whose
         Responses API rejects ``include``. ``auto_summary_level`` is the ``reasoning.summary`` the
-        opt-in auto summary injects when the client sent none.
+        opt-in auto summary injects when the client sent none. ``system_as_developer`` sends the
+        system prompt as the first input item instead of ``instructions``.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -633,10 +635,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         input_items: Final = self.translate_messages_to_responses_input(messages_list)
         system: Final = anthropic_request.get("system")
+        marks_cache_breakpoint: Final = isinstance(system, list) and any(
+            isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system
+        )
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
-            if isinstance(system, list)
-            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
+            if system and (system_as_developer or marks_cache_breakpoint)
             else ()
         )
         if developer_parts:

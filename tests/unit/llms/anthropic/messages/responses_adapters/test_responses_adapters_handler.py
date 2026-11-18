@@ -64,6 +64,54 @@ def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     assert responses_kwargs["custom_llm_provider"] == "azure"
 
 
+@pytest.mark.parametrize(
+    ("model", "extra_kwargs"),
+    [
+        pytest.param("openai/gpt-6.2", {"custom_llm_provider": "openai"}, id="openai"),
+        pytest.param("chatgpt/gpt-7", {"custom_llm_provider": "chatgpt"}, id="chatgpt-future-version"),
+        pytest.param("openai/alias", {"custom_llm_provider": "openai", "base_model": "gpt-6.2"}, id="base-model"),
+        pytest.param(
+            "openai/alias",
+            {"custom_llm_provider": "openai", "model_info": {"base_model": "gpt-6.2"}},
+            id="model-info-base-model",
+        ),
+    ],
+)
+def test_build_responses_kwargs_sends_the_system_prompt_as_a_developer_message(
+    model: str, extra_kwargs: dict[str, object]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024, messages=MESSAGES, model=model, system="Be concise.", extra_kwargs=extra_kwargs
+    )
+
+    assert "instructions" not in responses_kwargs
+    assert responses_kwargs["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Be concise."}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        pytest.param("openai/gpt-6.1", "openai", id="older-model"),
+        pytest.param("azure/gpt-6.2", "azure", id="unverified-provider"),
+    ],
+)
+def test_build_responses_kwargs_keeps_instructions_outside_the_gate(model: str, provider: str) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        system="Be concise.",
+        extra_kwargs={"custom_llm_provider": provider},
+    )
+
+    assert responses_kwargs["instructions"] == "Be concise."
+    assert [item["role"] for item in responses_kwargs["input"]] == ["user"]
+
+
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():
     responses_kwargs = _build_responses_kwargs(
         max_tokens=1024,

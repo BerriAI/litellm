@@ -1905,6 +1905,132 @@ def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_c
     assert (result["input"], result.get("instructions")) == (expected_input, expected_instructions), result
 
 
+_SYSTEM_MESSAGES: Final = (
+    {"role": "system", "content": "Be  concise."},
+    {"role": "system", "content": "Be kind.\n"},
+)
+_JOINED_SYSTEM_TEXT: Final = "Be  concise. Be kind.\n"
+_HELLO_MESSAGE: Final = {"role": "user", "content": "hello"}
+_HELLO_ITEM: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+
+
+def _developer_item(text: str) -> dict[str, object]:
+    return {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": text}]}
+
+
+def _transformed_system_prompt_request(
+    messages: Sequence[Mapping[str, object]],
+    *,
+    model: str = "gpt-6.2",
+    litellm_params: Mapping[str, object] = MappingProxyType({"custom_llm_provider": "openai"}),
+    optional_params: Mapping[str, object] = MappingProxyType({}),
+) -> dict:
+    return LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=list(messages),
+        optional_params=dict(optional_params),
+        litellm_params=dict(litellm_params),
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        pytest.param("gpt-6.2", {"custom_llm_provider": "openai"}, id="openai"),
+        pytest.param("gpt-7", {"custom_llm_provider": "chatgpt"}, id="chatgpt-future-version"),
+        pytest.param("alias", {"custom_llm_provider": "openai", "base_model": "gpt-6.2"}, id="base-model"),
+        pytest.param(
+            "alias",
+            {"custom_llm_provider": "openai", "model_info": {"base_model": "gpt-6.2"}},
+            id="model-info-base-model",
+        ),
+    ],
+)
+def test_transform_request_sends_the_system_prompt_as_the_first_developer_item(
+    model: str, litellm_params: Mapping[str, object]
+) -> None:
+    result: Final = _transformed_system_prompt_request(
+        [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], model=model, litellm_params=litellm_params
+    )
+
+    assert result["input"] == [_developer_item(_JOINED_SYSTEM_TEXT), _HELLO_ITEM]
+    assert "instructions" not in result
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        pytest.param("gpt-6.1", "openai", id="older-model"),
+        pytest.param("gpt-6.2", "azure", id="unverified-provider"),
+    ],
+)
+def test_transform_request_keeps_instructions_outside_the_gate(model: str, provider: str) -> None:
+    result: Final = _transformed_system_prompt_request(
+        [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], model=model, litellm_params={"custom_llm_provider": provider}
+    )
+
+    assert result["input"] == [_HELLO_ITEM]
+    assert result["instructions"] == _JOINED_SYSTEM_TEXT
+
+
+def test_transform_request_keeps_instructions_on_a_stored_conversation() -> None:
+    result: Final = _transformed_system_prompt_request(
+        [*_SYSTEM_MESSAGES, _HELLO_MESSAGE], optional_params={"previous_response_id": "resp_123"}
+    )
+
+    assert result["input"] == [_HELLO_ITEM]
+    assert result["instructions"] == _JOINED_SYSTEM_TEXT
+    assert result["previous_response_id"] == "resp_123"
+
+
+@pytest.mark.parametrize(
+    ("messages", "optional_params", "expected_input"),
+    [
+        pytest.param(_SYSTEM_MESSAGES, {}, [_developer_item(_JOINED_SYSTEM_TEXT)], id="empty-input"),
+        pytest.param(
+            [*_SYSTEM_MESSAGES, _HELLO_MESSAGE],
+            {"response_format": {"type": "json_object"}, "previous_response_id": "resp_123"},
+            [_developer_item(_JOINED_SYSTEM_TEXT), _HELLO_ITEM],
+            id="json-object-on-a-stored-conversation",
+        ),
+    ],
+)
+def test_transform_request_system_text_the_api_needs_in_input_uses_the_developer_role(
+    messages: Sequence[Mapping[str, object]],
+    optional_params: Mapping[str, object],
+    expected_input: list[dict[str, object]],
+) -> None:
+    result: Final = _transformed_system_prompt_request(messages, optional_params=optional_params)
+
+    assert result["input"] == expected_input
+    assert "instructions" not in result
+
+
+def test_transform_request_empty_system_prompt_adds_no_developer_item() -> None:
+    result: Final = _transformed_system_prompt_request([{"role": "system", "content": ""}, _HELLO_MESSAGE])
+
+    assert result["input"] == [_HELLO_ITEM]
+    assert not result.get("instructions")
+
+
+def test_transform_request_system_items_left_in_input_keep_their_role_after_the_developer_item() -> None:
+    result: Final = _transformed_system_prompt_request(
+        [
+            {"role": "system", "content": "Be concise."},
+            {"role": "system", "content": [{"type": "text", "text": "Marked."}]},
+            _HELLO_MESSAGE,
+        ]
+    )
+
+    assert result["input"] == [
+        _developer_item("Be concise."),
+        {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Marked."}]},
+        _HELLO_ITEM,
+    ]
+
+
 def test_transform_request_single_char_keys_not_matched():
     """Test that single-character keys are not incorrectly matched to 'metadata' or 'previous_response_id'
 
