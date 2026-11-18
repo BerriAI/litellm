@@ -10,6 +10,7 @@ mod chat_completions;
 mod error;
 mod headers;
 pub mod messages;
+mod model_restamp;
 mod ocr;
 mod request;
 mod responses;
@@ -149,6 +150,8 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
+        .layer(axum::middleware::map_response(model_restamp::restamp))
+        .layer(headers::layer())
         .with_state(gateway)
 }
 

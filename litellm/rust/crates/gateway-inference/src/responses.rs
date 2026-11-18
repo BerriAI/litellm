@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
-use axum::{Json, body::Bytes, extract::State, response::Response};
+use axum::{
+    Extension, Json,
+    body::Bytes,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use litellm_cache_response::CachePolicy;
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host::call::CallOutput;
@@ -12,6 +17,8 @@ use serde_json::{Map, Value};
 use crate::{
     Error, Gateway, JsonObject,
     caching::CacheHeaders,
+    headers::Routing,
+    model_restamp::ReportedModel,
     request,
     routing::{self, Host, RouteAttempt},
     stream_outcome,
@@ -47,13 +54,19 @@ pub(crate) async fn create<H: Host>(
         &attempt,
     )
     .await?;
-    let routed_headers = routing::headers(&routed);
+    let routing = Routing::served(&routed);
+    let reported = ReportedModel::of(&model, &routed);
     let (ran, cache) = routed.output.response;
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         Bytes::from(Error::from(error).responses_sse_frame())
     });
     let response = litellm_host_http::render(stream, ran)?;
-    Ok(routing::respond(routed_headers, cache.apply(response)))
+    Ok((
+        Extension(routing),
+        Extension(reported),
+        cache.apply(response),
+    )
+        .into_response())
 }
 
 struct ResponsesAttempt<'a, H> {

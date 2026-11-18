@@ -130,7 +130,9 @@ fn skip_bom(past_bom: &mut bool, src: &mut BytesMut) -> bool {
     true
 }
 
-fn block_end(bytes: &[u8]) -> Option<usize> {
+/// Where the first block of `bytes` ends, just past the blank line that closes it. `None` while no
+/// blank line arrived.
+pub fn block_end(bytes: &[u8]) -> Option<usize> {
     lines(bytes)
         .find(|(line, _)| line.is_empty())
         .map(|(_, end)| end)

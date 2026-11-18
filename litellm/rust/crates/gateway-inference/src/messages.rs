@@ -4,7 +4,7 @@ use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Extension, Json,
     body::Bytes,
     extract::State,
     http::HeaderMap,
@@ -23,6 +23,8 @@ use serde_json::{Map, Value};
 use crate::{
     Error, Gateway, JsonObject, RequestId,
     caching::CacheHeaders,
+    headers::Routing,
+    model_restamp::{ReportedModel, Stamp},
     request,
     routing::{self, Host, RouteAttempt},
     stream_outcome,
@@ -108,12 +110,48 @@ async fn handle<H: Host>(
         &attempt,
     )
     .await?;
-    let routed_headers = routing::headers(&routed);
+    let routing = Routing::served(&routed);
+    let reported = ReportedModel::of(&model, &routed).in_stream(message_start);
     let (ran, cache) = routed.output.response;
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let response = litellm_host_http::render(stream, ran)?;
-    Ok(routing::respond(routed_headers, cache.apply(response)))
+    Ok((
+        Extension(routing),
+        Extension(reported),
+        cache.apply(response),
+    )
+        .into_response())
+}
+
+/// Where a Messages stream names its model: the `message_start` event, the first one that is
+/// not a `ping`, as `AnthropicStreamModelRestamper` reads it.
+fn message_start(event: &Map<String, Value>, model: &str) -> Stamp {
+    let message = match (
+        event.get("type").and_then(Value::as_str),
+        event.get("message"),
+    ) {
+        (Some("ping"), _) => return Stamp::Later,
+        (Some("message_start"), Some(Value::Object(message))) => message,
+        _ => return Stamp::Never,
+    };
+    if message.get("model").and_then(Value::as_str) == Some(model) {
+        return Stamp::Never;
+    }
+    let message: Map<String, Value> = message
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .chain([("model".to_owned(), Value::from(model))])
+        .collect();
+    Stamp::Now(
+        event
+            .iter()
+            .map(|(name, value)| match name.as_str() {
+                "message" => (name.clone(), Value::Object(message.clone())),
+                _ => (name.clone(), value.clone()),
+            })
+            .collect(),
+    )
 }
 
 struct MessagesAttempt<'a, H> {
@@ -245,4 +283,44 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
         })
         .collect();
     (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    fn object(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    #[rstest]
+    #[case::message_start(
+        json!({"type": "message_start", "message": {"id": "msg_1", "model": "provider-model"}}),
+        Some(Some(json!({"type": "message_start", "message": {"id": "msg_1", "model": "public"}})))
+    )]
+    #[case::message_start_already_naming_it(
+        json!({"type": "message_start", "message": {"model": "public"}}),
+        Some(None)
+    )]
+    #[case::message_start_without_a_message(json!({"type": "message_start"}), Some(None))]
+    #[case::another_event(
+        json!({"type": "content_block_delta", "delta": {"text": "message_start"}}),
+        Some(None)
+    )]
+    #[case::a_ping(json!({"type": "ping"}), None)]
+    fn the_message_start_event_names_a_streams_model(
+        #[case] event: Value,
+        #[case] expected: Option<Option<Value>>,
+    ) {
+        let read = match message_start(&object(event), "public") {
+            Stamp::Later => None,
+            Stamp::Never => Some(None),
+            Stamp::Now(event) => Some(Some(Value::Object(event))),
+        };
+
+        assert_eq!(read, expected);
+    }
 }

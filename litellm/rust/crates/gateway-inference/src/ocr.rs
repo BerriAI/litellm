@@ -1,7 +1,7 @@
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{Extension, Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_inference_ocr::{
     OcrRoute,
     types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     Error, Gateway,
+    headers::Routing,
     request::{self, InferenceBody, Upload},
     routing::{self, Host, RouteAttempt},
 };
@@ -25,7 +26,7 @@ pub(crate) async fn create<H: Host>(
 ) -> Result<impl IntoResponse, Error> {
     handle(&gateway, &identity, &headers, body)
         .await
-        .map(|(headers, body)| (headers, Json(body)))
+        .map(|(routing, body)| (routing, Json(body)))
 }
 
 async fn handle<H: Host>(
@@ -36,7 +37,7 @@ async fn handle<H: Host>(
         fields: body,
         upload,
     }: InferenceBody,
-) -> Result<(HeaderMap, Value), Error> {
+) -> Result<(Extension<Routing>, Value), Error> {
     let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
@@ -64,7 +65,7 @@ async fn handle<H: Host>(
         options,
     };
     let routed = routing::call(gateway, identity, Op::OCR, "/ocr", &model, &attempt).await?;
-    Ok((routing::headers(&routed), routed.output.response))
+    Ok((Extension(Routing::served(&routed)), routed.output.response))
 }
 
 struct OcrAttempt<'a> {
