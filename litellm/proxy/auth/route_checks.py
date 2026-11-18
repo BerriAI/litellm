@@ -162,17 +162,17 @@ class RouteChecks:
             and valid_token.metadata.get("password_reset_required") is not True
         ):
             return True
-        return RouteChecks._assert_key_allowed_routes_grant(route=route, valid_token=valid_token, request=request)
+        return RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=valid_token, request=request)
 
     @staticmethod
     def key_allowed_routes_grant(route: str, valid_token: UserAPIKeyAuth) -> bool:
         try:
-            return RouteChecks._assert_key_allowed_routes_grant(route=route, valid_token=valid_token)
+            return RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=valid_token)
         except HTTPException:
             return False
 
     @staticmethod
-    def _assert_key_allowed_routes_grant(
+    def assert_key_allowed_routes_grant(
         route: str,
         valid_token: UserAPIKeyAuth,
         request: Request | None = None,

@@ -6020,15 +6020,15 @@ async def test_view_spend_logs_internal_user_combines_user_with_api_key(client, 
 
     start_date = "2024-01-01"
     end_date = "2024-12-31"
-    own_key_hash = hash_token_if_needed("sk-some-raw-token")
-    other_key_hash = hash_token_if_needed("sk-another-users-token")
+    own_key_hash: Final = hash_token_if_needed("sk-some-raw-token")
+    other_key_hash: Final = hash_token_if_needed("sk-another-users-token")
     ps.user_api_key_cache.set_cache(key=own_key_hash, value=UserAPIKeyAuth(user_id="internal-user-1"))
     ps.user_api_key_cache.set_cache(key=other_key_hash, value=UserAPIKeyAuth(user_id="internal-user-2"))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
         user_id="internal-user-1",
     )
-    params = {"start_date": start_date, "end_date": end_date, "summarize": "false"}
+    params: Final = {"start_date": start_date, "end_date": end_date, "summarize": "false"}
     try:
         response = client.get(
             "/spend/logs",
@@ -6042,7 +6042,7 @@ async def test_view_spend_logs_internal_user_combines_user_with_api_key(client, 
         assert where["api_key"] == "hashed::sk-some-raw-token"
         assert "startTime" in where
 
-        foreign = client.get(
+        foreign: Final = client.get(
             "/spend/logs",
             params={**params, "api_key": "sk-another-users-token"},
             headers={"Authorization": "Bearer sk-test"},
@@ -6052,6 +6052,25 @@ async def test_view_spend_logs_internal_user_combines_user_with_api_key(client, 
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
         ps.user_api_key_cache.delete_cache(own_key_hash)
         ps.user_api_key_cache.delete_cache(other_key_hash)
+
+
+def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(client, monkeypatch):
+    mock_client: Final = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.ORG_ADMIN,
+        user_id="org-admin-1",
+    )
+    try:
+        response: Final = client.get(
+            "/spend/logs",
+            params={"start_date": "2024-01-01", "end_date": "2024-12-31", "summarize": "false", "user_id": "member-1"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert mock_client.db.captured_where["user"] == "member-1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio

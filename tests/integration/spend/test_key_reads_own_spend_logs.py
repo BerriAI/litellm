@@ -6,7 +6,7 @@ from typing import Final
 
 import psycopg
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, string_value
 
 
 def _seed_spend_row(request_id: str, key: str, user: str = "") -> None:
@@ -118,6 +118,17 @@ def test_internal_user_is_refused_filters_outside_their_own_spend_logs(gateway: 
             readable = gateway.request("GET", route, params={**params, **readable_filter}, key=own_key)
             assert readable.status_code == 200, f"{readable_filter}: {readable.text[:300]}"
             assert _request_ids(readable.json()) == (own_request,), f"{readable_filter}: {readable.text[:500]}"
+
+        deleted_key: Final = string_value(gateway.post("/key/generate", {"user_id": own_user})["key"])
+        deleted_request: Final = f"deleted-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_spend_rows, (deleted_request,))
+        _seed_spend_row(deleted_request, deleted_key, own_user)
+        gateway.post("/key/delete", {"keys": [deleted_key]})
+        historical: Final = gateway.request(
+            "GET", route, params={**params, "api_key": sha256(deleted_key.encode()).hexdigest()}, key=own_key
+        )
+        assert historical.status_code == 200, historical.text
+        assert _request_ids(historical.json()) == (deleted_request,), historical.text[:500]
 
         for foreign_filter in (
             {"user_id": other_user},

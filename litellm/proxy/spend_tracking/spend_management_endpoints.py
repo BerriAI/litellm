@@ -3572,16 +3572,9 @@ async def view_spend_logs(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if _reads_spend_logs_as_key(user_api_key_dict, route="/spend/logs"):
-            api_key = _own_spend_log_api_key(  # rebind-ok: the handler's filters read the caller-supplied names
-                user_api_key_dict, api_key=api_key, user_id=user_id
-            )
-        elif not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
-            if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
-                await _assert_internal_user_can_read_filters(
-                    prisma_client, user_api_key_dict, api_key=api_key, user_id=user_id, readable_team_ids=()
-                )
-            user_id = user_api_key_dict.user_id
+        api_key, user_id = await _legacy_spend_log_owner_filters(  # rebind-ok: the handler's filters read these names
+            prisma_client, user_api_key_dict, api_key=api_key, user_id=user_id
+        )
         if (
             start_date is not None
             and isinstance(start_date, str)
@@ -4972,13 +4965,31 @@ def _own_spend_log_api_key(user_api_key_dict: UserAPIKeyAuth, *, api_key: str | 
     """The caller's own hashed key, the only spend-log owner a key without an admin or internal-user role may read."""
     own_api_key: Final = user_api_key_dict.token or user_api_key_dict.api_key
     requested_api_key: Final = hash_token_if_needed(api_key) if api_key is not None else None
-    if (
-        own_api_key is None
-        or (requested_api_key is not None and requested_api_key != hash_token_if_needed(own_api_key))
-        or (user_id is not None and user_id != user_api_key_dict.user_id)
-    ):
+    if own_api_key is None:
         raise _spend_log_filter_forbidden()
-    return hash_token_if_needed(own_api_key)
+    own_hash: Final = hash_token_if_needed(own_api_key)
+    if requested_api_key is not None and requested_api_key != own_hash:
+        raise _spend_log_filter_forbidden()
+    if user_id is not None and user_id != user_api_key_dict.user_id:
+        raise _spend_log_filter_forbidden()
+    return own_hash
+
+
+async def _legacy_spend_log_owner_filters(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    api_key: str | None,
+    user_id: str | None,
+) -> tuple[str | None, str | None]:
+    if _reads_spend_logs_as_key(user_api_key_dict, route="/spend/logs"):
+        return _own_spend_log_api_key(user_api_key_dict, api_key=api_key, user_id=user_id), user_id
+    if not _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+        return api_key, user_id
+    await _assert_internal_user_can_read_filters(
+        prisma_client, user_api_key_dict, api_key=api_key, user_id=user_id, readable_team_ids=()
+    )
+    return api_key, user_api_key_dict.user_id
 
 
 def _spend_log_filter_forbidden() -> HTTPException:
@@ -5008,8 +5019,8 @@ async def _assert_internal_user_can_read_filters(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
-    except ProxyException as error:
-        raise _spend_log_filter_forbidden() from error
+    except ProxyException:
+        return
     owns_key: Final = key_owner.user_id is not None and key_owner.user_id == user_api_key_dict.user_id
     if not owns_key and key_owner.team_id not in readable_team_ids:
         raise _spend_log_filter_forbidden()
