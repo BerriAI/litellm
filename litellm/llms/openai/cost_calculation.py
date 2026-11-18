@@ -12,10 +12,12 @@ from typing_extensions import Buffer
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     TranscriptionDocument,
+    VideoDocument,
     price_units,
     prompt_and_completion,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.rust_bridge._native import NativeReceipt
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -144,6 +146,43 @@ def video_clip_cost(model_info: Mapping[str, object], duration: object, resoluti
     return prices.get(requested_key, {}).get(resolution.strip().lower())
 
 
+def priced_video(
+    model: str,
+    custom_llm_provider: str | None,
+    seconds: float | None,
+    video_resolution: str | None,
+    deployment: Mapping[str, object] | None,
+    catalog: Mapping[str, object] | None,
+    videos: int = 1,
+    input_images: int = 0,
+    requested_row: Mapping[str, object] | None = None,
+) -> float:
+    """The cost of ``videos`` videos and the billable input images. ``deployment`` replaces ``catalog``, the row the
+    caller looked up for the model, and ``requested_row`` is read for an input image rate the deployment lacks."""
+    outcome: Final = price_units(
+        VideoDocument(
+            kind="video",
+            model=model,
+            provider=custom_llm_provider,
+            seconds=seconds,
+            resolution=video_resolution.strip().lower() if video_resolution is not None else None,
+            videos=videos,
+            input_images=input_images,
+            deployment=deployment is not None,
+            requested_row=requested_row is not None,
+        ),
+        tuple(table for table in (deployment, requested_row) if table is not None),
+        catalog,
+    )
+    if isinstance(outcome, NativeReceipt):
+        return outcome.total
+    verbose_logger.warning(
+        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
+        model,
+    )
+    return 0.0
+
+
 def video_generation_cost(
     model: str,
     duration_seconds: float,
@@ -166,39 +205,13 @@ def video_generation_cost(
     Returns:
         float - total_cost_in_usd
     """
-    ## GET MODEL INFO
-    if model_info is None:
-        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
-
-    clip_cost: Final = video_clip_cost(model_info, duration_seconds, video_resolution)
-    if clip_cost is not None:
-        return clip_cost
-
-    video_cost: Final = model_info.get("output_cost_per_video")
-    if video_cost is not None:
-        return video_cost
-
-    # Check for video-specific cost per second
-    video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")
-    if video_cost_per_second is not None:
-        verbose_logger.debug(
-            "For model=%s - output_cost_per_video_per_second: %s; duration: %s",
-            model,
-            video_cost_per_second,
-            duration_seconds,
-        )
-        return video_cost_per_second * duration_seconds
-
-    output_cost_per_second: Final = video_output_cost_per_second(model_info, video_resolution)
-    if output_cost_per_second is not None:
-        verbose_logger.debug(
-            "For model=%s - output_cost_per_second: %s; duration: %s", model, output_cost_per_second, duration_seconds
-        )
-        return output_cost_per_second * duration_seconds
-
-    # If no cost information found, return 0
-    verbose_logger.warning(
-        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
-        model,
+    return priced_video(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        seconds=duration_seconds,
+        video_resolution=video_resolution,
+        deployment=model_info,
+        catalog=None
+        if model_info is not None
+        else get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai"),
     )
-    return 0.0

@@ -118,8 +118,7 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
-    video_clip_cost,
-    video_output_cost_per_second,
+    priced_video,
 )
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
@@ -2327,22 +2326,31 @@ def completion_cost(
                             return float(provider_reported_cost)
 
                         if duration_seconds is not None:
-                            # Calculate cost based on video duration using video-specific cost calculation
-                            from litellm.llms.openai.cost_calculation import (
-                                video_generation_cost,
-                            )
-
-                            return video_generation_cost(
+                            input_images: Final = _billable_input_images(_video_usage_obj)
+                            return priced_video(
                                 model=model,
-                                duration_seconds=duration_seconds,
                                 custom_llm_provider=custom_llm_provider,
-                                model_info=_video_model_info,
+                                seconds=duration_seconds,
                                 video_resolution=video_resolution,
-                            ) * _video_count(_video_usage_obj) + _video_input_image_cost(
-                                requested_model or model,
-                                custom_llm_provider,
-                                _video_model_info,
-                                getattr(completion_response, "usage", None),
+                                deployment=_video_model_info,
+                                catalog=None
+                                if _video_model_info is not None
+                                else litellm.get_model_info(
+                                    model=model, custom_llm_provider=custom_llm_provider or "openai"
+                                ),
+                                videos=_video_count(_video_usage_obj),
+                                input_images=input_images,
+                                requested_row=(
+                                    litellm.get_model_info(
+                                        model=requested_model or model, custom_llm_provider=custom_llm_provider
+                                    )
+                                    if input_images > 0
+                                    and (
+                                        _video_model_info is None
+                                        or _video_model_info.get("input_cost_per_image") is None
+                                    )
+                                    else None
+                                ),
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
@@ -2351,7 +2359,8 @@ def completion_cost(
                         custom_llm_provider=custom_llm_provider,
                         model_info=_video_model_info,
                         video_resolution=video_resolution,
-                    ) * _video_count(_video_usage_obj)
+                        videos=_video_count(_video_usage_obj),
+                    )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = _speech_billed_characters(
                         completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
@@ -2805,25 +2814,12 @@ def _video_count(usage: object) -> int:
     return count if type(count) is int and count > 1 else 1
 
 
-def _video_input_image_cost(
-    model: str,
-    custom_llm_provider: str | None,
-    model_info: ModelInfo | None,
-    usage: object,
-) -> float:
+def _billable_input_images(usage: object) -> int:
     match usage:
         case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
-            deployment_rate: Final = model_info.get("input_cost_per_image") if model_info is not None else None
-            image_rate: Final = (
-                deployment_rate
-                if deployment_rate is not None
-                else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
-                    "input_cost_per_image"
-                )
-            )
-            return billable_input_images * image_rate if isinstance(image_rate, (int, float)) else 0.0
+            return billable_input_images
         case _:
-            return 0.0
+            return 0
 
 
 _LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
@@ -3233,15 +3229,13 @@ def default_image_cost_calculator(
     return cost
 
 
-_VIDEO_COST_INFO: Final = TypeAdapter(Mapping[str, object])
-
-
 def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
     video_resolution: str | None = None,
+    videos: int = 1,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -3254,6 +3248,7 @@ def default_video_cost_calculator(
             custom video pricing. When provided, used before falling back to
             the global litellm.model_cost lookup.
         video_resolution (Optional[str]): From usage (e.g. ``720p``, ``1080p``) for tiered per-second pricing.
+        videos (int): How many videos the call generated, each billed the same
 
     Returns:
         float: Cost in USD for the video generation
@@ -3298,29 +3293,15 @@ def default_video_cost_calculator(
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
 
-    clip_cost: Final = video_clip_cost(_VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution)
-    if clip_cost is not None:
-        return clip_cost
-
-    video_cost: Final = cost_info.get("output_cost_per_video")
-    if video_cost is not None:
-        return video_cost
-
-    # Check for video-specific cost per second first
-    video_cost_per_second: Final = cost_info.get("output_cost_per_video_per_second")
-    if video_cost_per_second is not None:
-        return video_cost_per_second * duration_seconds
-
-    output_cost_per_second: Final = video_output_cost_per_second(cost_info, video_resolution)
-    if output_cost_per_second is not None:
-        return output_cost_per_second * duration_seconds
-
-    # If no cost information found, return 0
-    verbose_logger.info(
-        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
-        model,
+    return priced_video(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        seconds=duration_seconds,
+        video_resolution=video_resolution,
+        deployment=model_info,
+        catalog=None if model_info is not None else cost_info,
+        videos=videos,
     )
-    return 0.0
 
 
 def _optional_batch_rate(

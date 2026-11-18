@@ -52,6 +52,8 @@ pub enum OutputUnit {
     VideoSecond,
     Video,
     BillableUnit,
+    /// One clip of a fixed length and resolution, `output_cost_per_video_clip`
+    VideoClip(VideoClip),
 }
 
 /// `Explicit` is a cache the caller created ahead of time, spelled `explicit_cache_read_*`. `Implicit` is every other read
@@ -103,6 +105,13 @@ pub struct ImageSize(Box<str>);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Resolution(Box<str>);
+
+/// A clip table cell as the cost map writes it: the length, such as `8s`, and the resolution, such as `720p`
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VideoClip {
+    pub length: Box<str>,
+    pub resolution: Box<str>,
+}
 
 impl Meter {
     pub(crate) const TEXT_INPUT: Self = Self::Input(InputUnit::Token(TokenKind::Text));

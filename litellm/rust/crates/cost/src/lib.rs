@@ -24,6 +24,7 @@ mod transcription;
 mod units;
 pub mod usage;
 mod vector_store;
+mod video;
 
 pub use bound::bound;
 pub use calculate::calculate;

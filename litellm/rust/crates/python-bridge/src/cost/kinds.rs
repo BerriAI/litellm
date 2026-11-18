@@ -8,7 +8,7 @@
 use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::query::{
     AdjustmentPolicy, Basis, Candidate, Header, OcrQuery, PriceQuery, PriceSource, Provider,
-    RerankQuery, SearchQuery, SpeechQuery, TranscriptionQuery, VectorStoreSearchQuery,
+    RerankQuery, SearchQuery, SpeechQuery, TranscriptionQuery, VectorStoreSearchQuery, VideoQuery,
 };
 use litellm_cost::receipt::{PriceOutcome, Unpriced};
 use litellm_cost::row::RowRef;
@@ -62,6 +62,23 @@ enum UnitsDocument {
         seconds: f64,
         #[serde(default)]
         tokens: bool,
+    },
+    Video {
+        #[serde(flatten)]
+        named: Named,
+        #[serde(default)]
+        seconds: Option<f64>,
+        #[serde(default)]
+        resolution: Option<Box<str>>,
+        videos: u64,
+        #[serde(default)]
+        input_images: u64,
+        /// `tables` holds the deployment's own table first, which replaces the catalog row
+        #[serde(default)]
+        deployment: bool,
+        /// The last of `tables` is the requested model's row, read for an input image rate
+        #[serde(default)]
+        requested_row: bool,
     },
     Search {
         #[serde(flatten)]
@@ -123,7 +140,8 @@ pub(crate) fn price_units(
         | UnitsDocument::Ocr { named, .. }
         | UnitsDocument::Speech { named, .. }
         | UnitsDocument::Transcription { named, .. }
-        | UnitsDocument::Search { named, .. } => named,
+        | UnitsDocument::Search { named, .. }
+        | UnitsDocument::Video { named, .. } => named,
     };
     let provider = named.provider.as_deref().unwrap_or_default();
     let candidate = Candidate {
@@ -149,11 +167,26 @@ pub(crate) fn price_units(
             Ok((rows, given.into_iter().chain([at]).collect::<Vec<RowRef>>()))
         },
     )?;
+    let (rows_given, image_rows) = match &document {
+        UnitsDocument::Video {
+            deployment,
+            requested_row,
+            ..
+        } => {
+            let deployment_row = given.first().filter(|_| *deployment).cloned();
+            let requested = given.last().filter(|_| *requested_row).cloned();
+            (
+                deployment_row.iter().cloned().collect(),
+                deployment_row.into_iter().chain(requested).collect(),
+            )
+        }
+        _ => (given, Vec::new()),
+    };
     let header = Header {
         candidates: vec![candidate],
-        source: match given.is_empty() {
+        source: match rows_given.is_empty() {
             true => PriceSource::Catalog,
-            false => PriceSource::Rows { rows: given },
+            false => PriceSource::Rows { rows: rows_given },
         },
         basis: Basis {
             service_tier: Default::default(),
@@ -217,6 +250,20 @@ pub(crate) fn price_units(
             header,
             seconds,
             tokens,
+        })),
+        UnitsDocument::Video {
+            seconds,
+            resolution,
+            videos,
+            input_images,
+            ..
+        } => PriceQuery::Video(Box::new(VideoQuery {
+            header,
+            seconds,
+            resolution,
+            videos,
+            input_images,
+            input_image_rows: image_rows,
         })),
         UnitsDocument::Search {
             queries,

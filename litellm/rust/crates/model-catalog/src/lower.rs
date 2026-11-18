@@ -7,7 +7,8 @@ use litellm_cost::money::{Multiplier, UnitPrice};
 use litellm_cost::price::{
     Adjustments, Band, BandEdge, Billing, CacheReadFallback, CacheReadMode, CacheTtl,
     GuardrailUnit, InputUnit, Meter, OffPeak, OffPeakRates, OutputUnit, Price, Prices, Residency,
-    SearchContextSize, TextUnit, TierScope, TokenKind, Uplift, WallClock, WebSearchUnit, When,
+    SearchContextSize, TextUnit, TierScope, TokenKind, Uplift, VideoClip, WallClock, WebSearchUnit,
+    When,
 };
 use litellm_cost::schedule::{Schedule, Window};
 
@@ -161,7 +162,8 @@ fn lowered(wire: &EntryWire, flat: &[FlatPrice], tiers: Tiers) -> (Prices, Vec<E
     let sourced = flat_prices(flat)
         .chain(tiered)
         .chain(search_context_prices(wire))
-        .chain(guardrail_prices(wire));
+        .chain(guardrail_prices(wire))
+        .chain(video_clip_prices(wire));
     let rates = dedupe(sourced, &mut problems);
     let off_peak = wire
         .off_peak
@@ -569,6 +571,27 @@ fn guardrail_prices(wire: &EntryWire) -> impl Iterator<Item = Sourced> + '_ {
         rate: *rate,
         source: format!("guardrail_cost_per_unit.{unit}"),
         path: pointer_child(&pointer_for_key("guardrail_cost_per_unit"), unit),
+    })
+}
+
+fn video_clip_prices(wire: &EntryWire) -> impl Iterator<Item = Sourced> + '_ {
+    let table = wire.output_cost_per_video_clip.iter().flatten();
+    table.flat_map(|(length, resolutions)| {
+        resolutions.iter().map(move |(resolution, rate)| Sourced {
+            price: Price::online(
+                Meter::Output(OutputUnit::VideoClip(VideoClip {
+                    length: length.as_str().into(),
+                    resolution: resolution.as_str().into(),
+                })),
+                When::default(),
+            ),
+            rate: *rate,
+            source: format!("output_cost_per_video_clip.{length}.{resolution}"),
+            path: pointer_child(
+                &pointer_child(&pointer_for_key("output_cost_per_video_clip"), length),
+                resolution,
+            ),
+        })
     })
 }
 
@@ -1086,6 +1109,29 @@ mod tests {
             [(TEXT_INPUT, Band::Base, 9e-6)]
         );
         assert_eq!(billed.for_prompt(1).billing(), Billing::default());
+    }
+
+    #[rstest]
+    fn each_clip_table_cell_lowers_to_its_own_clip_price() {
+        let billed = billed_wire(json!({"output_cost_per_video_clip": {
+            "4s": {"720p": 0.4, "1080p": 0.6},
+            "8s": {"720p": 0.8}
+        }}));
+        let clip = |length: &str, resolution: &str| {
+            Meter::Output(OutputUnit::VideoClip(VideoClip {
+                length: length.into(),
+                resolution: resolution.into(),
+            }))
+        };
+
+        assert_eq!(
+            rates(billed.for_prompt(0)),
+            [
+                (clip("4s", "1080p"), Band::Base, 0.6),
+                (clip("4s", "720p"), Band::Base, 0.4),
+                (clip("8s", "720p"), Band::Base, 0.8),
+            ]
+        );
     }
 
     #[rstest]
