@@ -123,12 +123,7 @@ class NativeProvenance:
 @final
 class NativePrices:
     def __new__(cls, row: Mapping[str, object], provider: str | None) -> NativePrices: ...
-    def calculate(self, usage: NativeTokenUsage, call: NativeCallContext) -> NativePriced: ...
     def quote(self, prompt_tokens: int, call: NativeCallContext) -> NativeQuote: ...
-
-@final
-class NativeTokenUsage:
-    def __new__(cls, quantities: Mapping[str, object]) -> NativeTokenUsage: ...
 
 @final
 class NativeCallContext:
@@ -140,13 +135,6 @@ class NativeCallContext:
         vertex_location: str | None,
         at: datetime,
     ) -> NativeCallContext: ...
-
-@final
-class NativePriced:
-    @property
-    def prompt_cost(self) -> float: ...
-    @property
-    def completion_cost(self) -> float: ...
 
 @final
 class NativeQuote:
@@ -2315,7 +2303,6 @@ __all__ = [
     "NativeParallelRequestLimiter",
     "NativeParallelRequestLimiterState",
     "NativePending",
-    "NativePriced",
     "NativePrices",
     "NativeProvenance",
     "NativeQuote",
@@ -2337,7 +2324,6 @@ __all__ = [
     "NativeSpendCounters",
     "NativeTableSwapped",
     "NativeTokenRedactor",
-    "NativeTokenUsage",
     "NativeUnpriced",
     "NativeUsageRead",
     "PostCallSettlement",

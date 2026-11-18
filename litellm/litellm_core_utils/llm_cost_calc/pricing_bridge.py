@@ -10,18 +10,22 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import current_billing_time
 from litellm.litellm_core_utils.get_model_cost_map import model_cost_inputs
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     BilledUsage,
+    CacheReadCounts,
+    CacheWriteCounts,
+    ModalityCounts,
     billed_usage,
+    parse_completion_tokens_details,
     parse_prompt_tokens_details,
 )
 from litellm.rust_bridge._native import NativeRateCard, NativeReceipt, NativeUnpriced
-from litellm.types.utils import Usage
+from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 SearchContextSize = Literal["low", "medium", "high"]
 
@@ -54,29 +58,20 @@ class CallFacts(TypedDict):
 
 
 class ModelFacts(TypedDict):
-    """One model a ``cost_per_token`` caller names."""
+    """One model a ``cost_per_token`` caller names. ``row_provider`` lowers the row the caller passed when it is not
+    the call's provider, as Fireworks AI bills a row it found under another provider."""
 
     by: ReadOnly[Literal["model"]]
     model: ReadOnly[str]
     provider: ReadOnly[str]
     region: ReadOnly[str | None]
+    row_provider: ReadOnly[NotRequired[str]]
 
 
 class AdjustFacts(TypedDict):
     provider: ReadOnly[str | None]
     model: ReadOnly[str | None]
     region: ReadOnly[str | None]
-
-
-class _PriceDocument(TypedDict):
-    named: ReadOnly[CallFacts | ModelFacts]
-    usage: ReadOnly[PricedUsage]
-    requested_model: ReadOnly[str | None]
-    service_tier: ReadOnly[str | None]
-    data_residency: ReadOnly[str | None]
-    vertex_location: ReadOnly[str | None]
-    at: ReadOnly[str]
-    adjust: ReadOnly[AdjustFacts | None]
 
 
 class RerankDocument(TypedDict):
@@ -170,6 +165,73 @@ class BatchUsage(TypedDict):
     audio_tokens: ReadOnly[int]
     image_tokens: ReadOnly[int]
     video_tokens: ReadOnly[int]
+
+
+TokenRules = Literal["branch", "generic", "override"]
+
+
+class Elapsed(TypedDict):
+    """How long the call ran and the audio file it read, for a row billed by the second."""
+
+    response_ms: ReadOnly[float]
+    audio_seconds: ReadOnly[float]
+
+
+class Characters(TypedDict):
+    """The prompt and completion characters Vertex AI bills, ``None`` for a side nobody counted."""
+
+    prompt: ReadOnly[int | None]
+    completion: ReadOnly[int | None]
+
+
+class RawCounts(TypedDict):
+    """Counts as the provider reported them, for the provider branches that bill those rather than the billed split."""
+
+    completion_tokens: ReadOnly[int]
+    cached_tokens: ReadOnly[int]
+    cache_creation_tokens: ReadOnly[int]
+    cache_writes: ReadOnly[WritesByTtl | None]
+    reasoning_tokens: ReadOnly[int]
+    stated_reasoning_tokens: ReadOnly[int]
+    citation_tokens: ReadOnly[int]
+    search_queries: ReadOnly[int]
+
+
+class ReportedCost(TypedDict):
+    source: ReadOnly[str]
+    usd: ReadOnly[float]
+
+
+class CustomRates(TypedDict):
+    input: ReadOnly[float]
+    output: ReadOnly[float]
+    cache_read: ReadOnly[float | None]
+    cache_write: ReadOnly[float | None]
+
+
+class CustomPricing(TypedDict):
+    """``custom_cost_per_token`` or ``custom_cost_per_second``, whichever the caller set."""
+
+    per_token: ReadOnly[CustomRates | None]
+    per_second: ReadOnly[float | None]
+
+
+class _PriceDocument(TypedDict):
+    named: ReadOnly[CallFacts | ModelFacts]
+    usage: ReadOnly[PricedUsage]
+    requested_model: ReadOnly[str | None]
+    service_tier: ReadOnly[str | None]
+    data_residency: ReadOnly[str | None]
+    vertex_location: ReadOnly[str | None]
+    at: ReadOnly[str]
+    adjust: ReadOnly[AdjustFacts | None]
+    rules: ReadOnly[TokenRules]
+    elapsed: ReadOnly[Elapsed | None]
+    characters: ReadOnly[Characters | None]
+    embedding: ReadOnly[bool]
+    raw: ReadOnly[RawCounts | None]
+    reported: ReadOnly[ReportedCost | None]
+    custom: ReadOnly[CustomPricing | None]
 
 
 class BatchLineDocument(TypedDict):
@@ -288,6 +350,19 @@ FeeDocument: TypeAlias = A2aDocument | McpDocument | GuardrailDocument | PromptS
 
 
 @dataclass(frozen=True, slots=True)
+class BranchFacts:
+    """What a ``cost_per_token`` provider branch reads beside the billed usage."""
+
+    rules: TokenRules = "branch"
+    elapsed: Elapsed | None = None
+    characters: Characters | None = None
+    embedding: bool = False
+    raw: RawCounts | None = None
+    reported: ReportedCost | None = None
+    custom: CustomPricing | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AdjustedCost:
     cost: float
     discount_percent: float
@@ -317,6 +392,40 @@ def priced_usage(usage: Usage, web_search: WebSearchUse | None) -> PricedUsage:
     )
 
 
+def _count(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
+
+
+def _writes_by_ttl(details: CacheCreationTokenDetails | None) -> WritesByTtl | None:
+    if details is None:
+        return None
+    return WritesByTtl(
+        five_minutes=details.ephemeral_5m_input_tokens,
+        thirty_minutes=details.ephemeral_30m_input_tokens,
+        one_hour=details.ephemeral_1h_input_tokens,
+        twelve_hours=details.ephemeral_12h_input_tokens,
+    )
+
+
+def raw_counts(usage: Usage) -> RawCounts:
+    """``usage``'s counts as the provider reported them, before the billed split removes their overlap."""
+    prompt: Final = parse_prompt_tokens_details(usage)
+    completion: Final = parse_completion_tokens_details(usage)
+    details: Final = usage.prompt_tokens_details
+    stated_reasoning: Final = _count(getattr(usage, "reasoning_tokens", 0))
+    return RawCounts(
+        completion_tokens=_count(usage.completion_tokens),
+        cached_tokens=_count(prompt["cache_hit_tokens"]),
+        cache_creation_tokens=_count(prompt["cache_creation_tokens"]),
+        cache_writes=_writes_by_ttl(prompt["cache_creation_token_details"]),
+        reasoning_tokens=_count(completion["reasoning_tokens"]),
+        stated_reasoning_tokens=stated_reasoning
+        or _count(getattr(usage.completion_tokens_details, "reasoning_tokens", 0)),
+        citation_tokens=_count(getattr(usage, "citation_tokens", 0)),
+        search_queries=_count(getattr(details, "web_search_requests", 0)),
+    )
+
+
 def _search_context(size: str | None) -> SearchContextSize | None:
     if size == "low":
         return "low"
@@ -343,7 +452,9 @@ def price(
     adjust: AdjustFacts | None = None,
     row: Mapping[str, object] | None = None,
     current_time: datetime | None = None,
+    branch: BranchFacts | None = None,
 ) -> NativeReceipt | None:
+    facts: Final = branch or BranchFacts()
     document: Final = _PriceDocument(
         named=named,
         usage=usage,
@@ -353,27 +464,103 @@ def price(
         vertex_location=vertex_location,
         at=_billed_at(current_time),
         adjust=adjust,
+        rules=facts.rules,
+        elapsed=facts.elapsed,
+        characters=facts.characters,
+        embedding=facts.embedding,
+        raw=facts.raw,
+        reported=facts.reported,
+        custom=facts.custom,
     )
     return model_cost_inputs.price(document, row)
 
 
-def price_model(
+def branch_cost(
     model: str,
     provider: str,
     usage: Usage,
+    row: Mapping[str, object] | None,
     service_tier: str | None = None,
-    row: Mapping[str, object] | None = None,
-) -> tuple[float, float] | None:
-    """``cost_per_token``'s prompt and completion cost of ``usage`` on ``model``, ``None`` when Rust leaves it to
-    Python. ``row`` is a price row the caller resolved for this call. ``cost_per_token`` never bills the web search
-    fee, ``completion_cost`` adds it, so the search count stays out of the price."""
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    branch: BranchFacts | None = None,
+    row_provider: str | None = None,
+    current_time: datetime | None = None,
+) -> tuple[float, float]:
+    """``cost_per_token``'s prompt and completion cost of ``usage`` on ``row``, the row ``provider``'s branch looked up
+    for ``model``, priced by that branch's rules in Rust."""
+    facts: Final = branch or BranchFacts()
+    named: Final = (
+        ModelFacts(by="model", model=model, provider=provider, region=None)
+        if row_provider is None
+        else ModelFacts(by="model", model=model, provider=provider, region=None, row_provider=row_provider)
+    )
     receipt: Final = price(
-        ModelFacts(by="model", model=model, provider=provider, region=None),
+        named,
         priced_usage(usage, web_search=None),
         service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
         row=row,
+        current_time=current_time,
+        branch=BranchFacts(
+            rules=facts.rules,
+            elapsed=facts.elapsed,
+            characters=facts.characters,
+            embedding=facts.embedding,
+            raw=raw_counts(usage),
+            reported=facts.reported,
+            custom=facts.custom,
+        ),
     )
-    return None if receipt is None else (receipt.prompt_cost, receipt.completion_cost)
+    if receipt is None:
+        raise ValueError(f"No price for model={model}, custom_llm_provider={provider}")
+    return receipt.prompt_cost, receipt.completion_cost
+
+
+def custom_pricing_usage(
+    prompt_tokens: int, completion_tokens: int, cached_tokens: int, cache_creation_tokens: int
+) -> PricedUsage:
+    """The counts ``custom_cost_per_token`` bills: the prompt with every cache read and write in it, and the
+    completion."""
+    no_tokens: Final = ModalityCounts(text=0, audio=0, image=0, video=0)
+    return PricedUsage(
+        prompt_tokens=prompt_tokens,
+        input=no_tokens,
+        cache_read=CacheReadCounts(text=cached_tokens, audio=0, image=0, explicit=False),
+        cache_write=CacheWriteCounts(default=cache_creation_tokens, one_hour=0, twelve_hours=0),
+        output=ModalityCounts(text=completion_tokens, audio=0, image=0, video=0),
+        reasoning=0,
+        input_characters=0,
+        input_images=0,
+        input_audio_seconds=0.0,
+        input_video_seconds=0.0,
+        queries=0,
+        web_search=None,
+        speed=None,
+        inference_geo=None,
+    )
+
+
+def custom_cost(
+    model: str,
+    provider: str,
+    usage: PricedUsage,
+    custom: CustomPricing,
+    response_time_ms: float | None,
+) -> tuple[float, float]:
+    """``custom_cost_per_token`` or ``custom_cost_per_second`` applied to ``usage``."""
+    receipt: Final = price(
+        ModelFacts(by="model", model=model, provider=provider, region=None),
+        usage,
+        branch=BranchFacts(
+            elapsed=Elapsed(response_ms=response_time_ms or 0.0, audio_seconds=0.0),
+            custom=custom,
+        ),
+    )
+    if receipt is None:
+        raise ValueError(f"Custom pricing left model={model} unpriced")
+    return receipt.prompt_cost, receipt.completion_cost
 
 
 def price_units(
@@ -399,14 +586,7 @@ def batch_usage(usage: Usage) -> BatchUsage:
         cache_hit_audio_tokens=details["cache_hit_audio_tokens"],
         cached_image_tokens=details["cached_image_tokens"],
         cache_creation_tokens=details["cache_creation_tokens"],
-        cache_creation_by_ttl=None
-        if ttl is None
-        else WritesByTtl(
-            five_minutes=ttl.ephemeral_5m_input_tokens,
-            thirty_minutes=ttl.ephemeral_30m_input_tokens,
-            one_hour=ttl.ephemeral_1h_input_tokens,
-            twelve_hours=ttl.ephemeral_12h_input_tokens,
-        ),
+        cache_creation_by_ttl=_writes_by_ttl(ttl),
         audio_tokens=details["audio_tokens"],
         image_tokens=details["image_tokens"],
         video_tokens=details["video_tokens"],

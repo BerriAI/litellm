@@ -23,11 +23,7 @@ use litellm_cost::price::{
     Adjustments, CacheReadMode, CacheTtl, Channel, InputUnit, Meter, OutputUnit, Residency,
     ServiceTier, TokenKind,
 };
-use litellm_cost::priced::Outcome;
-use litellm_cost::query::TokenUsage;
 use litellm_cost::quote::Quote;
-use litellm_cost::usage::Usage;
-use litellm_host_python::from_py_argument;
 use litellm_model_catalog::wire::{EntryWire, Fields};
 use litellm_model_catalog::{BilledPrices, billed_prices};
 use pyo3::exceptions::PyValueError;
@@ -55,28 +51,10 @@ pub(crate) struct NativePrices {
 
 #[pyclass(
     frozen,
-    name = "NativeTokenUsage",
-    module = "litellm.rust_bridge._native"
-)]
-pub(crate) struct NativeTokenUsage(Usage);
-
-#[pyclass(
-    frozen,
     name = "NativeCallContext",
     module = "litellm.rust_bridge._native"
 )]
 pub(crate) struct NativeCallContext(CallContext);
-
-#[pyclass(
-    frozen,
-    get_all,
-    name = "NativePriced",
-    module = "litellm.rust_bridge._native"
-)]
-pub(crate) struct NativePriced {
-    prompt_cost: f64,
-    completion_cost: f64,
-}
 
 /// The rates one call bills at before `uplift`. A meter the row has no price for reads 0.0
 #[pyclass(
@@ -112,20 +90,6 @@ impl NativePrices {
             prices: billed_prices(&wire),
             adjustments: Adjustments::from(&wire),
         })
-    }
-
-    fn calculate(&self, usage: &NativeTokenUsage, call: &NativeCallContext) -> NativePriced {
-        let prices = self.prices.for_prompt(usage.0.prompt_tokens);
-        match litellm_cost::calculate(prices, &self.adjustments, &usage.0, &call.0) {
-            Outcome::Priced(priced) => NativePriced {
-                prompt_cost: priced.prompt.get(),
-                completion_cost: priced.completion.get(),
-            },
-            Outcome::Unpriced { .. } => NativePriced {
-                prompt_cost: 0.0,
-                completion_cost: 0.0,
-            },
-        }
     }
 
     fn quote(&self, prompt_tokens: u64, call: &NativeCallContext) -> NativeQuote {
@@ -164,19 +128,6 @@ impl NativePrices {
                 .for_call(&call.0)
                 .fold(1.0, |uplift, multiplier| uplift * multiplier.get()),
         }
-    }
-}
-
-#[pymethods]
-impl NativeTokenUsage {
-    /// The billed quantities main's parsing already settled, as the pricing core's `TokenUsage` document reads them
-    #[new]
-    fn new(quantities: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let usage: TokenUsage = from_py_argument(quantities)?;
-        for length in [usage.input_audio_seconds, usage.input_video_seconds] {
-            seconds(length)?;
-        }
-        Ok(Self(usage.billed()))
     }
 }
 
@@ -228,7 +179,8 @@ fn fields(row: &Bound<'_, PyMapping>, provider: Option<&str>) -> PyResult<Fields
         .collect())
 }
 
-fn seconds(length: f64) -> PyResult<Duration> {
+/// A measured length the core can hold, which rejects a negative or non-finite one the usage reported
+pub(super) fn seconds(length: f64) -> PyResult<Duration> {
     Duration::try_from_secs_f64(length)
         .map_err(|error| PyValueError::new_err(format!("{length} seconds: {error}")))
 }

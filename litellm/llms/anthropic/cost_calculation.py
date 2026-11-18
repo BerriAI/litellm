@@ -8,13 +8,8 @@ from typing import TYPE_CHECKING, Final, Optional
 from pydantic import ValidationError
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import price_model
-from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    generic_cost_per_token,
-    get_provider_specific_geo_multiplier,
-    get_provider_specific_speed_multiplier,
-    get_web_search_requests_from_usage,
-)
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import BranchFacts, Elapsed, branch_cost
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -22,44 +17,27 @@ if TYPE_CHECKING:
 
 
 def cost_per_token(
-    model: str, usage: "Usage", service_tier: str | None = None, model_info: "ModelInfo | None" = None
+    model: str,
+    usage: "Usage",
+    service_tier: str | None = None,
+    model_info: "ModelInfo | None" = None,
+    elapsed: Elapsed | None = None,
 ) -> tuple[float, float]:
     """
     Prompt and completion cost of ``usage`` on an Anthropic model, with the speed and geo uplifts its row carries.
 
     ``model`` is the model name without provider prefix, ``service_tier`` the tier the response was served at and
-    ``model_info`` the deployment's effective prices when they override the public rates.
+    ``model_info`` the deployment's effective prices when they override the public rates. ``elapsed`` prices a row
+    billed by the second.
     """
-    priced: Final = price_model(
-        model=model, provider="anthropic", usage=usage, service_tier=service_tier, row=model_info
-    )
-    if priced is not None:
-        return priced
-    return _python_cost_per_token(model, usage, service_tier, model_info)
-
-
-def _python_cost_per_token(
-    model: str, usage: "Usage", service_tier: str | None, model_info: "ModelInfo | None"
-) -> tuple[float, float]:
-    """Main's pricing, for a call the Rust core leaves to Python."""
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="anthropic",
+    return branch_cost(
+        model,
+        "anthropic",
+        usage,
+        model_info if model_info is not None else litellm.get_model_info(model=model, custom_llm_provider="anthropic"),
         service_tier=service_tier,
-        model_info=model_info,
+        branch=BranchFacts(elapsed=elapsed),
     )
-    try:
-        effective_info: Final = (
-            model_info
-            if model_info is not None
-            else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-        )
-        geo: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
-        speed: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
-    except Exception:  # noqa: BLE001  # copied from main: an unreadable uplift prices the call without either uplift
-        return prompt_cost, completion_cost
-    return prompt_cost * speed * geo, completion_cost * speed * geo
 
 
 class _AnthropicServerToolUseProbe(LiteLLMBaseModel):
