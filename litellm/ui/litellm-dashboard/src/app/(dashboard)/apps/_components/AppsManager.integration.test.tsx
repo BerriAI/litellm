@@ -2,7 +2,13 @@ import { chooseAppOption } from "./appTestUtils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
-import { renderWithProviders as render, screen, waitFor, testQueryClient } from "../../../../../tests/test-utils";
+import {
+  fireEvent,
+  renderWithProviders as render,
+  screen,
+  waitFor,
+  testQueryClient,
+} from "../../../../../tests/test-utils";
 import AppsManager from "./AppsManager";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -112,6 +118,26 @@ describe("Gateway app definition", () => {
     expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject({
       resource_id: "team-chat",
       auto_create_customers: false,
+    });
+  });
+
+  it("should send the app's surcharge as a fraction and clear it when the field is emptied", async () => {
+    const user = userEvent.setup();
+    definition = { resource_type: "team" };
+    render(<AppsManager />);
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "chat");
+    const field = await screen.findByRole("spinbutton", { name: "Surcharge on customer requests (%)" });
+    fireEvent.change(field, { target: { value: "2.5" } });
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.filter((request) => request.method === "POST")).toHaveLength(1));
+    expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject({
+      customer_margin: 0.025,
+    });
+    fireEvent.change(field, { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.filter((request) => request.method === "POST")).toHaveLength(2));
+    expect(await requests.filter((request) => request.method === "POST")[1].json()).toMatchObject({
+      customer_margin: null,
     });
   });
 

@@ -52,8 +52,7 @@ from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_callback_customer_cost_margin,
     apply_customer_cost_margin_to_estimate,
-    customer_cost_margin,
-    request_has_customer,
+    request_customer_cost_margin,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
@@ -328,7 +327,7 @@ def _failure_row_with_customer_surcharge(
 ) -> tuple[float, Mapping[str, object]]:
     """A failure row the provider billed is charged to the customer like a completed request, surcharge included."""
     metadata: Final = _str_keyed_fields(_str_keyed_fields(row_kwargs.get("litellm_params")).get("metadata"))
-    margin: Final = customer_cost_margin(request_has_customer(metadata))
+    margin: Final = request_customer_cost_margin(metadata)
     if margin is None or row_cost <= 0:
         return row_cost, row_kwargs
     snapshot: Final = row_kwargs.get("standard_logging_object")
@@ -923,7 +922,7 @@ class _ProxyDBLogger(CustomLogger):
             response_cost: Final = apply_callback_customer_cost_margin(
                 margin_payload,
                 allowance_adjusted_cost,
-                customer_cost_margin(request_has_customer(_BATCH_CALLBACK_FIELDS.validate_python(metadata))),
+                request_customer_cost_margin(_BATCH_CALLBACK_FIELDS.validate_python(metadata)),
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,
