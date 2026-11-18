@@ -6,6 +6,7 @@ import httpx
 from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
 
+import litellm
 from litellm.images.utils import image_to_data_url
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.fal_ai.image_generation.gpt_image_2_transformation import (
@@ -107,7 +108,11 @@ class FalAIImageEditConfig(BaseImageEditConfig):
     ) -> tuple[dict, RequestFiles]:
         images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
         if not images:
-            raise ValueError("Fal AI image edit requires at least one input image")
+            raise litellm.BadRequestError(
+                message="Fal AI image edit requires at least one input image",
+                model=model,
+                llm_provider="fal_ai",
+            )
         mask: Final = _first(image_edit_optional_request_params.get("mask"))
         mask_field: Final[Mapping[str, str]] = (
             MappingProxyType({"mask_url": image_to_data_url(mask)}) if mask is not None else MappingProxyType({})
