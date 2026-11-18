@@ -131,6 +131,7 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
         (f"{RESOURCE_V1_BASE}/chat/completions", AzureAIResponsesAPIConfig),
         ("https://res.cognitiveservices.azure.com/openai/v1", NoneType),
         ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", NoneType),
+        ("https://res.openai.azure.com/api/projects/proj/openai/v1", NoneType),
         ("https://res.services.ai.azure.com/models", NoneType),
         ("https://res.services.ai.azure.com", NoneType),
         ("https://res.openai.azure.com/openai/deployments/model-router", NoneType),
@@ -531,6 +532,30 @@ async def test_a_model_router_answers_a_custom_tool_call_as_one(model, tools, ex
     )
 
     assert _dumped_output(response) == expected_output
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_model_router_answers_only_the_namespaced_call_as_custom_beside_a_function_of_that_name():
+    namespaced_call: Final = {**ROUTER_PATCH_CALL, "namespace": "editor"}
+    respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(
+            200, json={**_responses_payload("gpt-5-nano"), "output": [namespaced_call, ROUTER_PATCH_CALL]}
+        )
+    )
+
+    response: Final = await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="Fix the typo in README.md",
+        tools=[
+            {**WEATHER_TOOL, "name": "apply_patch"},
+            {"type": "namespace", "name": "editor", "description": "Edit files", "tools": [CUSTOM_TOOL]},
+        ],
+        api_base=FOUNDRY_PROJECT_BASE,
+        api_key="fake-key",
+    )
+
+    assert _dumped_output(response) == [{**CUSTOM_PATCH_CALL, "namespace": "editor"}, ROUTER_PATCH_CALL]
 
 
 @pytest.mark.asyncio

@@ -168,13 +168,11 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
 
 
 def _is_foundry_v1_base(api_base: str) -> bool:
-    if not is_azure_openai_v1_host(api_base):
-        return False
     base_url: Final = httpx.URL(api_base)
-    if foundry_project_root(base_url):
-        return True
     if not base_url.host.endswith(FOUNDRY_HOST_SUFFIX):
         return False
+    if foundry_project_root(base_url):
+        return True
     segments: Final = _path_segments(base_url)
     route_free: Final = next(
         (segments[: -len(route)] for route in _OPENAI_V1_ROUTES if segments[-len(route) :] == route), segments
