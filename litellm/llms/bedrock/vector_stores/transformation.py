@@ -315,6 +315,16 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
         return aws_filters
 
+    def combine_search_filters(self, registered: object, requested: object) -> object:
+        if registered is None or requested is None or registered == requested:
+            return super().combine_search_filters(registered, requested)
+        return {
+            "andAll": [
+                self._aws_filters(registered, drop_params=False),
+                self._aws_filters(requested, drop_params=False),
+            ]
+        }
+
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],

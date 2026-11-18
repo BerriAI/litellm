@@ -9,6 +9,7 @@ import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
 import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
+import CustomerSurchargeBreakdown from "../_components/CustomerSurchargeBreakdown";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
@@ -65,7 +66,7 @@ export default function CustomerHierarchyUsagePage() {
 
   return (
     <main
-      className="mx-auto w-full max-w-[1600px] space-y-7 px-5 py-6 sm:px-8"
+      className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6"
       aria-label={t("customerPortal.analytics.title")}
     >
       <CustomerUsageHeader
@@ -94,8 +95,15 @@ export default function CustomerHierarchyUsagePage() {
             budget={null}
             showBudgetHint={false}
             spendDetails={
-              budgetEntity &&
-              budgetSettingsHref && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+              <>
+                <CustomerSurchargeBreakdown
+                  spend={totals.spend}
+                  surcharge={data?.metadata.total_customer_margin_spend}
+                />
+                {budgetEntity && budgetSettingsHref && (
+                  <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+                )}
+              </>
             }
           />
           <CustomerUsageTrend
@@ -137,7 +145,6 @@ export default function CustomerHierarchyUsagePage() {
               {t("customerPortal.analytics.allOrganizationUsage")}
             </Button>
           )}
-          <p className="text-[11px] leading-5 text-muted-foreground">{t("customerPortal.analytics.freshness")}</p>
         </>
       )}
     </main>

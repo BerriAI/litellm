@@ -161,6 +161,7 @@ def _daily_counters(row: Mapping[str, object], metadata: Mapping[str, object]) -
         ("gateway_injected_caching_savings_spend", _number(savings.get("gateway_injected_caching"))),
         ("autorouter_savings_spend", 0.0 if internal else _number(savings.get("autorouter"))),
         ("guardrail_spend", _number(metadata.get("accounting_guardrail_spend"))),
+        ("customer_margin_spend", _number(metadata.get("accounting_customer_margin_spend"))),
         ("total_response_time_ms", _number(duration) if timed else 0),
         ("timed_requests", int(timed)),
     )

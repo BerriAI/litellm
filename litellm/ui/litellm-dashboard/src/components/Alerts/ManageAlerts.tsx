@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { backgroundFetchClient } from "@/lib/http/api";
 import { getProxyBaseUrl } from "@/components/networking";
 import type { components } from "@/lib/http/schema";
+import AlertThresholds from "./AlertThresholds";
 
 function statusMessage(data: components["schemas"]["AlertMonitoring"]) {
   if (data.disabled_by_config) return "alerts.monitoring.disabledByConfig";
@@ -41,7 +42,10 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
   const query = useQuery(queryOptions);
   const mutation = useMutation({
     mutationFn: async (
-      body: components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"],
+      body:
+        | components["schemas"]["AlertMonitoringUpdate"]
+        | components["schemas"]["ModelDeprecationMonitoringUpdate"]
+        | components["schemas"]["AlertThresholdsUpdate"],
     ) => {
       const { data } = await backgroundFetchClient.PATCH("/alerts/monitoring", { body });
       if (!data) throw new Error("Could not save monitoring settings");
@@ -64,7 +68,7 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
             <Settings className="size-4" aria-hidden />
             {t("alerts.monitoring.manage")}
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
             <DialogHeader>
               <DialogTitle>{t("alerts.monitoring.manage")}</DialogTitle>
               <DialogDescription>{t("alerts.monitoring.description")}</DialogDescription>
@@ -125,6 +129,13 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
                     aria-describedby="performance-monitoring-status"
                   />
                 </div>
+                <AlertThresholds
+                  thresholds={data.thresholds}
+                  enterprise={data.alert_limit === null}
+                  readOnly={readOnly}
+                  pending={mutation.isPending}
+                  save={(thresholds) => mutation.mutateAsync({ thresholds })}
+                />
               </div>
             )}
             {mutation.isError && (

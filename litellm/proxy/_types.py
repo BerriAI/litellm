@@ -418,6 +418,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vertex_ai",
         "/cohere",
         "/cursor",
+        "/cursor-cli",
         "/gemini",
         "/anthropic",
         "/langfuse",
@@ -610,6 +611,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/info",
         "/key/health",
         "/team/info",
+        "/management/v1/teams/{team_id}/members",
         "/team/list",
         "/v2/team/list",
         "/organization/list",
@@ -631,6 +633,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
+        "/get/reference_exchange_rates",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -699,6 +702,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/list",
             "/v2/team/list",
             "/team/info",
+            "/management/v1/teams/{team_id}/members",
             "/team/block",
             "/team/unblock",
             "/team/available",
@@ -908,6 +912,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/update",
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members",
         "/management/v1/teams/{team_id}/members/bulk_delete",
         "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
@@ -2951,6 +2956,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: list[UserHeaderMapping] | None = None
+    customer_org_alias_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
+    customer_member_id_header: str | None = Field(
+        default=None,
+        pattern=r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        description=(
+            "Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. "
+            "Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence."
+        ),
+    )
     supported_db_objects: list[SupportedDBObjectType] | None = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
@@ -5026,6 +5047,9 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     virtual_key_claim_field: str | None = Field(
         default=None,
         description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
@@ -5143,6 +5167,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: list[str] | None = None
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
+    customer_org_alias_jwt_field: str | None = None
+    customer_member_id_jwt_field: str | None = None
+    customer_team_id_jwt_field: str | None = None
     agent_id_jwt_field: str | None = Field(
         default=None,
         description=(
@@ -5431,6 +5458,7 @@ class BaseDailySpendTransaction(TypedDict):
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

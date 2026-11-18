@@ -18,6 +18,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.models.alert import (
     METRIC_ALERT_TYPES,
     Alert,
+    AlertBulkUpdate,
     AlertDetection,
     AlertFilter,
     AlertHistoryPoint,
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 
 class _HistoryTransaction(Protocol):
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+    async def execute_raw(self, query: str, *args: object) -> int: ...
 
 
 class _HistoryDatabase(Protocol):
@@ -95,7 +97,7 @@ _HISTORY_SOURCES: Final[
         "d.user_id",
         "api_requests",
         'LEFT JOIN "LiteLLM_UserTable" m ON m.user_id = r.resource_id',
-        "m.user_alias",
+        "COALESCE(NULLIF(TRIM(m.user_email), ''), m.user_alias)",
     ),
     "key": (
         '"LiteLLM_DailyUserSpend"',
@@ -259,6 +261,20 @@ class AlertRepository:
     async def set_status(self, alert_id: int, status: AlertStatus, actor: str) -> Alert | None:
         row: Final = await self._table.update(where={"id": alert_id}, data={"status": status, "updated_by": actor})
         return None if row is None else _alert(row)
+
+    async def set_open_status(self, data: AlertBulkUpdate, actor: str) -> int:
+        async with self._database.tx(timeout=timedelta(seconds=10)) as transaction:
+            await transaction.query_raw("SELECT set_config('statement_timeout', '6s', true)")
+            return await transaction.execute_raw(
+                """UPDATE "LiteLLM_Alert" SET status = $1, updated_by = $2,
+                    updated_at = now() AT TIME ZONE 'UTC'
+                WHERE status = 'open' AND
+                    ($3::text IS NULL OR type = $3 OR ($3 = 'performance' AND type = ANY($4::text[])))""",
+                data.status,
+                actor,
+                data.type,
+                list(METRIC_ALERT_TYPES),
+            )
 
     async def enrich(self, alerts: tuple[Alert, ...]) -> tuple[AlertView, ...]:
         from prisma.errors import PrismaError

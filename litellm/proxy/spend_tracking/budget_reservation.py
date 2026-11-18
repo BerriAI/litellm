@@ -53,6 +53,11 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_customer_cost_margin_to_estimate,
+    customer_cost_margin,
+    key_has_customer,
+)
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
@@ -285,12 +290,15 @@ async def reserve_budget_for_request(
         path_params=path_params,
     )
 
-    reservation_cost: Final = estimate_request_max_cost(
-        request_body=request_body,
-        route=route,
-        llm_router=llm_router,
-        input_token_counts=input_token_counts,
-        path_params=path_params,
+    reservation_cost: Final = apply_customer_cost_margin_to_estimate(
+        estimate_request_max_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+            path_params=path_params,
+        ),
+        customer_cost_margin(key_has_customer(valid_token, valid_token.customer_hierarchy is not None)),
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -302,12 +310,15 @@ async def reserve_budget_for_request(
         valid_token=valid_token,
         reservation_cost=reservation_cost,
         input_token_counts=input_token_counts,
-        input_cost=estimate_request_input_cost(
-            request_body=request_body,
-            route=route,
-            llm_router=llm_router,
-            input_token_counts=input_token_counts,
-            path_params=path_params,
+        input_cost=apply_customer_cost_margin_to_estimate(
+            estimate_request_input_cost(
+                request_body=request_body,
+                route=route,
+                llm_router=llm_router,
+                input_token_counts=input_token_counts,
+                path_params=path_params,
+            ),
+            customer_cost_margin(key_has_customer(valid_token, valid_token.customer_hierarchy is not None)),
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )

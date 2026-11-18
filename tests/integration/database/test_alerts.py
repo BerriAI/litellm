@@ -337,6 +337,82 @@ async def test_daily_history_matches_scope_and_weighted_metrics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("email", "alias", "expected"),
+    (
+        ("person@example.com", "Example user", "person@example.com"),
+        ("person@example.com", None, "person@example.com"),
+        (None, "Example user", "Example user"),
+        ("", "Example user", "Example user"),
+        ("   ", "Example user", "Example user"),
+        (None, None, None),
+    ),
+)
+async def test_user_alerts_display_email_in_list_and_detail(
+    alerts: Alerts, gateway: Gateway, email: str | None, alias: str | None, expected: str | None
+) -> None:
+    write_rows(
+        'INSERT INTO "LiteLLM_UserTable" (user_id, user_email, user_alias) VALUES (%s, %s, %s)',
+        (alerts.resource_id, email, alias),
+    )
+    try:
+        saved: Final = await alerts.repository.record(alerts.detection().model_copy(update={"resource_type": "user"}))
+        detail: Final = gateway.request("GET", f"/alerts/{saved.id}")
+        assert detail.status_code == 200, detail.text
+        view: Final = AlertView.model_validate_json(detail.content)
+        assert view.resource_name == expected
+        assert view.resource_id == alerts.resource_id
+        assert view.evidence == saved.evidence
+        listed: Final = gateway.request("GET", "/alerts", params={"type": "spend", "limit": "1"})
+        assert listed.status_code == 200, listed.text
+        assert AlertViewPage.model_validate_json(listed.content).data == (view,)
+    finally:
+        write_rows('DELETE FROM "LiteLLM_UserTable" WHERE user_id=%s', (alerts.resource_id,))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("resolved", "dismissed"))
+async def test_bulk_status_updates_all_matching_open_pages_and_preserves_other_alerts(
+    alerts: Alerts, gateway: Gateway, status: str
+) -> None:
+    saved: Final = tuple([await alerts.repository.record(alerts.detection(day=day)) for day in range(30)])
+    other: Final = await alerts.repository.record(alerts.detection("traffic"))
+    already_resolved: Final = await alerts.repository.set_status(int(saved[0].id), "resolved", "previous-admin")
+    response: Final = gateway.request("PATCH", "/alerts", {"status": status, "type": "spend"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"updated": 29}
+    for alert in saved[1:]:
+        changed: Final = await alerts.repository.get(int(alert.id))
+        assert changed is not None
+        assert changed.status == status
+        assert changed.updated_by
+        assert changed.evidence == alert.evidence
+    assert await alerts.repository.get(int(saved[0].id)) == already_resolved
+    assert await alerts.repository.get(int(other.id)) == other
+    repeat: Final = gateway.request("PATCH", "/alerts", {"status": status, "type": "spend"})
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.json() == {"updated": 0}
+
+
+@pytest.mark.asyncio
+async def test_bulk_performance_filter_leaves_prompt_cache_until_all_alerts_are_updated(
+    alerts: Alerts, gateway: Gateway
+) -> None:
+    spend: Final = await alerts.repository.record(alerts.detection())
+    cache: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
+    performance: Final = gateway.request("PATCH", "/alerts", {"status": "resolved", "type": "performance"})
+    assert performance.status_code == 200, performance.text
+    resolved: Final = await alerts.repository.get(int(spend.id))
+    assert resolved is not None and resolved.status == "resolved"
+    assert await alerts.repository.get(int(cache.id)) == cache
+    all_alerts: Final = gateway.request("PATCH", "/alerts", {"status": "dismissed"})
+    assert all_alerts.status_code == 200, all_alerts.text
+    dismissed: Final = await alerts.repository.get(int(cache.id))
+    assert dismissed is not None and dismissed.status == "dismissed"
+    assert await alerts.repository.get(int(spend.id)) == resolved
+
+
+@pytest.mark.asyncio
 async def test_type_filter_applies_before_cursor_limit(alerts: Alerts, gateway: Gateway) -> None:
     oldest: Final = await alerts.repository.record(alerts.detection("traffic"))
     await alerts.repository.record(alerts.detection("spend"))

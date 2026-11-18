@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
@@ -39,6 +39,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
+from litellm.rust_bridge._native import jwt_claims
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
@@ -133,36 +134,83 @@ def customer_org_alias_cache_key(customer_org_alias: str) -> str:
 def _header_value(headers: Mapping[str, object] | None, header: str) -> str | None:
     if headers is None:
         return None
+    lower_header: Final = header.lower()
     values: Final = tuple(
         value.strip()
         for name, value in headers.items()
-        if name.lower() == header and isinstance(value, str) and value.strip()
+        if name.lower() == lower_header and isinstance(value, str) and value.strip()
     )
     return values[0] if values else None
 
 
-def customer_member_id_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_MEMBER_ID_HEADER)
+@dataclass(frozen=True, slots=True)
+class CustomerIdentityHeaderNames:
+    org_alias: str = CUSTOMER_ORG_ALIAS_HEADER
+    member_id: str = CUSTOMER_MEMBER_ID_HEADER
+
+    @classmethod
+    def from_settings(cls, settings: Mapping[str, object]) -> "CustomerIdentityHeaderNames":
+        org_alias: Final = settings.get("customer_org_alias_header")
+        member_id: Final = settings.get("customer_member_id_header")
+        return cls(
+            org_alias=org_alias if isinstance(org_alias, str) else CUSTOMER_ORG_ALIAS_HEADER,
+            member_id=member_id if isinstance(member_id, str) else CUSTOMER_MEMBER_ID_HEADER,
+        )
 
 
-def customer_org_alias_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_ORG_ALIAS_HEADER)
+_DEFAULT_CUSTOMER_HEADER_NAMES: Final = CustomerIdentityHeaderNames()
 
 
-def customer_team_id_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_TEAM_ID_HEADER)
-
-
-def customer_identity_from_headers(headers: Mapping[str, object] | None) -> CustomerRequestIdentity | None:
+def customer_identity_from_headers(
+    headers: Mapping[str, object] | None, *, names: CustomerIdentityHeaderNames = _DEFAULT_CUSTOMER_HEADER_NAMES
+) -> CustomerRequestIdentity | None:
     """The customer the request named, or None when it carried neither customer header."""
     identity: Final = CustomerRequestIdentity(
-        customer_member_id=customer_member_id_from_headers(headers),
-        customer_org_alias=customer_org_alias_from_headers(headers),
-        customer_team_id=customer_team_id_from_headers(headers),
+        customer_member_id=_header_value(headers, names.member_id),
+        customer_org_alias=_header_value(headers, names.org_alias),
+        customer_team_id=_header_value(headers, CUSTOMER_TEAM_ID_HEADER),
     )
     if identity.customer_member_id is None and identity.customer_org_alias is None:
         return None
     return identity
+
+
+def _maps_customer_claims(mapping: LiteLLM_JWTAuth | JWTIssuerConfig) -> bool:
+    return any(
+        field is not None
+        for field in (
+            mapping.customer_org_alias_jwt_field,
+            mapping.customer_member_id_jwt_field,
+            mapping.customer_team_id_jwt_field,
+        )
+    )
+
+
+def customer_identity_from_request(
+    headers: Mapping[str, object] | None,
+    verified_claims: Mapping[str, object] | None,
+    settings: LiteLLM_JWTAuth,
+    *,
+    general_settings: Mapping[str, object] | None = None,
+) -> CustomerRequestIdentity | None:
+    """With customer claims mapped, a verified JWT alone names the customer and the headers are ignored."""
+    claims_name_customer: Final = verified_claims is not None and (
+        _maps_customer_claims(settings) or any(_maps_customer_claims(issuer) for issuer in settings.issuers or ())
+    )
+    if not claims_name_customer or verified_claims is None:
+        names: Final = (
+            CustomerIdentityHeaderNames.from_settings(general_settings)
+            if general_settings is not None
+            else _DEFAULT_CUSTOMER_HEADER_NAMES
+        )
+        return customer_identity_from_headers(headers, names=names)
+    mapped: Final = jwt_claims(dict(verified_claims), settings)
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias=mapped.customer_org_alias or None,
+        customer_member_id=mapped.customer_member_id or None,
+        customer_team_id=mapped.customer_team_id or None,
+    )
+    return identity if identity.customer_member_id is not None or identity.customer_org_alias is not None else None
 
 
 def _scope(

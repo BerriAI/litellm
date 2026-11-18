@@ -72,6 +72,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
+from litellm.litellm_core_utils.redact_messages import numeric_compression_stats
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.secret_redaction import redact_tokens
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -682,6 +683,18 @@ async def get_logging_payload_async(
     return build()
 
 
+SNAPSHOTLESS_COST_BREAKDOWN_KEY: Final = "snapshotless_cost_breakdown"
+_OPTIONAL_COST_BREAKDOWN: Final[TypeAdapter[CostBreakdown | None]] = TypeAdapter(CostBreakdown | None)
+
+
+def _snapshotless_cost_breakdown(row_kwargs: Mapping[object, object]) -> CostBreakdown | None:
+    """The breakdown of a billed row that has no logging payload to carry it."""
+    try:
+        return _OPTIONAL_COST_BREAKDOWN.validate_python(row_kwargs.get(SNAPSHOTLESS_COST_BREAKDOWN_KEY))
+    except ValidationError:
+        return None
+
+
 def get_logging_payload(
     kwargs: dict | None,
     response_obj: object,
@@ -692,6 +705,7 @@ def get_logging_payload(
     if kwargs is None:
         kwargs = {}
 
+    row_kwargs: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(kwargs)
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
     failure_exception: Final = response_obj if isinstance(response_obj, BaseException) else None
     response_served_from_cache: Final = served_from_cache(response_obj)
@@ -923,7 +937,9 @@ def get_logging_payload(
         litellm_overhead_time_ms=litellm_overhead_time_ms,
         upstream_provider=upstream_provider,
         cost_breakdown=(
-            standard_logging_payload.get("cost_breakdown", None) if standard_logging_payload is not None else None
+            standard_logging_payload.get("cost_breakdown", None)
+            if standard_logging_payload is not None
+            else _snapshotless_cost_breakdown(row_kwargs)
         ),
         autorouter_savings=(
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
@@ -1790,27 +1806,6 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
 
 
-_NUMERIC_COMPRESSION_STAT_KEYS: Final = (
-    "tokens_before",
-    "tokens_after",
-    "tokens_saved",
-    "compression_ratio",
-)
-
-
-def _numeric_compression_stats_from_guardrail_response(
-    guardrail_response: object,
-) -> dict[str, int | float] | None:
-    if not isinstance(guardrail_response, dict):
-        return None
-    stats: Final = {
-        key: value
-        for key, value in guardrail_response.items()
-        if key in _NUMERIC_COMPRESSION_STAT_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool)
-    }
-    return stats or None
-
-
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
@@ -1821,7 +1816,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     stats-only dict; spend aggregation reads them via
     ``extract_compression_saved_tokens``.
     """
-    preserved_stats: Final = _numeric_compression_stats_from_guardrail_response(entry.get("guardrail_response"))
+    preserved_stats: Final = numeric_compression_stats(entry)
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
         **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},

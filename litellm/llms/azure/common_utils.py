@@ -541,6 +541,19 @@ def get_azure_ad_token_from_oidc(
     )
 
 
+AZURE_V1_API_VERSION: Final = "v1"
+
+
+def is_azure_openai_v1_base(api_base: str | None) -> bool:
+    return api_base is not None and httpx.URL(api_base).path.rstrip("/").endswith("/openai/v1")
+
+
+def default_azure_api_version(api_base: str | None, env_api_version: str | None) -> str:
+    if is_azure_openai_v1_base(api_base):
+        return AZURE_V1_API_VERSION
+    return env_api_version or litellm.AZURE_DEFAULT_API_VERSION
+
+
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
     azure_endpoint: Final = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:
@@ -829,7 +842,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 v1_trimmed if v1_trimmed.endswith("/openai/v1") else f"{v1_trimmed.removesuffix('/openai')}/openai/v1"
             )
             v1_params: Final[_AzureV1ClientParams] = {
-                "api_key": v1_api_key,
+                "api_key": v1_api_key or "",
                 "base_url": f"{v1_root}/",
                 "default_query": dict(v1_query),
             }

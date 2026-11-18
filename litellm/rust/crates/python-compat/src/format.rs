@@ -41,6 +41,11 @@ fn round_half_even(digits: &str, precision: usize) -> String {
     }
 }
 
+/// `format(value, f".{precision}%")`: `value * 100` in fixed notation with a `%` sign.
+pub fn percent(value: f64, precision: usize) -> String {
+    format!("{}%", fixed(value * 100.0, precision))
+}
+
 /// `format(value, f".{precision}f")`: the exact binary value rounded half to even at
 /// `precision` digits, which is what CPython's `float.__format__` prints.
 pub fn fixed(value: f64, precision: usize) -> String {

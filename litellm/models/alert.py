@@ -178,6 +178,21 @@ class AlertUpdate(BaseModel):
     status: AlertStatus = Field(description="Mark resolved, dismiss, or reopen the alert.")
 
 
+class AlertBulkUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["resolved", "dismissed"] = Field(description="Status to apply to every matching open saved alert.")
+    type: AlertFilter | None = Field(
+        default=None, description="Only update this category, or all saved alerts if omitted."
+    )
+
+
+class AlertBulkResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    updated: int = Field(ge=0, description="Number of open saved alerts changed.")
+
+
 class AlertPage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -206,3 +221,5 @@ class AlertStore(Protocol):
     async def get(self, alert_id: int) -> Alert | None: ...
 
     async def set_status(self, alert_id: int, status: AlertStatus, actor: str) -> Alert | None: ...
+
+    async def set_open_status(self, data: AlertBulkUpdate, actor: str) -> int: ...
