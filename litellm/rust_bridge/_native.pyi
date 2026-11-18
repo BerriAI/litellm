@@ -272,7 +272,11 @@ class NativeModelCostMap:
     @property
     def provenance(self) -> NativeProvenance: ...
     def price(
-        self, document: Mapping[str, object], row: Mapping[str, object] | None = None
+        self,
+        document: Mapping[str, object],
+        row: Mapping[str, object] | None = None,
+        breakdown_row: Mapping[str, object] | None = None,
+        fee_row: Mapping[str, object] | None = None,
     ) -> NativeReceipt | None: ...
     def bound(
         self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]

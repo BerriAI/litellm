@@ -1,14 +1,15 @@
-//! The `session` kind, a port of what `handle_realtime_stream_cost_calculation` (`cost_calculator.py`) bills beside a
-//! realtime session's tokens: Live voice seconds, xAI audio seconds and text messages, translation seconds and
-//! transcription clips. Each of them is one part of the receipt, priced from the first of its rows, in the order main
-//! tries the session's model names, that lists its rate. A part no row prices is `Unpriced`, which main billed as 0.0.
-//! The session's tokens are priced by the token path, so the adapter adds them. Main applies no discount or margin
-//! to a session
+//! The `session` kind, a port of `handle_realtime_stream_cost_calculation` (`cost_calculator.py`): a realtime
+//! session's tokens and its Live `response.done` turns on the receipt's prompt and completion, and Live voice seconds,
+//! xAI audio seconds and text messages, translation seconds and transcription clips as one part each. A part is priced
+//! from the first of its rows, in the order main tries the session's model names, that lists its rate. A part no row
+//! prices is `Unpriced`, which main billed as 0.0. Main applies no discount or margin to a session
 
 use crate::money::{UnitPrice, Usd};
-use crate::price::{Channel, InputUnit, Meter, OutputUnit, TokenKind};
+use crate::price::{Channel, InputUnit, Meter, OutputUnit, ServiceTier, TokenKind};
 use crate::priced::{Line, Quantity, Side};
-use crate::query::Header;
+use crate::query::{
+    AdjustmentPolicy, Basis, Candidate, Header, PriceSource, TokenRules, TokenUsage, TokensQuery,
+};
 use crate::receipt::{Part, PartOutcome, PriceOutcome, Receipt};
 use crate::row::{RowRef, RowSource};
 use crate::units::{self, Billed};
@@ -38,6 +39,40 @@ pub struct SessionQuery {
     /// xAI text messages at `input_cost_per_text_message`
     #[cfg_attr(feature = "serde", serde(default))]
     pub text_messages: Option<Metered>,
+    /// The session's combined token usage
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub tokens: Option<SessionTokens>,
+    /// Each distinct Live `response.done` turn, priced on the model it names
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub turns: Vec<SessionTurn>,
+}
+
+/// The session's tokens, billed by `generic_cost_per_token` at the first candidate that bills them something or whose
+/// cost map entry declares a price, so a deployment priced at zero still wins over the public rates. A candidate
+/// whose pricing fails is skipped, and none accepted bills nothing
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+pub struct SessionTokens {
+    pub usage: TokenUsage,
+    pub candidates: Vec<TokenCandidate>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+pub struct TokenCandidate {
+    pub candidate: Candidate,
+    pub row: RowRef,
+    /// The candidate's cost map entry sets a rate of its own, even a zero one
+    pub declares: bool,
+}
+
+/// One Live `response.done` turn, billed nothing when its model has no row or its pricing fails
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+pub struct SessionTurn {
+    pub candidate: Candidate,
+    pub usage: TokenUsage,
+    pub row: Option<RowRef>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -128,12 +163,75 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &SessionQuery) -> PriceOutc
             },
         })
         .collect();
+    let token_sides = |candidate: &Candidate, row: &RowRef, usage: &TokenUsage| {
+        token_receipt(source, &query.header.basis, candidate, row, usage)
+    };
+    let session_tokens = query
+        .tokens
+        .as_ref()
+        .and_then(|tokens| {
+            tokens.candidates.iter().find_map(|offered| {
+                let (prompt, completion) =
+                    token_sides(&offered.candidate, &offered.row, &tokens.usage)?;
+                (prompt + completion > 0.0 || offered.declares).then_some((prompt, completion))
+            })
+        })
+        .unwrap_or((0.0, 0.0));
+    let turns: Vec<(f64, f64)> = query
+        .turns
+        .iter()
+        .map(|turn| {
+            turn.row
+                .as_ref()
+                .and_then(|row| token_sides(&turn.candidate, row, &turn.usage))
+                .unwrap_or((0.0, 0.0))
+        })
+        .collect();
+    let prompt = session_tokens.0 + turns.iter().fold(0.0, |sum, turn| sum + turn.0);
+    let completion = session_tokens.1 + turns.iter().fold(0.0, |sum, turn| sum + turn.1);
+    let total = bills.iter().fold(prompt + completion, |sum, bill| {
+        sum + bill.as_ref().map_or(0.0, |bill| bill.amount)
+    });
     let lines = bills.into_iter().flatten().map(Bill::line).collect();
     Receipt {
         parts,
+        prompt: Usd::new(prompt).unwrap_or_default(),
+        completion: Usd::new(completion).unwrap_or_default(),
+        total,
         ..units::receipt(source, &query.header, None, Billed::of(lines, Vec::new()))
     }
     .into()
+}
+
+/// `generic_cost_per_token` of `usage` on `row` with the session's data residency, `None` where main's call raised
+fn token_receipt<S: RowSource>(
+    source: &S,
+    basis: &Basis,
+    candidate: &Candidate,
+    row: &RowRef,
+    usage: &TokenUsage,
+) -> Option<(f64, f64)> {
+    let query = TokensQuery {
+        rules: TokenRules::Generic,
+        ..TokensQuery::new(
+            Header {
+                candidates: vec![candidate.clone()],
+                source: PriceSource::Row { row: row.clone() },
+                basis: Basis {
+                    service_tier: ServiceTier::Standard,
+                    vertex_location: None,
+                    ..basis.clone()
+                },
+                adjustments: AdjustmentPolicy::None,
+                reported: None,
+            },
+            usage.clone(),
+        )
+    };
+    match crate::tokens::price(source, &query) {
+        PriceOutcome::Priced(receipt) => Some((receipt.prompt.get(), receipt.completion.get())),
+        PriceOutcome::Unpriced(_) => None,
+    }
 }
 
 /// A part's amount as main computed it and the meter and rate it shows as a line
@@ -286,6 +384,8 @@ mod tests {
             live_voice: None,
             audio_duration: None,
             text_messages: None,
+            tokens: None,
+            turns: Vec::new(),
         }
     }
 
@@ -399,5 +499,84 @@ mod tests {
             },
         ));
         assert_eq!(receipt.total, 30.0 * 0.001 + 7.0 * 0.0001);
+    }
+
+    fn tokens(prompt: u64, completion: u64) -> TokenUsage {
+        crate::testing::usage(prompt, completion)
+    }
+
+    fn openai(key: &str) -> Candidate {
+        crate::testing::candidate("openai".parse().unwrap(), key)
+    }
+
+    fn offered(key: &str, declares: bool) -> TokenCandidate {
+        TokenCandidate {
+            candidate: openai(key),
+            row: row_ref(key),
+            declares,
+        }
+    }
+
+    fn token_source() -> TestSource {
+        source()
+            .and_row(
+                "free",
+                row(&[(Meter::TEXT_INPUT, 0.0), (Meter::TEXT_OUTPUT, 0.0)]),
+            )
+            .and_row(
+                "public",
+                row(&[(Meter::TEXT_INPUT, 1.0), (Meter::TEXT_OUTPUT, 2.0)]),
+            )
+            .and_row(
+                "turn",
+                row(&[(Meter::TEXT_INPUT, 3.0), (Meter::TEXT_OUTPUT, 5.0)]),
+            )
+    }
+
+    #[rstest]
+    #[case::a_free_row_that_declares_wins(true, (0.0, 0.0))]
+    #[case::a_free_row_that_declares_nothing_falls_through(false, (10.0, 4.0))]
+    fn session_tokens_bill_the_first_accepted_candidate(
+        #[case] declares: bool,
+        #[case] expected: (f64, f64),
+    ) {
+        let receipt = priced(price(
+            &token_source(),
+            &SessionQuery {
+                tokens: Some(SessionTokens {
+                    usage: tokens(10, 2),
+                    candidates: vec![offered("free", declares), offered("public", false)],
+                }),
+                ..empty()
+            },
+        ));
+        assert_eq!((receipt.prompt.get(), receipt.completion.get()), expected);
+    }
+
+    #[rstest]
+    fn turns_add_to_the_session_tokens_and_the_parts_to_the_total() {
+        let turn = |row: Option<&str>| SessionTurn {
+            candidate: openai("turn"),
+            usage: tokens(1, 1),
+            row: row.map(row_ref),
+        };
+        let receipt = priced(price(
+            &token_source(),
+            &SessionQuery {
+                tokens: Some(SessionTokens {
+                    usage: tokens(10, 2),
+                    candidates: vec![offered("public", false)],
+                }),
+                turns: vec![turn(Some("turn")), turn(None), turn(Some("turn"))],
+                live_voice: Some(Metered {
+                    quantity: 30.0,
+                    rows: rows(&["asr"]),
+                }),
+                ..empty()
+            },
+        ));
+        assert_eq!(receipt.prompt.get(), 10.0 + 3.0 + 3.0);
+        assert_eq!(receipt.completion.get(), 4.0 + 5.0 + 5.0);
+        assert_eq!(receipt.total, 16.0 + 14.0 + 30.0 * 0.001);
     }
 }

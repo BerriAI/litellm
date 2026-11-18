@@ -13,9 +13,9 @@ use litellm_cost::bound::{
 use litellm_cost::money::UnitPrice;
 use litellm_cost::price::{InputUnit, Meter, OutputUnit, TokenKind};
 use litellm_cost::query::{
-    AdjustmentPolicy, Basis, Candidate, CharacterCounts, DataResidency, Elapsed, FlatRates, Header,
-    PriceQuery, PriceSource, Provider, RawCounts, ReportedCost, TokenRules, TokenUsage,
-    TokensQuery,
+    AdjustmentPolicy, Basis, BreakdownRow, Candidate, CharacterCounts, DataResidency, Elapsed,
+    FeeBilling, FlatRates, Header, PriceQuery, PriceSource, Provider, RawCounts, ReportedCost,
+    RouterFee, TokenRules, TokenUsage, TokensQuery,
 };
 use litellm_cost::rates::{Pricing, RatesQuery};
 use litellm_cost::receipt::{PriceOutcome, Receipt};
@@ -34,6 +34,12 @@ use crate::model_cost::{CostSnapshot, row_fields};
 
 /// The key a row the caller passed for one call is priced under
 const PER_CALL_ROW: &str = "requested_model_info_override";
+
+/// The key of the row the caller looked up for the stored breakdown
+const BREAKDOWN_ROW: &str = "breakdown";
+
+/// The key of the Azure AI Model Router row whose fee the call bills
+const ROUTER_FEE_ROW: &str = "router-fee";
 
 /// The rows to try: the candidates main's `completion_cost` loop walks for a finished call, or the one model a
 /// caller of `cost_per_token` names
@@ -100,6 +106,36 @@ struct PriceDocument {
     custom: Option<CustomPricing>,
     #[serde(default)]
     decisions: bool,
+    #[serde(default)]
+    breakdown: BreakdownFacts,
+    #[serde(default)]
+    tool_fees: f64,
+    #[serde(default)]
+    router_fee: Option<RouterFeeFacts>,
+}
+
+/// Which row the stored breakdown reads. `row` is the `breakdown_row` passed beside the document
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BreakdownFacts {
+    #[default]
+    Priced,
+    Named,
+    Row,
+    Absent,
+}
+
+/// The Azure AI Model Router fee, billed off the `fee_row` passed beside the document
+#[derive(Deserialize)]
+struct RouterFeeFacts {
+    billed: FeeBilling,
+}
+
+/// The rows Python looked up for one token call beside the document
+pub(crate) struct CallRows {
+    pub(crate) row: Option<Fields>,
+    pub(crate) breakdown: Option<Fields>,
+    pub(crate) fee: Option<Fields>,
 }
 
 /// `custom_cost_per_token` or `custom_cost_per_second`, which price the call without a row
@@ -212,6 +248,8 @@ pub(crate) fn price(
     snapshot: &CostSnapshot,
     document: &Bound<'_, PyAny>,
     row: Option<&Bound<'_, PyMapping>>,
+    breakdown_row: Option<&Bound<'_, PyMapping>>,
+    fee_row: Option<&Bound<'_, PyMapping>>,
 ) -> PyResult<Option<NativeReceipt>> {
     let document: PriceDocument = from_py_argument(document)?;
     for length in [
@@ -220,8 +258,12 @@ pub(crate) fn price(
     ] {
         super::seconds(length)?;
     }
-    let row = row.map(row_fields).transpose()?;
-    priced(snapshot, document, row)
+    let rows = CallRows {
+        row: row.map(row_fields).transpose()?,
+        breakdown: breakdown_row.map(row_fields).transpose()?,
+        fee: fee_row.map(row_fields).transpose()?,
+    };
+    priced(snapshot, document, rows)
         .map(|receipt| NativeReceipt::new(py, &receipt))
         .transpose()
 }
@@ -273,18 +315,26 @@ impl litellm_inference_messages::Pricing for RoutePricing {
                 reported: None,
                 custom: None,
                 decisions: false,
+                breakdown: BreakdownFacts::Priced,
+                tool_fees: 0.0,
+                router_fee: None,
             },
-            None,
+            CallRows {
+                row: None,
+                breakdown: None,
+                fee: None,
+            },
         )
     }
 }
 
 /// The receipt of a token call, `None` when the core leaves it to Python
-fn priced(
-    snapshot: &CostSnapshot,
-    document: PriceDocument,
-    row: Option<Fields>,
-) -> Option<Receipt> {
+fn priced(snapshot: &CostSnapshot, document: PriceDocument, given: CallRows) -> Option<Receipt> {
+    let CallRows {
+        row,
+        breakdown: breakdown_row,
+        fee: fee_row,
+    } = given;
     let (candidates, named) = match (&document.custom, &document.named) {
         (
             Some(_),
@@ -324,15 +374,29 @@ fn priced(
         (None, Some(row), Some(first)) => {
             let provider = row_provider.unwrap_or_else(|| first.provider.to_string());
             let (rows, at) = rows.with_per_call(PER_CALL_ROW, row, &provider);
-            (
-                rows,
-                PriceSource::Row {
-                    row: at,
-                    breakdown_by_name: false,
-                },
-            )
+            (rows, PriceSource::Row { row: at })
         }
         _ => (rows, PriceSource::Catalog),
+    };
+    let lowered_under = candidates
+        .first()
+        .map(|first| first.provider.to_string())
+        .unwrap_or_default();
+    let (rows, breakdown) = match (document.breakdown, breakdown_row) {
+        (BreakdownFacts::Priced, _) => (rows, BreakdownRow::Priced),
+        (BreakdownFacts::Named, _) => (rows, BreakdownRow::Named),
+        (BreakdownFacts::Absent, _) | (BreakdownFacts::Row, None) => (rows, BreakdownRow::Absent),
+        (BreakdownFacts::Row, Some(fields)) => {
+            let (rows, at) = rows.with_per_call(BREAKDOWN_ROW, fields, &lowered_under);
+            (rows, BreakdownRow::Row { row: at })
+        }
+    };
+    let (rows, router_fee) = match (document.router_fee, fee_row) {
+        (Some(RouterFeeFacts { billed }), Some(fields)) => {
+            let (rows, at) = rows.with_per_call(ROUTER_FEE_ROW, fields, "azure_ai");
+            (rows, Some(RouterFee { row: at, billed }))
+        }
+        (_, _) => (rows, None),
     };
     let query = PriceQuery::Tokens(Box::new(TokensQuery {
         header: Header {
@@ -361,6 +425,9 @@ fn priced(
         embedding: document.embedding,
         raw: document.raw.unwrap_or_default(),
         decisions: document.decisions,
+        breakdown,
+        tool_fees: document.tool_fees,
+        router_fee,
     }));
     match litellm_cost::price(&rows, &query) {
         PriceOutcome::Priced(receipt) => Some(*receipt),

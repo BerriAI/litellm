@@ -4,7 +4,17 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import adjusted_cost
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+    BranchFacts,
+    FeeBilling,
+    ReceiptFacts,
+    adjusted_cost,
+    billed_token_rates,
+    branch_receipt,
+    part_costs,
+)
+from litellm.rust_bridge._native import NativeReceipt
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
@@ -207,3 +217,60 @@ def test_resolve_cost_discount_prefixless_glob_cannot_see_region_prefix(resolve_
 def test_resolve_cost_discount_no_region_name_keeps_qualified_name_hidden(resolve_cost_discount: Resolve):
     config = {"bedrock": 0.05, "bedrock/claude-*": 0.2}
     assert resolve_cost_discount(config, "bedrock", "bedrock/us-gov-west-1/claude-x") == 0.05
+
+
+_PRICED_ROW: Final = {"litellm_provider": "openai", "input_cost_per_token": 2.0, "output_cost_per_token": 1.0}
+_LOOKED_UP_ROW: Final = {
+    "litellm_provider": "openai",
+    "input_cost_per_token": 5.0,
+    "output_cost_per_token": 1.0,
+    "cache_read_input_token_cost": 0.5,
+}
+_ROUTER_ROW: Final = {"litellm_provider": "azure_ai", "input_cost_per_token": 0.25}
+
+
+def _receipt(facts: ReceiptFacts) -> NativeReceipt:
+    return branch_receipt(
+        "model",
+        "openai",
+        Usage(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=4),
+        ),
+        _PRICED_ROW,
+        branch=BranchFacts(rules="generic"),
+        receipt=facts,
+    )
+
+
+@pytest.mark.parametrize(
+    ("facts", "cache_read_rate"),
+    [
+        (ReceiptFacts(), 2.0),
+        (ReceiptFacts(breakdown="row", breakdown_row=_LOOKED_UP_ROW), 0.5),
+        (ReceiptFacts(breakdown="absent"), None),
+    ],
+)
+def test_the_stored_breakdown_reads_the_row_the_caller_names(facts: ReceiptFacts, cache_read_rate: float | None) -> None:
+    receipt: Final = _receipt(facts)
+    rates: Final = billed_token_rates(receipt)
+
+    assert receipt.prompt_cost == pytest.approx(10 * 2.0)
+    assert (None if rates is None else rates.cache_read_input_token_cost) == cache_read_rate
+
+
+@pytest.mark.parametrize(
+    ("billed", "prompt_cost", "fees"),
+    [("prompt", 20.0 + 2.5, {}), ("additional", 20.0, {"Azure Model Router Flat Cost": 2.5})],
+)
+def test_the_router_fee_bills_where_the_caller_says(
+    billed: FeeBilling, prompt_cost: float, fees: Mapping[str, float]
+) -> None:
+    receipt: Final = _receipt(ReceiptFacts(router_fee=billed, fee_row=_ROUTER_ROW, tool_fees=1.0))
+
+    assert receipt.prompt_cost == pytest.approx(prompt_cost)
+    assert dict(part_costs(receipt)) == pytest.approx(fees)
+    assert receipt.tools_cost == 1.0
+    assert receipt.total == pytest.approx(prompt_cost + 2.0 + sum(fees.values()) + 1.0)
