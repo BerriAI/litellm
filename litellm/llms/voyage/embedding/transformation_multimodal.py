@@ -7,10 +7,10 @@ containing content blocks, unlike standard Voyage embeddings which use
 """
 
 from collections.abc import Mapping
-from typing import Annotated, Final
+from typing import Final
 
 import httpx
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -22,7 +22,7 @@ from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, U
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
-_OPTIONAL_COUNT: Final = TypeAdapter(Annotated[int, Field(ge=0)] | None, config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_COUNT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None, config=ConfigDict(hide_input_in_errors=True))
 
 
 def _prompt_token_details(usage: Mapping[str, object]) -> PromptTokensDetailsWrapper | None:
@@ -31,6 +31,8 @@ def _prompt_token_details(usage: Mapping[str, object]) -> PromptTokensDetailsWra
         image_pixels: Final = _OPTIONAL_COUNT.validate_python(usage.get("image_pixels"))
         video_pixels: Final = _OPTIONAL_COUNT.validate_python(usage.get("video_pixels"))
     except ValidationError:
+        return None
+    if min(text_tokens or 0, image_pixels or 0, video_pixels or 0) < 0:
         return None
     if image_pixels is None and video_pixels is None:
         return None

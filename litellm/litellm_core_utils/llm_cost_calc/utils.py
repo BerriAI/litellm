@@ -1656,6 +1656,7 @@ def generic_cost_per_token(
     # Check for double-counting: sum of details > prompt_tokens means overlap
     total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
     has_double_counting: Final = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
+    infer_text_tokens: Final = text_tokens == 0 or reports_pixel_counts
 
     if has_double_counting:
         # cached and per-modality counts are both subsets of prompt_tokens and may overlap, so a
@@ -1668,9 +1669,7 @@ def generic_cost_per_token(
         prompt_tokens_details["image_tokens"] = billable_image
         prompt_tokens_details["video_tokens"] = billable_video
         prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
-    elif (
-        pixel_rate is None and (text_tokens == 0 or reports_pixel_counts) and prompt_tokens_details["image_count"] == 0
-    ):
+    elif pixel_rate is None and infer_text_tokens and prompt_tokens_details["image_count"] == 0:
         # Clamp to zero: inconsistent streaming usage
         prompt_tokens_details["text_tokens"] = max(
             usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
@@ -1695,7 +1694,8 @@ def generic_cost_per_token(
         base_costs.cache_read_rate if resolved_cache_read_cost is None else resolved_cache_read_cost
     )
 
-    prompt_cost = _calculate_input_cost(
+    pixel_cost: Final = ((image_pixels or 0) + (video_pixels or 0)) * pixel_rate if pixel_rate is not None else 0.0
+    prompt_cost = pixel_cost + _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
         model_info=resolved_model_info,
         prompt_base_cost=base_costs.input_rate,
@@ -1706,8 +1706,6 @@ def generic_cost_per_token(
         prompt_tokens=usage.prompt_tokens,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
-    if pixel_rate is not None:
-        prompt_cost += ((image_pixels or 0) + (video_pixels or 0)) * pixel_rate
 
     ## CALCULATE OUTPUT COST
     text_tokens = 0
