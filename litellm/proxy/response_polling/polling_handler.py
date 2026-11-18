@@ -257,7 +257,9 @@ class ResponsePollingHandler:
             written: Final = await self._write_unless_cancelled(self.redis_cache, cache_key, state)
         except Exception as write_error:  # noqa: BLE001  # a Redis fault must not end the background stream
             verbose_proxy_logger.error(
-                "Failed to write the polling state for %s: %s", sanitize_for_log(polling_id), write_error
+                "Failed to write the polling state for %s: %s",
+                sanitize_for_log(polling_id),
+                type(write_error).__name__,
             )
             return
         if written != _WRITTEN:

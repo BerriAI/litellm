@@ -99,6 +99,11 @@ class _CancelledRightAfterTheStatusCheckRedisStandIn(_ScriptRefusingRedisStandIn
 _CANCELLED_ELSEWHERE: Final = {"status": "cancelled", "id": "litellm_poll_test", "object": "response", "output": []}
 
 
+class _PipelineRefusingRedisStandIn(_ScriptRefusingRedisStandIn):
+    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: Optional[int]) -> NoReturn:
+        raise NoPermissionError(f"Command # 1 (GETSET {key} {value}) of pipeline caused error: NOPERM")
+
+
 class _UnreachableRedisStandIn(_RedisStandIn):
     async def async_getrange(self, key: str, start: int, end: int) -> NoReturn:
         raise ConnectionError("redis is unreachable")
@@ -713,12 +718,27 @@ class TestResponsePollingHandler:
         assert await handler.get_state("litellm_poll_test") == state
 
     @pytest.mark.asyncio
+    async def test_a_refused_state_write_logs_no_response_content(self, caplog: pytest.LogCaptureFixture) -> None:
+        handler: Final = ResponsePollingHandler(
+            redis_cache=_PipelineRefusingRedisStandIn.holding({"status": "in_progress"})
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+            await handler.update_state(
+                polling_id="litellm_poll_test", instructions="private system prompt", status="in_progress"
+            )
+
+        messages: Final = [record.getMessage() for record in caplog.records]
+        assert "Failed to write the polling state for litellm_poll_test: NoPermissionError" in messages
+        assert not [message for message in messages if "private system prompt" in message]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("redis_cache", "logged"),
         (
             (
                 _UnreachableRedisStandIn.holding({"status": "in_progress"}, polling_id="litellm_poll_a\nforged"),
-                "Failed to write the polling state for litellm_poll_aforged: redis is unreachable",
+                "Failed to write the polling state for litellm_poll_aforged: ConnectionError",
             ),
             (
                 _RedisStandIn(),
