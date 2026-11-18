@@ -401,6 +401,8 @@ pub(crate) fn units_row(fields: &serde_json::Value) -> TestRow {
             "input_cost_per_second" => (Meter::Input(InputUnit::Second), Channel::Online),
             "output_cost_per_second" => (Meter::Output(OutputUnit::Second(None)), Channel::Online),
             "output_cost_per_video" => (Meter::Output(OutputUnit::Video), Channel::Online),
+            "input_cost_per_image" => (Meter::Input(InputUnit::Image), Channel::Online),
+            "input_cost_per_pixel" => (Meter::Input(InputUnit::Pixel), Channel::Online),
             "output_cost_per_video_per_second" => {
                 (Meter::Output(OutputUnit::VideoSecond), Channel::Online)
             }

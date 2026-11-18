@@ -4,7 +4,7 @@
 use crate::query::PriceQuery;
 use crate::receipt::{PriceOutcome, Unpriced};
 use crate::row::RowSource;
-use crate::{ocr, rerank, search, speech, tokens, transcription, vector_store, video};
+use crate::{image, ocr, rerank, search, speech, tokens, transcription, vector_store, video};
 
 pub fn price(source: &impl RowSource, query: &PriceQuery) -> PriceOutcome {
     match query {
@@ -16,8 +16,8 @@ pub fn price(source: &impl RowSource, query: &PriceQuery) -> PriceOutcome {
         PriceQuery::Transcription(transcription) => transcription::price(source, transcription),
         PriceQuery::Search(search) => search::price(source, search),
         PriceQuery::Video(video) => video::price(source, video),
-        PriceQuery::Image(_)
-        | PriceQuery::Session(_)
+        PriceQuery::Image(image) => image::price(source, image),
+        PriceQuery::Session(_)
         | PriceQuery::BatchLine(_)
         | PriceQuery::Guardrail(_)
         | PriceQuery::A2a(_)
@@ -35,11 +35,10 @@ mod tests {
 
     #[rstest]
     fn a_kind_without_a_handler_is_not_ported(
-        #[values(Kind::Image, Kind::Session, Kind::Mcp, Kind::BatchLine)] kind: Kind,
+        #[values(Kind::Session, Kind::Mcp, Kind::BatchLine)] kind: Kind,
     ) {
         let header = tokens_query(Provider::Anthropic, "claude", usage(1, 1)).header;
         let query = match kind {
-            Kind::Image => PriceQuery::Image(header),
             Kind::Session => PriceQuery::Session(header),
             Kind::Mcp => PriceQuery::Mcp(header),
             _ => PriceQuery::BatchLine(header),

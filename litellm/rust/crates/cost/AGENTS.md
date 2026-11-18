@@ -6,7 +6,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - `engine.rs` hands each `PriceQuery` kind to its handler module. A kind or case without a handler answers `Unpriced::NotPorted`, and only then may the caller price it the old way
 - `tokens.rs` and `tokens/` port the token path of `completion_cost`: `rule.rs` for what each provider branch of `cost_per_token` adds, `breakdown.rs` for the values main stores beside the total, `custom.rs` for `custom_cost_per_token`
 - `adjust.rs` ports the discount and margin config. Rules keep the order the config wrote them in
-- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`, `search.rs`, `video.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
+- Each per-unit kind has its own module (`rerank.rs`, `vector_store.rs`, `ocr.rs`, `speech.rs`, `transcription.rs`, `search.rs`, `video.rs`, `image.rs`), which picks the meter and quantity main's calculator billed. `units.rs` holds what they share: the rows a header names, `PriceSource::Rows` (the deployment's own price tables, read ahead of the catalog row in the order the kind's calculator reads them), billing one row through `calculate`, and the receipt with the query's discount and margin settled
   - Where main billed a call nothing on purpose (no row, no rate, no units) the core answers `Unpriced`, never 0.0, and the adapter maps it to each calculator's legacy return
 
 ## Parity fixtures
@@ -35,6 +35,8 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - A search row priced by `max_results_range` tiers falls back to the last tier when the requested results fall below the first range. A row listing any `tiered_pricing` answers `NotPorted`, even beside a flat query rate main never reads then, since billing lowering leaves result tiers out, and the adapter keeps main's tier pick
 - A deployment's video table replaces the catalog row whole, so a deployment that prices only input images bills no video, and one that prices only per second never reads the catalog's clip table (`video_generation_cost`)
 - A video length of exactly half a second rounds to the even clip length, so 4.5s reads the `4s` cell (Python's `round` in `video_clip_cost`)
+- The default image calculator bills `input_cost_per_image` for returned images when a row lists it, ahead of `output_cost_per_image`, and reads the deployment's table whole before the catalog row, so a deployment pixel rate beats a catalog per-image rate (`default_image_cost_calculator`)
+- A per-image provider bills a returned image the deployment or catalog prices at 0, and one neither prices at 0.0 rather than failing (`recraft`, `aiml`, `cometapi`, `runwayml` cost calculators)
 
 ## Not copied from main
 - `video_generation_cost` read a catalog row through `get_model_info`, which drops every `output_cost_per_second_<resolution>` key but six. The core reads any resolution the row lists. No shipped row lists another

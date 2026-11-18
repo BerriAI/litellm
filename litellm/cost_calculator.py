@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     AdjustedCost,
     AdjustFacts,
     CallFacts,
+    ImageDocument,
     OcrDocument,
     RerankDocument,
     SpeechDocument,
@@ -3207,26 +3208,23 @@ def default_image_cost_calculator(
     if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
-    price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
     image_count: Final = n if n is not None else 1
-    unit_counts: Final = (
-        ("input_cost_per_image", image_count),
-        ("output_cost_per_image", image_count),
-        ("input_cost_per_pixel", height * width * image_count),
-    )
-    cost: Final = next(
-        (
-            price * units
-            for price_table in price_tables
-            for cost_key, units in unit_counts
-            if (price := price_table.get(cost_key)) is not None
+    outcome: Final = price_units(
+        ImageDocument(
+            kind="image",
+            model=model,
+            provider=custom_llm_provider,
+            calculator="default",
+            images=image_count,
+            pixels=height * width * image_count,
+            input_images=0,
         ),
-        None,
+        (model_info,) if model_info is not None else (),
+        litellm.model_cost[matched_model] if matched_model is not None else None,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
     )
-    if cost is None:
+    if not isinstance(outcome, NativeReceipt):
         raise Exception(f"No pricing information found for model {model}. Tried checking {models_to_check}")
-    return cost
+    return outcome.total
 
 
 def default_video_cost_calculator(
