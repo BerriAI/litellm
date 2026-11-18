@@ -48,7 +48,12 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
-class FunctionResponsePartType(TypedDict, total=False):
+class GeminiFileInspectionMetadata(TypedDict, total=False):
+    document_metadata: ReadOnly[Mapping[str, object]]
+    spreadsheet_metadata: ReadOnly[Mapping[str, object]]
+
+
+class FunctionResponsePartType(GeminiFileInspectionMetadata, total=False):
     inline_data: BlobType
     file_data: FileDataType
 
@@ -59,7 +64,7 @@ class VideoMetadataType(TypedDict, total=False):
     endOffset: ReadOnly[str]
 
 
-class PartType(TypedDict, total=False):
+class PartType(GeminiFileInspectionMetadata, total=False):
     text: str
     inline_data: BlobType
     file_data: FileDataType

@@ -59,6 +59,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
 from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
+from litellm.types.llms.vertex_ai import FunctionResponsePartType, GeminiFileInspectionMetadata
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
@@ -1499,10 +1500,28 @@ def _contains_part_reference(payload: JsonValue) -> bool:
     return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
+def _gemini_files_api_tool_part(file: Mapping[str, object], model: str | None) -> VertexPartType | None:
+    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    uri: Final = next(
+        (value for key in ("file_data", "file_id", "file_url") if isinstance(value := file.get(key), str) and value),
+        None,
+    )
+    if not isinstance(uri, str) or not uri.startswith(GEMINI_FILES_API_URI_PREFIXES):
+        return None
+    format_hint: Final = file.get("format") or file.get("mime_type") or file.get("content_type")
+    return _process_gemini_media(uri, format=format_hint if isinstance(format_hint, str) else None, model=model)
+
+
 def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
     forward_function_call_id: bool = False,
+    *,
+    allow_gemini_file_references: bool = False,
+    supports_media_in_tool_response: bool = True,
+    model: str | None = None,
 ) -> VertexPartType | list[VertexPartType]:
     """
     OpenAI message with a tool result looks like:
@@ -1530,10 +1549,12 @@ def convert_to_gemini_tool_call_result(
         ]
     }
     """
+    from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_file_inspection_metadata
     from litellm.types.llms.vertex_ai import BlobType
 
     content_str: str = ""
-    inline_data_list: Final[list[BlobType]] = []
+    media_parts: Final[list[FunctionResponsePartType]] = []  # mutable-ok: preserve tool result media order
+    sibling_parts: Final[list[VertexPartType]] = []  # mutable-ok: preserve file references on older Gemini models
 
     if "content" in message:
         if isinstance(message["content"], str):
@@ -1547,7 +1568,7 @@ def convert_to_gemini_tool_call_result(
                     if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
                         # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
                         clean_mime: Final = mime_rest[0].split(";")[0].strip()
-                        inline_data_list.append(BlobType(data=mime_rest[1], mime_type=clean_mime))
+                        media_parts.append({"inline_data": BlobType(data=mime_rest[1], mime_type=clean_mime)})
                         content_str = ""
                 except Exception as e:
                     verbose_logger.warning("Failed to parse data URL in tool response: %s", e)
@@ -1562,11 +1583,13 @@ def convert_to_gemini_tool_call_result(
                     source = content.get("source", {})
                     if isinstance(source, dict) and source.get("type") == "base64":
                         try:
-                            inline_data_list.append(
-                                BlobType(
-                                    data=source.get("data", ""),
-                                    mime_type=source.get("media_type", "image/jpeg"),
-                                )
+                            media_parts.append(
+                                {
+                                    "inline_data": BlobType(
+                                        data=source.get("data", ""),
+                                        mime_type=source.get("media_type", "image/jpeg"),
+                                    )
+                                }
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
@@ -1579,15 +1602,28 @@ def convert_to_gemini_tool_call_result(
                         # Convert image to base64 blob format for Gemini
                         try:
                             image_obj = convert_to_anthropic_image_obj(image_url, format=None)
-                            inline_data_list.append(
-                                BlobType(
-                                    data=image_obj["data"],
-                                    mime_type=image_obj["media_type"],
-                                )
+                            media_parts.append(
+                                {
+                                    "inline_data": BlobType(
+                                        data=image_obj["data"],
+                                        mime_type=image_obj["media_type"],
+                                    )
+                                }
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process image in tool response: %s", e)
                 elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
+                    metadata = GeminiFileInspectionMetadata()
+                    if allow_gemini_file_references:
+                        file_fields: Final = {**content, **(as_str_mapping(content.get("file")) or {})}
+                        metadata = encode_gemini_file_inspection_metadata(file_fields)
+                        source_part: Final = _gemini_files_api_tool_part(file_fields, model)
+                        if source_part is not None and "file_data" in source_part:
+                            if supports_media_in_tool_response:
+                                media_parts.append({"file_data": source_part["file_data"], **metadata})
+                            else:
+                                sibling_parts.append({**source_part, **metadata})
+                            continue
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
                     if not file_data:
@@ -1604,11 +1640,14 @@ def convert_to_gemini_tool_call_result(
                         # Convert file to base64 blob format for Gemini
                         try:
                             file_obj = convert_to_anthropic_image_obj(file_data, format=None)
-                            inline_data_list.append(
-                                BlobType(
-                                    data=file_obj["data"],
-                                    mime_type=file_obj["media_type"],
-                                )
+                            media_parts.append(
+                                {
+                                    "inline_data": BlobType(
+                                        data=file_obj["data"],
+                                        mime_type=file_obj["media_type"],
+                                    ),
+                                    **(metadata if supports_media_in_tool_response else {}),
+                                }
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
@@ -1667,9 +1706,10 @@ def convert_to_gemini_tool_call_result(
 
     # For multimodal function responses, Gemini expects media parts nested
     # inside functionResponse.parts instead of sibling content parts.
-    if inline_data_list:
-        _function_response["parts"] = [{"inline_data": inline_data} for inline_data in inline_data_list]
-        return [_part]
+    if media_parts:
+        _function_response["parts"] = media_parts
+    if media_parts or sibling_parts:
+        return [_part, *sibling_parts]
 
     return _part
 

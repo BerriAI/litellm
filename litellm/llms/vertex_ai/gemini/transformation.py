@@ -16,7 +16,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -49,6 +49,7 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
+    GeminiFileInspectionMetadata,
     GenerationConfig,
     PartType,
     RequestBody,
@@ -60,7 +61,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
-    GEMINI_FILES_API_URI_PREFIX,
+    GEMINI_FILES_API_URI_PREFIXES,
     check_text_in_content,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
@@ -175,7 +176,7 @@ def _extract_max_media_resolution_from_messages(
                 elif item.get("type") == "file":
                     file_obj = item.get("file")
                     if isinstance(file_obj, dict):
-                        detail = file_obj.get("detail")
+                        detail = file_obj.get("resolution") or file_obj.get("detail")
                 if detail:
                     max_resolution = _get_highest_media_resolution(max_resolution, detail)
     return max_resolution
@@ -559,7 +560,7 @@ def _process_gemini_media(
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
+        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIXES):
             # Gemini Files API URIs — the file is already uploaded to Google's
             # servers; pass the URI through as file_data without fetching it.
             # These URLs return 403 when accessed directly, so we must not try
@@ -592,6 +593,24 @@ def snake_to_camel(snake_str: str) -> str:
 
 
 _snake_to_camel = snake_to_camel
+
+
+def encode_gemini_file_inspection_metadata(file: Mapping[str, object]) -> GeminiFileInspectionMetadata:
+    document_metadata: Final = as_str_mapping(file.get("document_metadata"))
+    spreadsheet_metadata: Final = as_str_mapping(file.get("spreadsheet_metadata"))
+    document: Final = (
+        GeminiFileInspectionMetadata(
+            document_metadata={snake_to_camel(key): value for key, value in document_metadata.items()}
+        )
+        if document_metadata is not None
+        else GeminiFileInspectionMetadata()
+    )
+    if spreadsheet_metadata is None:
+        return document
+    return {
+        **document,
+        "spreadsheet_metadata": {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()},
+    }
 
 
 def camel_to_snake(camel_str: str) -> str:
@@ -823,7 +842,7 @@ def gemini_convert_messages_with_history(
                                 file_dict.get("format") or file_dict.get("mime_type") or file_dict.get("content_type")
                             )
                             file_data = file_dict.get("file_data")
-                            detail = file_dict.get("detail")
+                            detail = file_dict.get("resolution") or file_dict.get("detail")
                             video_metadata = file_dict.get("video_metadata")
                             passed_file = file_id or file_data
                             if passed_file is None:
@@ -842,7 +861,7 @@ def gemini_convert_messages_with_history(
                                     vertex_project=vertex_project,
                                     vertex_credentials=vertex_credentials,
                                 )
-                                _parts.append(_part)
+                                _parts.append({**_part, **encode_gemini_file_inspection_metadata(file_dict)})
                             except litellm.BadRequestError:
                                 raise
                             except Exception as e:
@@ -1030,6 +1049,9 @@ def gemini_convert_messages_with_history(
                     messages[msg_i],
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
+                    allow_gemini_file_references=custom_llm_provider == "gemini",
+                    supports_media_in_tool_response=model is None or VertexGeminiConfig.is_gemini_3_or_newer(model),
+                    model=model,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1320,11 +1342,11 @@ def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
 
 
 def _ai_studio_inlines(media: RemoteMedia) -> bool:
-    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIXES)
 
 
 def _vertex_inlines(media: RemoteMedia) -> bool:
-    if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
+    if media.url.startswith(GEMINI_FILES_API_URI_PREFIXES):
         return False
     return media.url.startswith("http://") or (
         _explicit_mime_type(media.fields) is None and get_image_mime_type_from_url(media.url) is None
