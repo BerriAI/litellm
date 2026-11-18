@@ -6,7 +6,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
@@ -1985,6 +1985,83 @@ def store_receipt_breakdown(
     )
 
 
+class _PricedTokens(Protocol):
+    def __call__(
+        self, *, custom_llm_provider: str | None, receipt: ReceiptFacts | None, adjust: AdjustFacts | None
+    ) -> NativeReceipt | tuple[float, float]: ...
+
+
+def _candidate_cost(
+    priced_tokens: _PricedTokens,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    candidate_provider: str | None,
+    completion_response: object,
+    usage: Usage | None,
+    standard_built_in_tools_params: StandardBuiltInToolsParams | None,
+    request_model: str | None,
+    custom_cost_per_token: CostPerToken | None,
+    bedrock_model_info: ModelInfo | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    adjust: AdjustFacts,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> float:
+    """One candidate's ``completion_cost``: its token receipt with the tool fees, the Model Router fee and the row the
+    stored breakdown reads, stored on the logging object."""
+    tool_fees: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=completion_response,
+        usage=usage,
+        standard_built_in_tools_params=standard_built_in_tools_params,
+        custom_llm_provider=custom_llm_provider,
+    )
+    fee_row: Final = _router_fee_row(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        request_model=request_model,
+        completion_response=completion_response,
+    )
+    stored_row: Final = _breakdown_row(
+        model=model,
+        custom_llm_provider=candidate_provider,
+        custom_cost_per_token=custom_cost_per_token,
+        bedrock_model_info=bedrock_model_info,
+        usage=usage,
+        stored=litellm_logging_obj is not None,
+    )
+    priced: Final = priced_tokens(
+        custom_llm_provider=candidate_provider,
+        receipt=ReceiptFacts(
+            breakdown=stored_row[0],
+            breakdown_row=stored_row[1],
+            tool_fees=tool_fees,
+            router_fee=None if fee_row is None else "additional",
+            fee_row=fee_row,
+        ),
+        adjust=adjust,
+    )
+    if not isinstance(priced, NativeReceipt):
+        return _unit_kind_cost(
+            priced,
+            model=model,
+            custom_llm_provider=candidate_provider,
+            usage=usage,
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            stored_row=stored_row,
+            tool_fees=tool_fees,
+            fee_row=fee_row,
+            adjust=adjust,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+    store_receipt_breakdown(litellm_logging_obj, priced, service_tier, data_residency, vertex_location)
+    return priced.total
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -2501,87 +2578,55 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
-                candidate_provider: Final = _pricing_provider_for_cost_candidate(
-                    candidate_provider=candidate_pricing_provider,
-                    request_provider=request_pricing_provider,
-                    current_provider=custom_llm_provider,
-                )
-                tool_fees: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-                    model=model,
-                    response_object=completion_response,
-                    usage=cost_per_token_usage_object,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                    custom_llm_provider=custom_llm_provider,
-                )
-                fee_row: Final = _router_fee_row(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    request_model=request_model_for_cost,
-                    completion_response=completion_response,
-                )
-                stored_row: Final = _breakdown_row(
-                    model=model,
-                    custom_llm_provider=candidate_provider,
-                    custom_cost_per_token=custom_cost_per_token,
-                    bedrock_model_info=bedrock_model_info,
-                    usage=cost_per_token_usage_object,
-                    stored=litellm_logging_obj is not None,
-                )
-                adjust: Final = AdjustFacts(
-                    provider=custom_llm_provider,
-                    model=model_for_discount,
-                    region=region_name if isinstance(region_name, str) else None,
-                )
-                priced: Final = _priced_tokens(
-                    model=model,
-                    prompt_tokens=prompt_tokens or 0,
-                    completion_tokens=completion_tokens or 0,
-                    custom_llm_provider=candidate_provider,
-                    response_time_ms=response_time_ms,
-                    region_name=None if explicit_pricing else region_name,
-                    custom_cost_per_second=custom_cost_per_second,
-                    custom_cost_per_token=custom_cost_per_token,
-                    requested_model_info_override=requested_model_info_override,
-                    prompt_characters=prompt_characters,
-                    completion_characters=completion_characters,
-                    cache_creation_input_tokens=cache_creation_input_tokens,
-                    cache_read_input_tokens=cache_read_input_tokens,
-                    usage_object=cost_per_token_usage_object,
-                    call_type=call_type,
-                    audio_transcription_file_duration=audio_transcription_file_duration,
-                    rerank_billed_units=rerank_billed_units,
-                    service_tier=service_tier,
-                    data_residency=data_residency,
-                    vertex_location=vertex_location,
-                    response=completion_response,
-                    custom_model_info=_ocr_price_tables(litellm_logging_obj, custom_pricing, router_model_id),
-                    bedrock_model_info=bedrock_model_info,
-                    receipt=ReceiptFacts(
-                        breakdown=stored_row[0],
-                        breakdown_row=stored_row[1],
-                        tool_fees=tool_fees,
-                        router_fee=None if fee_row is None else "additional",
-                        fee_row=fee_row,
-                    ),
-                    adjust=adjust,
-                )
-                if not isinstance(priced, NativeReceipt):
-                    return _unit_kind_cost(
-                        priced,
+                return _candidate_cost(
+                    partial(
+                        _priced_tokens,
                         model=model,
-                        custom_llm_provider=candidate_provider,
-                        usage=cost_per_token_usage_object,
+                        prompt_tokens=prompt_tokens or 0,
+                        completion_tokens=completion_tokens or 0,
+                        response_time_ms=response_time_ms,
+                        region_name=None if explicit_pricing else region_name,
+                        custom_cost_per_second=custom_cost_per_second,
+                        custom_cost_per_token=custom_cost_per_token,
+                        requested_model_info_override=requested_model_info_override,
+                        prompt_characters=prompt_characters,
+                        completion_characters=completion_characters,
+                        cache_creation_input_tokens=cache_creation_input_tokens,
+                        cache_read_input_tokens=cache_read_input_tokens,
+                        usage_object=cost_per_token_usage_object,
+                        call_type=call_type,
+                        audio_transcription_file_duration=audio_transcription_file_duration,
+                        rerank_billed_units=rerank_billed_units,
                         service_tier=service_tier,
                         data_residency=data_residency,
                         vertex_location=vertex_location,
-                        stored_row=stored_row,
-                        tool_fees=tool_fees,
-                        fee_row=fee_row,
-                        adjust=adjust,
-                        litellm_logging_obj=litellm_logging_obj,
-                    )
-                store_receipt_breakdown(litellm_logging_obj, priced, service_tier, data_residency, vertex_location)
-                return priced.total
+                        response=completion_response,
+                        custom_model_info=_ocr_price_tables(litellm_logging_obj, custom_pricing, router_model_id),
+                        bedrock_model_info=bedrock_model_info,
+                    ),
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    candidate_provider=_pricing_provider_for_cost_candidate(
+                        candidate_provider=candidate_pricing_provider,
+                        request_provider=request_pricing_provider,
+                        current_provider=custom_llm_provider,
+                    ),
+                    completion_response=completion_response,
+                    usage=cost_per_token_usage_object,
+                    standard_built_in_tools_params=standard_built_in_tools_params,
+                    request_model=request_model_for_cost,
+                    custom_cost_per_token=custom_cost_per_token,
+                    bedrock_model_info=bedrock_model_info,
+                    litellm_logging_obj=litellm_logging_obj,
+                    adjust=AdjustFacts(
+                        provider=custom_llm_provider,
+                        model=model_for_discount,
+                        region=region_name if isinstance(region_name, str) else None,
+                    ),
+                    service_tier=service_tier,
+                    data_residency=data_residency,
+                    vertex_location=vertex_location,
+                )
             except Exception as e:
                 verbose_logger.debug(
                     "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model=%s - %s", model, e
