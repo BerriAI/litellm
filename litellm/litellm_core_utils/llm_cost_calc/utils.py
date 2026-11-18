@@ -317,15 +317,6 @@ def prices_tokens(model_info: ModelInfo) -> bool:
     return any(model_info.get(key) is not None for key in _IMAGE_TOKEN_RATE_KEYS)
 
 
-def flat_image_cost(model_info: ModelInfo | None, image_response: ImageResponse) -> float:
-    """The per-image price times the images returned; 0.0 when the table sets no per-image price."""
-    if model_info is None:
-        return 0.0
-    output_cost_per_image: Final = get_cost_per_unit(model_info, "output_cost_per_image", default_value=None) or 0.0
-    num_images: Final = len(image_response.data) if image_response.data else 0
-    return output_cost_per_image * num_images
-
-
 def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: ModelInfo | None) -> ModelInfo:
     """The price table an image cost calculator consults for ``model``.
 

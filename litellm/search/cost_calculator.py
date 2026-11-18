@@ -14,7 +14,6 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import AdjustFacts, SearchDocument, price_units
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.rust_bridge._native import NativeReceipt
-from litellm.types.utils import ModelInfo
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
@@ -77,18 +76,10 @@ def _pricing_model(
     return mode_model
 
 
-def _tiered_cost_per_query(model_info: ModelInfo, optional_params: Mapping[str, object] | None) -> float:
-    """The `max_results_range` tier price, which the Rust core does not price yet."""
-    tiered_pricing: Final = model_info.get("tiered_pricing") or []
-    max_results: Final = (optional_params or {}).get("max_results", 10)
-    return next(
-        (
-            tier["input_cost_per_query"]
-            for tier in tiered_pricing
-            if tier["max_results_range"][0] <= max_results <= tier["max_results_range"][1]
-        ),
-        tiered_pricing[-1]["input_cost_per_query"],
-    )
+def _max_results(optional_params: Mapping[str, object] | None) -> float | None:
+    """The `max_results` the request asked for, which picks a `max_results_range` tier."""
+    max_results: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get("max_results")
+    return float(max_results) if isinstance(max_results, (int, float)) else None
 
 
 def _parallel_ai_billed(optional_params: Mapping[str, object]) -> tuple[str, int, int]:
@@ -114,7 +105,7 @@ def search_cost(
     *,
     search_response: SearchResponse | None = None,
 ) -> NativeReceipt | float:
-    """The receipt of a search, or for a row priced by requested results its cost before discount and margin."""
+    """The receipt of a search, 0.0 when no row prices it."""
     pricing_model, requests, additional_results = (
         _parallel_ai_billed(optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS)
         if custom_llm_provider == "parallel_ai" and configured_cost_per_query is None
@@ -133,15 +124,12 @@ def search_cost(
             queries=requests,
             additional_results=additional_results,
             adjust=adjust,
+            max_results=_max_results(optional_params),
         ),
         tables=({"input_cost_per_query": configured_cost_per_query},) if configured_cost_per_query is not None else (),
         catalog=model_info,
     )
-    if isinstance(outcome, NativeReceipt):
-        return outcome
-    if outcome.reason == "not_ported" and model_info is not None:
-        return number_of_queries * _tiered_cost_per_query(model_info, optional_params)
-    return 0.0
+    return outcome if isinstance(outcome, NativeReceipt) else 0.0
 
 
 def search_provider_cost_per_query(
