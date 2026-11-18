@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.litellm_core_utils import model_cost_table
+from litellm.litellm_core_utils.fallback_generalizations import get_fallback_generalization_rules
 from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry, Landing
 
 
@@ -18,20 +19,30 @@ published: Final = model_cost_table.published
 write: Final = model_cost_table.write
 
 
-def generation() -> tuple[Mapping[str, object], int, int, int, int, int]:
-    """The published table with what a pricing snapshot is keyed on: its ``ModelCostVersion`` and the identity of the
-    cost discount and margin configs, which are only ever replaced whole."""
+def generation() -> tuple[
+    Mapping[str, object],
+    tuple[int, int, int],
+    tuple[int, int, int, Mapping[str, object], Mapping[str, object], Sequence[object]],
+]:
+    """The published table and what a pricing snapshot of it is keyed on: its ``ModelCostVersion``, then the identity
+    of the cost discount and margin configs and of the ``fallback_generalizations`` rule list, which are only ever
+    replaced whole, followed by those three."""
     import litellm
 
     table: Final = model_cost_table.published()
     version: Final = model_cost_table.model_cost_version()
+    rules: Final = get_fallback_generalization_rules()
     return (
         table,
-        version.table,
-        version.size,
-        version.writes,
-        id(litellm.cost_discount_config),
-        id(litellm.cost_margin_config),
+        (version.table, version.size, version.writes),
+        (
+            id(litellm.cost_discount_config),
+            id(litellm.cost_margin_config),
+            id(rules),
+            litellm.cost_discount_config,
+            litellm.cost_margin_config,
+            rules,
+        ),
     )
 
 

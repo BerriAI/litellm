@@ -99,6 +99,7 @@ pub(crate) const GENERATION: Generation = Generation {
     writes: 0,
     discount: 0,
     margin: 0,
+    rules: 0,
 };
 
 pub(crate) fn snapshot(rows: TestRows, names: KnownNames) -> Snapshot<Store<TestRows>> {
@@ -108,6 +109,8 @@ pub(crate) fn snapshot(rows: TestRows, names: KnownNames) -> Snapshot<Store<Test
             table: Store::new(rows),
             rules: Arc::new(bundled_rules()),
             names: Arc::new(names),
+            discounts: Arc::default(),
+            margins: Arc::default(),
         },
     )
 }

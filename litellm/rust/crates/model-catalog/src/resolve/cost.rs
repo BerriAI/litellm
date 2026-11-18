@@ -59,8 +59,15 @@ pub struct CallIdentity {
 /// The rows to try in order, each tried only when the one before it could not be priced, then what is left
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CandidateRows {
-    pub rows: Vec<RowRef>,
+    pub rows: Vec<Tried>,
     pub then: AfterRows,
+}
+
+/// A row main tries, with the model name it hands `cost_per_token` for it, which keys the discount
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tried {
+    pub model: String,
+    pub row: RowRef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,24 +180,28 @@ impl<T: LiveTable> Snapshot<T> {
             }
         };
         let region = call.region.as_deref().filter(|_| !explicit);
-        let steps = ordered
-            .into_iter()
-            .map(|model| match &bedrock_registration {
+        let steps = ordered.into_iter().map(|model| {
+            let step = match &bedrock_registration {
                 Some(key) => Step::Row(key.clone(), RowProvenance::Registered),
                 None => self.priced_key(model, provider, region),
-            });
-        let mut rows: Vec<RowRef> = Vec::new();
-        for step in steps {
+            };
+            (model, step)
+        });
+        let mut rows: Vec<Tried> = Vec::new();
+        for (model, step) in steps {
             match step {
-                Step::Row(key, provenance) => rows.push(RowRef {
-                    provenance: match call.custom_pricing
-                        && call.deployment_id.as_deref() == Some(&key)
-                    {
-                        true => RowProvenance::Registered,
-                        false => provenance,
+                Step::Row(key, provenance) => rows.push(Tried {
+                    model: model.to_owned(),
+                    row: RowRef {
+                        provenance: match call.custom_pricing
+                            && call.deployment_id.as_deref() == Some(&key)
+                        {
+                            true => RowProvenance::Registered,
+                            false => provenance,
+                        },
+                        key,
+                        provider: call.provider.clone(),
                     },
-                    key,
-                    provider: call.provider.clone(),
                 }),
                 Step::Skip => {}
                 Step::Defer(deferral) => {
@@ -205,6 +216,29 @@ impl<T: LiveTable> Snapshot<T> {
             rows,
             then: AfterRows::Exhausted,
         })
+    }
+
+    /// The row `cost_per_token(model, custom_llm_provider=provider, region_name=region)` prices with, for a caller that
+    /// names one model. `Err` when main prices it by another path
+    pub fn priced_row(
+        &self,
+        model: &str,
+        provider: &str,
+        region: Option<&str>,
+    ) -> Result<Option<RowRef>, Deferral> {
+        let cost_provider = CostProvider::from_str(provider).map_err(|_| Deferral::Provider)?;
+        if self.priced_elsewhere(model) {
+            return Err(Deferral::ModelName);
+        }
+        match self.priced_key(model, cost_provider, region) {
+            Step::Row(key, provenance) => Ok(Some(RowRef {
+                key,
+                provider: provider.to_owned(),
+                provenance,
+            })),
+            Step::Skip => Ok(None),
+            Step::Defer(deferral) => Err(deferral),
+        }
     }
 
     /// Port of `select_model_name_for_cost_calc` for a call with no hidden response facts. `bedrock_registration` is
@@ -574,8 +608,8 @@ mod tests {
 
     const REGISTERED: &str = "us.anthropic.claude-opus-5-5";
 
-    fn keys(rows: &[RowRef]) -> Vec<&str> {
-        rows.iter().map(|row| row.key.as_str()).collect()
+    fn keys(rows: &[Tried]) -> Vec<&str> {
+        rows.iter().map(|tried| tried.row.key.as_str()).collect()
     }
 
     #[rstest]
@@ -667,7 +701,7 @@ mod tests {
             found
                 .rows
                 .first()
-                .map(|row| (row.key.as_str(), row.provider.as_str())),
+                .map(|tried| (tried.row.key.as_str(), tried.row.provider.as_str())),
             main_billed
         );
     }
@@ -714,7 +748,7 @@ mod tests {
             found
                 .rows
                 .iter()
-                .map(|row| (row.key.as_str(), row.provenance))
+                .map(|tried| (tried.row.key.as_str(), tried.row.provenance))
                 .collect::<Vec<_>>(),
             case.tried
                 .iter()
@@ -735,7 +769,7 @@ mod tests {
             found
                 .rows
                 .iter()
-                .map(|row| (row.key.as_str(), row.provenance))
+                .map(|tried| (tried.row.key.as_str(), tried.row.provenance))
                 .collect::<Vec<_>>(),
             [
                 ("dep-claude-custom", RowProvenance::Registered),
@@ -846,7 +880,7 @@ mod tests {
             found
                 .rows
                 .iter()
-                .map(|row| (row.key.as_str(), row.provenance))
+                .map(|tried| (tried.row.key.as_str(), tried.row.provenance))
                 .collect::<Vec<_>>(),
             expected
         );

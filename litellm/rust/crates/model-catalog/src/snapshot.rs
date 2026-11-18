@@ -9,11 +9,14 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use litellm_cost::adjust::{Discounts, Margins};
 use litellm_cost::price::Adjustments;
+use litellm_cost::row::RowFacts;
 use serde_json::Value;
 
 use crate::fallback::CapabilityRules;
 use crate::lower::{BilledPrices, billed_prices};
+use crate::pricing::row_facts;
 use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
 
@@ -85,8 +88,8 @@ impl<T: LiveTable> LiveTable for Arc<T> {
     }
 }
 
-/// What a snapshot is valid for: main's `ModelCostVersion` and the identity of the discount and margin config dicts,
-/// which have no version and are only ever replaced whole
+/// What a snapshot is valid for: main's `ModelCostVersion` and the identity of the discount and margin config dicts
+/// and of the host's `fallback_generalizations` rule list, which have no version and are only ever replaced whole
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Generation {
     pub table: usize,
@@ -94,6 +97,7 @@ pub struct Generation {
     pub writes: u64,
     pub discount: usize,
     pub margin: usize,
+    pub rules: usize,
 }
 
 /// Names only the host knows: every provider name, and the model names `get_model_info` renames before a lookup
@@ -108,6 +112,9 @@ pub struct SnapshotInputs<T> {
     pub table: T,
     pub rules: Arc<CapabilityRules>,
     pub names: Arc<KnownNames>,
+    /// `cost_discount_config` and `cost_margin_config` at this generation
+    pub discounts: Arc<Discounts>,
+    pub margins: Arc<Margins>,
 }
 
 /// Where a row came from. A `Registered` row is a deployment's row as the router registered it under its id
@@ -131,6 +138,7 @@ pub struct LoweredRow {
     pub fields: Arc<Fields>,
     pub prices: BilledPrices,
     pub adjustments: Adjustments,
+    pub facts: RowFacts,
 }
 
 /// A row ready for pricing, with the key and provenance it was found by
@@ -157,6 +165,8 @@ pub struct Snapshot<T: LiveTable> {
     pub(crate) table: T,
     pub(crate) rules: Arc<CapabilityRules>,
     pub(crate) names: Arc<KnownNames>,
+    pub(crate) discounts: Arc<Discounts>,
+    pub(crate) margins: Arc<Margins>,
     memo: Arc<Memo<T::Row>>,
 }
 
@@ -176,12 +186,22 @@ impl<T: LiveTable> Snapshot<T> {
             table: inputs.table,
             rules: inputs.rules,
             names: inputs.names,
+            discounts: inputs.discounts,
+            margins: inputs.margins,
             memo,
         }
     }
 
     pub fn generation(&self) -> Generation {
         self.generation
+    }
+
+    pub fn discounts(&self) -> &Discounts {
+        &self.discounts
+    }
+
+    pub fn margins(&self) -> &Margins {
+        &self.margins
     }
 
     /// The row under `row_ref`, lowered for its provider. `None` when the table no longer has the key
@@ -314,7 +334,7 @@ impl<Row: TableRow> Memo<Row> {
             return Arc::clone(lowered);
         }
         let fields = self.fields(row);
-        let lowered = Arc::new(lower(fields, provider));
+        let lowered = Arc::new(LoweredRow::lower(fields, provider));
         if let Some(cached) = self.entries().get_mut(&identity) {
             cached
                 .lowered
@@ -332,17 +352,20 @@ impl<Row: TableRow> Memo<Row> {
     }
 }
 
-fn lower(fields: Arc<Fields>, provider: &str) -> LoweredRow {
-    let billed: Fields = fields
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .chain([("litellm_provider".to_owned(), Value::from(provider))])
-        .collect();
-    let wire = EntryWire::read(&billed);
-    LoweredRow {
-        prices: billed_prices(&wire),
-        adjustments: Adjustments::from(&wire),
-        fields,
+impl LoweredRow {
+    pub(crate) fn lower(fields: Arc<Fields>, provider: &str) -> Self {
+        let billed: Fields = fields
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .chain([("litellm_provider".to_owned(), Value::from(provider))])
+            .collect();
+        let wire = EntryWire::read(&billed);
+        Self {
+            prices: billed_prices(&wire),
+            adjustments: Adjustments::from(&wire),
+            facts: row_facts(&fields),
+            fields,
+        }
     }
 }
 
@@ -416,6 +439,8 @@ mod tests {
             table: Arc::clone(table),
             rules: Arc::new(bundled_rules()),
             names: Arc::new(KnownNames::default()),
+            discounts: Arc::default(),
+            margins: Arc::default(),
         })
     }
 
@@ -453,6 +478,7 @@ mod tests {
     #[case::new_table(Generation { table: 2, ..GENERATION })]
     #[case::discount_config_replaced(Generation { discount: 7, ..GENERATION })]
     #[case::margin_config_replaced(Generation { margin: 7, ..GENERATION })]
+    #[case::rules_replaced(Generation { rules: 7, ..GENERATION })]
     fn a_moved_generation_is_a_new_snapshot(#[case] moved: Generation) {
         let table = Arc::new(Table::default());
         let snapshots = Snapshots::default();
