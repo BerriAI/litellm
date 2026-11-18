@@ -122,10 +122,13 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
     [
         (FOUNDRY_PROJECT_BASE, AzureAIResponsesAPIConfig),
         (f"{FOUNDRY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
+        (GATEWAY_PROJECT_BASE, AzureAIResponsesAPIConfig),
+        (f"{GATEWAY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
+        ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", AzureAIResponsesAPIConfig),
         ("https://res.services.ai.azure.com/openai/v1", NoneType),
         ("https://res.openai.azure.com/openai/v1", NoneType),
         ("https://res.cognitiveservices.azure.com/openai/v1", NoneType),
-        ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", NoneType),
+        ("https://apim.example.com/foundry/openai/v1", NoneType),
         (SERVERLESS_BASE, NoneType),
     ],
 )
@@ -338,7 +341,11 @@ async def test_router_aresponses_sends_bare_deployment_name(model, api_base, exp
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_aresponses_sends_a_model_router_to_the_project_responses_api_by_deployment_name():
+@pytest.mark.parametrize(
+    "api_base,expected_url",
+    [(f"{FOUNDRY_PROJECT_BASE}/openai/v1", FOUNDRY_RESPONSES_URL), (GATEWAY_PROJECT_BASE, GATEWAY_RESPONSES_URL)],
+)
+async def test_aresponses_sends_a_model_router_to_the_project_responses_api_by_deployment_name(api_base, expected_url):
     route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
     )
@@ -346,12 +353,12 @@ async def test_aresponses_sends_a_model_router_to_the_project_responses_api_by_d
     response: Final = await litellm.aresponses(
         model="azure_ai/model_router/model-router",
         input="What is the weather in SF?",
-        api_base=f"{FOUNDRY_PROJECT_BASE}/openai/v1",
+        api_base=api_base,
         api_key="fake-key",
     )
 
     request: Final = route.calls.last.request
-    assert str(request.url) == FOUNDRY_RESPONSES_URL
+    assert str(request.url) == expected_url
     assert request.headers["authorization"] == "Bearer fake-key"
     assert json.loads(request.content) == {"model": "model-router", "input": "What is the weather in SF?"}
     assert response.model == "FW-GLM-5.3-Flash"

@@ -264,10 +264,9 @@ def azure_ai_supports_native_responses(model: str | None, api_base: str | None) 
 
 def is_foundry_project_model_router(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
-    if model is None or resolved_base is None or not is_azure_openai_v1_host(resolved_base):
+    if model is None or resolved_base is None or not foundry_project_root(httpx.URL(resolved_base)):
         return False
-    on_project: Final = bool(foundry_project_root(httpx.URL(resolved_base)))
-    return on_project and AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router"
+    return AzureFoundryModelInfo.get_azure_ai_route(model) == "model_router"
 
 
 def foundry_chat_rejects_function_tools_while_reasoning(
