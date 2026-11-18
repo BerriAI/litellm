@@ -8437,6 +8437,61 @@ def test_a_completion_sends_the_client_profile_id_to_claude_models_unless_the_de
     assert upstream.calls[0].request.headers.get_list("anthropic-user-profile-id") == ([sent] if sent else [])
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,deployment_headers,sent_key,sent_profile",
+    [
+        ("messages", {"x-api-key": "sk-ant-deployment"}, "sk-ant-deployment", "uprof_key"),
+        ("messages", {}, "sk-ant-caller", "uprof_client"),
+        ("chat", {"x-api-key": "sk-ant-deployment"}, "sk-ant-caller", "uprof_client"),
+        ("chat", {}, "sk-ant-caller", "uprof_client"),
+    ],
+    ids=[
+        "messages_sends_the_deployment_key_so_the_pin_applies",
+        "messages_sends_the_caller_key_so_its_own_id_applies",
+        "chat_sends_the_caller_key_over_a_configured_one",
+        "chat_sends_the_caller_key",
+    ],
+)
+async def test_a_caller_api_key_skips_the_pin_only_when_anthropic_receives_it(
+    route: str, deployment_headers: dict[str, str], sent_key: str, sent_profile: str
+) -> None:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    updated: Final = await _request_data_added_by_the_proxy(
+        {"api_key": "sk-ant-caller"}, {USER_PROFILE_ID_HEADER: "uprof_client"}, {}, _PINNED_KEY
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Anthropic endpoint records what the proxy sent
+
+    def anthropic_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=dict(_ANTHROPIC_MESSAGE_REPLY), request=request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
+    call: Final[dict[str, object]] = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": "Say OK"}],
+        "max_tokens": 8,
+        "api_key": "sk-ant-caller",
+        "extra_headers": dict(deployment_headers),
+        "client": upstream,
+        "provider_specific_header": updated["provider_specific_header"],
+    }
+    try:
+        if route == "chat":
+            await litellm.acompletion(**call)
+        else:
+            await litellm.anthropic.messages.acreate(**call)
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1
+    assert received[0].headers.get_list("x-api-key") == [sent_key]
+    assert received[0].headers.get_list("anthropic-user-profile-id") == [sent_profile]
+
+
 def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     forwarded = _headers_forwarded_to({"anthropic-beta": "claude-code-20250219"}, "openai")
 

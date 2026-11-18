@@ -2326,6 +2326,7 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
             model=model,
             configured_headers=_merge_messages_header_sources(forwarded_headers, extra_headers_from_kwargs),
+            native_anthropic_messages=True,
         )
         merged_headers: Final = _merge_messages_header_sources(
             forwarded_headers, extra_headers_from_kwargs, provider_specific_headers

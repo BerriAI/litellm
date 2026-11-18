@@ -7,6 +7,7 @@ from litellm.types.utils import LlmProviders, ProviderSpecificHeader
 
 _HeaderValue: Final = TypeVar("_HeaderValue")
 _CASE_INSENSITIVE_OVERRIDES: Final = frozenset({ANTHROPIC_USER_PROFILE_ID_HEADER})
+_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
 
 
 def override_headers(
@@ -34,8 +35,11 @@ def names_a_claude_model(model: str | None) -> bool:
 def _applies_to_call(
     scoped_header: ProviderSpecificHeader,
     custom_llm_provider: str,
+    native_anthropic_messages: bool,
     model: str | None,
 ) -> bool:
+    if scoped_header.get("native_anthropic_messages_only") and not native_anthropic_messages:
+        return False
     if scoped_header.get("claude_models_only") and not names_a_claude_model(model):
         return False
     if scoped_header.get("non_claude_models_only") and names_a_claude_model(model):
@@ -45,6 +49,8 @@ def _applies_to_call(
 
 
 def _contributed_headers(scoped_header: ProviderSpecificHeader, configured_names: frozenset[str]) -> Mapping[str, str]:
+    if scoped_header.get("configured_credential_only") and configured_names.isdisjoint(_CREDENTIAL_HEADERS):
+        return {}
     headers: Final[Mapping[str, str]] = scoped_header.get("extra_headers", {})
     if not scoped_header.get("yields_to_configured"):
         return headers
@@ -58,6 +64,7 @@ class ProviderSpecificHeaderUtils:
         custom_llm_provider: str | None,
         model: str | None = None,
         configured_headers: Mapping[str, object] | None = None,
+        native_anthropic_messages: bool = False,
     ) -> Mapping[str, str]:
         """
         Get the provider specific headers for the given custom llm provider.
@@ -66,9 +73,11 @@ class ProviderSpecificHeaderUtils:
         carries its own comma-separated provider list, so headers that are safe for several
         providers and headers that are safe for exactly one can travel on the same request
         without sharing a scope. Entries whose provider list does not contain
-        `custom_llm_provider` contribute nothing. Entries marked `claude_models_only` contribute only
-        when `model` names a Claude model, entries marked `non_claude_models_only` only when it does not,
-        and entries marked `yields_to_configured` never replace a header already in `configured_headers`.
+        `custom_llm_provider` contribute nothing, and entries marked `native_anthropic_messages_only`
+        contribute only to a provider's native Messages route. Entries marked `claude_models_only` contribute
+        only when `model` names a Claude model, entries marked `non_claude_models_only` only when it does not,
+        entries marked `yields_to_configured` never replace a header already in `configured_headers`, and
+        entries marked `configured_credential_only` contribute only when `configured_headers` carries a credential.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider
@@ -84,7 +93,7 @@ class ProviderSpecificHeaderUtils:
         applicable: Final = (
             scoped_header
             for scoped_header in scoped_headers
-            if _applies_to_call(scoped_header, custom_llm_provider, model)
+            if _applies_to_call(scoped_header, custom_llm_provider, native_anthropic_messages, model)
         )
         return dict(
             chain.from_iterable(
