@@ -7734,7 +7734,6 @@ def get_model_info_helper(
                 input_cost_per_audio_token_batches=_model_info.get("input_cost_per_audio_token_batches", None),
                 input_cost_per_image_token_batches=_model_info.get("input_cost_per_image_token_batches", None),
                 input_cost_per_image=_model_info.get("input_cost_per_image", None),
-                input_cost_per_pixel=_model_info.get("input_cost_per_pixel", None),
                 input_cost_per_audio_per_second=_model_info.get("input_cost_per_audio_per_second", None),
                 input_cost_per_video_per_second=_model_info.get("input_cost_per_video_per_second", None),
                 input_cost_per_token_batches=_model_info.get("input_cost_per_token_batches"),
@@ -7828,7 +7827,7 @@ def get_model_info_helper(
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
                 tiered_pricing=_model_info.get("tiered_pricing", None),
                 litellm_provider=_model_info.get("litellm_provider", custom_llm_provider),
-                mode=_model_info.get("mode"),  # pyright: ignore[reportArgumentType]  # Custom pricing rows may omit mode.
+                mode=_model_info.get("mode"),
                 supported_endpoints=_model_info.get("supported_endpoints", None),
                 supports_system_messages=_model_info.get("supports_system_messages", None),
                 supports_response_schema=_model_info.get("supports_response_schema", None),
@@ -7910,7 +7909,11 @@ def get_model_info_helper(
             )
             cost_entries: Final[Mapping[str, object]] = MappingProxyType(_model_info)
             for cost_key, cost_value in cost_entries.items():
-                if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
+                if cost_key in returned_model_info:
+                    continue
+                if _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None or (
+                    cost_key == "input_cost_per_pixel" and cost_value is not None
+                ):
                     returned_model_info[cost_key] = cost_value
             return returned_model_info
     except ModelNotMappedError:
