@@ -972,7 +972,6 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     )
 
 
-
 @pytest.mark.asyncio
 async def test_sigterm_while_serving_starts_the_shutdown_budget_clock() -> None:
     import signal
@@ -1005,6 +1004,7 @@ async def test_sigterm_while_serving_starts_the_shutdown_budget_clock() -> None:
     assert serving_worker_shutting_down
     assert server_saw_shutdown.get_nowait() is True
     assert handler_after_teardown is server_handler
+
 
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback

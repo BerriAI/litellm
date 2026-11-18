@@ -267,14 +267,19 @@ def test_sigterm_capture_preserves_default_and_ignored_dispositions(handler: str
 def test_sigterm_capture_in_worker_thread_leaves_signal_ownership_unchanged() -> None:
     import signal
     from concurrent.futures import ThreadPoolExecutor
-    from typing import Final
+    from types import FrameType
 
-    original: Final = signal.getsignal(signal.SIGTERM)
+    def server_handler(signum: int, frame: FrameType | None) -> None:
+        pass
 
     def run_lifespan() -> None:
         with GracefulShutdownManager.capture_sigterm():
-            assert signal.getsignal(signal.SIGTERM) is original
+            assert signal.getsignal(signal.SIGTERM) is server_handler
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        executor.submit(run_lifespan).result()
-    assert signal.getsignal(signal.SIGTERM) is original
+    original: Final = signal.signal(signal.SIGTERM, server_handler)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(run_lifespan).result()
+        assert signal.getsignal(signal.SIGTERM) is server_handler
+    finally:
+        signal.signal(signal.SIGTERM, original)
