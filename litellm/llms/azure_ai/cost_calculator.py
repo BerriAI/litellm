@@ -70,12 +70,11 @@ def router_fee_name(model: str, request_model: str | None) -> str | None:
     return None
 
 
-def _response_model_row(model: str) -> ModelInfo | None:
+def _router_model_row(model: str) -> ModelInfo | None:
+    """The row of a Model Router name the response was priced as, ``None`` when the cost map has none."""
     try:
         return get_model_info(model=model, custom_llm_provider="azure_ai")
     except Exception as e:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
-        if not is_azure_model_router(model):
-            raise
         verbose_logger.debug(
             "Azure AI Model Router: model '%s' not in cost map, only the routing fee applies. Error: %s", model, e
         )
@@ -94,14 +93,15 @@ def receipt(
 ) -> NativeReceipt:
     """The response model's own tokens priced by ``generic_cost_per_token`` with the service tier, plus the Model Router
     fee on the prompt once when the priced name or ``request_model`` is a router name. A router name missing from the
-    cost map bills the fee alone."""
+    cost map bills the fee alone. Any other name's row is Model Catalog's."""
     fee_name: Final = router_fee_name(model=model, request_model=request_model)
     beside: Final = facts or ReceiptFacts()
     with_fee: Final = (
         beside if fee_name is None else replace(beside, router_fee="prompt", fee_row=router_fee_row(fee_name))
     )
-    row: Final = _response_model_row(model)
-    if row is None:
+    routed: Final = is_azure_model_router(model)
+    row: Final = _router_model_row(model) if routed else None
+    if routed and row is None:
         return custom_receipt(
             model,
             "azure_ai",

@@ -1,0 +1,4449 @@
+{
+ "captured_from": "litellm.completion_cost(call_type='completion') on main 532df6ef85, LITELLM_LOCAL_MODEL_COST_MAP=True: the names its candidate loop walked, the candidate that priced (null when it raised) and the keys get_model_info_helper returned while that candidate priced; get_llm_provider's answer for each name the cases use",
+ "known_names": {
+  "providers": [
+   "a2a",
+   "a2a_agent",
+   "abliteration",
+   "ai21",
+   "ai21_chat",
+   "aiand",
+   "aiml",
+   "aiohttp_openai",
+   "amazon_nova",
+   "anthropic",
+   "anthropic_text",
+   "apertis",
+   "assemblyai",
+   "auto_router",
+   "aws_polly",
+   "aws_textract",
+   "azure",
+   "azure_ai",
+   "azure_speech",
+   "azure_text",
+   "baseten",
+   "bedrock",
+   "bedrock_mantle",
+   "bespoke",
+   "bigmodel",
+   "black_forest_labs",
+   "bytez",
+   "cerebras",
+   "charity_engine",
+   "chatgpt",
+   "chutes",
+   "clarifai",
+   "clf_ai_gateway",
+   "cloudflare",
+   "codestral",
+   "cognition",
+   "cohere",
+   "cohere_chat",
+   "cometapi",
+   "compactifai",
+   "coralbricks",
+   "cortecs",
+   "cursor",
+   "custom",
+   "custom_openai",
+   "darkbloom",
+   "dashscope",
+   "databricks",
+   "databricks_agent",
+   "datarobot",
+   "deepgram",
+   "deepinfra",
+   "deepseek",
+   "docker_model_runner",
+   "dotprompt",
+   "edenai",
+   "elevenlabs",
+   "empiriolabs",
+   "empower",
+   "eu_jev",
+   "fal_ai",
+   "featherless_ai",
+   "fireworks_ai",
+   "friendliai",
+   "galadriel",
+   "gdc",
+   "gemini",
+   "gigachat",
+   "github",
+   "github_copilot",
+   "gradient_ai",
+   "groq",
+   "helicone",
+   "heroku",
+   "hosted_vllm",
+   "hostinger_router",
+   "huggingface",
+   "humanloop",
+   "hyperbolic",
+   "inception",
+   "inferenceapis",
+   "infinity",
+   "jina_ai",
+   "kyma",
+   "lambda_ai",
+   "langflow",
+   "langfuse",
+   "langgraph",
+   "laya",
+   "lemonade",
+   "libertai",
+   "litellm_agent",
+   "litellm_proxy",
+   "llamafile",
+   "lm_studio",
+   "manus",
+   "maritalk",
+   "meta",
+   "meta_llama",
+   "microsoft_365_copilot",
+   "milvus",
+   "minimax",
+   "mistral",
+   "modelscope",
+   "mongodb",
+   "moonshot",
+   "morph",
+   "nace",
+   "nadir",
+   "nano-gpt",
+   "nebius",
+   "neosantara",
+   "nlp_cloud",
+   "novita",
+   "nscale",
+   "nvidia_nim",
+   "nvidia_riva",
+   "oci",
+   "ollama",
+   "ollama_chat",
+   "oobabooga",
+   "openai",
+   "openai_like",
+   "opencode_go",
+   "openinfer",
+   "openrouter",
+   "opensearch",
+   "ovhcloud",
+   "parallel_ai",
+   "parasail",
+   "perplexity",
+   "petals",
+   "pg_vector",
+   "pinstripes",
+   "poe",
+   "predibase",
+   "prism",
+   "publicai",
+   "qwen_ai_platform",
+   "qwencloud",
+   "ragflow",
+   "recraft",
+   "reducto",
+   "refuseless",
+   "reka",
+   "replicate",
+   "runwayml",
+   "s3_vectors",
+   "sagemaker",
+   "sagemaker_chat",
+   "sagemaker_nova",
+   "sail",
+   "sambanova",
+   "sap",
+   "scaledown",
+   "scaleway",
+   "scx-ai",
+   "snowflake",
+   "soniox",
+   "stability",
+   "strands_decider",
+   "streamlake",
+   "synthetic",
+   "tencent",
+   "tensormesh",
+   "text-completion-codestral",
+   "text-completion-inception",
+   "text-completion-openai",
+   "together_ai",
+   "topaz",
+   "transcribe",
+   "triton",
+   "typesafe",
+   "v0",
+   "valkey",
+   "vercel_ai_gateway",
+   "vertex_ai",
+   "vertex_ai_beta",
+   "vispark",
+   "vllm",
+   "volcengine",
+   "voyage",
+   "wally",
+   "wandb",
+   "watsonx",
+   "watsonx_text",
+   "xai",
+   "xiaomi_mimo",
+   "xinference",
+   "zai",
+   "zerogpu"
+  ],
+  "renamed_models": {
+   "gpt-35-turbo": "azure/gpt-35-turbo",
+   "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
+   "azure/gpt-41": "gpt-4.1",
+   "azure/gpt-41-mini": "gpt-4.1-mini",
+   "azure/gpt-41-nano": "gpt-4.1-nano",
+   "ada": "azure/ada"
+  },
+  "vertex_renamed": {
+   "mistral-large": "mistral-large@latest",
+   "codestral": "codestral@latest",
+   "mistral-nemo": "mistral-nemo@latest",
+   "llama-3.2-90b-vision-instruct-maas": "meta/llama-3.2-90b-vision-instruct-maas",
+   "llama-3.1-70b-instruct-maas": "meta/llama-3.1-70b-instruct-maas",
+   "llama3-8b-instruct-maas": "meta/llama3-8b-instruct-maas",
+   "llama-4-maverick-17b-128e-instruct-maas": "meta/llama-4-maverick-17b-128e-instruct-maas",
+   "llama-4-scout-17b-128e-instruct-maas": "meta/llama-4-scout-17b-128e-instruct-maas",
+   "llama-3.1-8b-instruct-maas": "meta/llama-3.1-8b-instruct-maas",
+   "llama-3.1-405b-instruct-maas": "meta/llama-3.1-405b-instruct-maas",
+   "llama-4-maverick-17b-16e-instruct-maas": "meta/llama-4-maverick-17b-16e-instruct-maas",
+   "llama3-70b-instruct-maas": "meta/llama3-70b-instruct-maas",
+   "llama-3.3-70b-instruct-maas": "meta/llama-3.3-70b-instruct-maas",
+   "llama-4-scout-17b-16e-instruct-maas": "meta/llama-4-scout-17b-16e-instruct-maas",
+   "llama3-405b-instruct-maas": "meta/llama3-405b-instruct-maas"
+  },
+  "replicate_models": [
+   "a16z-infra/llama-2-13b-chat:2a7f981751ec7fdf87b5b91ad4db53683a98082e9ff7bfd12c8cd5ea85980a52",
+   "daanelson/flan-t5-large:ce962b3f6792a57074a601d3979db5839697add2e4e02696b3ced4c022d4767f",
+   "joehoover/instructblip-vicuna13b:c4c54e3c8c97cd50c2d2fec9be3b6065563ccf7d43787fb99f84151b867178fe",
+   "meta/codellama-13b:1c914d844307b0588599b8393480a3ba917b660c7e9dfae681542b5325f228db",
+   "replicate/dolly-v2-12b:ef0e1aefc61f8e096ebe4db6b2bacc297daf2ef6899f0f7e001ec445893500e5",
+   "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
+   "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b",
+   "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad"
+  ]
+ },
+ "inferred": {
+  "01-ai/yi-large": null,
+  "@cf/meta/llama-2-7b-chat-fp16": null,
+  "DeepSeek-R1": null,
+  "MiniMax-M2.5": null,
+  "Qwen3-Coder-30B-A3B-Instruct-GGUF": null,
+  "accounts/fireworks/models/llama-v3p1-8b-instruct": null,
+  "alibaba/qwen-3-14b": null,
+  "anthropic.claude-3-haiku-20240307-v1:0": [
+   "anthropic.claude-3-haiku-20240307-v1:0",
+   "bedrock"
+  ],
+  "anthropic.claude-opus-4-6": [
+   "anthropic.claude-opus-4-6",
+   "bedrock"
+  ],
+  "anthropic/claude-opus-4-5": [
+   "claude-opus-4-5",
+   "anthropic"
+  ],
+  "anthropic/claude-opus-4-5-20251101": [
+   "claude-opus-4-5-20251101",
+   "anthropic"
+  ],
+  "anthropic/claude-sonnet-4-5": [
+   "claude-sonnet-4-5",
+   "anthropic"
+  ],
+  "anthropic/claude-sonnet-4-5-20250929": [
+   "claude-sonnet-4-5-20250929",
+   "anthropic"
+  ],
+  "anthropic/claude-sonnet-4.5": [
+   "claude-sonnet-4.5",
+   "anthropic"
+  ],
+  "azure-model-router": null,
+  "azure/dep-azure-custom": [
+   "dep-azure-custom",
+   "azure"
+  ],
+  "azure/eu/gpt-4o-2024-08-06": [
+   "eu/gpt-4o-2024-08-06",
+   "azure"
+  ],
+  "azure/gpt-35-turbo": [
+   "gpt-35-turbo",
+   "azure"
+  ],
+  "azure/gpt-4.1-nano-2025-04-14": [
+   "gpt-4.1-nano-2025-04-14",
+   "azure"
+  ],
+  "azure/gpt-4o-2024-08-06": [
+   "gpt-4o-2024-08-06",
+   "azure"
+  ],
+  "azure/gpt-4o-2024-11-20": [
+   "gpt-4o-2024-11-20",
+   "azure"
+  ],
+  "azure/gpt-4o-mini": [
+   "gpt-4o-mini",
+   "azure"
+  ],
+  "azure_ai/DeepSeek-R1": [
+   "DeepSeek-R1",
+   "azure_ai"
+  ],
+  "azure_ai/claude-opus-4-5": [
+   "claude-opus-4-5",
+   "azure_ai"
+  ],
+  "azure_ai/gpt-4.1-nano": [
+   "gpt-4.1-nano",
+   "azure_ai"
+  ],
+  "azure_ai/mistral-large-2407": [
+   "mistral-large-2407",
+   "azure_ai"
+  ],
+  "bedrock/anthropic.claude-3-haiku-20240307-v1:0": [
+   "anthropic.claude-3-haiku-20240307-v1:0",
+   "bedrock"
+  ],
+  "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+   "converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+   "bedrock"
+  ],
+  "bedrock/meta.llama3-1-70b-instruct-v1:0": [
+   "meta.llama3-1-70b-instruct-v1:0",
+   "bedrock"
+  ],
+  "bedrock/us-east-1/anthropic.claude-3-haiku-20240307-v1:0": [
+   "us-east-1/anthropic.claude-3-haiku-20240307-v1:0",
+   "bedrock"
+  ],
+  "bedrock/us.amazon.nova-pro-v1:0": [
+   "us.amazon.nova-pro-v1:0",
+   "bedrock"
+  ],
+  "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+   "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+   "bedrock"
+  ],
+  "bedrock_converse/us.writer.palmyra-x4-v1:0": null,
+  "bedrock_mantle/anthropic.claude-opus-4-6": [
+   "anthropic.claude-opus-4-6",
+   "bedrock_mantle"
+  ],
+  "cerebras/llama-3.3-70b": [
+   "llama-3.3-70b",
+   "cerebras"
+  ],
+  "claude-3-5-sonnet": null,
+  "claude-custom": null,
+  "claude-haiku-4.5": [
+   "claude-haiku-4.5",
+   "anthropic"
+  ],
+  "claude-opus-4-5": [
+   "claude-opus-4-5",
+   "anthropic"
+  ],
+  "claude-opus-4-5-20251101": [
+   "claude-opus-4-5-20251101",
+   "anthropic"
+  ],
+  "claude-sonnet-4-5": [
+   "claude-sonnet-4-5",
+   "anthropic"
+  ],
+  "claude-sonnet-4-5-20250929": [
+   "claude-sonnet-4-5-20250929",
+   "anthropic"
+  ],
+  "claude-sonnet-4-5@20250929": null,
+  "cloudflare/@cf/meta/llama-2-7b-chat-fp16": [
+   "@cf/meta/llama-2-7b-chat-fp16",
+   "cloudflare"
+  ],
+  "codestral-2": null,
+  "cohere_chat/command-a-03-2025": [
+   "command-a-03-2025",
+   "cohere_chat"
+  ],
+  "command-a-03-2025": [
+   "command-a-03-2025",
+   "cohere_chat"
+  ],
+  "converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0": null,
+  "dashscope/deepseek-v4-flash": [
+   "deepseek-v4-flash",
+   "dashscope"
+  ],
+  "databricks-claude-haiku-4-5": null,
+  "databricks/databricks-claude-haiku-4-5": [
+   "databricks-claude-haiku-4-5",
+   "databricks"
+  ],
+  "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct": [
+   "meta-llama/Meta-Llama-3.1-70B-Instruct",
+   "deepinfra"
+  ],
+  "deepseek-ai/DeepSeek-R1": null,
+  "deepseek-chat": null,
+  "deepseek-r1": null,
+  "deepseek-v4-flash": null,
+  "deepseek-v4-pro": null,
+  "deepseek/deepseek-chat": [
+   "deepseek-chat",
+   "deepseek"
+  ],
+  "deepseek/deepseek-v3.2": [
+   "deepseek-v3.2",
+   "deepseek"
+  ],
+  "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": [
+   "accounts/fireworks/models/llama-v3p1-8b-instruct",
+   "fireworks_ai"
+  ],
+  "friendliai/zai-org/GLM-5.3": [
+   "zai-org/GLM-5.3",
+   "friendliai"
+  ],
+  "ft:gpt-4o-2024-08-06:org::abc": [
+   "ft:gpt-4o-2024-08-06:org::abc",
+   "openai"
+  ],
+  "gemini-1.5-pro-002": null,
+  "gemini-2.0-flash-001": null,
+  "gemini-2.5-flash": [
+   "gemini-2.5-flash",
+   "vertex_ai"
+  ],
+  "gemini-2.5-pro": [
+   "gemini-2.5-pro",
+   "vertex_ai"
+  ],
+  "gemini/gemini-2.0-flash-001": [
+   "gemini-2.0-flash-001",
+   "gemini"
+  ],
+  "gemini/gemini-2.5-flash": [
+   "gemini-2.5-flash",
+   "gemini"
+  ],
+  "gemini/gemini-2.5-pro": [
+   "gemini-2.5-pro",
+   "gemini"
+  ],
+  "github_copilot/claude-haiku-4.5": null,
+  "glm-5": null,
+  "glm-5.3-flash": null,
+  "gpt-3.5-turbo-instruct": [
+   "gpt-3.5-turbo-instruct",
+   "text-completion-openai"
+  ],
+  "gpt-35-turbo": null,
+  "gpt-4.1-nano": [
+   "gpt-4.1-nano",
+   "openai"
+  ],
+  "gpt-4.1-nano-2025-04-14": [
+   "gpt-4.1-nano-2025-04-14",
+   "openai"
+  ],
+  "gpt-4o": [
+   "gpt-4o",
+   "openai"
+  ],
+  "gpt-4o-2024-08-06": [
+   "gpt-4o-2024-08-06",
+   "openai"
+  ],
+  "gpt-4o-2024-11-20": [
+   "gpt-4o-2024-11-20",
+   "openai"
+  ],
+  "gpt-4o-2031-01-01": null,
+  "gpt-4o-mini": [
+   "gpt-4o-mini",
+   "openai"
+  ],
+  "gpt-5": [
+   "gpt-5",
+   "openai"
+  ],
+  "gpt-9-preview": null,
+  "grok-4.20-0309-reasoning": null,
+  "groq/llama-3.3-70b-versatile": [
+   "llama-3.3-70b-versatile",
+   "groq"
+  ],
+  "hosted_vllm/my-llama": [
+   "my-llama",
+   "hosted_vllm"
+  ],
+  "ibm/granite-3-8b-instruct": null,
+  "kimi-k2.5": null,
+  "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": [
+   "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+   "lemonade"
+  ],
+  "litellm_proxy/gpt-4o": [
+   "gpt-4o",
+   "litellm_proxy"
+  ],
+  "llama-3.1-405b-instruct-maas": null,
+  "llama-3.3-70b": null,
+  "llama-3.3-70b-versatile": null,
+  "meta-llama/Llama-3.3-70B-Instruct-Turbo": null,
+  "meta-llama/Meta-Llama-3.1-70B-Instruct": null,
+  "meta.llama-3.1-70b-instruct": null,
+  "meta.llama3-1-70b-instruct-v1:0": [
+   "meta.llama3-1-70b-instruct-v1:0",
+   "bedrock"
+  ],
+  "meta/llama-2-13b": [
+   "llama-2-13b",
+   "meta"
+  ],
+  "minimax/MiniMax-M2.5": [
+   "MiniMax-M2.5",
+   "minimax"
+  ],
+  "mistral-large-2407": null,
+  "mistral-large-latest": null,
+  "mistral/mistral-large-latest": [
+   "mistral-large-latest",
+   "mistral"
+  ],
+  "model-router": null,
+  "models/gemini-2.5-pro": null,
+  "moonshot/kimi-k2.5": [
+   "kimi-k2.5",
+   "moonshot"
+  ],
+  "my-custom-llm/my-model": null,
+  "my-deploy": null,
+  "my-gpt": null,
+  "my-gpt-2": null,
+  "my-llama": null,
+  "my-model": null,
+  "my-prod-deploy": null,
+  "my-profile": null,
+  "nebius/deepseek-ai/DeepSeek-R1": [
+   "deepseek-ai/DeepSeek-R1",
+   "nebius"
+  ],
+  "nvidia_nim/01-ai/yi-large": [
+   "01-ai/yi-large",
+   "nvidia_nim"
+  ],
+  "oci/meta.llama-3.1-70b-instruct": [
+   "meta.llama-3.1-70b-instruct",
+   "oci"
+  ],
+  "openai/dep-input-only": [
+   "dep-input-only",
+   "openai"
+  ],
+  "openai/dep-openai-custom": [
+   "dep-openai-custom",
+   "openai"
+  ],
+  "openai/ft:gpt-4o-2024-08-06:org::abc": [
+   "ft:gpt-4o-2024-08-06:org::abc",
+   "openai"
+  ],
+  "openai/gpt-4o": [
+   "gpt-4o",
+   "openai"
+  ],
+  "openai/gpt-4o-2024-08-06": [
+   "gpt-4o-2024-08-06",
+   "openai"
+  ],
+  "openai/gpt-4o-2031-01-01": [
+   "gpt-4o-2031-01-01",
+   "openai"
+  ],
+  "openai/gpt-4o-mini": [
+   "gpt-4o-mini",
+   "openai"
+  ],
+  "openai/gpt-5": [
+   "gpt-5",
+   "openai"
+  ],
+  "openai/gpt-9-preview": [
+   "gpt-9-preview",
+   "openai"
+  ],
+  "openai/gpt-oss-120b": [
+   "gpt-oss-120b",
+   "openai"
+  ],
+  "openai/my-custom-llm/my-model": [
+   "my-custom-llm/my-model",
+   "openai"
+  ],
+  "openai/my-gpt-2": [
+   "my-gpt-2",
+   "openai"
+  ],
+  "openai/openai/gpt-4o": [
+   "openai/gpt-4o",
+   "openai"
+  ],
+  "opencode_go/glm-5.3-flash": [
+   "glm-5.3-flash",
+   "opencode_go"
+  ],
+  "openrouter/some/new-model": [
+   "some/new-model",
+   "openrouter"
+  ],
+  "perplexity/sonar": [
+   "sonar",
+   "perplexity"
+  ],
+  "qwen_ai_platform/deepseek-v4-flash": [
+   "deepseek-v4-flash",
+   "qwen_ai_platform"
+  ],
+  "qwencloud/deepseek-v4-pro": [
+   "deepseek-v4-pro",
+   "qwencloud"
+  ],
+  "sambanova/DeepSeek-R1": [
+   "DeepSeek-R1",
+   "sambanova"
+  ],
+  "snowflake/claude-3-5-sonnet": [
+   "claude-3-5-sonnet",
+   "snowflake"
+  ],
+  "some/new-model": null,
+  "sonar": null,
+  "tencent/deepseek-v4-pro": [
+   "deepseek-v4-pro",
+   "tencent"
+  ],
+  "text-completion-openai/gpt-3.5-turbo-instruct": [
+   "gpt-3.5-turbo-instruct",
+   "text-completion-openai"
+  ],
+  "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": [
+   "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+   "together_ai"
+  ],
+  "us.amazon.nova-pro-v1:0": [
+   "us.amazon.nova-pro-v1:0",
+   "bedrock"
+  ],
+  "us.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+   "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+   "bedrock"
+  ],
+  "us.writer.palmyra-x4-v1:0": [
+   "us.writer.palmyra-x4-v1:0",
+   "bedrock"
+  ],
+  "vercel_ai_gateway/alibaba/qwen-3-14b": [
+   "alibaba/qwen-3-14b",
+   "vercel_ai_gateway"
+  ],
+  "vertex/claude-opus-4-5": null,
+  "vertex_ai/claude-opus-4-5": [
+   "claude-opus-4-5",
+   "vertex_ai"
+  ],
+  "vertex_ai/claude-sonnet-4-5": [
+   "claude-sonnet-4-5",
+   "vertex_ai"
+  ],
+  "vertex_ai/codestral-2": [
+   "codestral-2",
+   "vertex_ai"
+  ],
+  "vertex_ai/gemini-1.5-pro-002": [
+   "gemini-1.5-pro-002",
+   "vertex_ai"
+  ],
+  "vertex_ai/gemini-2.5-flash": [
+   "gemini-2.5-flash",
+   "vertex_ai"
+  ],
+  "vertex_ai/gemini-2.5-pro": [
+   "gemini-2.5-pro",
+   "vertex_ai"
+  ],
+  "vertex_ai/llama-3.1-405b-instruct-maas": [
+   "llama-3.1-405b-instruct-maas",
+   "vertex_ai"
+  ],
+  "vertex_ai_beta/gemini-2.5-flash": [
+   "gemini-2.5-flash",
+   "vertex_ai_beta"
+  ],
+  "watsonx/ibm/granite-3-8b-instruct": [
+   "ibm/granite-3-8b-instruct",
+   "watsonx"
+  ],
+  "xai/grok-4.20-0309-reasoning": [
+   "grok-4.20-0309-reasoning",
+   "xai"
+  ],
+  "zai-org/GLM-5.3": null,
+  "zai/glm-5": [
+   "glm-5",
+   "zai"
+  ]
+ },
+ "registered": {
+  "dep-openai-custom": {
+   "fields": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06
+   },
+   "registered_fields": [
+    "input_cost_per_token",
+    "output_cost_per_token"
+   ]
+  },
+  "dep-input-only": {
+   "fields": {
+    "input_cost_per_token": 3e-06
+   },
+   "registered_fields": [
+    "input_cost_per_token"
+   ]
+  },
+  "dep-unpriced": {
+   "fields": {
+    "max_tokens": 1000
+   },
+   "registered_fields": [
+    "max_tokens"
+   ]
+  },
+  "dep-azure-custom": {
+   "fields": {
+    "input_cost_per_token": 4e-06,
+    "output_cost_per_token": 5e-06
+   },
+   "registered_fields": [
+    "input_cost_per_token",
+    "output_cost_per_token"
+   ]
+  },
+  "my-custom-llm/my-model": {
+   "fields": {
+    "litellm_provider": "openai",
+    "input_cost_per_token": 7e-07,
+    "output_cost_per_token": 9e-07
+   },
+   "registered_fields": [
+    "input_cost_per_token",
+    "litellm_provider",
+    "output_cost_per_token"
+   ]
+  }
+ },
+ "cases": [
+  {
+   "name": "openai_plain",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o-2024-08-06",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o-2024-08-06",
+     "openai"
+    ],
+    [
+     "gpt-4o-2024-08-06",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o-2024-08-06"
+   ]
+  },
+  {
+   "name": "openai_same",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "openai_no_response",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     "openai"
+    ],
+    [
+     null,
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "openai_prefixed",
+   "identity": {
+    "provider": "openai",
+    "request_model": "openai/gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "openai/gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "openai_repeated_prefix",
+   "identity": {
+    "provider": "openai",
+    "request_model": "openai/openai/gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "openai/openai/gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "openai_unmapped_request",
+   "identity": {
+    "provider": "openai",
+    "request_model": "my-gpt",
+    "response_model": "gpt-4o-mini",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o-mini",
+     "openai"
+    ],
+    [
+     "gpt-4o-mini",
+     "openai"
+    ],
+    [
+     "my-gpt",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o-mini"
+   ]
+  },
+  {
+   "name": "openai_unmapped_both",
+   "identity": {
+    "provider": "openai",
+    "request_model": "my-gpt",
+    "response_model": "my-gpt-2",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/my-gpt-2",
+     "openai"
+    ],
+    [
+     "my-gpt-2",
+     "openai"
+    ],
+    [
+     "my-gpt",
+     "openai"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "openai_finetune",
+   "identity": {
+    "provider": "openai",
+    "request_model": "ft:gpt-4o-2024-08-06:org::abc",
+    "response_model": "ft:gpt-4o-2024-08-06:org::abc",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/ft:gpt-4o-2024-08-06:org::abc",
+     "openai"
+    ],
+    [
+     "ft:gpt-4o-2024-08-06:org::abc",
+     "openai"
+    ],
+    [
+     "ft:gpt-4o-2024-08-06:org::abc",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "ft:gpt-4o-2024-08-06"
+   ]
+  },
+  {
+   "name": "openai_dated_unmapped",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o-2031-01-01",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o-2031-01-01",
+     "openai"
+    ],
+    [
+     "gpt-4o-2031-01-01",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "openai_cached",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o-mini",
+    "response_model": "gpt-4o-mini",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o-mini",
+     "openai"
+    ],
+    [
+     "gpt-4o-mini",
+     "openai"
+    ],
+    [
+     "gpt-4o-mini",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o-mini"
+   ]
+  },
+  {
+   "name": "openai_custom_priced",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-openai-custom",
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/dep-openai-custom",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "dep-openai-custom"
+   ]
+  },
+  {
+   "name": "openai_custom_input_only",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-input-only",
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/dep-input-only",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "dep-input-only"
+   ]
+  },
+  {
+   "name": "openai_custom_unpriced",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-unpriced",
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "openai_custom_missing",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-gone",
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "openai_base_model",
+   "identity": {
+    "provider": "openai",
+    "request_model": "my-deploy",
+    "response_model": "my-deploy",
+    "base_model": "gpt-4o-mini",
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o-mini",
+     "openai"
+    ],
+    [
+     "my-deploy",
+     "openai"
+    ],
+    [
+     "my-deploy",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o-mini"
+   ]
+  },
+  {
+   "name": "openai_registered_custom_name",
+   "identity": {
+    "provider": "openai",
+    "request_model": "my-custom-llm/my-model",
+    "response_model": "my-model",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/my-custom-llm/my-model",
+     "openai"
+    ],
+    [
+     "my-model",
+     "openai"
+    ],
+    [
+     "my-custom-llm/my-model",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "my-custom-llm/my-model"
+   ]
+  },
+  {
+   "name": "openai_provider_response_model",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": "gpt-4o-mini",
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o-mini",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o-mini"
+   ]
+  },
+  {
+   "name": "openai_hidden_model",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": "gpt-4o-mini",
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o-mini",
+     "openai"
+    ],
+    [
+     null,
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o-mini"
+   ]
+  },
+  {
+   "name": "azure_plain",
+   "identity": {
+    "provider": "azure",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o-2024-08-06",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure/gpt-4o-2024-08-06",
+     "azure"
+    ],
+    [
+     "gpt-4o-2024-08-06",
+     "azure"
+    ],
+    [
+     "gpt-4o",
+     "azure"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure/gpt-4o-2024-08-06"
+   ]
+  },
+  {
+   "name": "azure_deployment_name",
+   "identity": {
+    "provider": "azure",
+    "request_model": "my-prod-deploy",
+    "response_model": "gpt-4o-2024-11-20",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure/gpt-4o-2024-11-20",
+     "azure"
+    ],
+    [
+     "gpt-4o-2024-11-20",
+     "azure"
+    ],
+    [
+     "my-prod-deploy",
+     "azure"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure/gpt-4o-2024-11-20"
+   ]
+  },
+  {
+   "name": "azure_base_model",
+   "identity": {
+    "provider": "azure",
+    "request_model": "my-prod-deploy",
+    "response_model": "gpt-4o",
+    "base_model": "azure/gpt-4o-mini",
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure/gpt-4o-mini",
+     "azure"
+    ],
+    [
+     "gpt-4o",
+     "azure"
+    ],
+    [
+     "my-prod-deploy",
+     "azure"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure/gpt-4o-mini"
+   ]
+  },
+  {
+   "name": "azure_eu_region",
+   "identity": {
+    "provider": "azure",
+    "request_model": "gpt-4o-2024-08-06",
+    "response_model": "gpt-4o-2024-08-06",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "eu",
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": "eu"
+   },
+   "names": [
+    [
+     "azure/eu/gpt-4o-2024-08-06",
+     "azure"
+    ],
+    [
+     "gpt-4o-2024-08-06",
+     "azure"
+    ],
+    [
+     "gpt-4o-2024-08-06",
+     "azure"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure/eu/gpt-4o-2024-08-06"
+   ]
+  },
+  {
+   "name": "azure_renamed",
+   "identity": {
+    "provider": "azure",
+    "request_model": "gpt-35-turbo",
+    "response_model": "gpt-35-turbo",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure/gpt-35-turbo",
+     "azure"
+    ],
+    [
+     "gpt-35-turbo",
+     "azure"
+    ],
+    [
+     "gpt-35-turbo",
+     "azure"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure/gpt-35-turbo"
+   ]
+  },
+  {
+   "name": "azure_model_router",
+   "identity": {
+    "provider": "azure",
+    "request_model": "model-router",
+    "response_model": "gpt-4.1-nano-2025-04-14",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure/gpt-4.1-nano-2025-04-14",
+     "azure"
+    ],
+    [
+     "gpt-4.1-nano-2025-04-14",
+     "azure"
+    ],
+    [
+     "model-router",
+     "azure"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure/gpt-4.1-nano-2025-04-14"
+   ]
+  },
+  {
+   "name": "azure_custom",
+   "identity": {
+    "provider": "azure",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": true,
+    "deployment_id": "dep-azure-custom",
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure/dep-azure-custom",
+     "azure"
+    ],
+    [
+     "gpt-4o",
+     "azure"
+    ],
+    [
+     "gpt-4o",
+     "azure"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "dep-azure-custom"
+   ]
+  },
+  {
+   "name": "azure_ai_claude",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "claude-opus-4-5",
+    "response_model": "claude-opus-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure_ai/claude-opus-4-5",
+     "azure_ai"
+    ],
+    [
+     "claude-opus-4-5",
+     "azure_ai"
+    ],
+    [
+     "claude-opus-4-5",
+     "azure_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure_ai/claude-opus-4-5"
+   ]
+  },
+  {
+   "name": "azure_ai_other",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "mistral-large-2407",
+    "response_model": "mistral-large-2407",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure_ai/mistral-large-2407",
+     "azure_ai"
+    ],
+    [
+     "mistral-large-2407",
+     "azure_ai"
+    ],
+    [
+     "mistral-large-2407",
+     "azure_ai"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "azure_ai_deepseek",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "deepseek-r1",
+    "response_model": "DeepSeek-R1",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure_ai/DeepSeek-R1",
+     "azure_ai"
+    ],
+    [
+     "DeepSeek-R1",
+     "azure_ai"
+    ],
+    [
+     "deepseek-r1",
+     "azure_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure_ai/deepseek-r1"
+   ]
+  },
+  {
+   "name": "azure_ai_router",
+   "identity": {
+    "provider": "azure_ai",
+    "request_model": "azure-model-router",
+    "response_model": "gpt-4.1-nano",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "azure_ai/gpt-4.1-nano",
+     "azure_ai"
+    ],
+    [
+     "gpt-4.1-nano",
+     "azure_ai"
+    ],
+    [
+     "azure-model-router",
+     "azure_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4.1-nano"
+   ]
+  },
+  {
+   "name": "anthropic_dated",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-opus-4-5",
+    "response_model": "claude-opus-4-5-20251101",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "anthropic",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "anthropic/claude-opus-4-5-20251101",
+     "anthropic"
+    ],
+    [
+     "claude-opus-4-5-20251101",
+     "anthropic"
+    ],
+    [
+     "claude-opus-4-5",
+     "anthropic"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "claude-opus-4-5-20251101"
+   ]
+  },
+  {
+   "name": "anthropic_unmapped_request",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-custom",
+    "response_model": "claude-sonnet-4-5-20250929",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "anthropic",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "anthropic/claude-sonnet-4-5-20250929",
+     "anthropic"
+    ],
+    [
+     "claude-sonnet-4-5-20250929",
+     "anthropic"
+    ],
+    [
+     "claude-custom",
+     "anthropic"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "claude-sonnet-4-5-20250929"
+   ]
+  },
+  {
+   "name": "bedrock_profile",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "response_model": "claude-sonnet-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+     "bedrock"
+    ],
+    [
+     "claude-sonnet-4-5",
+     "bedrock"
+    ],
+    [
+     "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+     "bedrock"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+   ]
+  },
+  {
+   "name": "bedrock_converse_route",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+     "bedrock"
+    ],
+    [
+     null,
+     "bedrock"
+    ],
+    [
+     "converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+     "bedrock"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+   ]
+  },
+  {
+   "name": "bedrock_llama",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "meta.llama3-1-70b-instruct-v1:0",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "bedrock/meta.llama3-1-70b-instruct-v1:0",
+     "bedrock"
+    ],
+    [
+     null,
+     "bedrock"
+    ],
+    [
+     "meta.llama3-1-70b-instruct-v1:0",
+     "bedrock"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "meta.llama3-1-70b-instruct-v1:0"
+   ]
+  },
+  {
+   "name": "bedrock_region",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "anthropic.claude-3-haiku-20240307-v1:0",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "us-east-1",
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock",
+    "loop_region": "us-east-1"
+   },
+   "names": [
+    [
+     "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+     "bedrock"
+    ],
+    [
+     null,
+     "bedrock"
+    ],
+    [
+     "anthropic.claude-3-haiku-20240307-v1:0",
+     "bedrock"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "bedrock_nova",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "us.amazon.nova-pro-v1:0",
+    "response_model": "us.amazon.nova-pro-v1:0",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "bedrock/us.amazon.nova-pro-v1:0",
+     "bedrock"
+    ],
+    [
+     "us.amazon.nova-pro-v1:0",
+     "bedrock"
+    ],
+    [
+     "us.amazon.nova-pro-v1:0",
+     "bedrock"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "amazon.nova-pro-v1:0",
+    "us.amazon.nova-pro-v1:0"
+   ]
+  },
+  {
+   "name": "bedrock_converse_provider",
+   "identity": {
+    "provider": "bedrock_converse",
+    "request_model": "us.writer.palmyra-x4-v1:0",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock_converse",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "bedrock_converse/us.writer.palmyra-x4-v1:0",
+     "bedrock_converse"
+    ],
+    [
+     null,
+     "bedrock_converse"
+    ],
+    [
+     "us.writer.palmyra-x4-v1:0",
+     "bedrock_converse"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "us.writer.palmyra-x4-v1:0",
+    "writer.palmyra-x4-v1:0"
+   ]
+  },
+  {
+   "name": "bedrock_invoked_profile",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "my-profile",
+    "response_model": "claude-sonnet-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+     "bedrock"
+    ],
+    [
+     "claude-sonnet-4-5",
+     "bedrock"
+    ],
+    [
+     "my-profile",
+     "bedrock"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+   ]
+  },
+  {
+   "name": "mantle",
+   "identity": {
+    "provider": "bedrock_mantle",
+    "request_model": "anthropic.claude-opus-4-6",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": "us-east-1",
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "bedrock_mantle",
+    "loop_region": "us-east-1"
+   },
+   "names": [
+    [
+     null,
+     "bedrock_mantle"
+    ],
+    [
+     "bedrock_mantle/anthropic.claude-opus-4-6",
+     "bedrock_mantle"
+    ],
+    [
+     "anthropic.claude-opus-4-6",
+     "bedrock_mantle"
+    ]
+   ],
+   "priced": 1,
+   "keys": [
+    "bedrock_mantle/anthropic.claude-opus-4-6"
+   ]
+  },
+  {
+   "name": "vertex_gemini",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "gemini-2.5-flash",
+    "response_model": "gemini-2.5-flash",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai/gemini-2.5-flash",
+     "vertex_ai"
+    ],
+    [
+     "gemini-2.5-flash",
+     "vertex_ai"
+    ],
+    [
+     "gemini-2.5-flash",
+     "vertex_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gemini-2.5-flash"
+   ]
+  },
+  {
+   "name": "vertex_gemini_version",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "gemini-1.5-pro-002",
+    "response_model": "gemini-1.5-pro-002",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai/gemini-1.5-pro-002",
+     "vertex_ai"
+    ],
+    [
+     "gemini-1.5-pro-002",
+     "vertex_ai"
+    ],
+    [
+     "gemini-1.5-pro-002",
+     "vertex_ai"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "vertex_claude",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "claude-sonnet-4-5@20250929",
+    "response_model": "claude-sonnet-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai/claude-sonnet-4-5",
+     "vertex_ai"
+    ],
+    [
+     "claude-sonnet-4-5",
+     "vertex_ai"
+    ],
+    [
+     "claude-sonnet-4-5@20250929",
+     "vertex_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "vertex_ai/claude-sonnet-4-5"
+   ]
+  },
+  {
+   "name": "vertex_mistral",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "codestral-2",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai/codestral-2",
+     "vertex_ai"
+    ],
+    [
+     null,
+     "vertex_ai"
+    ],
+    [
+     "codestral-2",
+     "vertex_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "vertex_ai/codestral-2"
+   ]
+  },
+  {
+   "name": "vertex_llama",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "llama-3.1-405b-instruct-maas",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai/llama-3.1-405b-instruct-maas",
+     "vertex_ai"
+    ],
+    [
+     null,
+     "vertex_ai"
+    ],
+    [
+     "llama-3.1-405b-instruct-maas",
+     "vertex_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "vertex_ai/meta/llama-3.1-405b-instruct-maas"
+   ]
+  },
+  {
+   "name": "vertex_prefixed",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "vertex_ai/gemini-2.5-pro",
+    "response_model": "gemini-2.5-pro",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai/gemini-2.5-pro",
+     "vertex_ai"
+    ],
+    [
+     "gemini-2.5-pro",
+     "vertex_ai"
+    ],
+    [
+     "vertex_ai/gemini-2.5-pro",
+     "vertex_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gemini-2.5-pro"
+   ]
+  },
+  {
+   "name": "vertex_slash_alias",
+   "identity": {
+    "provider": "vertex_ai",
+    "request_model": "vertex/claude-opus-4-5",
+    "response_model": "claude-opus-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai/claude-opus-4-5",
+     "vertex_ai"
+    ],
+    [
+     "claude-opus-4-5",
+     "vertex_ai"
+    ],
+    [
+     "vertex/claude-opus-4-5",
+     "vertex_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "vertex_ai/claude-opus-4-5"
+   ]
+  },
+  {
+   "name": "vertex_beta",
+   "identity": {
+    "provider": "vertex_ai_beta",
+    "request_model": "gemini-2.5-flash",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vertex_ai_beta",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vertex_ai_beta/gemini-2.5-flash",
+     "vertex_ai_beta"
+    ],
+    [
+     null,
+     "vertex_ai_beta"
+    ],
+    [
+     "gemini-2.5-flash",
+     "vertex_ai_beta"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gemini-2.5-flash"
+   ]
+  },
+  {
+   "name": "gemini_plain",
+   "identity": {
+    "provider": "gemini",
+    "request_model": "gemini-2.5-flash",
+    "response_model": "gemini-2.5-flash",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "gemini",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "gemini/gemini-2.5-flash",
+     "gemini"
+    ],
+    [
+     "gemini-2.5-flash",
+     "gemini"
+    ],
+    [
+     "gemini-2.5-flash",
+     "gemini"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gemini/gemini-2.5-flash"
+   ]
+  },
+  {
+   "name": "gemini_prefixed",
+   "identity": {
+    "provider": "gemini",
+    "request_model": "gemini/gemini-2.5-pro",
+    "response_model": "models/gemini-2.5-pro",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "gemini",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "gemini/gemini-2.5-pro",
+     "gemini"
+    ],
+    [
+     "gemini/gemini-2.5-pro",
+     "gemini"
+    ],
+    [
+     "models/gemini-2.5-pro",
+     "gemini"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gemini/gemini-2.5-pro"
+   ]
+  },
+  {
+   "name": "gemini_dated",
+   "identity": {
+    "provider": "gemini",
+    "request_model": "gemini-2.0-flash-001",
+    "response_model": "gemini-2.0-flash-001",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "gemini",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "gemini/gemini-2.0-flash-001",
+     "gemini"
+    ],
+    [
+     "gemini-2.0-flash-001",
+     "gemini"
+    ],
+    [
+     "gemini-2.0-flash-001",
+     "gemini"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "groq",
+   "identity": {
+    "provider": "groq",
+    "request_model": "llama-3.3-70b-versatile",
+    "response_model": "llama-3.3-70b-versatile",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "groq",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "groq/llama-3.3-70b-versatile",
+     "groq"
+    ],
+    [
+     "llama-3.3-70b-versatile",
+     "groq"
+    ],
+    [
+     "llama-3.3-70b-versatile",
+     "groq"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "groq_nested",
+   "identity": {
+    "provider": "groq",
+    "request_model": "openai/gpt-oss-120b",
+    "response_model": "openai/gpt-oss-120b",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "groq",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-oss-120b",
+     "groq"
+    ],
+    [
+     "openai/gpt-oss-120b",
+     "groq"
+    ],
+    [
+     "openai/gpt-oss-120b",
+     "groq"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "groq/openai/gpt-oss-120b"
+   ]
+  },
+  {
+   "name": "mistral",
+   "identity": {
+    "provider": "mistral",
+    "request_model": "mistral-large-latest",
+    "response_model": "mistral-large-latest",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "mistral",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "mistral/mistral-large-latest",
+     "mistral"
+    ],
+    [
+     "mistral-large-latest",
+     "mistral"
+    ],
+    [
+     "mistral-large-latest",
+     "mistral"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "mistral/mistral-large-latest"
+   ]
+  },
+  {
+   "name": "deepseek",
+   "identity": {
+    "provider": "deepseek",
+    "request_model": "deepseek-chat",
+    "response_model": "deepseek-chat",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "deepseek",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "deepseek/deepseek-chat",
+     "deepseek"
+    ],
+    [
+     "deepseek-chat",
+     "deepseek"
+    ],
+    [
+     "deepseek-chat",
+     "deepseek"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "deepseek/deepseek-chat"
+   ]
+  },
+  {
+   "name": "deepinfra_nested",
+   "identity": {
+    "provider": "deepinfra",
+    "request_model": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "response_model": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "deepinfra",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct",
+     "deepinfra"
+    ],
+    [
+     "meta-llama/Meta-Llama-3.1-70B-Instruct",
+     "deepinfra"
+    ],
+    [
+     "meta-llama/Meta-Llama-3.1-70B-Instruct",
+     "deepinfra"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct"
+   ]
+  },
+  {
+   "name": "novita",
+   "identity": {
+    "provider": "novita",
+    "request_model": "deepseek/deepseek-v3.2",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "novita",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "deepseek/deepseek-v3.2",
+     "novita"
+    ],
+    [
+     null,
+     "novita"
+    ],
+    [
+     "deepseek/deepseek-v3.2",
+     "novita"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "novita/deepseek/deepseek-v3.2"
+   ]
+  },
+  {
+   "name": "vercel",
+   "identity": {
+    "provider": "vercel_ai_gateway",
+    "request_model": "alibaba/qwen-3-14b",
+    "response_model": "alibaba/qwen-3-14b",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "vercel_ai_gateway",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "vercel_ai_gateway/alibaba/qwen-3-14b",
+     "vercel_ai_gateway"
+    ],
+    [
+     "alibaba/qwen-3-14b",
+     "vercel_ai_gateway"
+    ],
+    [
+     "alibaba/qwen-3-14b",
+     "vercel_ai_gateway"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "vercel_ai_gateway/alibaba/qwen-3-14b"
+   ]
+  },
+  {
+   "name": "nvidia_nim",
+   "identity": {
+    "provider": "nvidia_nim",
+    "request_model": "01-ai/yi-large",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "nvidia_nim",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "nvidia_nim/01-ai/yi-large",
+     "nvidia_nim"
+    ],
+    [
+     null,
+     "nvidia_nim"
+    ],
+    [
+     "01-ai/yi-large",
+     "nvidia_nim"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "nvidia_nim/01-ai/yi-large"
+   ]
+  },
+  {
+   "name": "dashscope",
+   "identity": {
+    "provider": "dashscope",
+    "request_model": "deepseek-v4-flash",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "dashscope",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "dashscope/deepseek-v4-flash",
+     "dashscope"
+    ],
+    [
+     null,
+     "dashscope"
+    ],
+    [
+     "deepseek-v4-flash",
+     "dashscope"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "dashscope/deepseek-v4-flash"
+   ]
+  },
+  {
+   "name": "qwencloud",
+   "identity": {
+    "provider": "qwencloud",
+    "request_model": "deepseek-v4-pro",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "qwencloud",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "qwencloud/deepseek-v4-pro",
+     "qwencloud"
+    ],
+    [
+     null,
+     "qwencloud"
+    ],
+    [
+     "deepseek-v4-pro",
+     "qwencloud"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "qwencloud/deepseek-v4-pro"
+   ]
+  },
+  {
+   "name": "qwen_ai_platform",
+   "identity": {
+    "provider": "qwen_ai_platform",
+    "request_model": "deepseek-v4-flash",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "qwen_ai_platform",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "qwen_ai_platform/deepseek-v4-flash",
+     "qwen_ai_platform"
+    ],
+    [
+     null,
+     "qwen_ai_platform"
+    ],
+    [
+     "deepseek-v4-flash",
+     "qwen_ai_platform"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "qwen_ai_platform/deepseek-v4-flash"
+   ]
+  },
+  {
+   "name": "tencent",
+   "identity": {
+    "provider": "tencent",
+    "request_model": "deepseek-v4-pro",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "tencent",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "tencent/deepseek-v4-pro",
+     "tencent"
+    ],
+    [
+     null,
+     "tencent"
+    ],
+    [
+     "deepseek-v4-pro",
+     "tencent"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "tencent/deepseek-v4-pro"
+   ]
+  },
+  {
+   "name": "oci",
+   "identity": {
+    "provider": "oci",
+    "request_model": "meta.llama-3.1-70b-instruct",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "oci",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "oci/meta.llama-3.1-70b-instruct",
+     "oci"
+    ],
+    [
+     null,
+     "oci"
+    ],
+    [
+     "meta.llama-3.1-70b-instruct",
+     "oci"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "oci/meta.llama-3.1-70b-instruct"
+   ]
+  },
+  {
+   "name": "github_copilot",
+   "identity": {
+    "provider": "github_copilot",
+    "request_model": "claude-haiku-4.5",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "github_copilot",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "github_copilot/claude-haiku-4.5",
+     "github_copilot"
+    ],
+    [
+     null,
+     "github_copilot"
+    ],
+    [
+     "claude-haiku-4.5",
+     "github_copilot"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "github_copilot/claude-haiku-4.5"
+   ]
+  },
+  {
+   "name": "snowflake",
+   "identity": {
+    "provider": "snowflake",
+    "request_model": "claude-3-5-sonnet",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "snowflake",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "snowflake/claude-3-5-sonnet",
+     "snowflake"
+    ],
+    [
+     null,
+     "snowflake"
+    ],
+    [
+     "claude-3-5-sonnet",
+     "snowflake"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "snowflake/claude-3-5-sonnet"
+   ]
+  },
+  {
+   "name": "watsonx",
+   "identity": {
+    "provider": "watsonx",
+    "request_model": "ibm/granite-3-8b-instruct",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "watsonx",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "watsonx/ibm/granite-3-8b-instruct",
+     "watsonx"
+    ],
+    [
+     null,
+     "watsonx"
+    ],
+    [
+     "ibm/granite-3-8b-instruct",
+     "watsonx"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "watsonx/ibm/granite-3-8b-instruct"
+   ]
+  },
+  {
+   "name": "cloudflare",
+   "identity": {
+    "provider": "cloudflare",
+    "request_model": "@cf/meta/llama-2-7b-chat-fp16",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "cloudflare",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "cloudflare/@cf/meta/llama-2-7b-chat-fp16",
+     "cloudflare"
+    ],
+    [
+     null,
+     "cloudflare"
+    ],
+    [
+     "@cf/meta/llama-2-7b-chat-fp16",
+     "cloudflare"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "cloudflare/@cf/meta/llama-2-7b-chat-fp16"
+   ]
+  },
+  {
+   "name": "cohere_chat",
+   "identity": {
+    "provider": "cohere_chat",
+    "request_model": "command-a-03-2025",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "cohere_chat",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "cohere_chat/command-a-03-2025",
+     "cohere_chat"
+    ],
+    [
+     null,
+     "cohere_chat"
+    ],
+    [
+     "command-a-03-2025",
+     "cohere_chat"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "command-a-03-2025"
+   ]
+  },
+  {
+   "name": "cerebras",
+   "identity": {
+    "provider": "cerebras",
+    "request_model": "llama-3.3-70b",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "cerebras",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "cerebras/llama-3.3-70b",
+     "cerebras"
+    ],
+    [
+     null,
+     "cerebras"
+    ],
+    [
+     "llama-3.3-70b",
+     "cerebras"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "cerebras/llama-3.3-70b"
+   ]
+  },
+  {
+   "name": "sambanova",
+   "identity": {
+    "provider": "sambanova",
+    "request_model": "DeepSeek-R1",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "sambanova",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "sambanova/DeepSeek-R1",
+     "sambanova"
+    ],
+    [
+     null,
+     "sambanova"
+    ],
+    [
+     "DeepSeek-R1",
+     "sambanova"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "sambanova/DeepSeek-R1"
+   ]
+  },
+  {
+   "name": "moonshot",
+   "identity": {
+    "provider": "moonshot",
+    "request_model": "kimi-k2.5",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "moonshot",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "moonshot/kimi-k2.5",
+     "moonshot"
+    ],
+    [
+     null,
+     "moonshot"
+    ],
+    [
+     "kimi-k2.5",
+     "moonshot"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "moonshot/kimi-k2.5"
+   ]
+  },
+  {
+   "name": "zai",
+   "identity": {
+    "provider": "zai",
+    "request_model": "glm-5",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "zai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "zai/glm-5",
+     "zai"
+    ],
+    [
+     null,
+     "zai"
+    ],
+    [
+     "glm-5",
+     "zai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "zai/glm-5"
+   ]
+  },
+  {
+   "name": "minimax",
+   "identity": {
+    "provider": "minimax",
+    "request_model": "MiniMax-M2.5",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "minimax",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "minimax/MiniMax-M2.5",
+     "minimax"
+    ],
+    [
+     null,
+     "minimax"
+    ],
+    [
+     "MiniMax-M2.5",
+     "minimax"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "minimax/MiniMax-M2.5"
+   ]
+  },
+  {
+   "name": "nebius",
+   "identity": {
+    "provider": "nebius",
+    "request_model": "deepseek-ai/DeepSeek-R1",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "nebius",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "nebius/deepseek-ai/DeepSeek-R1",
+     "nebius"
+    ],
+    [
+     null,
+     "nebius"
+    ],
+    [
+     "deepseek-ai/DeepSeek-R1",
+     "nebius"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "nebius/deepseek-ai/DeepSeek-R1"
+   ]
+  },
+  {
+   "name": "friendliai",
+   "identity": {
+    "provider": "friendliai",
+    "request_model": "zai-org/GLM-5.3",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "friendliai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "friendliai/zai-org/GLM-5.3",
+     "friendliai"
+    ],
+    [
+     null,
+     "friendliai"
+    ],
+    [
+     "zai-org/GLM-5.3",
+     "friendliai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "friendliai/zai-org/GLM-5.3"
+   ]
+  },
+  {
+   "name": "openrouter",
+   "identity": {
+    "provider": "openrouter",
+    "request_model": "anthropic/claude-sonnet-4.5",
+    "response_model": "anthropic/claude-sonnet-4.5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openrouter",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "anthropic/claude-sonnet-4.5",
+     "openrouter"
+    ],
+    [
+     "anthropic/claude-sonnet-4.5",
+     "openrouter"
+    ],
+    [
+     "anthropic/claude-sonnet-4.5",
+     "openrouter"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "openrouter/anthropic/claude-sonnet-4.5"
+   ]
+  },
+  {
+   "name": "openrouter_unmapped",
+   "identity": {
+    "provider": "openrouter",
+    "request_model": "some/new-model",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openrouter",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openrouter/some/new-model",
+     "openrouter"
+    ],
+    [
+     null,
+     "openrouter"
+    ],
+    [
+     "some/new-model",
+     "openrouter"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "hosted_vllm_unmapped",
+   "identity": {
+    "provider": "hosted_vllm",
+    "request_model": "my-llama",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "hosted_vllm",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "hosted_vllm/my-llama",
+     "hosted_vllm"
+    ],
+    [
+     null,
+     "hosted_vllm"
+    ],
+    [
+     "my-llama",
+     "hosted_vllm"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "litellm_proxy",
+   "identity": {
+    "provider": "litellm_proxy",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "litellm_proxy",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "litellm_proxy/gpt-4o",
+     "litellm_proxy"
+    ],
+    [
+     "gpt-4o",
+     "litellm_proxy"
+    ],
+    [
+     "gpt-4o",
+     "litellm_proxy"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "opencode_go",
+   "identity": {
+    "provider": "opencode_go",
+    "request_model": "glm-5.3-flash",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "opencode_go",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "opencode_go/glm-5.3-flash",
+     "opencode_go"
+    ],
+    [
+     null,
+     "opencode_go"
+    ],
+    [
+     "glm-5.3-flash",
+     "opencode_go"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "opencode_go/glm-5.3-flash"
+   ]
+  },
+  {
+   "name": "text_completion_openai",
+   "identity": {
+    "provider": "text-completion-openai",
+    "request_model": "gpt-3.5-turbo-instruct",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "text-completion-openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "text-completion-openai/gpt-3.5-turbo-instruct",
+     "text-completion-openai"
+    ],
+    [
+     null,
+     "text-completion-openai"
+    ],
+    [
+     "gpt-3.5-turbo-instruct",
+     "text-completion-openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-3.5-turbo-instruct"
+   ]
+  },
+  {
+   "name": "xai",
+   "identity": {
+    "provider": "xai",
+    "request_model": "grok-4.20-0309-reasoning",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "xai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "xai/grok-4.20-0309-reasoning",
+     "xai"
+    ],
+    [
+     null,
+     "xai"
+    ],
+    [
+     "grok-4.20-0309-reasoning",
+     "xai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "xai/grok-4.20-0309-reasoning"
+   ]
+  },
+  {
+   "name": "perplexity",
+   "identity": {
+    "provider": "perplexity",
+    "request_model": "sonar",
+    "response_model": "sonar",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "perplexity",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "perplexity/sonar",
+     "perplexity"
+    ],
+    [
+     "sonar",
+     "perplexity"
+    ],
+    [
+     "sonar",
+     "perplexity"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "perplexity/sonar"
+   ]
+  },
+  {
+   "name": "fireworks",
+   "identity": {
+    "provider": "fireworks_ai",
+    "request_model": "accounts/fireworks/models/llama-v3p1-8b-instruct",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "fireworks_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct",
+     "fireworks_ai"
+    ],
+    [
+     null,
+     "fireworks_ai"
+    ],
+    [
+     "accounts/fireworks/models/llama-v3p1-8b-instruct",
+     "fireworks_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
+   ]
+  },
+  {
+   "name": "databricks",
+   "identity": {
+    "provider": "databricks",
+    "request_model": "databricks-claude-haiku-4-5",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "databricks",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "databricks/databricks-claude-haiku-4-5",
+     "databricks"
+    ],
+    [
+     null,
+     "databricks"
+    ],
+    [
+     "databricks-claude-haiku-4-5",
+     "databricks"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "databricks/databricks-claude-haiku-4-5"
+   ]
+  },
+  {
+   "name": "together",
+   "identity": {
+    "provider": "together_ai",
+    "request_model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "together_ai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+     "together_ai"
+    ],
+    [
+     null,
+     "together_ai"
+    ],
+    [
+     "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+     "together_ai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
+   ]
+  },
+  {
+   "name": "replicate",
+   "identity": {
+    "provider": "replicate",
+    "request_model": "meta/llama-2-13b",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "replicate",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "meta/llama-2-13b",
+     "replicate"
+    ],
+    [
+     null,
+     "replicate"
+    ],
+    [
+     "meta/llama-2-13b",
+     "replicate"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "replicate/meta/llama-2-13b"
+   ]
+  },
+  {
+   "name": "lemonade",
+   "identity": {
+    "provider": "lemonade",
+    "request_model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "lemonade",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+     "lemonade"
+    ],
+    [
+     null,
+     "lemonade"
+    ],
+    [
+     "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+     "lemonade"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+   ]
+  },
+  {
+   "name": "chatgpt_base_model",
+   "identity": {
+    "provider": "chatgpt",
+    "request_model": "gpt-5",
+    "response_model": "gpt-5",
+    "base_model": "gpt-5",
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "chatgpt",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-5",
+     "openai"
+    ],
+    [
+     "gpt-5",
+     "chatgpt"
+    ],
+    [
+     "gpt-5",
+     "chatgpt"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-5"
+   ]
+  },
+  {
+   "name": "pricing_provider",
+   "identity": {
+    "provider": "anthropic",
+    "request_model": "claude-sonnet-4-5",
+    "response_model": "claude-sonnet-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "anthropic",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "anthropic/claude-sonnet-4-5",
+     "anthropic"
+    ],
+    [
+     "claude-sonnet-4-5",
+     "anthropic"
+    ],
+    [
+     "claude-sonnet-4-5",
+     "anthropic"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "claude-sonnet-4-5"
+   ]
+  },
+  {
+   "name": "no_provider",
+   "identity": {
+    "provider": null,
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": null,
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     null
+    ],
+    [
+     "gpt-4o",
+     null
+    ],
+    [
+     "gpt-4o",
+     null
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "gpt-4o"
+   ]
+  },
+  {
+   "name": "no_provider_prefixed",
+   "identity": {
+    "provider": null,
+    "request_model": "anthropic/claude-opus-4-5",
+    "response_model": "claude-opus-4-5",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": null,
+    "loop_region": null
+   },
+   "names": [
+    [
+     "anthropic/claude-opus-4-5",
+     null
+    ],
+    [
+     "claude-opus-4-5",
+     null
+    ],
+    [
+     "anthropic/claude-opus-4-5",
+     null
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "claude-opus-4-5"
+   ]
+  },
+  {
+   "name": "hidden_provider_differs",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-4o",
+    "response_model": "gpt-4o",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "azure",
+    "loop_region": null
+   },
+   "names": [
+    [
+     "openai/gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ],
+    [
+     "gpt-4o",
+     "openai"
+    ]
+   ],
+   "priced": 0,
+   "keys": [
+    "azure/gpt-4o"
+   ]
+  },
+  {
+   "name": "hidden_region",
+   "identity": {
+    "provider": "bedrock",
+    "request_model": "anthropic.claude-3-haiku-20240307-v1:0",
+    "response_model": "anthropic.claude-3-haiku-20240307-v1:0",
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": "us-east-1"
+    },
+    "loop_provider": "bedrock",
+    "loop_region": "us-east-1"
+   },
+   "names": [
+    [
+     "bedrock/us-east-1/anthropic.claude-3-haiku-20240307-v1:0",
+     "bedrock"
+    ],
+    [
+     "anthropic.claude-3-haiku-20240307-v1:0",
+     "bedrock"
+    ],
+    [
+     "anthropic.claude-3-haiku-20240307-v1:0",
+     "bedrock"
+    ]
+   ],
+   "priced": null,
+   "keys": []
+  },
+  {
+   "name": "rule_only",
+   "identity": {
+    "provider": "openai",
+    "request_model": "gpt-9-preview",
+    "response_model": null,
+    "base_model": null,
+    "custom_pricing": false,
+    "deployment_id": null,
+    "region": null,
+    "invoked_model_id": null,
+    "hidden": {
+     "model": null,
+     "litellm_model_name": null,
+     "provider_response_model": null,
+     "region": null
+    },
+    "loop_provider": "openai",
+    "loop_region": null
+   },
+   "names": [
+    [
+     null,
+     "openai"
+    ],
+    [
+     "openai/gpt-9-preview",
+     "openai"
+    ],
+    [
+     "gpt-9-preview",
+     "openai"
+    ]
+   ],
+   "priced": 1,
+   "keys": [
+    "openai/gpt-9-preview"
+   ]
+  }
+ ]
+}

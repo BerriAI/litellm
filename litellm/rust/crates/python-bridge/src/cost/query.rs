@@ -18,13 +18,16 @@ use litellm_cost::query::{
     RouterFee, TokenRules, TokenUsage, TokensQuery,
 };
 use litellm_cost::rates::{Pricing, RatesQuery};
-use litellm_cost::receipt::{PriceOutcome, Receipt};
+use litellm_cost::receipt::{PriceOutcome, Receipt, Unpriced};
 use litellm_cost::reported::{PricedSides, ReportedQuery};
 use litellm_cost::tools::{ToolUse, Tools, ToolsQuery};
 use litellm_host_python::{from_py_argument, json_from_py};
 use litellm_inference_messages::PricedCall;
 use litellm_model_catalog::wire::Fields;
-use litellm_model_catalog::{CallIdentity, Deferral, PricingRows, RowRef, Tried, priced_ref};
+use litellm_model_catalog::{
+    AfterRows, CallIdentity, Deferral, HiddenParams, NameHost, PricingRows, TableOnly, Tried,
+    TriedRow, priced_ref,
+};
 use litellm_python_compat::number::float_of;
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
@@ -32,7 +35,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::service_tier_named;
-use crate::model_cost::{CostSnapshot, row_fields};
+use crate::model_cost::{CostSnapshot, PythonNames, row_fields};
 
 /// The key a row the caller passed for one call is priced under
 const PER_CALL_ROW: &str = "requested_model_info_override";
@@ -43,12 +46,15 @@ const BREAKDOWN_ROW: &str = "breakdown";
 /// The key of the Azure AI Model Router row whose fee the call bills
 const ROUTER_FEE_ROW: &str = "router-fee";
 
+/// The key of a candidate's row `get_model_info` built rather than found in the table
+const CANDIDATE_ROW: &str = "candidate";
+
 /// The rows to try: the candidates main's `completion_cost` loop walks for a finished call, or the one model a
 /// caller of `cost_per_token` names
 #[derive(Deserialize)]
 #[serde(tag = "by", rename_all = "snake_case")]
 enum Named {
-    Call(CallFacts),
+    Call(Box<CallFacts>),
     Model {
         model: String,
         provider: String,
@@ -61,10 +67,10 @@ enum Named {
 }
 
 /// What `completion_cost` knows about the call before it picks a row
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 #[serde(default)]
-struct CallFacts {
-    provider: String,
+pub(crate) struct CallFacts {
+    provider: Option<String>,
     request_model: Option<String>,
     response_model: Option<String>,
     base_model: Option<String>,
@@ -72,8 +78,82 @@ struct CallFacts {
     deployment_id: Option<String>,
     region: Option<String>,
     invoked_model_id: Option<String>,
+    hidden: Option<HiddenFacts>,
+    loop_provider: Option<String>,
+    loop_region: Option<String>,
+}
+
+/// The `_hidden_params` strings that pick a candidate
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct HiddenFacts {
+    model: Option<String>,
+    litellm_model_name: Option<String>,
     provider_response_model: Option<String>,
-    hidden_model: Option<String>,
+    region: Option<String>,
+}
+
+impl From<CallFacts> for CallIdentity {
+    fn from(call: CallFacts) -> Self {
+        Self {
+            provider: call.provider,
+            request_model: call.request_model,
+            response_model: call.response_model,
+            base_model: call.base_model,
+            custom_pricing: call.custom_pricing,
+            deployment_id: call.deployment_id,
+            region: call.region,
+            invoked_model_id: call.invoked_model_id,
+            hidden: call.hidden.map(|hidden| HiddenParams {
+                model: hidden.model,
+                litellm_model_name: hidden.litellm_model_name,
+                provider_response_model: hidden.provider_response_model,
+                region: hidden.region,
+            }),
+            loop_provider: call.loop_provider,
+            loop_region: call.loop_region,
+        }
+    }
+}
+
+/// What Python found for one candidate of a call: the built-in tools it used and the Model Router fee it bills, each
+/// row named by its index among the candidate's own rows, which start at `rows_from` among the rows passed beside
+/// the document, or that finding them raised, as main moved on to the next candidate when they did
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct CandidateFacts {
+    candidate: usize,
+    tools: Option<ToolUse<usize>>,
+    router_fee: Option<CandidateFee>,
+    failed: bool,
+    rows_from: usize,
+}
+
+/// One usage a call bills on its own: one service tier's share of a Responses WebSocket session, each priced as main
+/// priced it, by its own walk of the call's candidates
+#[derive(Deserialize)]
+struct UsagePart {
+    usage: TokenUsage,
+    #[serde(default)]
+    service_tier: Option<String>,
+    #[serde(default)]
+    raw: Option<RawCounts>,
+    #[serde(default)]
+    candidates: Vec<CandidateFacts>,
+}
+
+/// The usage one walk prices and what Python found for each candidate
+struct PartView<'a> {
+    usage: &'a TokenUsage,
+    service_tier: Option<&'a str>,
+    raw: Option<RawCounts>,
+    candidates: &'a [CandidateFacts],
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct CandidateFee {
+    billed: FeeBilling,
+    row: usize,
 }
 
 #[derive(Deserialize)]
@@ -115,6 +195,23 @@ struct PriceDocument {
     tools: Option<ToolUse<usize>>,
     #[serde(default)]
     router_fee: Option<RouterFeeFacts>,
+    /// What Python found for each candidate of a call, by its place among the candidates
+    #[serde(default)]
+    candidates: Vec<CandidateFacts>,
+    /// The usages a call bills each on its own, in place of `usage`
+    #[serde(default)]
+    parts: Vec<UsagePart>,
+}
+
+impl PriceDocument {
+    fn whole(&self) -> PartView<'_> {
+        PartView {
+            usage: &self.usage,
+            service_tier: self.service_tier.as_deref(),
+            raw: self.raw,
+            candidates: &self.candidates,
+        }
+    }
 }
 
 /// Which row the stored breakdown reads. `row` is the `breakdown_row` passed beside the document
@@ -270,9 +367,255 @@ pub(crate) fn price(
         fee: fee_row.map(row_fields).transpose()?,
         tools: tool_rows.iter().map(row_fields).collect::<PyResult<_>>()?,
     };
-    priced(snapshot, document, rows)
+    let host = PythonNames { py };
+    let receipt = match &document.named {
+        Named::Call(call) => priced_call(
+            snapshot,
+            &(**call).clone().into(),
+            &document,
+            &document.whole(),
+            &rows.tools,
+            &host,
+        ),
+        Named::Model { .. } => priced(snapshot, document, rows, &host),
+    };
+    receipt
         .map(|receipt| NativeReceipt::new(py, &receipt))
         .transpose()
+}
+
+/// The candidates of the call in `document` as `completion_cost` reads them
+pub(crate) struct CallCandidateNames {
+    /// The name `select_model_name_for_cost_calc` picks with the provider the call names
+    pub(crate) selected: Option<String>,
+    /// The name `completion_cost` selects, with the provider it overrides the call's with
+    pub(crate) call_selected: Option<String>,
+    /// The names main's loop walks, each with the provider it pairs it with
+    pub(crate) names: Vec<(Option<String>, Option<String>)>,
+    /// The Bedrock row every Bedrock candidate prices with, the row a `register_model` price landed on and whether
+    /// main merges that registration over the row
+    pub(crate) bedrock: Option<(String, Option<String>, bool)>,
+}
+
+/// The names `completion_cost` walks for the call in `document`, the name `select_model_name_for_cost_calc` picks and
+/// the Bedrock row every Bedrock candidate prices with
+pub(crate) fn cost_candidates(
+    py: Python<'_>,
+    snapshot: &CostSnapshot,
+    document: &Bound<'_, PyAny>,
+) -> PyResult<CallCandidateNames> {
+    let call: CallIdentity = from_py_argument::<CallFacts>(document)?.into();
+    let host = PythonNames { py };
+    let found = snapshot.cost_candidates(&call, &host);
+    Ok(CallCandidateNames {
+        selected: snapshot.selected_cost_model(&call, &host),
+        call_selected: found.selected,
+        names: found
+            .names
+            .into_iter()
+            .map(|candidate| (candidate.model, candidate.provider))
+            .collect(),
+        bedrock: snapshot
+            .bedrock_pricing(&call, &host)
+            .map(|pricing| (pricing.key, pricing.registration, pricing.merged)),
+    })
+}
+
+/// The candidates main's loop prices the call in `document` with, in its order: each candidate's place among the
+/// names, the model name and provider it is priced as and the provider the loop holds. The flag is whether the walk
+/// stops at a candidate only Python prices
+pub(crate) fn cost_rows(
+    py: Python<'_>,
+    snapshot: &CostSnapshot,
+    document: &Bound<'_, PyAny>,
+) -> PyResult<CostRows> {
+    let call: CallFacts = from_py_argument(document)?;
+    let found = snapshot.candidates(&call.into(), &PythonNames { py });
+    Ok((
+        found
+            .rows
+            .into_iter()
+            .map(|tried| {
+                (
+                    tried.candidate,
+                    tried.model,
+                    tried.provider,
+                    tried.loop_provider,
+                )
+            })
+            .collect(),
+        matches!(found.then, AfterRows::Deferred(_)),
+    ))
+}
+
+/// Each candidate Model Catalog prices a call with (its place, model, provider and the provider main's loop holds),
+/// and whether the walk stops at a candidate only Python prices
+pub(crate) type CostRows = (Vec<(usize, String, String, String)>, bool);
+
+/// The receipt of each usage part of the call in `document`, each walked and priced on its own, `None` when any part
+/// is left to Python
+pub(crate) fn price_parts(
+    py: Python<'_>,
+    snapshot: &CostSnapshot,
+    document: &Bound<'_, PyAny>,
+    rows: &[Bound<'_, PyMapping>],
+) -> PyResult<Option<Vec<NativeReceipt>>> {
+    let document: PriceDocument = from_py_argument(document)?;
+    let Named::Call(call) = &document.named else {
+        return Ok(None);
+    };
+    let call: CallIdentity = (**call).clone().into();
+    let given: Vec<Fields> = rows.iter().map(row_fields).collect::<PyResult<_>>()?;
+    let host = PythonNames { py };
+    let receipts: Option<Vec<Receipt>> = document
+        .parts
+        .iter()
+        .map(|part| {
+            let view = PartView {
+                usage: &part.usage,
+                service_tier: part.service_tier.as_deref(),
+                raw: part.raw,
+                candidates: &part.candidates,
+            };
+            priced_call(snapshot, &call, &document, &view, &given, &host)
+        })
+        .collect();
+    receipts
+        .map(|receipts| {
+            receipts
+                .iter()
+                .map(|receipt| NativeReceipt::new(py, receipt))
+                .collect()
+        })
+        .transpose()
+}
+
+/// The receipt of a call's first candidate that prices, as main's loop walks them. `None` when a candidate only
+/// Python prices comes first, or none prices, so Python walks the candidates itself
+fn priced_call(
+    snapshot: &CostSnapshot,
+    call: &CallIdentity,
+    document: &PriceDocument,
+    part: &PartView<'_>,
+    given: &[Fields],
+    host: &dyn NameHost,
+) -> Option<Receipt> {
+    let found = snapshot.candidates(call, host);
+    let walked = found.rows.iter().find_map(|tried| {
+        let facts = part
+            .candidates
+            .iter()
+            .find(|facts| facts.candidate == tried.candidate);
+        if facts.is_some_and(|facts| facts.failed) {
+            return None;
+        }
+        match price_tried(snapshot, document, part, tried, facts, given) {
+            PriceOutcome::Priced(receipt) => Some(Some(*receipt)),
+            PriceOutcome::Unpriced(Unpriced::NotPorted(_) | Unpriced::CatalogDeferred) => {
+                Some(None)
+            }
+            PriceOutcome::Unpriced(_) => None,
+        }
+    });
+    walked.flatten()
+}
+
+/// One candidate of a call priced on its own row, with its own tools, fee and breakdown row
+fn price_tried(
+    snapshot: &CostSnapshot,
+    document: &PriceDocument,
+    part: &PartView<'_>,
+    tried: &Tried,
+    facts: Option<&CandidateFacts>,
+    given: &[Fields],
+) -> PriceOutcome {
+    let Ok(provider) = tried.provider.parse::<Provider>();
+    let candidate = Candidate {
+        model: tried.model.as_str().into(),
+        provider,
+    };
+    let breakdown_ref = match (document.breakdown, &tried.breakdown) {
+        (BreakdownFacts::Row, Some(TriedRow::Table(row))) => Some(row.clone()),
+        _ => None,
+    };
+    let rows = snapshot.pricing_rows([], breakdown_ref.clone());
+    let rows = match &tried.row {
+        TriedRow::Table(row) => {
+            snapshot.pricing_rows([(candidate.clone(), row.clone())], breakdown_ref.clone())
+        }
+        TriedRow::Fields { fields, .. } => rows.with_named_per_call(
+            candidate.clone(),
+            CANDIDATE_ROW,
+            (**fields).clone(),
+            &tried.provider,
+        ),
+    };
+    let (rows, breakdown) = match (document.breakdown, &tried.breakdown) {
+        (BreakdownFacts::Priced, _) => (rows, BreakdownRow::Priced),
+        (BreakdownFacts::Named, _) => (rows, BreakdownRow::Named),
+        (BreakdownFacts::Absent, _) | (BreakdownFacts::Row, None) => (rows, BreakdownRow::Absent),
+        (BreakdownFacts::Row, Some(TriedRow::Table(row))) => (
+            rows,
+            BreakdownRow::Row {
+                row: priced_ref(row),
+            },
+        ),
+        (BreakdownFacts::Row, Some(TriedRow::Fields { fields, .. })) => {
+            let (rows, at) = rows.with_per_call(BREAKDOWN_ROW, (**fields).clone(), &tried.provider);
+            (rows, BreakdownRow::Row { row: at })
+        }
+    };
+    let rows_from = facts.map_or(0, |facts| facts.rows_from);
+    let fee = facts.and_then(|facts| facts.router_fee);
+    let (rows, router_fee) =
+        match fee.and_then(|fee| Some((fee.billed, given.get(rows_from + fee.row)?.clone()))) {
+            Some((billed, fields)) => {
+                let (rows, at) = rows.with_per_call(ROUTER_FEE_ROW, fields, "azure_ai");
+                (rows, Some(RouterFee { row: at, billed }))
+            }
+            None => (rows, None),
+        };
+    let (rows, tools) = with_tool_rows(rows, given.to_vec());
+    let query = PriceQuery::Tokens(Box::new(TokensQuery {
+        header: Header {
+            candidates: vec![candidate],
+            source: PriceSource::Catalog,
+            basis: Basis {
+                service_tier: service_tier_named(part.service_tier),
+                data_residency: data_residency(document.data_residency.as_deref()),
+                vertex_location: document.vertex_location.clone(),
+                at: document.at,
+            },
+            adjustments: document
+                .adjust
+                .as_ref()
+                .map_or(AdjustmentPolicy::None, |key| AdjustmentPolicy::Apply {
+                    provider: Some(tried.loop_provider.as_str().into()),
+                    model: Some(
+                        key.model
+                            .clone()
+                            .unwrap_or_else(|| tried.model.as_str().into()),
+                    ),
+                    region: key.region.clone(),
+                }),
+            reported: None,
+        },
+        usage: part.usage.clone(),
+        requested_model: document.requested_model.clone(),
+        rules: document.rules,
+        elapsed: document.elapsed,
+        characters: document.characters,
+        embedding: document.embedding,
+        raw: part.raw.unwrap_or_default(),
+        decisions: document.decisions,
+        breakdown,
+        tools: facts
+            .and_then(|facts| facts.tools.clone())
+            .unwrap_or_default()
+            .rows(&|index: usize| tools.get(rows_from + index).cloned()),
+        router_fee,
+    }));
+    litellm_cost::price(&rows, &query)
 }
 
 /// The Messages route's pricing over the snapshot taken when the call was set up. It reads the call the way
@@ -291,53 +634,61 @@ impl RoutePricing {
 impl litellm_inference_messages::Pricing for RoutePricing {
     fn price(&self, call: &PricedCall) -> Option<Receipt> {
         let identity = &call.identity;
-        priced(
+        let document = PriceDocument {
+            named: Named::Call(Box::default()),
+            usage: call.usage.clone(),
+            requested_model: Some(call.request_model.as_str().into()),
+            service_tier: call.service_tier.clone(),
+            data_residency: identity.data_residency.clone(),
+            vertex_location: identity.vertex_location.as_deref().map(Into::into),
+            at: jiff::Timestamp::now(),
+            adjust: Some(AdjustFacts {
+                provider: Some(call.provider.as_str().into()),
+                model: None,
+                region: identity.region.as_deref().map(Into::into),
+            }),
+            rules: TokenRules::Branch,
+            elapsed: None,
+            characters: None,
+            embedding: false,
+            raw: None,
+            reported: None,
+            custom: None,
+            decisions: false,
+            breakdown: BreakdownFacts::Priced,
+            tools: None,
+            router_fee: None,
+            candidates: Vec::new(),
+            parts: Vec::new(),
+        };
+        priced_call(
             &self.snapshot,
-            PriceDocument {
-                named: Named::Call(CallFacts {
-                    provider: call.provider.clone(),
-                    request_model: Some(call.request_model.clone()),
-                    response_model: call.response_model.clone(),
-                    base_model: identity.base_model.clone(),
-                    deployment_id: identity.deployment_id.clone(),
-                    region: identity.region.clone(),
-                    ..CallFacts::default()
-                }),
-                usage: call.usage.clone(),
-                requested_model: Some(call.request_model.as_str().into()),
-                service_tier: call.service_tier.clone(),
-                data_residency: identity.data_residency.clone(),
-                vertex_location: identity.vertex_location.as_deref().map(Into::into),
-                at: jiff::Timestamp::now(),
-                adjust: Some(AdjustFacts {
-                    provider: Some(call.provider.as_str().into()),
-                    model: None,
-                    region: identity.region.as_deref().map(Into::into),
-                }),
-                rules: TokenRules::Branch,
-                elapsed: None,
-                characters: None,
-                embedding: false,
-                raw: None,
-                reported: None,
-                custom: None,
-                decisions: false,
-                breakdown: BreakdownFacts::Priced,
-                tools: None,
-                router_fee: None,
+            &CallIdentity {
+                provider: Some(call.provider.clone()),
+                request_model: Some(call.request_model.clone()),
+                response_model: call.response_model.clone(),
+                base_model: identity.base_model.clone(),
+                deployment_id: identity.deployment_id.clone(),
+                region: identity.region.clone(),
+                loop_provider: Some(call.provider.clone()),
+                loop_region: identity.region.clone(),
+                ..CallIdentity::default()
             },
-            CallRows {
-                row: None,
-                breakdown: None,
-                fee: None,
-                tools: Vec::new(),
-            },
+            &document,
+            &document.whole(),
+            &[],
+            &TableOnly,
         )
     }
 }
 
-/// The receipt of a token call, `None` when the core leaves it to Python
-fn priced(snapshot: &CostSnapshot, document: PriceDocument, given: CallRows) -> Option<Receipt> {
+/// The receipt of a token call a caller names one model for, `None` when the core leaves it to Python
+fn priced(
+    snapshot: &CostSnapshot,
+    document: PriceDocument,
+    given: CallRows,
+    host: &dyn NameHost,
+) -> Option<Receipt> {
     let CallRows {
         row,
         breakdown: breakdown_row,
@@ -355,11 +706,22 @@ fn priced(snapshot: &CostSnapshot, document: PriceDocument, given: CallRows) -> 
                 model: model.as_str().into(),
                 provider: provider.parse().ok()?,
             }],
-            Vec::new(),
+            None,
         ),
-        _ => candidates(snapshot, &document.named, row.is_some())?,
+        _ => candidates(snapshot, &document.named, row.is_some(), host)?,
     };
-    let rows = snapshot.pricing_rows(named, []);
+    let rows = match named {
+        Some((candidate, TriedRow::Table(row))) => snapshot.pricing_rows([(candidate, row)], []),
+        Some((candidate, TriedRow::Fields { fields, .. })) => {
+            snapshot.pricing_rows([], []).with_named_per_call(
+                candidate.clone(),
+                CANDIDATE_ROW,
+                (*fields).clone(),
+                &candidate.provider.to_string(),
+            )
+        }
+        None => snapshot.pricing_rows([], []),
+    };
     let row_provider = match &document.named {
         Named::Model {
             row_provider: Some(provider),
@@ -543,72 +905,45 @@ pub(crate) fn price_reported(
     )
 }
 
-/// The candidates in main's order, and each one the catalog resolved beside its row
-type CallCandidates = (Vec<Candidate>, Vec<(Candidate, RowRef)>);
+/// The one candidate a caller names, and the row the catalog resolved it to
+type CallCandidates = (Vec<Candidate>, Option<(Candidate, TriedRow)>);
 
-/// The candidates in main's order and the rows the catalog resolved them to. `None` when main prices the call by a
-/// path the catalog does not resolve, no row comes before it and the caller passed no row of its own
+/// The candidate a `cost_per_token` caller names and the row the catalog resolved it to. `None` when main prices it
+/// by a path the catalog does not resolve and the caller passed no row of its own
 fn candidates(
     snapshot: &CostSnapshot,
     named: &Named,
     per_call_row: bool,
+    host: &dyn NameHost,
 ) -> Option<CallCandidates> {
-    match named {
-        Named::Call(call) => {
-            let provider: Provider = call.provider.parse().ok()?;
-            let found = snapshot.candidates(&CallIdentity {
-                provider: call.provider.clone(),
-                request_model: call.request_model.clone(),
-                response_model: call.response_model.clone(),
-                base_model: call.base_model.clone(),
-                custom_pricing: call.custom_pricing,
-                deployment_id: call.deployment_id.clone(),
-                region: call.region.clone(),
-                invoked_model_id: call.invoked_model_id.clone(),
-                provider_response_model: call.provider_response_model.clone(),
-                hidden_model: call.hidden_model.clone(),
-            });
-            let named: Vec<(Candidate, RowRef)> = found
-                .rows
-                .into_iter()
-                .map(|Tried { model, row }| {
-                    let candidate = Candidate {
-                        model: model.into(),
-                        provider: provider.clone(),
-                    };
-                    (candidate, row)
-                })
-                .collect();
-            (!named.is_empty()).then(|| {
-                let candidates = named
-                    .iter()
-                    .map(|(candidate, _)| candidate.clone())
-                    .collect();
-                (candidates, named)
-            })
+    let Named::Model {
+        model,
+        provider,
+        region,
+        ..
+    } = named
+    else {
+        return None;
+    };
+    let priced = match snapshot.priced_row(model, provider, region.as_deref(), host) {
+        Ok(priced) => priced,
+        Err(Deferral::Provider) => None,
+        Err(_) if per_call_row => None,
+        Err(_) => return None,
+    };
+    let candidate = |model: &str| -> Option<Candidate> {
+        Some(Candidate {
+            model: model.into(),
+            provider: provider.parse().ok()?,
+        })
+    };
+    Some(match priced {
+        Some(priced) => {
+            let named = candidate(&priced.model)?;
+            (vec![named.clone()], Some((named, priced.row)))
         }
-        Named::Model {
-            model,
-            provider,
-            region,
-            ..
-        } => {
-            let row = match snapshot.priced_row(model, provider, region.as_deref()) {
-                Ok(row) => row,
-                Err(Deferral::Provider) => None,
-                Err(_) if per_call_row => None,
-                Err(_) => return None,
-            };
-            let candidate = Candidate {
-                model: model.as_str().into(),
-                provider: provider.parse().ok()?,
-            };
-            Some((
-                vec![candidate.clone()],
-                row.map(|row| (candidate, row)).into_iter().collect(),
-            ))
-        }
-    }
+        None => (vec![candidate(model)?], None),
+    })
 }
 
 /// `data_residency` lowercased, as the uplift helpers compare it

@@ -6,7 +6,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache, partial
+from functools import partial
 from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
@@ -18,7 +18,6 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm import verbose_logger
 from litellm.constants import (
-    DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
@@ -39,13 +38,17 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     BranchFacts,
     BreakdownFrom,
     CallFacts,
+    CandidateFacts,
+    CandidateFee,
     Characters,
     ClipUsage,
     ClipUse,
+    CostRow,
     CustomPricing,
     CustomRates,
     DurationClip,
     Elapsed,
+    HiddenFacts,
     ImageDocument,
     MeteredUse,
     ModelFacts,
@@ -64,6 +67,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     TokenCandidateUse,
     TokenClip,
     ToolsOfCall,
+    ToolUse,
     TranscriptionDocument,
     TranslationUse,
     VectorStoreSearchDocument,
@@ -71,18 +75,22 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     batch_usage,
     billed_token_rates,
     branch_receipt,
+    cost_candidates,
+    cost_rows,
     custom_pricing_usage,
     custom_receipt,
     part_costs,
     price,
+    price_call,
     price_reported,
     price_session,
     price_tools,
     price_units,
+    priced_names,
     priced_usage,
     prompt_and_completion,
+    raw_counts,
     total_or_zero,
-    web_search_use,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -95,13 +103,10 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
     billed_usage,
-    get_web_search_requests_from_usage,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
-from litellm.llms.anthropic.cost_calculation import (
-    get_anthropic_web_search_requests_from_response,
-)
 from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 from litellm.llms.azure_ai.cost_calculator import (
     is_azure_model_router as azure_ai_is_model_router_name,
@@ -159,7 +164,6 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
-    LlmProvidersSet,
     ModelInfo,
     PromptTokensDetailsWrapper,
     ServiceTier,
@@ -168,7 +172,6 @@ from litellm.types.utils import (
     TranscriptionUsageTokensObject,
     Usage,
     VectorStoreSearchResponse,
-    is_server_derived_pricing_key,
 )
 from litellm.utils import (
     CallTypes,
@@ -180,11 +183,9 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
-    cached_cost_map_key,
     cached_get_model_info_helper,
     mapped_model_fill_missing,
     model_info_with_pricing_overrides,
-    runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
 )
@@ -250,11 +251,16 @@ _RUST_PRICED_CALL_TYPES: Final = frozenset(
     {
         CallTypes.completion.value,
         CallTypes.acompletion.value,
+        CallTypes.text_completion.value,
+        CallTypes.atext_completion.value,
+        CallTypes.embedding.value,
+        CallTypes.aembedding.value,
         CallTypes.anthropic_messages.value,
         CallTypes.aanthropic_messages.value,
+        CallTypes.responses.value,
+        CallTypes.aresponses.value,
     }
 )
-_RUST_PRICED_PROVIDERS: Final = frozenset({"anthropic", "bedrock", "vertex_ai", "azure_ai"})
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
 
 
@@ -740,72 +746,21 @@ def _priced_tokens(
             adjust=adjust,
         )
 
-    model_cost_ref: Final = litellm.model_cost
-    # Only callers that explicitly pass `custom_llm_provider` get the
-    # dedup/prefix-join treatment. When provider is omitted, preserve legacy
-    # behavior: `model_with_provider` stays equal to the raw `model` string
-    # (provider is detected below for downstream use only).
     caller_supplied_provider: Final = custom_llm_provider is not None
-
-    # `model` is normally a string, but callers that mock the transport can pass
-    # non-string objects. Only run the string-based dedup/prefix-join when it is
-    # actually a string — e.g. a MagicMock's `.startswith()` is always truthy and
-    # its slices return new mocks, which would spin the dedup loop forever.
-    model_is_str: Final = isinstance(model, str)
-
-    # Router/proxy deployments may repeat the provider segment (e.g. model_name
-    # "openai/openai/gpt-5.5"). Strip duplicated `{provider}/` chains before joining.
-    if caller_supplied_provider and model_is_str:
-        _dup_prefix: Final = f"{custom_llm_provider}/"
-        while model.startswith(_dup_prefix):
-            _remainder = model[len(_dup_prefix) :]
-            if _remainder.startswith(_dup_prefix):
-                model = _remainder
-            else:
-                break
-
-    model_with_provider = model
-    if caller_supplied_provider:
-        _prov_prefix: Final = f"{custom_llm_provider}/"
-        if model_is_str and model.startswith(_prov_prefix):
-            model_with_provider = model
-        else:
-            model_with_provider = f"{custom_llm_provider}/{model}"
-        if region_name is not None:
-            bare_model: Final = model[len(_prov_prefix) :] if model_is_str and model.startswith(_prov_prefix) else model
-            model_with_provider_and_region: Final = f"{custom_llm_provider}/{region_name}/{bare_model}"
-            if model_with_provider_and_region in model_cost_ref:  # use region based pricing, if it's available
-                model_with_provider = model_with_provider_and_region
-    else:
-        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-
-    assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
-
-    model_parts: Final = model.split("/", 1)
-    model_is_provider_relative: Final = (
-        model_with_provider == f"{custom_llm_provider}/{model}" and model_with_provider in model_cost_ref
+    cost_provider: Final[str] = (
+        custom_llm_provider if custom_llm_provider is not None else litellm.get_llm_provider(model=model)[1]
     )
-    model_without_prefix: Final = model if len(model_parts) == 1 or model_is_provider_relative else model_parts[1]
-    """
-    Code block that formats model to lookup in litellm.model_cost
-    Option1. model = "bedrock/ap-northeast-1/anthropic.claude-instant-v1". This is the most accurate since it is region based. Should always be option 1
-    Option2. model = "openai/gpt-4"       - model = provider/model
-    Option3. model = "anthropic.claude-3" - model = model
-    """
-    if model_with_provider in model_cost_ref:  # Option 2. use model with provider, model = "openai/gpt-4"
-        model = model_with_provider
-    elif model in model_cost_ref:  # Option 1. use model passed, model="gpt-4"
-        model = model
-    elif (
-        model_without_prefix in model_cost_ref
-    ):  # Option 3. if user passed model="bedrock/anthropic.claude-3", use model="anthropic.claude-3"
-        model = model_without_prefix
+    cost_model, model_without_prefix = priced_names(
+        model,
+        custom_llm_provider if caller_supplied_provider else None,
+        None if region_name is None else str(region_name),
+    )
 
     if is_decisions_call_type(call_type):
-        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_model_info: Final = cached_get_model_info_helper(model=cost_model, custom_llm_provider=cost_provider)
         return branch_receipt(
-            model,
-            custom_llm_provider,
+            cost_model,
+            cost_provider,
             usage_block,
             {
                 **decisions_model_info,
@@ -821,7 +776,7 @@ def _priced_tokens(
     if call_type == "speech" or call_type == "aspeech":
         return _speech_cost(
             model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=cost_provider,
             prompt_characters=prompt_characters,
             usage=usage_block,
             service_tier=service_tier,
@@ -829,20 +784,20 @@ def _priced_tokens(
         )
     elif call_type == "arerank" or call_type == "rerank":
         return rerank_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
+            model=cost_model,
+            custom_llm_provider=cost_provider,
             billed_units=rerank_billed_units,
         )
     elif call_type == "avector_store_search" or call_type == "vector_store_search":
         return vector_store_search_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
+            model=cost_model,
+            custom_llm_provider=cost_provider,
             response=cast(VectorStoreSearchResponse, response),
         )
     elif call_type == "ocr" or call_type == "aocr":
         return ocr_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
+            model=cost_model,
+            custom_llm_provider=cost_provider,
             response=response,
             model_info=custom_model_info,
         )
@@ -854,16 +809,16 @@ def _priced_tokens(
     ):
         return batch_cost_calculator(
             usage=usage_block,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
+            model=cost_model,
+            custom_llm_provider=cost_provider,
             data_residency=data_residency,
             vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
         return _transcription_cost(
-            model=model,
+            model=cost_model,
             model_without_prefix=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=cost_provider,
             duration=audio_transcription_file_duration,
             usage=usage_block,
             service_tier=service_tier,
@@ -874,14 +829,14 @@ def _priced_tokens(
         from litellm.search import search_provider_cost_per_query
 
         return search_provider_cost_per_query(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
+            model=cost_model,
+            custom_llm_provider=cost_provider,
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
         )
-    elif custom_llm_provider == "azure_ai":
+    elif cost_provider == "azure_ai":
         return azure_ai_receipt(
-            model=model,
+            model=cost_model,
             usage=usage_block,
             request_model=request_model,
             service_tier=service_tier,
@@ -890,20 +845,16 @@ def _priced_tokens(
             facts=receipt,
             adjust=adjust,
         )
-    bedrock_row: Final = (
-        (bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False))
-        if custom_llm_provider == "bedrock"
-        else None
-    )
-    stated: Final = _stated_cost(custom_llm_provider, usage_block)
+    bedrock_row: Final = bedrock_model_info if cost_provider == "bedrock" else None
+    stated: Final = _stated_cost(cost_provider, usage_block)
     priced_model, row, row_provider = (
-        (model, bedrock_row, None)
+        (cost_model, bedrock_row, None)
         if bedrock_row is not None
-        else _branch_row(model, model_without_prefix, custom_llm_provider, usage_block, stated is not None)
+        else _branch_row(cost_model, model_without_prefix, cost_provider, usage_block, stated is not None)
     )
     return branch_receipt(
         priced_model,
-        custom_llm_provider,
+        cost_provider,
         usage_block,
         row,
         service_tier=service_tier,
@@ -925,21 +876,6 @@ def _priced_tokens(
 
 
 _EMBEDDING_CALL_TYPES: Final = frozenset({CallTypes.embedding.value, CallTypes.aembedding.value})
-
-_MODEL_INFO_BRANCHES: Final = frozenset(
-    {
-        "anthropic",
-        "bedrock",
-        "openai",
-        "azure",
-        "gemini",
-        "deepseek",
-        "tencent",
-        "dashscope",
-        "qwencloud",
-        "qwen_ai_platform",
-    }
-)
 
 
 def _reasoning_tokens(usage: Usage) -> int:
@@ -981,15 +917,11 @@ def _stated_cost(custom_llm_provider: str, usage: Usage) -> ReportedCost | None:
 def _branch_row(
     model: str, model_without_prefix: str, custom_llm_provider: str, usage: Usage, stated: bool
 ) -> tuple[str, Mapping[str, object] | None, str | None]:
-    """The model name, the row and the provider the row is lowered under for ``custom_llm_provider``'s branch of
-    ``cost_per_token``, each looked up the way that branch looked it up. A lookup raises for an unmapped model, as
-    main's did."""
+    """The model name, the row and the provider the row is lowered under for the providers whose branch of
+    ``cost_per_token`` finds its row through code of its own. Every other provider's row is Model Catalog's, so the
+    row is ``None``. A lookup raises for an unmapped model, as main's did."""
     if custom_llm_provider == "vertex_ai":
-        return (
-            model_without_prefix,
-            litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider),
-            None,
-        )
+        return model_without_prefix, None, None
     if custom_llm_provider == "databricks":
         return model, databricks_pricing_row(model), None
     if custom_llm_provider == "fireworks_ai":
@@ -999,11 +931,7 @@ def _branch_row(
         return model, perplexity_pricing_row(model, usage), None
     if custom_llm_provider == "xai":
         return model, xai_pricing_row(model, stated), None
-    if custom_llm_provider == "lemonade":
-        return model, None, None
-    if custom_llm_provider in _MODEL_INFO_BRANCHES:
-        return model, litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider), None
-    return model, cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider), None
+    return model, None, None
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
@@ -1025,25 +953,6 @@ def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
 
 def has_hidden_params(obj: object) -> bool:
     return hasattr(obj, "_hidden_params")
-
-
-def _get_provider_for_cost_calc(
-    model: str | None,
-    custom_llm_provider: str | None = None,
-) -> str | None:
-    if custom_llm_provider is not None:
-        return custom_llm_provider
-    if model is None:
-        return None
-    try:
-        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-    except Exception as e:
-        verbose_logger.debug(
-            "litellm.cost_calculator.py::_get_provider_for_cost_calc() - Error inferring custom_llm_provider - %s", e
-        )
-        return None
-
-    return custom_llm_provider
 
 
 def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None:
@@ -1072,71 +981,29 @@ def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
     )
 
 
-def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
-    return _cost_map_entry_prices_anything(entry) or any(
-        value is not None and field.startswith("cache_") and is_server_derived_pricing_key(field)
-        for field, value in entry.items()
-    )
-
-
-def _bedrock_cost_registration(model: str | None) -> tuple[str, Mapping[str, object]] | None:
-    if model is None:
-        return None
-    return next(
-        (
-            (key, entry)
-            for key, entry in runtime_model_cost_registrations(model, "bedrock")
-            if _bedrock_registration_has_prices(entry)
-        ),
-        None,
-    )
-
-
-def _bedrock_pricing_info(
-    model: str | None,
-    invoked_model_id: str | None,
-    custom_llm_provider: str | None,
-    explicit_pricing: bool,
-) -> ModelInfo | None:
-    if explicit_pricing or custom_llm_provider != "bedrock" or not model:
-        return None
-    registration: Final = _bedrock_cost_registration(model)
-    profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
-    if profile is None or not _declares_rates(profile):
-        return _cost_map_model_info(registration[0], None) if registration is not None else None
-    if registration is None or registration[0] == profile["key"]:
-        return profile
-    return model_info_with_pricing_overrides(profile, registration[1])
-
-
 def cost_map_key_prices_anything(key: str) -> bool:
     entry: Final = _raw_cost_map_entry(key)
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
-def _declares_rates(model_info: ModelInfo | None) -> bool:
-    return model_info is not None and cost_map_key_prices_anything(model_info["key"])
+def _registered_fields(key: str | None) -> Mapping[str, object]:
+    """The fields ``register_model`` wrote onto the row under ``key``."""
+    entry: Final = None if key is None else litellm.model_cost.get(key)
+    if not isinstance(entry, AliasedCostEntry):
+        return MappingProxyType({})
+    return MappingProxyType({name: value for name, value in entry.items() if name in entry.registered_fields})
 
 
-def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
-    """The provider to price an explicit base_model under, when the deployment's own provider has
-    no rates for it (e.g. chatgpt/ subscription rows) but the base model's own row does"""
-    if custom_llm_provider is None or _declares_rates(_cost_map_model_info(base_model, custom_llm_provider)):
+def _bedrock_model_info(pricing: tuple[str, str | None, bool] | None) -> ModelInfo | None:
+    """The Bedrock row Model Catalog found for a call (an inference profile's or the one a ``register_model`` price
+    landed on), with the registration merged over the profile's row where main merged it."""
+    if pricing is None:
         return None
-    own_model_info: Final = _cost_map_model_info(base_model, None)
-    if own_model_info is None or not _declares_rates(own_model_info):
-        return None
-    return own_model_info["litellm_provider"]
-
-
-def _routed_model_pricing_provider(
-    request_model: str | None, served_model: str | None, custom_llm_provider: object
-) -> str | None:
-    if custom_llm_provider != "azure" or request_model is None or served_model is None:
-        return None
-    if not azure_ai_is_model_router_name(request_model) or _resolves_to_rates(served_model, "azure"):
-        return None
-    return "azure_ai" if _resolves_to_rates(served_model, "azure_ai") else None
+    key, registration, merged = pricing
+    row: Final = _cost_map_model_info(key, None if key == registration else "bedrock")
+    if row is None or not merged:
+        return row
+    return model_info_with_pricing_overrides(row, _registered_fields(registration))
 
 
 def _pricing_provider_for_cost_candidate(
@@ -1159,6 +1026,66 @@ def _invoked_model_id_for_cost(
     )
 
 
+def _loop_reads_hidden_params(completion_response: object) -> bool:
+    """Whether main's candidate loop read the response's usage, and with it the provider and region its hidden params
+    carry."""
+    return completion_response is not None and (
+        isinstance(completion_response, (BaseModel, dict))
+        or isinstance(completion_response, HttpxBinaryResponseContent)
+        and completion_response.usage is not None
+    )
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _call_facts(
+    completion_response: object,
+    model: str | None,
+    custom_llm_provider: object,
+    base_model: str | None,
+    custom_pricing: bool | None,
+    router_model_id: str | None,
+    region_name: object,
+    invoked_model_id: str | None,
+    pricing_provider: str | None = None,
+) -> CallFacts:
+    """What Model Catalog picks a call's candidates from: the request, the response's model and hidden params, and
+    the provider and region main's candidate loop priced with once it read them."""
+    hidden: Final[object] = getattr(completion_response, "_hidden_params", None)
+    hidden_params: Final = as_str_mapping(hidden) if _loop_reads_hidden_params(completion_response) else None
+    response_model: Final[object] = _get_response_model(completion_response)
+    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    loop_provider: Final[object] = (
+        provider
+        if hidden_params is None
+        else pricing_provider or hidden_params.get("custom_llm_provider", provider or None)
+    )
+    loop_region: Final[object] = region_name if hidden_params is None else hidden_params.get("region_name", region_name)
+    return CallFacts(
+        by="call",
+        provider=provider,
+        request_model=_text(model) or None,
+        response_model=_text(response_model),
+        base_model=_text(base_model),
+        custom_pricing=custom_pricing is True,
+        deployment_id=_text(router_model_id),
+        region=_text(region_name),
+        invoked_model_id=_text(invoked_model_id),
+        hidden=None
+        if hidden is None
+        else HiddenFacts(
+            model=_get_hidden_str_for_cost_calc(hidden, "model"),
+            litellm_model_name=_get_hidden_str_for_cost_calc(hidden, "litellm_model_name"),
+            provider_response_model=_get_hidden_str_for_cost_calc(hidden, "provider_response_model"),
+            region=_get_hidden_str_for_cost_calc(hidden, "region_name"),
+        ),
+        loop_provider=loop_provider if isinstance(loop_provider, str) else None,
+        loop_region=loop_region if isinstance(loop_region, str) else None,
+    )
+
+
 def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -1169,78 +1096,24 @@ def select_model_name_for_cost_calc(
     region_name: str | None = None,
     invoked_model_id: str | None = None,
 ) -> str | None:
-    """
-    1. If custom pricing is true, return received model name
-    2. If base_model is set (e.g. for azure models), return that
-    3. If completion response has model set return that, unless only the requested model's cost-map row has rates
-    4. Check if model is passed in return that
-    """
-
-    return_model: str | None = None
-    custom_llm_provider = _get_provider_for_cost_calc(model=model, custom_llm_provider=custom_llm_provider)
-
-    completion_response_model: Final = _get_response_model(completion_response)
-    hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
-    provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
-    requested_model: Final = model or _get_hidden_str_for_cost_calc(hidden_params, "litellm_model_name")
-    explicit_pricing: Final = custom_pricing is True or base_model is not None
-    configured_model: Final = model or (
-        completion_response_model if isinstance(completion_response_model, str) else None
-    )
-    bedrock_model_info: Final = _bedrock_pricing_info(
-        configured_model, invoked_model_id, custom_llm_provider, explicit_pricing
-    )
-    bedrock_pricing_model: Final = bedrock_model_info["key"] if bedrock_model_info is not None else None
-    priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
-    priced_region: Final = (
-        _get_hidden_str_for_cost_calc(hidden_params, "region_name") or region_name
-        if not explicit_pricing and priced_from_response
-        else None
-    )
-
-    if custom_pricing is True:
-        if router_model_id is not None and router_model_id in litellm.model_cost:
-            entry: Final = litellm.model_cost[router_model_id]
-            if _cost_map_entry_prices_anything(entry):
-                return_model = router_model_id
-            else:
-                return_model = model
-        else:
-            return_model = model
-
-    elif base_model is not None or bedrock_pricing_model is not None:
-        return_model = base_model if base_model is not None else bedrock_pricing_model
-
-    elif provider_response_model is not None:
-        return _served_or_priced_requested_model(
-            provider_response_model, requested_model, custom_llm_provider, priced_region
+    """The model name ``completion_cost`` prices first, as Model Catalog picks it: the deployment's custom-priced row,
+    else the base model or the Bedrock row the call prices with, else the served model unless only the requested
+    model's row has rates, else the requested model."""
+    return cost_candidates(
+        _call_facts(
+            completion_response,
+            model,
+            custom_llm_provider,
+            base_model,
+            custom_pricing,
+            router_model_id,
+            region_name,
+            invoked_model_id,
         )
-
-    elif completion_response_model is None and hidden_params is not None:
-        if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
-            return_model = hidden_params.get("model", model)
-
-    if return_model is None and completion_response_model is not None:
-        return _served_or_priced_requested_model(
-            completion_response_model, requested_model, custom_llm_provider, priced_region
-        )
-
-    if return_model is None and model is not None:
-        return_model = model
-
-    if return_model is None:
-        return None
-    return _cost_map_model_name(return_model, custom_llm_provider, priced_region)
+    ).selected
 
 
 _select_model_name_for_cost_calc = select_model_name_for_cost_calc
-
-
-def _cost_map_model_name(model: str, custom_llm_provider: str | None, region_name: str | None) -> str:
-    if custom_llm_provider is None or _model_contains_known_llm_provider(model):
-        return model
-    provider_prefix: Final = custom_llm_provider if region_name is None else f"{custom_llm_provider}/{region_name}"
-    return _strip_unregistered_leading_segments(f"{provider_prefix}/{model}", region_name)
 
 
 def declared_cost_map_pricing(key: str, model: str, custom_llm_provider: str | None) -> Mapping[str, object]:
@@ -1249,70 +1122,6 @@ def declared_cost_map_pricing(key: str, model: str, custom_llm_provider: str | N
         return unmapped_model_generalization(model, custom_llm_provider) or MappingProxyType({})
     fill_missing: Final = mapped_model_fill_missing(key, entry)
     return entry if fill_missing is None else MappingProxyType({**fill_missing, **entry})
-
-
-def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
-    key: Final = cached_cost_map_key(model, custom_llm_provider)
-    return key is not None and _cost_map_entry_prices_anything(
-        declared_cost_map_pricing(key, model, custom_llm_provider)
-    )
-
-
-def _served_or_priced_requested_model(
-    served_model: str, requested_model: str | None, custom_llm_provider: str | None, priced_region: str | None
-) -> str:
-    served: Final = _cost_map_model_name(served_model, custom_llm_provider, priced_region)
-    if requested_model is None:
-        return served
-    requested: Final = _cost_map_model_name(requested_model, custom_llm_provider, None)
-    if served in (requested, requested.partition("/")[2]):
-        return served
-    pricing_provider: Final = _get_provider_for_cost_calc(requested, custom_llm_provider)
-    profile_of_served: Final = _is_bedrock_cross_region_profile_of(requested_model, served_model, pricing_provider)
-    if profile_of_served and _resolves_to_rates(requested, pricing_provider):
-        return requested
-    if _resolves_to_rates(served, pricing_provider):
-        return served
-    return requested if _resolves_to_rates(requested, pricing_provider) else served
-
-
-def _is_bedrock_cross_region_profile_of(profile: str, served_model: str, custom_llm_provider: str | None) -> bool:
-    if custom_llm_provider != "bedrock":
-        return False
-    from litellm.llms.bedrock.common_utils import (
-        get_bedrock_cross_region_inference_regions,
-        strip_bedrock_routing_prefix,
-    )
-
-    region, _, profiled_model = strip_bedrock_routing_prefix(profile).partition(".")
-    return (
-        region in get_bedrock_cross_region_inference_regions()
-        and strip_bedrock_routing_prefix(served_model) == profiled_model
-    )
-
-
-def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
-    """Resolve a provider-prefixed slash alias like "vertex_ai/vertex/claude-opus-5" to the
-    registered cost key ("vertex_ai/claude-opus-5"), keeping the model unchanged when it already
-    resolves downstream (custom-priced router ids) or no stripped candidate is registered (#38069)."""
-    segments: Final = model.split("/")
-    if "/".join(segments[1:]) in litellm.model_cost:
-        return model
-    head_len: Final = 2 if region_name is not None and len(segments) > 2 and segments[1] == region_name else 1
-    head: Final = "/".join(segments[:head_len])
-    tail: Final = segments[head_len:]
-    strippable: Final = next((index for index, segment in enumerate(tail) if segment in LlmProvidersSet), len(tail))
-    candidates: Final = (f"{head}/{'/'.join(tail[start:])}" for start in range(min(strippable, len(tail) - 1) + 1))
-    return next((candidate for candidate in candidates if candidate in litellm.model_cost), model)
-
-
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _model_contains_known_llm_provider(model: str) -> bool:
-    """
-    Check if the model contains a known llm provider
-    """
-    _provider_prefix: Final = model.split("/")[0]
-    return _provider_prefix in LlmProvidersSet
 
 
 class _SupportsGet(Protocol):
@@ -1824,38 +1633,95 @@ def _hidden_params_of(completion_response: object) -> Mapping[str, object]:
     return as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or _NO_HIDDEN_PARAMS
 
 
-def _reports_web_search_another_way(completion_response: object, usage: Usage) -> bool:
-    """The response reports web search through ``url_citation`` annotations or prompt token details, which
-    ``completion_cost`` bills the old way."""
-    if not isinstance(completion_response, ModelResponse):
-        return False
-    if StandardBuiltInToolCostTracking.response_includes_annotation_type(
-        response_object=completion_response, annotation_type="url_citation"
-    ):
-        return True
-    details: Final = usage.prompt_tokens_details
-    return details is not None and getattr(details, "web_search_requests", None) is not None
+def _with_known_usage(completion_response: object) -> None:
+    """Swaps a usage model litellm does not know for the ``Usage`` its fields make, as main's candidate loop did
+    before it read the usage."""
+    if not _loop_reads_hidden_params(completion_response) or isinstance(completion_response, dict):
+        return
+    usage_obj: Final[object] = getattr(completion_response, "usage", None)
+    if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
+        setattr(completion_response, "usage", _usage_from_model(usage_obj))
 
 
-def _web_search_requests_for_rust(completion_response: object, usage: Usage) -> int | None:
-    """The web search count the Rust core bills: the usage's, else a raw Messages response's."""
-    reported: Final = get_web_search_requests_from_usage(usage)
-    if reported is not None or isinstance(completion_response, ModelResponse):
-        return reported
-    return get_anthropic_web_search_requests_from_response(completion_response)
+@dataclass(frozen=True, slots=True)
+class _CandidateExtras:
+    """What Python finds for one candidate of a token call: the built-in tools it used, the rows they and the Model
+    Router fee read, and whether finding them raised."""
+
+    candidate: int
+    tools: ToolUse | None
+    rows: tuple[Mapping[str, object], ...]
+    fee_at: int | None
+    failed: bool
+
+    def facts(self, rows_from: int) -> CandidateFacts:
+        return CandidateFacts(
+            candidate=self.candidate,
+            tools=self.tools,
+            router_fee=None if self.fee_at is None else CandidateFee(billed="additional", row=self.fee_at),
+            failed=self.failed,
+            rows_from=rows_from,
+        )
+
+
+def _candidate_extras(
+    row: CostRow,
+    completion_response: object,
+    usage: Usage,
+    standard_built_in_tools_params: StandardBuiltInToolsParams | None,
+    request_model: str | None,
+) -> _CandidateExtras:
+    try:
+        tools, tool_rows = StandardBuiltInToolCostTracking.built_in_tool_use(
+            model=row.model,
+            response_object=completion_response,
+            usage=usage,
+            standard_built_in_tools_params=standard_built_in_tools_params,
+            custom_llm_provider=row.loop_provider,
+        )
+        fee_row: Final = _router_fee_row(
+            model=row.model,
+            custom_llm_provider=row.loop_provider,
+            request_model=request_model,
+            completion_response=completion_response,
+        )
+    except Exception as e:  # noqa: BLE001  # main's candidate loop moved to the next candidate on any error
+        verbose_logger.debug("Error finding the tools and fees of candidate %s - %s", row.model, e)
+        return _CandidateExtras(candidate=row.candidate, tools=None, rows=(), fee_at=None, failed=True)
+    return _CandidateExtras(
+        candidate=row.candidate,
+        tools=tools,
+        rows=(*tool_rows, *(() if fee_row is None else (fee_row,))),
+        fee_at=None if fee_row is None else len(tool_rows),
+        failed=False,
+    )
+
+
+def _vertex_characters(messages: Sequence[object], completion_response: object) -> Characters | None:
+    """The prompt and response characters ``completion_cost`` counts for a Vertex AI call."""
+    prompt: Final = (
+        litellm.utils.count_characters(
+            text=litellm.utils.get_formatted_prompt(data={"messages": list(messages)}, call_type="completion")
+        )
+        if len(messages) > 0
+        else None
+    )
+    completion: Final = (
+        litellm.utils.count_characters(text=litellm.utils.get_response_string(response_obj=completion_response))
+        if isinstance(completion_response, ModelResponse)
+        else None
+    )
+    return None if prompt is None and completion is None else Characters(prompt=prompt, completion=completion)
 
 
 def rust_priced_cost(
+    call: CallFacts,
     completion_response: object,
-    model: str | None,
     call_type: str,
-    custom_llm_provider: object,
     usage: Usage | None,
-    region_name: object,
-    base_model: str | None,
-    custom_pricing: bool | None,
-    router_model_id: str | None,
-    invoked_model_id: str | None,
+    messages: Sequence[object],
+    custom_priced_request_model: str | None,
+    total_time: float | None,
     service_tier: str | None,
     data_residency: str | None,
     vertex_location: str | None,
@@ -1863,71 +1729,44 @@ def rust_priced_cost(
     litellm_logging_obj: LitellmLoggingObject | None,
     reported_cost_applies: bool,
 ) -> float | None:
-    """``completion_cost`` of a Claude token call on the /v1/messages providers, priced in Rust. ``None`` where
-    ``completion_cost`` prices the call the old way: another provider or call kind, built-in tools other than a
-    reported web search, a provider-stated cost, or a call the Rust core leaves to Python."""
-    if call_type not in _RUST_PRICED_CALL_TYPES or model is None or usage is None:
+    """``completion_cost`` of a token call, its candidates walked and priced in Rust in main's order. ``None`` where
+    Python prices the call: a call kind priced by its own calculator, a provider-billed cost, or a candidate only
+    Python prices coming first."""
+    if call_type not in _RUST_PRICED_CALL_TYPES or usage is None or not _loop_reads_hidden_params(completion_response):
         return None
-    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _RUST_PRICED_PROVIDERS:
+    if reported_cost_applies and billed_usage_cost(completion_response, call["loop_provider"]) is not None:
         return None
-    response: Final = (
-        completion_response if isinstance(completion_response, ModelResponse) else as_str_mapping(completion_response)
+    rows, _ = cost_rows(call)
+    if not rows:
+        return None
+    request_model: Final = None if litellm_logging_obj is None else litellm_logging_obj.model
+    extras: Final = tuple(
+        _candidate_extras(row, completion_response, usage, standard_built_in_tools_params, request_model)
+        for row in rows
     )
-    if response is None:
-        return None
-    if reported_cost_applies and billed_usage_cost(response, custom_llm_provider) is not None:
-        return None
-    hidden_params: Final = _hidden_params_of(response)
-    hidden_region: Final[object] = hidden_params.get("region_name", region_name)
-    hidden_models: Final = (hidden_params.get("model"), hidden_params.get("litellm_model_name"))
-    tools_params: Final[Mapping[str, object]] = standard_built_in_tools_params or _NO_HIDDEN_PARAMS
-    web_search_options: Final[object] = tools_params.get("web_search_options")
-    search_context: Final[object] = (as_str_mapping(web_search_options) or _NO_HIDDEN_PARAMS).get("search_context_size")
-    if hidden_params.get("custom_llm_provider", custom_llm_provider) != custom_llm_provider:
-        return None
-    if not (hidden_region is None or isinstance(hidden_region, str)):
-        return None
-    if _reports_web_search_another_way(response, usage):
-        return None
-    if any(isinstance(name, str) and azure_ai_is_model_router_name(name) for name in hidden_models):
-        return None
-    if any(value for key, value in tools_params.items() if key != "web_search_options"):
-        return None
-    region: Final = hidden_region if isinstance(hidden_region, str) and hidden_region else None
-    response_model: Final = _get_response_model(response)
-    hidden_model: Final[object] = hidden_params.get("model")
-    receipt: Final = price(
-        CallFacts(
-            by="call",
-            provider=custom_llm_provider,
-            request_model=model,
-            response_model=response_model,
-            base_model=base_model,
-            custom_pricing=custom_pricing is True,
-            deployment_id=router_model_id,
-            region=_get_hidden_str_for_cost_calc(hidden_params, "region_name") or region,
-            invoked_model_id=invoked_model_id,
-            provider_response_model=_get_hidden_str_for_cost_calc(hidden_params, "provider_response_model"),
-            hidden_model=hidden_model
-            if response_model is None and isinstance(hidden_model, str) and hidden_model
-            else None,
-        ),
-        priced_usage(
-            usage,
-            web_search_use(
-                _web_search_requests_for_rust(response, usage),
-                search_context if isinstance(search_context, str) else None,
-            ),
-        ),
+    offsets: Final = tuple(accumulate((len(extra.rows) for extra in extras), initial=0))
+    receipt: Final = price_call(
+        call,
+        priced_usage(usage, web_search=None),
+        candidates=tuple(extra.facts(offset) for extra, offset in zip(extras, offsets, strict=False)),
+        rows=tuple(chain.from_iterable(extra.rows for extra in extras)),
         service_tier=service_tier,
         data_residency=data_residency,
         vertex_location=vertex_location,
-        requested_model=None if litellm_logging_obj is None else litellm_logging_obj.model,
-        adjust=AdjustFacts(
-            provider=custom_llm_provider,
-            model=model if custom_pricing is True else None,
-            region=region,
+        requested_model=request_model,
+        adjust=AdjustFacts(provider=None, model=custom_priced_request_model, region=call["loop_region"]),
+        branch=BranchFacts(
+            elapsed=Elapsed(
+                response_ms=_response_time_ms_for_cost(completion_response, litellm_logging_obj, total_time),
+                audio_seconds=0.0,
+            ),
+            characters=_vertex_characters(messages, completion_response)
+            if call["loop_provider"] == "vertex_ai"
+            else None,
+            embedding=call_type in _EMBEDDING_CALL_TYPES,
+            raw=raw_counts(usage),
         ),
+        breakdown="absent" if litellm_logging_obj is None else "row",
     )
     if receipt is None:
         return None
@@ -2165,69 +2004,38 @@ def completion_cost(
         configured_cost_per_query: Final = (
             _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
         )
-        base_model_provider: Final = (
-            _base_model_pricing_provider(
-                base_model,
-                _get_provider_for_cost_calc(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-                ),
-            )
-            if base_model is not None and custom_pricing is not True
-            else None
-        )
-        pricing_provider_override: Final = base_model_provider or (
-            _routed_model_pricing_provider(model, _get_response_model(completion_response), custom_llm_provider)
-            if base_model is None and custom_pricing is not True
-            else None
-        )
         invoked_model_id: Final = _invoked_model_id_for_cost(
             _LOGGED_LITELLM_PARAMS.validate_python(optional_params) if optional_params is not None else None,
             litellm_logging_obj,
         )
-        selected_model: Final = select_model_name_for_cost_calc(
-            model=model,
-            completion_response=completion_response,
-            custom_llm_provider=pricing_provider_override or custom_llm_provider,
-            custom_pricing=custom_pricing,
-            base_model=base_model,
-            router_model_id=router_model_id,
-            region_name=region_name,
-            invoked_model_id=invoked_model_id,
-        )
-
-        bedrock_model_info: Final = _bedrock_pricing_info(
-            model or _get_response_model(completion_response),
+        call: Final = _call_facts(
+            completion_response,
+            model,
+            custom_llm_provider,
+            base_model,
+            custom_pricing,
+            router_model_id,
+            region_name,
             invoked_model_id,
-            _get_provider_for_cost_calc(model, custom_llm_provider),
-            explicit_pricing,
+            pricing_provider,
         )
+        found: Final = cost_candidates(call)
+        potential_model_names: Final = found.names
+        selected_model: Final = found.call_selected
+        bedrock_model_info: Final = _bedrock_model_info(found.bedrock)
         requested_model: Final = model
         request_pricing_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
-        raw_candidates: Final = (
-            (
-                selected_model,
-                pricing_provider_override or request_pricing_provider,
-            ),
-            (_get_response_model(completion_response), request_pricing_provider),
-            *(((model, request_pricing_provider),) if model is not None else ()),
-        )
-        potential_model_names: Final = (
-            raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
-        )
+        _with_known_usage(completion_response)
 
         rust_priced: Final = (
             rust_priced_cost(
+                call,
                 completion_response=completion_response,
-                model=model,
                 call_type=call_type,
-                custom_llm_provider=custom_llm_provider,
                 usage=cost_per_token_usage_object,
-                region_name=region_name,
-                base_model=base_model,
-                custom_pricing=custom_pricing,
-                router_model_id=router_model_id,
-                invoked_model_id=invoked_model_id,
+                messages=messages,
+                custom_priced_request_model=custom_priced_request_model,
+                total_time=total_time,
                 service_tier=service_tier,
                 data_residency=data_residency,
                 vertex_location=vertex_location,
@@ -2235,8 +2043,7 @@ def completion_cost(
                 litellm_logging_obj=litellm_logging_obj,
                 reported_cost_applies=not caller_set_prices,
             )
-            if pricing_provider_override is None
-            and custom_cost_per_token is None
+            if custom_cost_per_token is None
             and custom_cost_per_second is None
             and requested_model_info_override is None
             else None
@@ -2260,13 +2067,6 @@ def completion_cost(
                         usage_obj: dict | Usage | None = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
-                    if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
-                        _usage_for_dump = cast(BaseModel, usage_obj)
-                        setattr(
-                            completion_response,
-                            "usage",
-                            _usage_from_model(_usage_for_dump),
-                        )
                     if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
                         _usage = _decisions_usage(usage_obj).model_dump()
                     elif isinstance(usage_obj, ExtractionUsage):
@@ -2920,25 +2720,6 @@ def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelIn
         return None
 
 
-_CostCandidate: TypeAlias = tuple[str | None, str | None]
-
-
-def _is_unpriced_generalized_candidate(candidate: _CostCandidate) -> bool:
-    model, pricing_provider = candidate
-    if model is None:
-        return False
-    rule_info: Final = unmapped_model_generalization(model, pricing_provider)
-    return rule_info is not None and not _cost_map_entry_prices_anything(rule_info)
-
-
-def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, ...]) -> tuple[_CostCandidate, ...]:
-    unpriced: Final = tuple(_is_unpriced_generalized_candidate(candidate) for candidate in candidates)
-    return (
-        *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if not is_unpriced),
-        *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if is_unpriced),
-    )
-
-
 _NO_COST_MAP_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -2961,29 +2742,25 @@ def pricing_entry_for_cost_calc(
     deployment_key: Final = router_model_id or model
     if deployment_entry is not None and deployment_key is not None:
         return deployment_key, deployment_entry
-    selected_model: Final = select_model_name_for_cost_calc(
-        model=model,
-        completion_response=completion_response,
-        base_model=base_model,
-        custom_pricing=custom_pricing,
-        custom_llm_provider=custom_llm_provider,
-        router_model_id=router_model_id,
-        region_name=region_name,
-        invoked_model_id=_invoked_model_id_for_cost(None, litellm_logging_obj),
+    found: Final = cost_candidates(
+        _call_facts(
+            completion_response,
+            model,
+            custom_llm_provider,
+            base_model,
+            custom_pricing,
+            router_model_id,
+            region_name,
+            _invoked_model_id_for_cost(None, litellm_logging_obj),
+        )
     )
-    bedrock_model_info: Final = _bedrock_pricing_info(
-        model or _get_response_model(completion_response),
-        _invoked_model_id_for_cost(None, litellm_logging_obj),
-        _get_provider_for_cost_calc(model, custom_llm_provider),
-        custom_pricing is True or base_model is not None,
-    )
-    if bedrock_model_info is not None:
+    selected_model: Final = found.selected
+    bedrock_model_info: Final = _bedrock_model_info(found.bedrock)
+    if bedrock_model_info is not None and found.bedrock is not None:
         key: Final = bedrock_model_info["key"]
         declared_pricing: Final = declared_cost_map_pricing(key, model or key, custom_llm_provider)
-        registration: Final = _bedrock_cost_registration(model)
-        declared_keys: Final = frozenset(declared_pricing) | (
-            frozenset(registration[1]) if registration is not None else frozenset[str]()
-        )
+        registered: Final = _registered_fields(found.bedrock[1]) if model else MappingProxyType({})
+        declared_keys: Final = frozenset(declared_pricing) | frozenset(registered)
         selected_entry: Final[Mapping[str, object]] = bedrock_model_info
         return key, MappingProxyType({name: value for name, value in selected_entry.items() if name in declared_keys})
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
