@@ -15,6 +15,7 @@ import gc
 import json
 import logging
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
@@ -53,13 +54,17 @@ from .conftest import normalize
 @pytest.mark.parametrize("error_envelope", ("proxy", "http", "aws"))
 @pytest.mark.parametrize("num_retries", (0, None), ids=("retries-zero", "default-retries"))
 async def test_failed_endpoint_releases_request_body_without_cyclic_gc(
-    error_envelope: str, num_retries: int | None, caplog: pytest.LogCaptureFixture
+    error_envelope: str,
+    num_retries: int | None,
+    caplog: pytest.LogCaptureFixture,
+    failure_fields_executor: ThreadPoolExecutor,
 ) -> None:
     caplog.set_level(logging.CRITICAL, logger="LiteLLM Proxy")
     caplog.set_level(logging.CRITICAL, logger="LiteLLM")
 
     class Body(str):
-        pass
+        def __repr__(self) -> str:
+            return f"<Body length={len(self)}>"
 
     references: Final[asyncio.Queue[weakref.ReferenceType[Body]]] = asyncio.Queue()
     router: Final = Router(
@@ -124,8 +129,8 @@ async def test_failed_endpoint_releases_request_body_without_cyclic_gc(
             )
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
                 response: Final = await asyncio.create_task(client.post("/v1/chat/completions", content=b"x" * 1024**2))
-                await asyncio.sleep(0)
             reference: Final = await references.get()
+        failure_fields_executor.shutdown(wait=True)
         assert response.status_code == 500, response.text
         assert "server failed" in response.text
         assert reference() is None
