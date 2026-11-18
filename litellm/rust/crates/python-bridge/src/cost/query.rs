@@ -98,6 +98,8 @@ struct PriceDocument {
     reported: Option<ReportedCost>,
     #[serde(default)]
     custom: Option<CustomPricing>,
+    #[serde(default)]
+    decisions: bool,
 }
 
 /// `custom_cost_per_token` or `custom_cost_per_second`, which price the call without a row
@@ -270,6 +272,7 @@ impl litellm_inference_messages::Pricing for RoutePricing {
                 raw: None,
                 reported: None,
                 custom: None,
+                decisions: false,
             },
             None,
         )
@@ -357,6 +360,7 @@ fn priced(
         characters: document.characters,
         embedding: document.embedding,
         raw: document.raw.unwrap_or_default(),
+        decisions: document.decisions,
     }));
     match litellm_cost::price(&rows, &query) {
         PriceOutcome::Priced(receipt) => Some(*receipt),

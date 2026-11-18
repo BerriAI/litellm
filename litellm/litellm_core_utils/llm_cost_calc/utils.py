@@ -150,15 +150,6 @@ def is_above_128k(tokens: float) -> bool:
 _is_above_128k = is_above_128k
 
 
-def get_billable_input_tokens(usage: Usage) -> int:
-    """
-    Returns the number of billable input tokens.
-    Subtracts cached tokens from prompt tokens if applicable.
-    """
-    details: Final = parse_prompt_tokens_details(usage)
-    return usage.prompt_tokens - details["cache_hit_tokens"]
-
-
 def generic_cost_per_character(
     model: str,
     custom_llm_provider: str,

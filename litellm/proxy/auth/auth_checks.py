@@ -46,9 +46,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import rate_card
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import decisions_request_cost, rate_card
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.base_llm.managed_resources.utils import (
@@ -703,9 +702,11 @@ def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> b
     return False
 
 
-def _deployment_query_price(litellm_params: Mapping[str, object], cost_entry: Mapping[str, object]) -> float | None:
-    provider: Final = litellm_params.get("custom_llm_provider") or str(litellm_params.get("model")).partition("/")[0]
-    return decisions_request_price({**cost_entry, "litellm_provider": provider}, decisions_pricing_fields(cost_entry))
+def _deployment_query_price(litellm_params: Mapping[str, object], cost_entry: Mapping[str, object]) -> float:
+    provider: Final = str(
+        litellm_params.get("custom_llm_provider") or str(litellm_params.get("model")).partition("/")[0]
+    )
+    return decisions_request_cost(provider, {**cost_entry, "litellm_provider": provider})
 
 
 _EMPTY_COST_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})

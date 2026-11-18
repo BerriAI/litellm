@@ -31,11 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     billed_usage_cost,
     require_attributes,
 )
-from litellm.litellm_core_utils.decisions_pricing import (
-    decisions_pricing_fields,
-    decisions_request_price,
-    is_decisions_call_type,
-)
+from litellm.litellm_core_utils.decisions_pricing import decisions_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     AdjustedCost,
@@ -641,23 +637,19 @@ def cost_per_token(
 
     if is_decisions_call_type(call_type):
         decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-        decisions_overrides: Final = decisions_pricing_fields(
-            litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
+        return branch_cost(
+            model,
+            custom_llm_provider,
+            usage_block,
+            {
+                **decisions_model_info,
+                **decisions_fields(_raw_cost_map_entry(decisions_model_info["key"]) or _NO_COST_MAP_ENTRY),
+            },
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            branch=BranchFacts(elapsed=elapsed, decisions=True),
         )
-        request_price: Final = decisions_request_price(decisions_model_info, decisions_overrides)
-        if request_price is not None:
-            return request_price, 0.0
-        if decisions_overrides:
-            return generic_cost_per_token(
-                model=model,
-                usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
-                service_tier=service_tier,
-                data_residency=data_residency,
-                model_info=cast(  # cast-ok: _decisions fields override same-named ModelInfo rates
-                    ModelInfo, {**decisions_model_info, **decisions_overrides}
-                ),
-            )
     if call_type == "speech" or call_type == "aspeech":
         return _speech_cost(
             model=model_without_prefix,
@@ -2791,6 +2783,9 @@ def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, .
         *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if not is_unpriced),
         *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if is_unpriced),
     )
+
+
+_NO_COST_MAP_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
