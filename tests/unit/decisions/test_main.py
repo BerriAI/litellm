@@ -37,6 +37,8 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsUsage,
     NoulAnswer,
+    OpenAIDecisionInputMessage,
+    OpenAIDecisionInputText,
     OpenAIDecisionPromptCacheBreakpoint,
     OpenAIDecisionPromptCacheOptions,
     OpenAIDecisionResponse,
@@ -2606,6 +2608,39 @@ async def test_typed_prompt_cache_values_reach_openai_on_the_wire(
         "prompt_cache_key": "defect-review",
         "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
     }
+
+
+@pytest.mark.asyncio
+async def test_drop_params_trims_a_breakpoint_in_a_typed_message_before_openai(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    typed_policy: Final = OpenAIDecisionInputMessage(
+        role="developer",
+        content=[
+            OpenAIDecisionInputText(
+                type="input_text",
+                text=_REVIEW_POLICY,
+                prompt_cache_breakpoint=OpenAIDecisionPromptCacheBreakpoint(mode="explicit", ttl="7d", scope="org"),
+            )
+        ],
+    )
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input=[typed_policy, _REVIEW_MESSAGE],
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert json.loads(route.calls[0].request.content)["input"] == [
+        _policy_message_with_breakpoint({"mode": "explicit"}),
+        _REVIEW_MESSAGE,
+    ]
 
 
 _SUPPORT_TEAM_NOTE: Final = "Answer for the support team."

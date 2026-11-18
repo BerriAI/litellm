@@ -66,7 +66,7 @@ def test_systemone_logs_every_request_field_the_caller_sent():
     assert set(logged) == {"state", "questions"}
 
 
-def test_prompt_cache_fields_are_logged_even_when_the_provider_ignores_them():
+def test_prompt_cache_fields_are_logged_even_when_drop_params_drops_them():
     logging_obj: Final = _logging_obj("adecisions")
 
     call: Final = _prepare_decisions_call(
@@ -77,7 +77,7 @@ def test_prompt_cache_fields_are_logged_even_when_the_provider_ignores_them():
         videos=None,
         prompt_cache_key="billing-triage",
         prompt_cache_options={"mode": "explicit", "ttl": "30m"},
-        kwargs={"litellm_logging_obj": logging_obj},
+        kwargs={"litellm_logging_obj": logging_obj, "drop_params": True},
     )
 
     logged: Final = _logged_request(logging_obj)

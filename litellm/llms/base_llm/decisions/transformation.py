@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
@@ -55,7 +55,6 @@ from litellm.types.decisions import (
     OpenAIDecisionInputImage,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
-    OpenAIDecisionPromptCacheBreakpoint,
     ScoreAnswer,
     ScoreQuestion,
     UnsupportedDecisionsRequest,
@@ -260,6 +259,8 @@ def _raw_entries(value: object) -> tuple[object, ...] | None:
 
 
 def _raw_fields(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, BaseModel):
+        return value.model_dump(exclude_none=True)
     try:
         return _RAW_FIELDS_ADAPTER.validate_python(value)
     except ValidationError:
@@ -273,18 +274,15 @@ def _raw_part_without_breakpoint(part: object) -> object:
     return {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
 
 
-def _breakpoint_fields(marker: object) -> object:
-    if isinstance(marker, OpenAIDecisionPromptCacheBreakpoint):
-        return marker.model_dump(exclude_none=True)
-    return marker
-
-
 def _raw_part_with_readable_breakpoint(part: object) -> object:
     fields: Final = _raw_fields(part)
     marker: Final = None if fields is None else fields.get("prompt_cache_breakpoint")
     if fields is None or marker is None:
         return part
-    readable: Final = prompt_cache_breakpoint_for_wire(_breakpoint_fields(marker), drop_params=True)
+    marker_fields: Final = _raw_fields(marker)
+    readable: Final = prompt_cache_breakpoint_for_wire(
+        marker if marker_fields is None else marker_fields, drop_params=True
+    )
     without_breakpoint: Final = {key: value for key, value in fields.items() if key != "prompt_cache_breakpoint"}
     return without_breakpoint if readable is None else {**without_breakpoint, "prompt_cache_breakpoint": readable}
 
