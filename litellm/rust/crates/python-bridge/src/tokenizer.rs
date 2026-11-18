@@ -15,14 +15,17 @@ use litellm_token_counter::fast::{FastCounter, FastTokenizer};
 use litellm_token_counter::{Error, TextCodec};
 use pyo3::{exceptions::PyUnicodeEncodeError, prelude::*, types::PyString};
 
+#[cfg(any(feature = "tiktoken", feature = "huggingface"))]
+use pyo3::exceptions::PyValueError;
 #[cfg(feature = "huggingface")]
 use pyo3::{
-    exceptions::{PyIOError, PyTypeError, PyValueError},
+    exceptions::{PyIOError, PyTypeError},
     types::PyDict,
 };
 #[cfg(feature = "tiktoken")]
 use pyo3::{
     exceptions::{PyKeyError, PyRuntimeError},
+    sync::PyOnceLock,
     types::PyBytes,
 };
 
@@ -103,9 +106,9 @@ impl From<TokenizerError> for PyErr {
                 PyValueError::new_err(message)
             }
             #[cfg(feature = "tiktoken")]
-            TokenizerError::NoVocabulary | TokenizerError::EncodeSpecial(_) => {
-                PyRuntimeError::new_err(message)
-            }
+            TokenizerError::NoVocabulary => PyRuntimeError::new_err(message),
+            #[cfg(feature = "tiktoken")]
+            TokenizerError::EncodeSpecial(_) => PyValueError::new_err(message),
             #[cfg(feature = "tiktoken")]
             TokenizerError::DecodeBytes(_) => PyKeyError::new_err(message),
             #[cfg(feature = "huggingface")]
@@ -255,9 +258,19 @@ impl Tokenizer {
     ) -> PyResult<Vec<u32>> {
         enter_native()?;
         let tokenizer = self.tiktoken()?;
-        let text = self.text(text)?;
-        release_gil(py, || tokenizer.encode_special(&text, &allowed))
-            .map_err(|error| TokenizerError::EncodeSpecial(error.into()).into())
+        encode_allowing(py, tokenizer, &self.text(text)?, &allowed)
+    }
+
+    #[cfg(feature = "tiktoken")]
+    fn encode_special_strict(
+        &self,
+        py: Python<'_>,
+        text: &Bound<'_, PyString>,
+        allowed: Vec<String>,
+    ) -> PyResult<Vec<u32>> {
+        enter_native()?;
+        let tokenizer = self.tiktoken()?;
+        encode_allowing(py, tokenizer, &text.to_cow()?, &allowed)
     }
 
     /// tiktoken's `encode_with_unstable`: `(stable_tokens, completions)`.
@@ -270,7 +283,7 @@ impl Tokenizer {
     ) -> PyResult<(Vec<u32>, Vec<Vec<u32>>)> {
         enter_native()?;
         let tokenizer = self.tiktoken()?;
-        let text = self.text(text)?;
+        let text = text.to_cow()?;
         Ok(release_gil(py, || {
             tokenizer.encode_with_unstable(&text, &allowed)
         }))
@@ -292,8 +305,15 @@ impl Tokenizer {
     }
 
     #[cfg(feature = "tiktoken")]
-    fn is_special_token(&self, token: u32) -> PyResult<bool> {
-        Ok(self.vocabulary()?.is_special_token(token))
+    fn is_special_token(&self, token: &Bound<'_, PyAny>) -> PyResult<bool> {
+        static OPERATOR_INDEX: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+        let vocabulary = self.vocabulary()?;
+        let index = OPERATOR_INDEX
+            .import(token.py(), "operator", "index")?
+            .call1((token,))?;
+        Ok(index
+            .extract::<u32>()
+            .is_ok_and(|rank| vocabulary.is_special_token(rank)))
     }
 
     /// Every mergeable token's bytes, sorted bytewise like tiktoken's `token_byte_values`.
@@ -560,6 +580,17 @@ impl Tokenizer {
     }
 }
 
+#[cfg(feature = "tiktoken")]
+fn encode_allowing(
+    py: Python<'_>,
+    tokenizer: &TiktokenTokenizer,
+    text: &str,
+    allowed: &[String],
+) -> PyResult<Vec<u32>> {
+    release_gil(py, || tokenizer.encode_special(text, allowed))
+        .map_err(|error| TokenizerError::EncodeSpecial(error.into()).into())
+}
+
 pub(crate) enum SharedCounter {
     Codec(Arc<Codec>),
     #[cfg(feature = "fast")]
@@ -768,5 +799,132 @@ impl HuggingFaceEncoding {
         )?;
         self.inner.truncate(max_length, stride, direction);
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "tiktoken"))]
+mod tests {
+    use std::{ffi::CString, path::Path};
+
+    use rstest::{fixture, rstest};
+
+    use super::*;
+
+    #[fixture]
+    fn cl100k_tokenizer() -> Tokenizer {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../litellm_core_utils/tokenizers");
+        let codec = TiktokenTokenizer::from_cached_ranks("cl100k_base", |file| {
+            std::fs::read_to_string(dir.join(file))
+        })
+        .expect("bundled cl100k_base ranks should load");
+        Tokenizer::new(Codec::Tiktoken(codec))
+    }
+
+    #[rstest]
+    #[case::negative_one("-1", false)]
+    #[case::below_i64_min("-(1 << 100)", false)]
+    #[case::u32_overflow("1 << 32", false)]
+    #[case::above_u64("1 << 100", false)]
+    #[case::u32_max("(1 << 32) - 1", false)]
+    #[case::zero("0", false)]
+    #[case::bool_false("False", false)]
+    #[case::bool_true("True", false)]
+    #[case::eot_token("100257", true)]
+    #[case::index_object_eot_token("type('Index', (), {'__index__': lambda self: 100257})()", true)]
+    #[case::index_object_overflow(
+        "type('Index', (), {'__index__': lambda self: 1 << 32})()",
+        false
+    )]
+    fn is_special_token_handles_arbitrary_python_ints(
+        cl100k_tokenizer: Tokenizer,
+        #[case] expr: &str,
+        #[case] expected: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let tokenizer = cl100k_tokenizer;
+            let code = CString::new(expr).unwrap();
+            let token = py.eval(&code, None, None).unwrap();
+            assert_eq!(tokenizer.is_special_token(&token).unwrap(), expected);
+        });
+    }
+
+    #[rstest]
+    #[case::string("'1'", "TypeError")]
+    #[case::float("1.5", "TypeError")]
+    #[case::none("None", "TypeError")]
+    #[case::index_raising_overflow(
+        "type('Index', (), {'__index__': lambda self: int(float('inf'))})()",
+        "OverflowError"
+    )]
+    fn is_special_token_propagates_errors_other_than_range_overflow(
+        cl100k_tokenizer: Tokenizer,
+        #[case] expr: &str,
+        #[case] raised: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let code = CString::new(expr).unwrap();
+            let token = py.eval(&code, None, None).unwrap();
+            let error = cl100k_tokenizer
+                .is_special_token(&token)
+                .expect_err("only an id outside u32 maps to False");
+            assert_eq!(error.get_type(py).name().unwrap().to_cow().unwrap(), raised);
+        });
+    }
+
+    #[rstest]
+    #[case::high_surrogate("'\\ud800'", vec![])]
+    #[case::trailing_low_surrogate("'x\\udc80'", vec![])]
+    #[case::surrogate_pair_halves("'\\ud83d\\ude42'", vec![])]
+    #[case::with_allowed_special("'a\\ud800<|endoftext|>'", vec!["<|endoftext|>".to_owned()])]
+    fn strict_encoders_reject_lone_surrogates(
+        cl100k_tokenizer: Tokenizer,
+        #[case] expr: &str,
+        #[case] allowed: Vec<String>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let tokenizer = cl100k_tokenizer;
+            let code = CString::new(expr).unwrap();
+            let value = py.eval(&code, None, None).unwrap();
+            let text = value.cast::<PyString>().unwrap();
+
+            let unstable = tokenizer
+                .encode_with_unstable(py, text, allowed.clone())
+                .expect_err("lone surrogates must raise UnicodeEncodeError");
+            assert!(unstable.is_instance_of::<PyUnicodeEncodeError>(py));
+            let strict = tokenizer
+                .encode_special_strict(py, text, allowed)
+                .expect_err("lone surrogates must raise UnicodeEncodeError");
+            assert!(strict.is_instance_of::<PyUnicodeEncodeError>(py));
+        });
+    }
+
+    #[rstest]
+    #[case::ascii("hello world")]
+    #[case::astral_emoji("smile \u{1F642} and \u{6F22}\u{5B57}")]
+    fn strict_encoders_agree_with_encode_for_valid_utf8(
+        cl100k_tokenizer: Tokenizer,
+        #[case] valid: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let tokenizer = cl100k_tokenizer;
+            let text = PyString::new(py, valid);
+            let encoded = tokenizer.encode(py, &text).unwrap();
+
+            assert_eq!(
+                tokenizer
+                    .encode_special_strict(py, &text, Vec::new())
+                    .unwrap(),
+                encoded
+            );
+            let (stable, _) = tokenizer
+                .encode_with_unstable(py, &text, Vec::new())
+                .unwrap();
+            assert!(!stable.is_empty() && encoded.starts_with(&stable));
+        });
     }
 }
