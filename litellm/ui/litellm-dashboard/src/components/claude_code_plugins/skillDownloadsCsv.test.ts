@@ -42,6 +42,13 @@ describe("buildSkillDownloadsCsv", () => {
     expect(result.data[0].key).toBe(`'${key_alias}`);
   });
 
+  it("neutralizes multiline formula-leading team aliases", () => {
+    const team_alias = "=1+\n1";
+    const result = Papa.parse<{ team: string }>(buildSkillDownloadsCsv([{ ...event, team_alias }]), { header: true });
+    expect(result.errors).toEqual([]);
+    expect(result.data[0].team).toBe(`'${team_alias}`);
+  });
+
   it("preserves quotes, commas, newlines and Unicode with null attribution", () => {
     const result = Papa.parse(
       buildSkillDownloadsCsv([

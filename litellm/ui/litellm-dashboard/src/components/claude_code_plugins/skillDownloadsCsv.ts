@@ -15,5 +15,5 @@ export const buildSkillDownloadsCsv = (downloads: readonly PluginDownloadEvent[]
         event.version,
       ]),
     },
-    { escapeFormulae: true },
+    { escapeFormulae: /^[=+\-@\t\r]/ },
   );
