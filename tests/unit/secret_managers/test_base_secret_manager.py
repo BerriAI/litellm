@@ -1,12 +1,10 @@
-import httpx
 """
 Test raise_if_unsafe_secret_name, the shared guard applied before secret_name
 reaches a secret manager backend.
 """
 
-
+import httpx
 import pytest
-
 
 from litellm.secret_managers.base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 
