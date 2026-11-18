@@ -27,10 +27,10 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.served_output_texts import (
-    LOGGED_RESPONSE_OVERRIDE_KEY,
-    LOGGED_STREAM_CHUNKS_OVERRIDE_KEY,
     PRESERVE_SERVED_OUTPUT_TEXTS_KEY,
     SERVED_OUTPUT_TEXTS_KEY,
+    record_logged_response_override,
+    record_logged_stream_chunks_override,
     served_output_texts,
     served_stream_output_texts,
 )
@@ -820,7 +820,11 @@ class ZTDSGuardrail(CustomGuardrail):
 
         raw_call_id: Final = request_data.get("litellm_call_id") or "call"
         existing_sid: Final = self._extract_session_id(request_data)
-        session_id: Final = existing_sid if existing_sid is not None else f"{raw_call_id}_{uuid.uuid4().hex}"
+        session_id: Final = (
+            existing_sid
+            if existing_sid is not None and existing_sid in self._session_maps
+            else f"{raw_call_id}_{uuid.uuid4().hex}"
+        )
         request_data["_ztds_session_id"] = session_id  # rebind-ok: track unified guardrail session for cleanup
         updated_inputs: Final[GenericGuardrailAPIInputs] = dict(inputs)  # pyright: ignore[reportAssignmentType]  # shallow copy of TypedDict preserves schema keys
         try:
@@ -965,17 +969,9 @@ class ZTDSGuardrail(CustomGuardrail):
         if self.reverse_on_output:
             model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
 
-    def _lock_tokenized_logging_output(
-        self,
-        data: dict[str, object],  # mutable-ok: record tokenized logging override on request carrier
-        tokenized_response: object,
-    ) -> None:
-        data[LOGGED_RESPONSE_OVERRIDE_KEY] = (  # rebind-ok: preserve pre-restoration response for loggers
-            tokenized_response
-        )
-        model_call_details: Final = _as_str_dict(
-            attribute_or_none(data.get("litellm_logging_obj"), "model_call_details")
-        )
+    def _lock_tokenized_logging_output(self, logging_obj: object, tokenized_response: object) -> None:
+        record_logged_response_override(logging_obj, tokenized_response)
+        model_call_details: Final = _as_str_dict(attribute_or_none(logging_obj, "model_call_details"))
         if model_call_details is None:
             return
         tokenized_texts: Final = served_output_texts(tokenized_response)
@@ -992,18 +988,10 @@ class ZTDSGuardrail(CustomGuardrail):
         if model_call_details is not None:
             model_call_details[PRESERVE_SERVED_OUTPUT_TEXTS_KEY] = True
 
-    def _lock_tokenized_stream_logging(
-        self,
-        request_data: dict[str, object],  # mutable-ok: record tokenized stream override on request carrier
-        tokenized_chunks: Sequence[object],
-    ) -> None:
+    def _lock_tokenized_stream_logging(self, logging_obj: object, tokenized_chunks: Sequence[object]) -> None:
         chunk_tuple: Final = tuple(tokenized_chunks)
-        request_data[LOGGED_STREAM_CHUNKS_OVERRIDE_KEY] = (  # rebind-ok: preserve pre-restoration stream chunks
-            chunk_tuple
-        )
-        model_call_details: Final = _as_str_dict(
-            attribute_or_none(request_data.get("litellm_logging_obj"), "model_call_details")
-        )
+        record_logged_stream_chunks_override(logging_obj, chunk_tuple)
+        model_call_details: Final = _as_str_dict(attribute_or_none(logging_obj, "model_call_details"))
         if model_call_details is None:
             return
         tokenized_texts: Final = served_stream_output_texts(chunk_tuple)
@@ -1049,7 +1037,7 @@ class ZTDSGuardrail(CustomGuardrail):
 
         try:
             if self.reverse_on_output:
-                self._lock_tokenized_logging_output(data, response)
+                self._lock_tokenized_logging_output(data.get("litellm_logging_obj"), response)
                 caller_response: Final = copy.deepcopy(response)
                 response_dict: Final = _as_dict(caller_response)
                 if response_dict is not None:
@@ -1122,7 +1110,7 @@ class ZTDSGuardrail(CustomGuardrail):
                     yield chunk  # pyright: ignore[reportReturnType]  # yields ModelResponseStream or test/dict chunk wrapper
         finally:
             if should_restore:
-                self._lock_tokenized_stream_logging(request_data, tokenized_chunks)
+                self._lock_tokenized_stream_logging(request_data.get("litellm_logging_obj"), tokenized_chunks)
             if session_id is not None:
                 self.zeroize_session(session_id)
 

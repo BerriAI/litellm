@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal
+from weakref import WeakKeyDictionary
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -14,13 +15,13 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompleti
 
 SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
 PRESERVE_SERVED_OUTPUT_TEXTS_KEY: Final = "preserve_served_output_texts"
-LOGGED_RESPONSE_OVERRIDE_KEY: Final = "_litellm_logged_response_override"
-LOGGED_STREAM_CHUNKS_OVERRIDE_KEY: Final = "_litellm_logged_stream_chunks_override"
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
 _TEXTS: Final = TypeAdapter(tuple[str | None, ...])
-_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
+_MISSING: Final = object()
+_RESPONSE_OVERRIDES: Final = WeakKeyDictionary[object, object]()
+_STREAM_CHUNKS_OVERRIDES: Final = WeakKeyDictionary[object, tuple[object, ...]]()
 
 ServedTexts = tuple[str | None, ...]
 
@@ -173,14 +174,44 @@ def record_served_output_texts(model_call_details: dict[str, object], texts: Ser
     model_call_details[SERVED_OUTPUT_TEXTS_KEY] = texts  # rebind-ok: model_call_details is the shared kwargs bag
 
 
+def record_logged_response_override(logging_obj: object, response: object) -> None:
+    if logging_obj is None:
+        return
+    try:
+        _RESPONSE_OVERRIDES[logging_obj] = response
+    except TypeError:
+        return
+
+
+def logged_response(request_data: Mapping[str, object], response: object) -> object:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if logging_obj is None:
+        return response
+    try:
+        override: Final = _RESPONSE_OVERRIDES.get(logging_obj, _MISSING)
+    except TypeError:
+        return response
+    return response if override is _MISSING else override
+
+
+def record_logged_stream_chunks_override(logging_obj: object, chunks: Sequence[object]) -> None:
+    if logging_obj is None:
+        return
+    try:
+        _STREAM_CHUNKS_OVERRIDES[logging_obj] = tuple(chunks)
+    except TypeError:
+        return
+
+
 def logged_stream_chunks(request_data: Mapping[str, object], relayed: Sequence[object]) -> Sequence[object]:
-    override: Final = request_data.get(LOGGED_STREAM_CHUNKS_OVERRIDE_KEY)
-    if override is None:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if logging_obj is None:
         return relayed
     try:
-        return _OBJECT_TUPLE.validate_python(override)
-    except ValidationError:
+        override: Final = _STREAM_CHUNKS_OVERRIDES.get(logging_obj)
+    except TypeError:
         return relayed
+    return relayed if override is None else override
 
 
 def overlay_served_output_texts(

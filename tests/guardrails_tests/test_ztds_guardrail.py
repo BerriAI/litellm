@@ -20,8 +20,8 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.served_output_texts import (
-    LOGGED_RESPONSE_OVERRIDE_KEY,
     SERVED_OUTPUT_TEXTS_KEY,
+    logged_response,
     logged_stream_chunks,
     record_served_output_texts,
     served_output_texts,
@@ -1029,7 +1029,9 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("alice@corp.com", str(logged_final))
         self.assertIn("[EMAIL_TOKEN_1]", str(logged_final))
-        self.assertNotIn("alice@corp.com", str(req.get(LOGGED_RESPONSE_OVERRIDE_KEY)))
+        langfuse_logged_resp: Final = logged_response(req, caller_resp)
+        self.assertNotIn("alice@corp.com", str(langfuse_logged_resp))
+        self.assertIn("[EMAIL_TOKEN_1]", str(langfuse_logged_resp))
 
         raw_stream_msgs: Final[list[dict[str, object]]] = [  # mutable-ok: mutable streaming message fixture
             {"role": "user", "content": "Contact bob@corp.com"}
@@ -1088,6 +1090,30 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         langfuse_logged_chunks: Final = logged_stream_chunks(stream_req, served_chunks)
         self.assertNotIn("bob@corp.com", str(langfuse_logged_chunks))
         self.assertIn("[EMAIL_TOKEN_1]", str(langfuse_logged_chunks))
+
+        untrusted_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-untrusted",
+            function_id="",
+        )
+        untrusted_req: Final[dict[str, object]] = {  # mutable-ok: spoofed client request fixture
+            "_litellm_logged_response_override": None,
+            "_litellm_logged_stream_chunks_override": (),
+            "litellm_logging_obj": untrusted_logging_obj,
+        }
+        self.assertIs(logged_response(untrusted_req, caller_resp), caller_resp)
+        self.assertIs(logged_stream_chunks(untrusted_req, served_chunks), served_chunks)
+
+        spoofed_dict_req: Final[dict[str, object]] = {  # mutable-ok: non-Logging dict fixture
+            "_litellm_logged_response_override": None,
+            "litellm_logging_obj": {"spoof": True},
+        }
+        self.assertIs(logged_response(spoofed_dict_req, caller_resp), caller_resp)
+        self.assertIs(logged_stream_chunks(spoofed_dict_req, served_chunks), served_chunks)
 
 
 if __name__ == "__main__":

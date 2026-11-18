@@ -20,7 +20,7 @@ from litellm.integrations.otel.model.trace_controls import caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.context import request_root_span
 from litellm.litellm_core_utils.served_output_texts import (
-    LOGGED_RESPONSE_OVERRIDE_KEY,
+    logged_response,
     logged_stream_chunks,
 )
 
@@ -89,8 +89,7 @@ class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
         user_api_key_dict: "UserAPIKeyAuth",
         response: object,
     ) -> None:
-        logged_response: Final = data.get(LOGGED_RESPONSE_OVERRIDE_KEY, response)
-        self._stamp_root_io(data, lambda: response_output(logged_response))
+        self._stamp_root_io(data, lambda: response_output(logged_response(data, response)))
 
     async def async_post_call_streaming_iterator_hook(
         self,
