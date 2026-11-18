@@ -33,8 +33,38 @@ _TOKEN_LITERAL_RE: Final = re.compile(r"\[([A-Z_]+)_TOKEN_([a-zA-Z0-9_-]+)\]")
 _NON_CALLER_ROLES: Final = frozenset({"system", "developer"})
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
 _JSON_ENCODED_STRING_KEYS: Final = frozenset({"arguments"})
-_UNSUPPORTED_BLOCK_TYPES: Final = frozenset({"file", "input_file", "input_audio", "audio"})
-_UNSUPPORTED_BINARY_KEYS: Final = frozenset({"file_data", "input_audio"})
+_BASE64_DATA_URI_RE: Final = re.compile(
+    r"data:(?:image|video|audio)/[a-z0-9.+-]+[;,]|data:[a-z0-9.+/-]+(?:;[a-z0-9.=+-]+)*;base64,",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_BLOCK_TYPES: Final = frozenset(
+    {
+        "file",
+        "input_file",
+        "input_audio",
+        "audio",
+        "image",
+        "image_url",
+        "input_image",
+        "video",
+        "input_video",
+        "computer_screenshot",
+    }
+)
+_UNSUPPORTED_MEDIA_KEYS: Final = frozenset(
+    {
+        "file_data",
+        "fileData",
+        "file_id",
+        "input_audio",
+        "image_url",
+        "inline_data",
+        "inlineData",
+        "s3Location",
+    }
+)
+_UNSUPPORTED_MEDIA_CONTAINERS: Final = frozenset({"image", "video"})
+_UNSUPPORTED_SOURCE_TYPES: Final = frozenset({"base64", "url", "file"})
 _PARALLEL_HOOK_NAMES: Final = frozenset(
     {GuardrailEventHooks.during_call.value, GuardrailEventHooks.during_mcp_call.value}
 )
@@ -439,6 +469,20 @@ class ZTDSGuardrail(CustomGuardrail):
             )
         )
 
+    def _reject_uninspectable_source(self, node_dict: Mapping[object, object]) -> None:
+        block_type: Final = node_dict.get("type")
+        source_dict: Final = _as_mapping(node_dict.get("source"))
+        if block_type == "document" and (source_dict is None or source_dict.get("type") != "text"):
+            raise ValueError("ZTDS guardrail rejects non-text document block")
+        if source_dict is None:
+            return
+        source_type: Final = source_dict.get("type")
+        if isinstance(source_type, str) and source_type in _UNSUPPORTED_SOURCE_TYPES:
+            raise ValueError(f"ZTDS guardrail rejects uninspectable '{source_type}' source payload")
+        for key in ("bytes", "s3Location"):
+            if source_dict.get(key) is not None:
+                raise ValueError(f"ZTDS guardrail rejects uninspectable '{key}' source payload")
+
     def _reject_uninspectable_dict(self, node_dict: Mapping[object, object]) -> None:
         if not self.enforce_zero_egress:
             return
@@ -447,9 +491,13 @@ class ZTDSGuardrail(CustomGuardrail):
             raise ValueError(f"ZTDS guardrail rejects uninspectable '{block_type}' attachment block")
         if block_type == "base64" and "data" in node_dict:
             raise ValueError("ZTDS guardrail rejects uninspectable base64 document block")
-        for bkey in _UNSUPPORTED_BINARY_KEYS:
-            if bkey in node_dict and node_dict[bkey] is not None:
-                raise ValueError(f"ZTDS guardrail rejects uninspectable '{bkey}' payload")
+        self._reject_uninspectable_source(node_dict)
+        for mkey in _UNSUPPORTED_MEDIA_KEYS:
+            if mkey in node_dict and node_dict[mkey] is not None:
+                raise ValueError(f"ZTDS guardrail rejects uninspectable '{mkey}' payload")
+        for ckey in _UNSUPPORTED_MEDIA_CONTAINERS:
+            if _as_mapping(node_dict.get(ckey)) is not None:
+                raise ValueError(f"ZTDS guardrail rejects uninspectable '{ckey}' container")
 
     def _sanitize_dict_key(self, key: object, session_id: str) -> object:
         if not isinstance(key, str) or key.startswith("_"):
@@ -465,6 +513,8 @@ class ZTDSGuardrail(CustomGuardrail):
         is_caller_visible: bool,
         parent_key: str | None,
     ) -> str:
+        if self.enforce_zero_egress and _BASE64_DATA_URI_RE.search(value) is not None:
+            raise ValueError("ZTDS guardrail rejects uninspectable inline data URI payload")
         is_json_candidate: Final = parent_key in _JSON_ENCODED_STRING_KEYS or (
             len(value) >= 2 and value[0] in ("{", "[", '"') and "\\" in value
         )
@@ -765,6 +815,8 @@ class ZTDSGuardrail(CustomGuardrail):
         request_data["_ztds_session_id"] = session_id  # rebind-ok: track unified guardrail session for cleanup
         updated_inputs: Final[GenericGuardrailAPIInputs] = dict(inputs)  # pyright: ignore[reportAssignmentType]  # shallow copy of TypedDict preserves schema keys
         try:
+            if self.enforce_zero_egress and inputs.get("images"):
+                raise ValueError("ZTDS guardrail rejects uninspectable image inputs under zero-egress enforcement")
             raw_texts: Final = inputs.get("texts")
             if raw_texts:
                 updated_inputs["texts"] = [

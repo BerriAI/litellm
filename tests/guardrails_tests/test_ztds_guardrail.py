@@ -825,6 +825,153 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             await self.guardrail.async_pre_call_hook({}, {}, bad_obj_req, "chat_completion")
         self.assertNotIn("_ztds_session_id", bad_obj_req)
 
+    async def test_opaque_images_and_inline_media_rejected_when_zero_egress_enabled(self) -> None:
+        before_sessions: Final = set(self.guardrail._session_maps.keys())
+        rejected_cases: Final = (
+            (
+                "call-img-openai-data",
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                        ],
+                    }
+                ],
+            ),
+            (
+                "call-img-openai-url",
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": "https://example.com/secret.png"}},
+                        ],
+                    }
+                ],
+            ),
+            (
+                "call-img-responses",
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_image", "image_url": "https://example.com/input.png"},
+                        ],
+                    }
+                ],
+            ),
+            (
+                "call-img-anthropic",
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "iVBORw0KGgo=",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            ),
+            (
+                "call-img-gemini",
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}},
+                        ],
+                    }
+                ],
+            ),
+            (
+                "call-img-bedrock",
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"image": {"format": "png", "source": {"bytes": b"\x89PNG\r\n\x1a\n"}}},
+                        ],
+                    }
+                ],
+            ),
+            (
+                "call-img-markdown-data-uri",
+                [{"role": "user", "content": "Review ![scan](data:image/png;base64,iVBORw0KGgo=)"}],
+            ),
+        )
+        for call_id, messages in rejected_cases:
+            req = {"litellm_call_id": call_id, "messages": messages}
+            with self.subTest(call_id=call_id):
+                with self.assertRaisesRegex(ValueError, r"rejects uninspectable"):
+                    await self.guardrail.async_pre_call_hook({}, {}, req, "chat_completion")
+                self.assertNotIn("_ztds_session_id", req)
+                self.assertEqual(set(self.guardrail._session_maps.keys()), before_sessions)
+
+        apply_req: Final[dict[str, object]] = {  # mutable-ok: apply_guardrail image rejection fixture
+            "litellm_call_id": "call-apply-img",
+        }
+        with self.assertRaisesRegex(ValueError, r"rejects uninspectable"):
+            await self.guardrail.apply_guardrail(
+                {"texts": ["hi"], "images": ["data:image/png;base64,iVBORw0KGgo="]},
+                apply_req,
+                "request",
+            )
+        self.assertNotIn("_ztds_session_id", apply_req)
+        self.assertEqual(set(self.guardrail._session_maps.keys()), before_sessions)
+
+        doc_req: Final[dict[str, object]] = {  # mutable-ok: plain-text document sanitization fixture
+            "litellm_call_id": "call-doc-text",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "text",
+                                "media_type": "text/plain",
+                                "data": "Contact doc@corp.com",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        sanitized_doc_req: Final = await self.guardrail.async_pre_call_hook({}, {}, doc_req, "chat_completion")
+        self.assertIsNotNone(sanitized_doc_req)
+        assert sanitized_doc_req is not None
+        doc_source: Final = sanitized_doc_req["messages"][0]["content"][0]["source"]
+        self.assertNotIn("doc@corp.com", doc_source["data"])
+        self.assertIn("[EMAIL_TOKEN_", doc_source["data"])
+
+        relaxed_guardrail: Final = ZTDSGuardrail(enforce_zero_egress=False)
+        relaxed_req: Final[dict[str, object]] = {  # mutable-ok: relaxed zero-egress image fixture
+            "litellm_call_id": "call-img-relaxed",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Reach alice@example.com"},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                    ],
+                }
+            ],
+        }
+        sanitized_relaxed: Final = await relaxed_guardrail.async_pre_call_hook({}, {}, relaxed_req, "chat_completion")
+        self.assertIsNotNone(sanitized_relaxed)
+        assert sanitized_relaxed is not None
+        relaxed_blocks: Final = sanitized_relaxed["messages"][0]["content"]
+        self.assertNotIn("alice@example.com", relaxed_blocks[0]["text"])
+        self.assertIn("[EMAIL_TOKEN_", relaxed_blocks[0]["text"])
+        self.assertEqual(relaxed_blocks[1], {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}})
+
 
 if __name__ == "__main__":
     unittest.main()
