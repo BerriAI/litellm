@@ -2169,6 +2169,7 @@ SENTRY_DENYLIST: Final = [
     "authorization",
     "api-key",
     "x-api-key",
+    "x-api-key-id",
     "x-goog-api-key",
     "ocp-apim-subscription-key",
     "x-litellm-api-key",
