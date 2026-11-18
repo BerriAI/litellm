@@ -106525,6 +106525,22 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "together_ai/Qwen/Qwen4-Max": {
+        "cache_read_input_token_cost": 7.125e-08,
+        "input_cost_per_token": 1.425e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 4.275e-06,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure/us-gov/gpt-4-turbo": {
         "input_cost_per_token": 1.25e-05,
         "litellm_provider": "azure",

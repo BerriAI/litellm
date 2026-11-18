@@ -6649,6 +6649,31 @@ _QUESTION_ITEM: Final = {"role": "user", "content": "What is 2+2?"}
 _ANSWER_ITEM: Final = {"role": "assistant", "content": "Four."}
 
 
+@pytest.mark.parametrize("item_cache_control", (False, True))
+@pytest.mark.parametrize(
+    "input_item",
+    (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM, {"role": "user"}),
+    ids=("user", "assistant", "null_content", "no_content_key"),
+)
+def test_single_object_input_is_read_like_a_one_item_list(
+    input_item: dict[str, object], item_cache_control: bool
+) -> None:
+    marked_item: Final = {**input_item, "cache_control": {"type": "ephemeral"}}
+    listed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, [marked_item]),
+        responses_api_request={},
+        item_cache_control=item_cache_control,
+        route_fills_empty_user_turns=lambda: True,
+    )
+    single: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, marked_item),
+        responses_api_request={},
+        item_cache_control=item_cache_control,
+        route_fills_empty_user_turns=lambda: True,
+    )
+    assert single == listed
+
+
 def _bridged_turns(
     model: str, provider: str | None, items: Sequence[Mapping[str, object]]
 ) -> list[tuple[object, object]]:
@@ -6841,11 +6866,12 @@ def test_a_final_user_input_item_without_content_keeps_its_cache_mark_on_the_emp
 
 
 @pytest.mark.parametrize("instructions", (None, "Be brief."), ids=("no_instructions", "instructions"))
+@pytest.mark.parametrize("object_input", (False, True), ids=("list", "object"))
 @pytest.mark.parametrize(
     "empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key")
 )
 def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history_on_an_empty_user_turn(
-    instructions: str | None, empty_user_item: dict[str, object]
+    instructions: str | None, empty_user_item: dict[str, object], object_input: bool
 ) -> None:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         return ChatCompletionSession(
@@ -6853,9 +6879,10 @@ def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history
             litellm_session_id=None,
         )
 
+    input_items: Final = cast(ResponseInputParam, empty_user_item if object_input else [empty_user_item])
     chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="bedrock/us.anthropic.claude-opus-5-5",
-        input=cast(ResponseInputParam, [empty_user_item]),
+        input=input_items,
         responses_api_request={
             "previous_response_id": "resp_stored",
             **({"instructions": instructions} if instructions else {}),
@@ -6869,7 +6896,7 @@ def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history
             litellm_completion_request=chat_request,
             instructions=instructions,
             session_lookup=session_lookup,
-            request_input=cast(ResponseInputParam, [empty_user_item]),
+            request_input=input_items,
         )
     )
 
@@ -6880,13 +6907,15 @@ def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history
     ]
 
 
-def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is_still_refused() -> None:
+@pytest.mark.parametrize("object_input", (False, True), ids=("list", "object"))
+def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is_still_refused(object_input: bool) -> None:
     async def no_stored_turns(previous_response_id: str) -> ChatCompletionSession:
         return ChatCompletionSession(messages=[], litellm_session_id=None)
 
+    input_items: Final = cast(ResponseInputParam, _NULL_USER_ITEM if object_input else [_NULL_USER_ITEM])
     chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="bedrock/us.anthropic.claude-opus-5-5",
-        input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+        input=input_items,
         responses_api_request={"previous_response_id": "resp_unknown"},
         custom_llm_provider="bedrock",
     )
@@ -6898,7 +6927,7 @@ def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is
                 litellm_completion_request=chat_request,
                 instructions=None,
                 session_lookup=no_stored_turns,
-                request_input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+                request_input=input_items,
             )
         )
 
