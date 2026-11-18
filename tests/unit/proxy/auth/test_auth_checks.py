@@ -2977,8 +2977,9 @@ async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
     from litellm.proxy.auth.auth_checks import common_checks
 
     max_budget: Final = 10.0
-    valid_token: Final = UserAPIKeyAuth(token="test-token", spend=spend, max_budget=max_budget)
-    valid_token.authenticated_by_custom_auth = authenticated_by_custom_auth
+    valid_token: Final = UserAPIKeyAuth(token="test-token", spend=spend, max_budget=max_budget).model_copy(
+        update={"authenticated_by_custom_auth": authenticated_by_custom_auth}
+    )
 
     async def run() -> bool:
         return await common_checks(
