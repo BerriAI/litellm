@@ -13,6 +13,7 @@ from typing import Any, Final, cast
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -41,6 +42,7 @@ from litellm.llms.anthropic.messages.utils import (
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
 )
+from litellm.llms.openai.responses.instruction_items import instructions_miss_prompt_cache
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
@@ -603,6 +605,23 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return system
         return cls.system_blocks_to_instructions(system) or None
 
+    @classmethod
+    def _leading_developer_parts(
+        cls, system: str | Iterable[AnthropicSystemMessageContent] | None, system_leads_input: bool
+    ) -> Sequence[Mapping[str, object]]:
+        if not system:
+            return ()
+        if system_leads_input:
+            # The billing line changes per request, so leaving it first would void the cached prefix.
+            return [
+                part
+                for part in cls._translate_midturn_system_content_to_responses(system)
+                if not str(part.get("text")).startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+            ]
+        if any(block.get("prompt_cache_breakpoint") is not None for block in cls._content_blocks(system)):
+            return cls._translate_midturn_system_content_to_responses(system)
+        return ()
+
     @staticmethod
     def _resolve_output_format_strict(strict: object) -> bool:
         return True if strict is None else bool(strict)
@@ -614,6 +633,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         auto_summary_level: str = "detailed",
         *,
         drop_params: bool = True,
+        base_model: object = None,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -633,19 +653,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         input_items: Final = self.translate_messages_to_responses_input(messages_list)
         system: Final = anthropic_request.get("system")
-        developer_parts: Final = (
-            self._translate_midturn_system_content_to_responses(system)
-            if isinstance(system, list)
-            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
-            else ()
-        )
+        system_leads_input: Final = instructions_miss_prompt_cache(model, base_model)
+        developer_parts: Final = self._leading_developer_parts(system, system_leads_input)
         if developer_parts:
             input_items.insert(
                 0,
                 {
                     "type": "message",
                     "role": "developer",
-                    "content": developer_parts,
+                    "content": list(developer_parts),
                 },
             )
 
@@ -656,7 +672,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if include_encrypted_reasoning:
             responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]
 
-        if system and not developer_parts:
+        if system and not developer_parts and not system_leads_input:
             if isinstance(system, str):
                 responses_kwargs["instructions"] = system
             elif isinstance(system, list):

@@ -66,6 +66,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.llms.openai.responses.instruction_items import instructions_miss_prompt_cache
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
@@ -1420,8 +1421,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Keep the system text in input instead of instructions when the Responses API needs it there.
         # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
         typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
-        system_goes_in_input: Final = converted_instructions is not None and (
-            not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+        system_leads_input: Final = bool(converted_instructions) and instructions_miss_prompt_cache(model, base_model)
+        system_goes_in_input: Final = system_leads_input or (
+            converted_instructions is not None
+            and (
+                not converted_input_items
+                or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+            )
         )
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)
@@ -1432,7 +1438,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             [
                 {
                     "type": "message",
-                    "role": "system",
+                    "role": "developer" if system_leads_input else "system",
                     "content": [{"type": "input_text", "text": converted_instructions}],
                 },
                 *target_input_items,

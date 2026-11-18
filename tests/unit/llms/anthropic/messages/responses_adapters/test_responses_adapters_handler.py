@@ -1586,3 +1586,20 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
         )
 
     assert upstream.call_count == 1
+
+
+def test_deployment_base_model_moves_the_system_prompt_into_input() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="team-deployment",
+        max_tokens=64,
+        system="Be concise.",
+        messages=[{"role": "user", "content": "hello"}],
+        extra_kwargs={"custom_llm_provider": "azure", "base_model": "azure/gpt-6.2-sol"},
+    )
+
+    assert "instructions" not in responses_kwargs
+    assert responses_kwargs["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Be concise."}],
+    }

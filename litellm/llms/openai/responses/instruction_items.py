@@ -5,11 +5,18 @@ from typing import Final, Literal, TypeAlias
 from openai.types.responses import EasyInputMessageParam, ResponseInputContentParam, ResponseInputItemParam
 
 from litellm.llms.base_llm.base_utils import hoisted_instruction_indices
+from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.types.llms.openai import ResponseInputParam
 
 UnfoldedDeveloperRole: TypeAlias = Literal["system", "user"]
 
 _INSTRUCTION_ROLES: Final = frozenset({"system", "developer"})
+
+
+def instructions_miss_prompt_cache(model: str, base_model: object = None) -> bool:
+    """GPT-6.2 and later place top-level `instructions` after `input`, beyond every cache breakpoint."""
+    names: Final = (model, base_model) if isinstance(base_model, str) and base_model else (model,)
+    return any(map(OpenAIGPT5Config.is_model_gpt_6_2_plus_model, names))
 
 
 def _role(item: ResponseInputItemParam) -> str | None:

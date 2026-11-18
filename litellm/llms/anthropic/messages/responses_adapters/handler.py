@@ -367,6 +367,7 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        base_model=forwarded_kwargs.get("base_model"),
     )
 
     # Normalize reasoning effort based on model capabilities

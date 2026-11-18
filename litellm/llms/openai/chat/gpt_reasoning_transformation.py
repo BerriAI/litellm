@@ -212,6 +212,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return version is not None and version >= (6, 0)
 
     @classmethod
+    def is_model_gpt_6_2_plus_model(cls, model: str) -> bool:
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (6, 2)
+
+    @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
         """The name this model is looked up by in the cost map.
 

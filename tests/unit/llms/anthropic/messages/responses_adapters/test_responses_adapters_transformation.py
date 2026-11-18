@@ -2567,3 +2567,67 @@ class TestTranslateChatBridgedResponse:
             {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}
         ]
         assert result["stop_reason"] == "tool_use"
+
+
+_BILLING_LINE: Final = "x-anthropic-billing-header: cc_version=1; cch=abc12;"
+
+
+def _developer_item(*texts: str) -> dict[str, Any]:
+    return {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": text} for text in texts],
+    }
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-6.2-sol", "gpt-6.2-astra", "openai/gpt-6.3-sol", "gpt-7-sol"])
+def test_system_string_leads_input_when_instructions_miss_the_prompt_cache(model: str) -> None:
+    kwargs = _ADAPTER.translate_request(_make_request(model=model, system="Be concise."))
+
+    assert "instructions" not in kwargs
+    assert kwargs["input"][0] == _developer_item("Be concise.")
+    assert [item["role"] for item in kwargs["input"]] == ["developer", "user"]
+
+
+def test_system_blocks_lead_input_without_the_per_request_billing_line() -> None:
+    kwargs = _ADAPTER.translate_request(
+        _make_request(
+            model="openai/gpt-6.2-sol",
+            system=[
+                {"type": "text", "text": _BILLING_LINE},
+                {"type": "text", "text": "Be concise."},
+                {"type": "text", "text": "Be helpful."},
+            ],
+        )
+    )
+
+    assert "instructions" not in kwargs
+    assert kwargs["input"][0] == _developer_item("Be concise.", "Be helpful.")
+
+
+def test_system_of_only_a_billing_line_sends_no_prompt_on_gpt_6_2() -> None:
+    kwargs = _ADAPTER.translate_request(_make_request(model="openai/gpt-6.2-sol", system=_BILLING_LINE))
+
+    assert "instructions" not in kwargs
+    assert [item["role"] for item in kwargs["input"]] == ["user"]
+
+
+def test_base_model_moves_the_system_prompt_for_a_deployment_alias() -> None:
+    kwargs = _ADAPTER.translate_request(
+        _make_request(model="team-deployment", system="Be concise."), base_model="azure/gpt-6.2-sol"
+    )
+
+    assert "instructions" not in kwargs
+    assert kwargs["input"][0] == _developer_item("Be concise.")
+
+
+def test_gpt_6_1_keeps_the_system_prompt_and_billing_line_in_instructions() -> None:
+    kwargs = _ADAPTER.translate_request(
+        _make_request(
+            model=_MODEL,
+            system=[{"type": "text", "text": _BILLING_LINE}, {"type": "text", "text": "Be concise."}],
+        )
+    )
+
+    assert kwargs["instructions"] == f"{_BILLING_LINE}\nBe concise."
+    assert [item["role"] for item in kwargs["input"]] == ["user"]
