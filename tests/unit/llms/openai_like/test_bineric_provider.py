@@ -76,20 +76,18 @@ def test_bineric_api_base_env_overrides_default(monkeypatch: pytest.MonkeyPatch)
     assert api_base == "https://bineric.env.example/v1"
 
 
-def test_bineric_api_base_autodetects_provider(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("BINERIC_API_KEY", "bineric-env-key")
+def test_bare_openai_model_on_bineric_api_base_keeps_openai_params():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json={**_CHAT_COMPLETION, "model": "gpt-5-mini"})
+        litellm.completion(
+            model="gpt-5-mini",
+            api_base=_DEFAULT_API_BASE,
+            messages=[{"role": "user", "content": "Say hello"}],
+            verbosity="low",
+            api_key="bineric-test-key",
+        )
 
-    model, provider, api_key, api_base = get_llm_provider(
-        model="claude-sonnet-5.5",
-        custom_llm_provider=None,
-        api_base=_DEFAULT_API_BASE,
-        api_key=None,
-    )
-
-    assert model == "claude-sonnet-5.5"
-    assert provider == "bineric"
-    assert api_key == "bineric-env-key"
-    assert api_base == _DEFAULT_API_BASE
+    assert json.loads(route.calls.last.request.content)["verbosity"] == "low"
 
 
 @pytest.mark.parametrize("model", BINERIC_CHAT_MODELS)
