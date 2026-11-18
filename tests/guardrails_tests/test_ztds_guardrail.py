@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingP
 from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     record_served_output_texts,
+    register_served_output_sanitizer,
     sanitize_logged_output_str,
     served_output_texts,
     served_stream_output_texts,
@@ -1163,6 +1164,35 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             "litellm_logging_obj": {"spoof": True},
         }
         self.assertEqual(sanitize_logged_output_str(spoofed_dict_req, "real output"), "real output")
+
+        adv_logging_obj: Final = Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="call-adv-ac",
+            function_id="",
+        )
+        adv_pairs: Final = tuple(
+            (("a" * 60) + f"@d{i:05d}.example.com", f"[EMAIL_TOKEN_{i}]") for i in range(1, 1001)
+        ) + (("different@example.com", "[EMAIL_TOKEN_1001]"),)
+        register_served_output_sanitizer(
+            adv_logging_obj,
+            adv_logging_obj.model_call_details,
+            adv_pairs,
+            "sid-adv-ac",
+        )
+        near_miss_80kb: Final = (("a" * 60) + "@d00001.example.net ") * 1000 + "different@example.com"
+        t0_ac: Final = time.perf_counter()
+        record_served_output_texts(adv_logging_obj.model_call_details, (near_miss_80kb,))
+        ac_elapsed: Final = time.perf_counter() - t0_ac
+        self.assertLess(ac_elapsed, 0.25, f"Output-log matching took {ac_elapsed:.4f}s")
+        adv_recorded: Final = adv_logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY)
+        self.assertIsNotNone(adv_recorded)
+        assert adv_recorded is not None
+        self.assertNotIn("different@example.com", adv_recorded[0])
+        self.assertTrue(adv_recorded[0].endswith("[EMAIL_TOKEN_1001]"))
 
 
 if __name__ == "__main__":

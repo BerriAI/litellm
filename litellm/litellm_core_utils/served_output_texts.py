@@ -4,7 +4,6 @@ post-call guardrail rewrote rather than the provider response the proxy assemble
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal
@@ -23,6 +22,145 @@ _JSON_LIST: Final = TypeAdapter(list[object])
 _TEXTS: Final = TypeAdapter(tuple[str | None, ...])
 
 
+class _AhoCorasickMatcher:
+    def __init__(self, mapping: Mapping[str, str]) -> None:
+        trie: Final[list[dict[str, int]]] = [{}]  # mutable-ok: automaton transition table built once
+        fail: Final[list[int]] = [0]  # mutable-ok: failure links indexed by state id
+        depth: Final[list[int]] = [0]  # mutable-ok: trie depth per state id
+        own_len: Final[list[int]] = [0]  # mutable-ok: terminal key length per state id
+        dict_link: Final[list[int]] = [0]  # mutable-ok: nearest terminal ancestor per state id
+
+        for key in mapping:
+            if not key:
+                continue
+            node = 0
+            for ch in key:
+                nxt = trie[node].get(ch)
+                if nxt is None:
+                    nxt = len(trie)
+                    trie[node][ch] = nxt
+                    trie.append({})
+                    fail.append(0)
+                    depth.append(depth[node] + 1)
+                    own_len.append(0)
+                    dict_link.append(0)
+                node = nxt
+            own_len[node] = depth[node]
+
+        self._populate_links(trie, fail, own_len, dict_link)
+        self._trie: list[dict[str, int]] = trie  # mutable-ok: cleared on explicit zeroization
+        self._fail: list[int] = fail  # mutable-ok: cleared on explicit zeroization
+        self._depth: list[int] = depth  # mutable-ok: cleared on explicit zeroization
+        self._own_len: list[int] = own_len  # mutable-ok: cleared on explicit zeroization
+        self._dict_link: list[int] = dict_link  # mutable-ok: cleared on explicit zeroization
+
+    @staticmethod
+    def _populate_links(
+        trie: Sequence[Mapping[str, int]],
+        fail: list[int],  # mutable-ok: populated in BFS order
+        own_len: Sequence[int],
+        dict_link: list[int],  # mutable-ok: populated in BFS order
+    ) -> None:
+        queue: Final[list[int]] = list(trie[0].values())  # mutable-ok: flat BFS state queue
+        head = 0  # rebind-ok: advances through BFS queue without popleft overhead
+        while head < len(queue):
+            r = queue[head]
+            head += 1
+            for ch, u in trie[r].items():
+                queue.append(u)
+                f = fail[r]
+                while f and ch not in trie[f]:
+                    f = fail[f]
+                fu = trie[f].get(ch, 0)
+                fail[u] = fu  # rebind-ok: assign failure transition for child state
+                dict_link[u] = fu if own_len[fu] else dict_link[fu]  # rebind-ok: link nearest word suffix
+
+    @staticmethod
+    def _step_state(trie: Sequence[Mapping[str, int]], fail: Sequence[int], state: int, ch: str) -> int:
+        cur = state  # rebind-ok: walks failure links until character transition found
+        while cur and ch not in trie[cur]:
+            cur = fail[cur]
+        return trie[cur].get(ch, 0)
+
+    def _record_suffix_matches(
+        self,
+        start_state: int,
+        end: int,
+        guaranteed_until: int,
+        best_end: dict[int, int],  # mutable-ok: updates earliest-start longest-end map in place
+        current_max_end: int,
+    ) -> int:
+        own_len: Final = self._own_len
+        dict_link: Final = self._dict_link
+        max_end = current_max_end  # rebind-ok: tracks furthest match end seen so far
+        u = start_state  # rebind-ok: follows terminal dict links in O(matches)
+        while u:
+            s = end - own_len[u]
+            if s >= guaranteed_until:
+                if end > best_end.get(s, 0):
+                    best_end[s] = end  # rebind-ok: record longer match for start offset
+                max_end = max(max_end, end)
+            u = dict_link[u]
+        return max_end
+
+    def collect_best_ends(self, text: str) -> Mapping[int, int]:
+        trie: Final = self._trie
+        fail: Final = self._fail
+        depth: Final = self._depth
+        own_len: Final = self._own_len
+        dict_link: Final = self._dict_link
+
+        best_end: Final[dict[int, int]] = {}  # mutable-ok: start-index to longest-end-index table
+        guaranteed_until = 0  # rebind-ok: advances as non-overlappable matches finalize
+        max_recorded_end = 0  # rebind-ok: furthest match end recorded so far
+        locked_start: int | None = None  # rebind-ok: active unoverlapped leftmost match start
+        state = 0  # rebind-ok: current Aho-Corasick automaton state
+
+        for idx, ch in enumerate(text):
+            state = self._step_state(trie, fail, state, ch)
+            if not state:
+                if locked_start is not None:
+                    guaranteed_until = best_end[locked_start]
+                    locked_start = None
+                continue
+
+            end = idx + 1
+            trie_start = end - depth[state]
+            if locked_start is not None and trie_start > locked_start:
+                guaranteed_until = best_end[locked_start]
+                locked_start = None
+                if guaranteed_until == idx:
+                    state = trie[0].get(ch, 0)
+                    if not state:
+                        continue
+                    trie_start = idx
+
+            u = state if own_len[state] else dict_link[state]
+            if not u:
+                continue
+
+            if own_len[state] and (trie_start >= max_recorded_end or trie_start == locked_start):
+                best_end[trie_start] = end
+                max_recorded_end = end
+                locked_start = trie_start
+                if not trie[state]:
+                    guaranteed_until = end
+                    locked_start = None
+                    state = 0
+                continue
+
+            max_recorded_end = self._record_suffix_matches(u, end, guaranteed_until, best_end, max_recorded_end)
+
+        return best_end
+
+    def clear(self) -> None:
+        self._trie.clear()
+        self._fail.clear()
+        self._depth.clear()
+        self._own_len.clear()
+        self._dict_link.clear()
+
+
 class _OutputLogSanitizer:
     def __init__(self, pairs: Sequence[tuple[str, str]]) -> None:
         mapping: Final[dict[str, str]] = {}  # mutable-ok: build deduplicated cleartext-to-surrogate map locally
@@ -37,22 +175,38 @@ class _OutputLogSanitizer:
                 if variant and variant != token:
                     mapping[variant] = token
         self._mapping: dict[str, str] = mapping  # mutable-ok: cleared on logging completion zeroization
-        self._pattern: re.Pattern[str] | None = None
+        self._matcher: _AhoCorasickMatcher | None = None
 
     def sanitize_text(self, text: str) -> str:
         if not text or not self._mapping:
             return text
-        pattern = self._pattern  # rebind-ok: lazily compiled single-pass alternation
-        if pattern is None:
-            ordered_keys: Final = sorted(self._mapping.keys(), key=len, reverse=True)
-            pattern = re.compile("|".join(re.escape(key) for key in ordered_keys))  # rebind-ok: cache compiled pattern
-            self._pattern = pattern
+        matcher = self._matcher  # rebind-ok: lazily built linear-time Aho-Corasick automaton
+        if matcher is None:
+            matcher = _AhoCorasickMatcher(self._mapping)  # rebind-ok: cache built automaton
+            self._matcher = matcher
+        best_end: Final = matcher.collect_best_ends(text)
+        if not best_end:
+            return text
         mapping: Final = self._mapping
-        return pattern.sub(lambda m: mapping.get(m.group(0), m.group(0)), text)
+        out: Final[list[str]] = []  # mutable-ok: linear output piece buffer
+        pos = 0  # rebind-ok: tracks end of last emitted replacement
+        for s in sorted(best_end):
+            if s < pos:
+                continue
+            e = best_end[s]
+            if s > pos:
+                out.append(text[pos:s])
+            out.append(mapping[text[s:e]])
+            pos = e
+        if pos < len(text):
+            out.append(text[pos:])
+        return "".join(out)
 
     def clear(self) -> None:
         self._mapping.clear()
-        self._pattern = None
+        if self._matcher is not None:
+            self._matcher.clear()
+            self._matcher = None
 
 
 _LOGGING_SANITIZERS: Final = WeakKeyDictionary[object, _OutputLogSanitizer]()
