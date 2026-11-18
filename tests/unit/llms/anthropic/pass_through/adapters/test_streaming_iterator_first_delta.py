@@ -21,7 +21,10 @@ into an open ``thinking`` block, crashing Anthropic SDK clients (Claude Code)
 with "Content block is not a text block".
 """
 
-from typing import List, Optional
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -1316,4 +1319,117 @@ async def test_signature_only_thinking_chunk_before_text_leaks_no_signature(is_a
     assert len(text_starts) == 1
     assert "signature" not in text_starts[0]
     assert _text_deltas(events) == ["Hello"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@dataclass(frozen=True, slots=True)
+class _AccumulatedThinking:
+    thinking: str
+    signature: str
+
+
+def _accumulate_thinking(start: dict, deltas: Sequence[dict]) -> _AccumulatedThinking:
+    signatures: Final = tuple(delta["signature"] for delta in deltas if delta["type"] == "signature_delta")
+    return _AccumulatedThinking(
+        thinking=(start.get("thinking") or "")
+        + "".join(delta["thinking"] for delta in deltas if delta["type"] == "thinking_delta"),
+        signature=signatures[-1] if signatures else (start.get("signature") or ""),
+    )
+
+
+def _thinking_starts(events: List[dict]) -> Mapping[int, dict]:
+    return MappingProxyType(
+        {
+            event["index"]: event["content_block"]
+            for event in events
+            if event.get("type") == "content_block_start" and event["content_block"]["type"] == "thinking"
+        }
+    )
+
+
+def _deltas_at(events: List[dict], index: int) -> Tuple[dict, ...]:
+    return tuple(
+        event["delta"] for event in events if event.get("type") == "content_block_delta" and event["index"] == index
+    )
+
+
+def _thinking_blocks_as_accumulated(events: List[dict]) -> Tuple[_AccumulatedThinking, ...]:
+    starts: Final = _thinking_starts(events)
+    return tuple(_accumulate_thinking(starts[index], _deltas_at(events, index)) for index in sorted(starts))
+
+
+async def _events_for(chunks: Sequence[MagicMock], is_async: bool) -> List[dict]:
+    if is_async:
+        return await _drain_async(AnthropicStreamWrapper(completion_stream=_AsyncStream(list(chunks)), model="mistral-x"))
+    return _drain_sync(AnthropicStreamWrapper(completion_stream=iter(chunks), model="mistral-x"))
+
+
+_UNSIGNED_REASONING_STREAMS: Final[Mapping[str, Tuple[MagicMock, ...]]] = MappingProxyType(
+    {
+        "then-text": (
+            _reasoning_content_chunk("The user "),
+            _reasoning_content_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+        "then-tool-call": (
+            _reasoning_content_chunk("The user wants 2+2."),
+            _tool_chunk("call_add", "add", '{"a": 2, "b": 2}'),
+            _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+        ),
+        "thought-ends-with-finish": (
+            _reasoning_content_chunk("The user "),
+            _make_chunk(Delta(content=None, reasoning_content="wants 2+2."), finish_reason="stop"),
+        ),
+    }
+)
+
+
+def _event_before_stop(events: Sequence[Mapping[str, object]], index: int) -> Mapping[str, object]:
+    stop_position: Final = next(
+        position
+        for position, event in enumerate(events)
+        if event.get("type") == "content_block_stop" and event["index"] == index
+    )
+    return events[stop_position - 1]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("stream", list(_UNSIGNED_REASONING_STREAMS), ids=list(_UNSIGNED_REASONING_STREAMS))
+@pytest.mark.asyncio
+async def test_unsigned_thinking_block_closes_with_an_empty_signature_delta(is_async: bool, stream: str):
+    events: Final = await _events_for(_UNSIGNED_REASONING_STREAMS[stream], is_async)
+
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="The user wants 2+2.", signature=""),
+    )
+    assert [_event_before_stop(events, index) for index in _thinking_starts(events)] == [
+        {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": ""}}
+        for index in _thinking_starts(events)
+    ]
+    assert _signature_deltas(events) == [""]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_unsigned_thinking_blocks_close_with_an_empty_signature_delta(is_async: bool):
+    events: Final = await _events_for(
+        (
+            _thinking_chunk("The user "),
+            _thinking_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+        is_async,
+    )
+
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="The user wants 2+2.", signature=""),
+    )
+    assert [_event_before_stop(events, index) for index in _thinking_starts(events)] == [
+        {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": ""}}
+        for index in _thinking_starts(events)
+    ]
+    assert _signature_deltas(events) == [""]
     _assert_deltas_match_their_block_type(events)

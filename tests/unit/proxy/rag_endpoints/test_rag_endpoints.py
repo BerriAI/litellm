@@ -7,9 +7,11 @@ Covers:
 
 import io
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 import litellm
@@ -1174,3 +1176,64 @@ class TestVectorStoreUploadControls:
         assert server_filename.endswith(".txt")
         assert secured_content_type == "text/plain"
         assert content_bytes == b"benign document text\n"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("listed, expected_status", [(False, 403), (True, 200)])
+def test_rag_query_checks_the_s3_image_bucket_before_search(
+    client_internal_user: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    listed: bool,
+    expected_status: int,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    search: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/provider-native-store/search").respond(
+        json={
+            "object": "vector_store.search_results.page",
+            "search_query": ["hello"],
+            "data": [],
+            "has_more": False,
+            "next_page": None,
+        }
+    )
+    completion: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allowed_client_side_s3_buckets": ["private-bucket"]} if listed else {},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.vector_store_registry", None),
+    ):
+        response: Final = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}},
+                        ],
+                    }
+                ],
+                "retrieval_config": {"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            },
+        )
+    assert response.status_code == expected_status, response.text
+    assert search.call_count == int(listed)
+    assert completion.call_count == int(listed)
+    if not listed:
+        assert "allowed_client_side_s3_buckets" in response.json()["detail"]

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, count, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -93,6 +93,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
@@ -252,6 +253,10 @@ async def chat_completion_pass_through_endpoint(
             data = json.loads(body_str) | data
 
         data["adapter_id"] = adapter_id
+
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
         verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", data)
         data["model"] = (
@@ -465,7 +470,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         url: httpx.URL,
         headers: dict,
         requested_query_params: dict | None = None,
-        _parsed_body: dict | None = None,
+        _parsed_body: Mapping[str, object] | None = None,
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
@@ -1087,6 +1092,28 @@ from litellm.passthrough.timeout_utils import (
     resolve_pass_through_request_timeout,
 )
 
+UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
+UpstreamRequestFilter: TypeAlias = Callable[
+    [Mapping[str, str], Mapping[str, object] | None, Mapping[str, object]], UpstreamRequest
+]
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _unfiltered_request(
+    headers: Mapping[str, str], body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
+) -> UpstreamRequest:
+    return headers, body
+
+
+def _filtered_upstream_request(
+    upstream_request_filter: UpstreamRequestFilter,
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[dict[str, str], Mapping[str, object] | None]:  # mutable-ok: the relay helpers take a dict of headers
+    filtered_headers, filtered_body = upstream_request_filter(headers, body, litellm_params)
+    return dict(filtered_headers), filtered_body
+
 
 async def pass_through_request(
     request: Request,
@@ -1103,6 +1130,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1123,6 +1151,8 @@ async def pass_through_request(
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
+        upstream_request_filter: Optional last rewrite of the headers and JSON body sent upstream, given the
+            litellm_params the request is logged with
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1461,13 +1491,20 @@ async def pass_through_request(
             else:
                 logging_url = str(url) + "?" + requested_query_params_str
 
+        outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
+        outbound_headers, upstream_body = _filtered_upstream_request(
+            upstream_request_filter,
+            upstream_headers,
+            outgoing_body,
+            _LITELLM_PARAMS.validate_python(kwargs["litellm_params"]),
+        )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
             additional_args={
                 "complete_input_dict": _parsed_body,
                 "api_base": str(logging_url),
-                "headers": upstream_headers,
+                "headers": outbound_headers,
             },
         )
         stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
@@ -1484,7 +1521,7 @@ async def pass_through_request(
                     request=request,
                     async_client=async_client,
                     url=url,
-                    headers=upstream_headers,
+                    headers=outbound_headers,
                     requested_query_params=requested_query_params,
                     stream=True,
                 )
@@ -1496,7 +1533,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=outbound_headers,
                         content=state_raw_body,
                     )
                     if state_raw_body is not None
@@ -1504,8 +1541,8 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
-                        json=_parsed_body,
+                        headers=outbound_headers,
+                        json=upstream_body,
                     )
                 )
 
@@ -1582,7 +1619,7 @@ async def pass_through_request(
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
@@ -1592,9 +1629,9 @@ async def pass_through_request(
                 request=request,
                 async_client=async_client,
                 url=url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 requested_query_params=requested_query_params,
-                _parsed_body=_parsed_body,
+                _parsed_body=upstream_body,
                 forward_multipart=is_multipart,
             )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
@@ -2107,6 +2144,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2246,6 +2284,7 @@ def create_pass_through_route(
                         custom_llm_provider=custom_llm_provider,
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
+                        upstream_request_filter=upstream_request_filter,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
