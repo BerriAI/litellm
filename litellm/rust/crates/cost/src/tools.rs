@@ -738,6 +738,7 @@ fn image_item<S: RowSource>(source: &S, item: &ImageItem, header: &Header) -> Us
         images: 1,
         pixels: item.pixels,
         input_images: 0,
+        size: None,
     };
     match crate::image::price(source, &query) {
         PriceOutcome::Priced(receipt) => Usd::new(receipt.total).unwrap_or(Usd::ZERO),
