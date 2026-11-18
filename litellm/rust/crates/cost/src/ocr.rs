@@ -79,7 +79,7 @@ pub(crate) fn price<S: RowSource>(source: &S, query: &OcrQuery) -> PriceOutcome 
         match (query.pages, &page) {
             (None, Some((at, _))) if credit.is_none() => {
                 return Unpriced::MissingUsage {
-                    row: at.clone(),
+                    row: Some(at.clone()),
                     meter: PAGE,
                 }
                 .into();

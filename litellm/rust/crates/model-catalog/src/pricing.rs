@@ -184,6 +184,10 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
             .get("tiered_pricing")
             .and_then(Value::as_array)
             .is_some_and(|tiers| !tiers.is_empty()),
+        guardrail_units: fields
+            .get("guardrail_cost_per_unit")
+            .and_then(Value::as_object)
+            .is_some_and(|rates| rates.values().all(|rate| float_of(rate).is_ok())),
     }
 }
 
@@ -463,6 +467,20 @@ mod tests {
     #[case::flat_query_rate(json!({"input_cost_per_query": 0.005}), false)]
     fn a_row_prices_by_results_whenever_it_lists_tiers(#[case] row: Value, #[case] expected: bool) {
         assert_eq!(row_facts(&fields(row)).prices_by_results, expected);
+    }
+
+    #[rstest]
+    #[case::numbers(json!({"guardrail_cost_per_unit": {"contentPolicyUnits": 0.00015, "wordPolicyUnits": 0}}), true)]
+    #[case::numeric_text(json!({"guardrail_cost_per_unit": {"contentPolicyUnits": "1e-4"}}), true)]
+    #[case::empty(json!({"guardrail_cost_per_unit": {}}), true)]
+    #[case::not_a_mapping(json!({"guardrail_cost_per_unit": "malformed"}), false)]
+    #[case::a_word_rate(json!({"guardrail_cost_per_unit": {"contentPolicyUnits": "cheap"}}), false)]
+    #[case::absent(json!({"input_cost_per_token": 1e-6}), false)]
+    fn a_row_prices_guardrails_when_its_units_validate_as_main_validates_them(
+        #[case] row: Value,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(row_facts(&fields(row)).guardrail_units, expected);
     }
 
     #[rstest]
