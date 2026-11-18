@@ -22,6 +22,7 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - Pure logic is never a host call. The test is a second host. If it could only answer a method by re-implementing a rule, that rule belongs in the core
 - No generic methods such as `cached_json(key)` or `run_step()`. One method per question, typed in and out
 - The order of host calls is behavior, since it decides which reads and writes happen before a denial. Tests share the scripted host in `testing.rs` and assert the result and the calls in order
+- Where one path hands off to another, such as a mapped JWT continuing on the key path, a test at the entry point in `lib.rs` covers it, with inputs built by the stage that produces them. A test that seeds a record by hand proves only its own stage
 
 ## No Python semantics
 
@@ -34,6 +35,7 @@ These are target invariants. Where the code still lags them, the Notion page lis
 ## Typed rows in, one context out
 
 - Methods return the row they read (key, user, team, membership, end user, org, project), next to the facts the core decides on. No method returns `()` to leave data behind in the host, and no host keeps per-request state between calls. The request is the one exception. It is an argument the whole call takes in and hands back, so a host step that still resolves the model (`normalize_model`, the budget fallback) rewrites it in place, where the budget steps, the handlers after auth and the Python-only path read it. Returning the model for the core to pass along would only echo what is already on the request. Once the core resolves the model itself, the rewrite comes back in the outcome and the host applies it once
+- A record such as `KeyRecord` holds only what the stored row says. A value one stage derives from the request or a claim reaches the next stage as an argument, never through a field a host fills from a row. A JWT's end-user claim reaches the key path as `Credential::Resolved::end_user_id`
 - One reader per row, with one set of facts beside it. The read policy (cache only, cache then database, database only, upsert) is a typed argument, never a second method
 - Pass-through grants are decided in `routes/passthrough.rs` from the team's facts and the request's forwarded routes. `RouteChecks` calls the same functions through `_native`
 - Success is one `AuthContext` holding those rows. The host only converts it, to `UserAPIKeyAuth` in `litellm/proxy/auth/host/identity.py`
@@ -42,6 +44,7 @@ These are target invariants. Where the code still lags them, the Notion page lis
 
 - Every failure is one `crate::Error` in `src/error.rs`, with key and JWT denials in `src/error/key.rs` and `src/error/jwt.rs` and every message in `#[error(...)]`. A host method returns the same `Error`: `HostFailed` means the host keeps its own failure, an unreachable database included, and a host-owned step's verdict is its typed denial. `is_host_failure()` separates the two at every boundary
 - `public.rs` is the one mapping from `Error` to `PublicDenial`. It picks the status, type and param, and takes the message from `Display`
+- The exception class is part of a denial, since the failure spend row records its name and the auth failure log reads its fields. A denial the proxy raised as its own class is its own `PublicDenial` variant, and `tests/unit/proxy/auth/test_denial.py` fails when a variant has no class
 - The core renders every denial to `PublicDenial`. Python only constructs the exception, in `core.raise_denial`. A host failure is the one Python exception that passes through, so `allow_requests_on_db_unavailable` stays in Python's `handle_authentication_error` and the core never reads it
 
 ## Host-owned steps

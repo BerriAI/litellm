@@ -41,6 +41,12 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 class CacheCallTracker:
@@ -66,6 +72,7 @@ class CacheCallTracker:
             "cache_write_keys": [w["key"] for w in self.cache_writes],
             "db_query_details": self.db_queries,
         }
+
 
 
 def _wrap_cache_with_tracker(cache: DualCache, tracker: CacheCallTracker) -> DualCache:
@@ -149,7 +156,7 @@ def _create_user_object(user_id: str) -> LiteLLM_UserTable:
 
 
 @pytest.mark.asyncio
-async def test_get_key_object_warm_cache():
+async def test_get_key_object_warm_cache(rust_auth_stores: RustAuthStores):
     """
     Test get_key_object with a warm cache - should hit cache, no DB query.
     """
@@ -168,13 +175,11 @@ async def test_get_key_object_warm_cache():
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
 
-    # Mock prisma client (should NOT be called for warm cache)
-    mock_prisma = MagicMock()
-    mock_prisma.get_data = AsyncMock()
+    rust_auth_stores.key.rows[hashed_token] = {"token": hashed_token, "team_id": team_id, "user_id": user_id}
 
     result = await get_key_object(
         hashed_token=hashed_token,
-        prisma_client=mock_prisma,
+        prisma_client=MagicMock(),
         user_api_key_cache=tracked_cache,
         parent_otel_span=None,
         proxy_logging_obj=None,
@@ -186,15 +191,14 @@ async def test_get_key_object_warm_cache():
     assert summary["total_cache_reads"] == 1
     assert hashed_token in summary["cache_read_keys"]
 
-    # Prisma should NOT have been called
-    mock_prisma.get_data.assert_not_called()
+    assert rust_auth_stores.key.lookups == []
 
     # Result should be the cached token
     assert result.token == hashed_token
 
 
 @pytest.mark.asyncio
-async def test_get_key_object_cold_cache():
+async def test_get_key_object_cold_cache(rust_auth_stores: RustAuthStores):
     """
     Test get_key_object with a cold cache - should miss cache, query DB.
     """
@@ -203,21 +207,17 @@ async def test_get_key_object_cold_cache():
     user_id = "user-456"
     hashed_token = hash_token(api_key)
 
-    valid_token = _create_valid_token(api_key, team_id, user_id)
-
     # Create empty cache
     cache = DualCache(in_memory_cache=InMemoryCache())
 
     tracker = CacheCallTracker()
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
 
-    # Mock prisma client to return token on DB query
-    mock_prisma = MagicMock()
-    mock_prisma.get_data = AsyncMock(return_value=valid_token)
+    rust_auth_stores.key.rows[hashed_token] = {"token": hashed_token, "team_id": team_id, "user_id": user_id}
 
-    await get_key_object(
+    result = await get_key_object(
         hashed_token=hashed_token,
-        prisma_client=mock_prisma,
+        prisma_client=MagicMock(),
         user_api_key_cache=tracked_cache,
         parent_otel_span=None,
         proxy_logging_obj=None,
@@ -228,8 +228,8 @@ async def test_get_key_object_cold_cache():
     # Should have 1 cache read (miss) and at least 1 cache write (populate cache)
     assert summary["total_cache_reads"] >= 1
 
-    # Prisma SHOULD have been called
-    mock_prisma.get_data.assert_called_once()
+    assert rust_auth_stores.key.lookups == [(hashed_token, False)]
+    assert (result.token, result.team_id, result.user_id) == (hashed_token, team_id, user_id)
 
 
 # ============================================================================

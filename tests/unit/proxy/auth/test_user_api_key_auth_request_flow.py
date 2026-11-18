@@ -99,6 +99,12 @@ from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_met
 from litellm.types.videos.utils import encode_video_id_with_provider
 from tests._master_key import MASTER_KEY
 from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
+from tests.unit.proxy.rust_auth_stores import FakeKeyStore, RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 JWKS_URL: Final = "https://idp.example/jwks"
@@ -132,6 +138,7 @@ class _RoutingRequest:
         self.headers = headers or {}
         self.query_params = query_params or {}
         self.state = SimpleNamespace()
+
 
 
 async def _real_model_budget_limiter(
@@ -1443,7 +1450,7 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
     )
     mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget)
 
     user_api_key_cache: Final = UserApiKeyCache()
@@ -3788,7 +3795,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
         return _end_user_budget_row(budget_id, budgets[budget_id]) if budget_id in budgets else None
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
     prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
 
@@ -5100,7 +5107,7 @@ def _unrestricted_end_user_prisma(spend: float):
     end_user_row.dict = lambda: {"user_id": "customer-1", "blocked": False, "spend": spend}
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
@@ -7431,20 +7438,24 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
 
 
 class _StalledKeyLookupPrisma:
-    """A database whose connection answers the readiness ping but whose key lookups
+    """A database whose connection answers the readiness ping, paired with key lookups that
     never return, which is what the incident's locked table looked like."""
 
     def __init__(self) -> None:
         self.health_check = AsyncMock(return_value=True)
-        self.attempt_db_reconnect = AsyncMock(return_value=True)
         self.db = MagicMock()
 
-    async def get_data(self, token: str, table_name: str, parent_otel_span: None, proxy_logging_obj: None) -> None:
+
+class _StalledKeyStore(FakeKeyStore):
+    async def find(self, token: str, *, use_writer: bool = False) -> str | None:
         await asyncio.Event().wait()
+        return None
 
 
 @pytest.mark.asyncio
-async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readiness_red():
+async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readiness_red(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The incident, end to end: N requests into a proxy whose database stalls used to
     park in the pod with readiness green until it OOMed. Now every one of them fails
     within the lookup deadline as a 503, and the next readiness probe takes the pod out
@@ -7465,6 +7476,7 @@ async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readines
     app.include_router(health_endpoints.router)
     app.add_exception_handler(ProxyException, _proxy_server_mod.openai_exception_handler)
 
+    install_rust_auth_stores(monkeypatch, RustAuthStores(key=_StalledKeyStore()))
     attrs = {**_proxy_attrs_for_db_lookup(), "prisma_client": _StalledKeyLookupPrisma()}
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     health_endpoints.db_health_cache = {"status": "unknown", "last_updated": datetime.now() - timedelta(seconds=60)}
@@ -7564,6 +7576,20 @@ async def test_builder_401_for_unknown_key_discloses_nothing_about_the_lookup():
     assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
     for leaked in (key_hash, "VerificationToken", "/key/generate", submitted_key[-4:]):
         assert leaked not in body, f"401 body leaks {leaked!r}: {body}"
+
+
+@pytest.mark.asyncio
+async def test_builder_raises_the_typed_key_not_found_error_naming_the_hash_it_looked_up():
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+    from litellm.proxy.proxy_server import hash_token
+
+    get_key_object = AsyncMock(side_effect=KeyNotFoundError("the-hash-the-store-read"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    assert type(exc_info.value) is KeyNotFoundError
+    assert exc_info.value.hashed_token == hash_token(token="sk-db-lookup-test")
 
 
 @pytest.mark.asyncio
@@ -11554,7 +11580,7 @@ async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monk
 @pytest.mark.parametrize("credential", ["custom-credential", "sk-custom-credential"])
 @pytest.mark.parametrize("granted", [False, True])
 async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_row(
-    monkeypatch: pytest.MonkeyPatch, enterprise: bool, credential: str, granted: bool
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores, enterprise: bool, credential: str, granted: bool
 ) -> None:
     import importlib
     from typing import Final
@@ -11588,7 +11614,6 @@ async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_ro
     )
     custom: Final = AsyncMock(return_value=trusted)
     database: Final = MagicMock()
-    database.get_data = AsyncMock(return_value=None)
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
     for name, value in {
         **_proxy_server_attrs_for_custom_auth(user_custom_auth=None if enterprise else custom),
@@ -11610,7 +11635,7 @@ async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_ro
     )
     assert await AgentRequestHandler.is_agent_allowed("target", admitted) is granted
     custom.assert_awaited_once()
-    database.get_data.assert_not_awaited()
+    assert rust_auth_stores.key.lookups == []
 
 
 @pytest.mark.asyncio
@@ -11707,6 +11732,7 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
         patch("litellm.proxy.proxy_server.premium_user", premium),
         patch("litellm.proxy.proxy_server.master_key", "sk-fixture-master"),
         patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.database_url_configured", True),
         patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
         patch("httpx.AsyncClient.send", side_effect=AssertionError("OAuth2 must not run for this request")) as network,
     ):

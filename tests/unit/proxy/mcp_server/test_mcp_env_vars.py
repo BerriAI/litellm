@@ -6,6 +6,7 @@ connection. The DB-backed per-user flow is exercised in higher-level
 tests in tests/integration/mcp.
 """
 
+import _hashlib
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -1781,6 +1782,7 @@ def test_fips_mode_identifier_lock_keys_are_truncated_sha256() -> None:
     assert _mcp_identifier_lock_keys("GitHub") == (-7731150984991732978,)
 
 
+@pytest.mark.skipif(not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach")
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fips_mode", "blake2b_refused", "env_vars_salt_key")
 async def test_fips_mode_merge_user_env_vars_takes_its_lock_without_blake2b() -> None:
