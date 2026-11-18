@@ -48,6 +48,7 @@ from litellm.proxy.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
     normalize_token_endpoint_auth_method,
 )
+from litellm.proxy.mcp_server.auth_profiles import AuthProfileRefusal
 from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: F401  # legacy module exports
     _bridge_mint_error_response,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _BridgeMintReady,
@@ -2010,7 +2011,11 @@ async def _persist_dcr_client_registration(
             touched_by="mcp_oauth_dcr",
             expected_updated_at=stored.updated_at if stored else None,
         )
-        if updated_row is not None and not isinstance(updated_row, McpIdentifierConflict):
+        if (
+            updated_row is not None
+            and not isinstance(updated_row, McpIdentifierConflict)
+            and not isinstance(updated_row, AuthProfileRefusal)
+        ):
             await _refresh_persisted_dcr_server(updated_row)
             _apply_persisted_dcr_credentials(mcp_server, _PersistedDcrCredentials.model_validate(credentials))
             return "persisted"

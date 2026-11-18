@@ -181,6 +181,7 @@ if MCP_AVAILABLE:
         RejectMCPServerRequest,
         SpecialMCPServerName,
         UpdateMCPServerRequest,
+        UpdateMCPServerWithProfilesRequest,
         UserAPIKeyAuth,
         UserMCPManagementMode,
         is_per_server_oauth_discovery_eligible,
@@ -350,8 +351,8 @@ if MCP_AVAILABLE:
             "MCP server names and aliases must be unique, case-insensitive."
         )
 
-    def _submitted_profiles(payload: NewMCPServerRequest) -> SubmittedProfiles | None:
-        if not isinstance(payload, NewMCPServerWithProfilesRequest):
+    def _submitted_profiles(payload: NewMCPServerRequest | UpdateMCPServerRequest) -> SubmittedProfiles | None:
+        if not isinstance(payload, (NewMCPServerWithProfilesRequest, UpdateMCPServerWithProfilesRequest)):
             return None
         if "additional_auth" not in payload.model_fields_set:
             return None
@@ -3254,7 +3255,7 @@ if MCP_AVAILABLE:
     )
     @management_endpoint_wrapper
     async def edit_mcp_server(
-        payload: UpdateMCPServerRequest,
+        payload: UpdateMCPServerWithProfilesRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         litellm_changed_by: str | None = Header(
             None,
@@ -3357,10 +3358,13 @@ if MCP_AVAILABLE:
             payload,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             fields_set=payload_fields_set,
+            submitted_profiles=_submitted_profiles(payload),
         )
 
         if isinstance(mcp_server_record_updated, McpIdentifierConflict):
             raise_mcp_identifier_conflict(mcp_server_record_updated)
+        if isinstance(mcp_server_record_updated, AuthProfileRefusal):
+            raise_auth_profile_refusal(mcp_server_record_updated)
 
         if mcp_server_record_updated is None:
             raise HTTPException(

@@ -1,5 +1,8 @@
+import asyncio
 import itertools
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from typing import Final
@@ -7,7 +10,7 @@ from typing import Final
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.mcp import (
     McpCaller,
     McpPeer,
@@ -21,11 +24,19 @@ from integration._support.mcp import (
     tool_calls,
     tool_names,
 )
+from integration._support.prisma_clients import connected_proxy_prisma
 from integration._support.process import owned_proxy
 from pydantic import BaseModel, JsonValue
 
+from litellm.models.mcp_server import LiteLLM_MCPServerTable
 from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy._types import NewMCPServerWithProfilesRequest, UpdateMCPServerWithProfilesRequest
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.mcp_server.auth_profile_db import SubmittedProfiles
+from litellm.proxy.mcp_server.db import create_mcp_server_if_identifier_free, update_mcp_server
+from litellm.proxy.utils import PrismaClient
+from litellm.types.mcp import MCPTransport
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -762,3 +773,96 @@ def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_a
             assert _refusal(worker, member, identity) == not_found, worker.client.base_url
             assert _refusal(worker, outsider, identity) == not_found, worker.client.base_url
         assert _called_tools(upstream) == [], "a rejected submission reached the peer"
+
+
+def _profile(profile_id: str, auth_type: str, **settings: str) -> dict[str, str]:
+    return {"id": profile_id, "auth_type": auth_type, **settings}
+
+
+_PROFILE_ROWS: Final = (
+    'SELECT profile_id, token_url, credentials FROM "LiteLLM_MCPAuthProfileTable" WHERE server_id = %s '
+    "ORDER BY profile_id"
+)
+
+
+@contextmanager
+def _analytics_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "mcp-auth-profile-real-db")
+    server_id: Final = "analytics-" + uuid.uuid4().hex[:8]
+    try:
+        yield server_id
+    finally:
+        write_rows('DELETE FROM "LiteLLM_MCPServerTable" WHERE server_id = %s', (server_id,))
+
+
+async def _create_with_profiles(prisma_client: PrismaClient, server_id: str, profiles: list[dict[str, str]]) -> None:
+    created: Final = await create_mcp_server_if_identifier_free(
+        prisma_client,
+        NewMCPServerWithProfilesRequest(
+            server_id=server_id,
+            server_name=server_id,
+            url=f"https://mcp.example/{server_id}",
+            transport=MCPTransport.http,
+            additional_auth=profiles,
+        ),
+        "admin",
+        submitted_profiles=SubmittedProfiles(profiles),
+    )
+    assert isinstance(created, LiteLLM_MCPServerTable), created
+
+
+async def _put_profiles(prisma_client: PrismaClient, server_id: str, profiles: list[dict[str, str]]) -> object:
+    return await update_mcp_server(
+        prisma_client,
+        UpdateMCPServerWithProfilesRequest(server_id=server_id, additional_auth=profiles),
+        "admin",
+        submitted_profiles=SubmittedProfiles(profiles),
+    )
+
+
+def _secret(row: dict[str, JsonValue], key: str) -> str | None:
+    credentials: Final = row["credentials"]
+    assert isinstance(credentials, dict), credentials
+    ciphertext: Final = credentials.get(key)
+    return decrypt_value_helper(ciphertext, key) if isinstance(ciphertext, str) else None
+
+
+def test_a_put_resending_profiles_without_secrets_keeps_them_in_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _analytics_server(monkeypatch) as server_id:
+        ana: Final = "ana-bots-" + server_id
+        gh: Final = "gh-bots-" + server_id
+        oauth: Final = {"oauth2_flow": "client_credentials", "client_id": "ana-app"}
+
+        async def put_without_secrets() -> object:
+            async with connected_proxy_prisma() as prisma_client:
+                await _create_with_profiles(
+                    prisma_client,
+                    server_id,
+                    [
+                        _profile(ana, "oauth2", **oauth, client_secret="S1", token_url="https://auth.example/token"),
+                        _profile(gh, "bearer_token", authentication_token="T2"),
+                    ],
+                )
+                return await _put_profiles(
+                    prisma_client,
+                    server_id,
+                    [
+                        _profile(
+                            ana,
+                            "oauth2",
+                            **oauth,
+                            token_url="https://auth.example/token",
+                            token_endpoint_auth_method="client_secret_basic",
+                        ),
+                        _profile(gh, "bearer_token"),
+                    ],
+                )
+
+        updated: Final = asyncio.run(put_without_secrets())
+        rows: Final = read_rows(_PROFILE_ROWS, (server_id,))
+
+    assert isinstance(updated, LiteLLM_MCPServerTable), updated
+    assert [row["profile_id"] for row in rows] == [ana, gh]
+    stored_settings: Final = rows[0]["credentials"]
+    assert isinstance(stored_settings, dict) and stored_settings["token_endpoint_auth_method"] == "client_secret_basic"
+    assert (_secret(rows[0], "client_secret"), _secret(rows[1], "auth_value")) == ("S1", "T2")

@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
@@ -40,6 +41,10 @@ from litellm.proxy.mcp_server.auth_profile_db import (
     SubmittedProfiles,
     checked_profiles,
     create_profiles_write,
+    missing_secret,
+    profile_rows_of,
+    replacement_profile_rows,
+    stored_profile_rows,
     with_stored_profiles,
     with_stored_profiles_of,
 )
@@ -74,8 +79,14 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPCredentials, MCPTransportType, MCPUpstreamProtocol, validate_mcp_protocol_transport
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool
+from litellm.types.mcp import (
+    MCPCredentials,
+    MCPTransport,
+    MCPTransportType,
+    MCPUpstreamProtocol,
+    validate_mcp_protocol_transport,
+)
+from litellm.types.mcp_server.mcp_server_manager import MCPAuthProfile, MCPInfo, PinnedMCPTool
 
 if TYPE_CHECKING:
     from prisma import models as prisma_db_models
@@ -90,6 +101,9 @@ class _UserEnvVarsTransactionClient(Protocol):
 
     @property
     def litellm_mcpservertable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPServerTable]": ...
+
+    @property
+    def litellm_mcpauthprofiletable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPAuthProfileTable]": ...
 
     async def execute_raw(self, query: str, *args: object) -> int: ...
 
@@ -735,6 +749,7 @@ async def _mcp_server_write_if_identifier_free(
     exclude_server_id: str | None,
     write: "Callable[[TableActions[prisma_db_models.LiteLLM_MCPServerTable]], Awaitable[prisma_db_models.LiteLLM_MCPServerTable | None]]",
     lock_server_id: str | None = None,
+    after_write: "Callable[[_UserEnvVarsTransactionClient], Awaitable[None]] | None" = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     """Run ``write`` only when no other live row owns ``server_name``/``alias``.
 
@@ -758,7 +773,10 @@ async def _mcp_server_write_if_identifier_free(
             await tx.execute_raw(
                 'SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=$1 FOR UPDATE', lock_server_id
             )
-        return await write(tx.litellm_mcpservertable)
+        written: Final = await write(tx.litellm_mcpservertable)
+        if after_write is not None and written is not None:
+            await after_write(tx)
+        return written
 
 
 async def _db_find_mcp_server_rows(
@@ -1136,10 +1154,36 @@ async def create_mcp_server(
     return LiteLLM_MCPServerTable.model_validate(new_mcp_server.model_dump())
 
 
+_PROFILE_HOST_FIELDS: Final = frozenset({"transport", "is_byok", "spec_path"})
+
+
+def _moves_to_unsupported_profile_host(data: UpdateMCPServerRequest, fields_set: AbstractSet[str]) -> bool:
+    return (
+        ("transport" in fields_set and data.transport == MCPTransport.stdio)
+        or ("is_byok" in fields_set and data.is_byok)
+        or ("spec_path" in fields_set and bool(data.spec_path))
+    )
+
+
 def _config_profile_ids() -> tuple[StoredProfileId, ...]:
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager  # noqa: PLC0415  # circular
 
     return tuple(stored_profile_ids(global_mcp_server_manager.config_mcp_servers.values()))
+
+
+async def _stored_profiles_before_host_move(
+    prisma_client: PrismaClient, server_id: str
+) -> Mapping[str, Mapping[str, object]] | None:
+    try:
+        return await stored_profile_rows(prisma_client, server_id)
+    except Exception as error:
+        from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager  # noqa: PLC0415  # circular
+
+        loaded: Final = global_mcp_server_manager.registry.get(server_id)
+        if loaded is not None and loaded.additional_auth:
+            raise
+        verbose_proxy_logger.warning("Could not read the auth profiles of MCP server %s: %s", server_id, error)
+        return None
 
 
 async def _refusal_for_raced_profile(
@@ -1355,6 +1399,7 @@ async def _update_mcp_server_row(
     server_id: str,
     data_dict: Mapping[str, object],
     expected_updated_at: datetime | None = None,
+    after_write: "Callable[[_UserEnvVarsTransactionClient], Awaitable[None]] | None" = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
     protocol_write: Final = bool({"transport", "mcp_info"}.intersection(data_dict))
@@ -1378,7 +1423,13 @@ async def _update_mcp_server_row(
         )
 
     if not identifier_write and not protocol_write:
-        return await _update(_mcp_server_table_actions(prisma_client))
+        if after_write is None:
+            return await _update(_mcp_server_table_actions(prisma_client))
+        async with _db_transaction_manager(prisma_client) as tx:
+            updated: Final = await _update(tx.litellm_mcpservertable)
+            if updated is not None:
+                await after_write(tx)
+            return updated
     if "alias" in data_dict and not data_dict["alias"] and "server_name" not in data_dict:
         # Clearing the alias drops the prefix to the stored server_name, which
         # may already belong to another row, so that name needs the check too.
@@ -1392,6 +1443,7 @@ async def _update_mcp_server_row(
             exclude_server_id=server_id,
             write=_update,
             lock_server_id=server_id if protocol_write else None,
+            after_write=after_write,
         )
     return await _mcp_server_write_if_identifier_free(
         prisma_client,
@@ -1400,6 +1452,142 @@ async def _update_mcp_server_row(
         exclude_server_id=server_id,
         write=_update,
         lock_server_id=server_id if protocol_write else None,
+        after_write=after_write,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ProfileWrite:
+    profiles: tuple[MCPAuthProfile, ...] | None
+    touched_by: str
+    rechecks_host_move: bool = False
+
+
+async def _profile_update_write(
+    prisma_client: PrismaClient,
+    data: UpdateMCPServerRequest,
+    fields_set: AbstractSet[str],
+    submitted: SubmittedProfiles | None,
+    touched_by: str,
+) -> _ProfileWrite | AuthProfileRefusal:
+    if submitted is None and not _moves_to_unsupported_profile_host(data, fields_set):
+        return _ProfileWrite(None, touched_by)
+    stored_before_move: Final[Mapping[str, Mapping[str, object]] | None] = (
+        await _stored_profiles_before_host_move(prisma_client, data.server_id) if submitted is None else {}
+    )
+    if submitted.raw if submitted is not None else stored_before_move:
+        server: Final = await _db_find_mcp_server_row(prisma_client, data.server_id)
+        merged: Final = {
+            field: getattr(data, field) if field in fields_set else getattr(server, field, None)
+            for field in _PROFILE_HOST_FIELDS
+        }
+        host_refusal: Final = profile_host_refusal(
+            data.server_id, transport=merged["transport"], is_byok=merged["is_byok"], spec_path=merged["spec_path"]
+        )
+        if host_refusal is not None:
+            return host_refusal
+    if submitted is None:
+        return _ProfileWrite(None, touched_by, rechecks_host_move=stored_before_move is not None)
+    checked: Final = (
+        await checked_profiles(prisma_client, data.server_id, submitted.raw, _config_profile_ids())
+        if submitted.raw
+        else ()
+    )
+    if isinstance(checked, AuthProfileRefusal):
+        return checked
+    return _ProfileWrite(checked, touched_by)
+
+
+async def _refuse_profiles_on_unsupported_host(
+    tx: _UserEnvVarsTransactionClient, server_id: str, has_profiles: bool
+) -> None:
+    row: Final = await tx.litellm_mcpservertable.find_unique(where={"server_id": server_id}) if has_profiles else None
+    refusal: Final = (
+        None
+        if row is None
+        else profile_host_refusal(server_id, transport=row.transport, is_byok=row.is_byok, spec_path=row.spec_path)
+    )
+    if refusal is not None:
+        raise _ProfileWriteRefused(refusal)
+
+
+def _host_move_recheck(server_id: str) -> "Callable[[_UserEnvVarsTransactionClient], Awaitable[None]]":
+    async def recheck(tx: _UserEnvVarsTransactionClient) -> None:  # runs after the server row update locks the row
+        stored: Final = await profile_rows_of(tx.litellm_mcpauthprofiletable, server_id)
+        await _refuse_profiles_on_unsupported_host(tx, server_id, bool(stored))
+
+    return recheck
+
+
+class _ProfileWriteRefused(Exception):
+    def __init__(self, refusal: AuthProfileRefusal) -> None:
+        super().__init__("the stored MCP auth profiles refuse this replacement")
+        self.refusal = refusal
+
+
+def _profile_replacement(
+    server_id: str, profile_write: _ProfileWrite
+) -> "Callable[[_UserEnvVarsTransactionClient], Awaitable[None]] | None":
+    profiles: Final = profile_write.profiles
+    if profiles is None:
+        return _host_move_recheck(server_id) if profile_write.rechecks_host_move else None
+
+    async def replace(tx: _UserEnvVarsTransactionClient) -> None:  # runs after the server row update locks the row
+        table: Final = tx.litellm_mcpauthprofiletable
+        stored: Final = await profile_rows_of(table, server_id)
+        await _refuse_profiles_on_unsupported_host(tx, server_id, bool(profiles))
+        unsupported_change: Final = missing_secret(server_id, profiles, stored)
+        if unsupported_change is not None:
+            raise _ProfileWriteRefused(unsupported_change)
+        await table.delete_many(where={"server_id": server_id})
+        rows: Final = replacement_profile_rows(profiles, profile_write.touched_by, stored)
+        if rows:
+            await table.create_many(data=[{**row, "server_id": server_id} for row in rows])
+
+    return replace
+
+
+async def _update_row_or_name_raced_profile(
+    prisma_client: PrismaClient,
+    *,
+    server_id: str,
+    data_dict: Mapping[str, object],
+    profile_write: _ProfileWrite,
+    expected_updated_at: datetime | None,
+    submitted_profiles: object,
+) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None":
+    from prisma.errors import UniqueViolationError  # noqa: PLC0415  # prisma client is generated at build time
+
+    try:
+        return await _update_mcp_server_row(
+            prisma_client,
+            server_id=server_id,
+            data_dict=data_dict,
+            expected_updated_at=expected_updated_at,
+            after_write=_profile_replacement(server_id, profile_write),
+        )
+    except _ProfileWriteRefused as refused:
+        return refused.refusal
+    except UniqueViolationError:
+        raced: Final = await _refusal_for_raced_profile(prisma_client, server_id, submitted_profiles)
+        if raced is None:
+            raise
+        return raced
+
+
+async def _readable_updated_row(
+    prisma_client: PrismaClient,
+    row: "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None",
+) -> LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None:
+    if row is None:
+        return None
+    if isinstance(row, McpIdentifierConflict):
+        return row
+    if isinstance(row, AuthProfileRefusal):
+        return row
+    _decrypt_env_vars_on_returned_row(row)
+    return await with_stored_profiles(
+        prisma_client, LiteLLM_MCPServerTable.model_validate(row.model_dump()), use_writer=True
     )
 
 
@@ -1409,12 +1597,16 @@ async def update_mcp_server(
     touched_by: str,
     fields_set: set[str] | None = None,
     expected_updated_at: datetime | None = None,
-) -> LiteLLM_MCPServerTable | McpIdentifierConflict | None:
+    *,
+    submitted_profiles: SubmittedProfiles | None = None,
+) -> LiteLLM_MCPServerTable | McpIdentifierConflict | AuthProfileRefusal | None:
     """
     Update a new mcp server record in the db
 
     Returns McpIdentifierConflict instead of writing when the update would put
     ``server_name``/``alias`` onto identifiers another live row already owns.
+    An ``additional_auth`` list replaces the server's profiles in the same statement, a profile that
+    omits its secrets keeps the stored ones, and an omitted field leaves the profiles untouched.
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -1492,6 +1684,15 @@ async def update_mcp_server(
         if has_credentials and (data.auth_type or (existing.auth_type if existing else None)) == "oauth2"
         else {}
     )
+    profile_write: Final = await _profile_update_write(
+        prisma_client,
+        data,
+        fields_set if fields_set is not None else data.fields_set(),
+        submitted_profiles,
+        touched_by,
+    )
+    if isinstance(profile_write, AuthProfileRefusal):
+        return profile_write
     data_dict: Final = {**edited_credentials, **prepared_data, **submitted_credentials, **cleared_auth_fields}
 
     # Clear stale credentials when auth_type changes but no new credentials provided
@@ -1555,17 +1756,15 @@ async def update_mcp_server(
 
         data_dict["credentials"] = Json(None)
 
-    updated_mcp_server: Final = await _update_mcp_server_row(
+    updated_mcp_server: Final = await _update_row_or_name_raced_profile(
         prisma_client,
         server_id=data.server_id,
         data_dict=data_dict,
+        profile_write=profile_write,
         expected_updated_at=expected_updated_at,
+        submitted_profiles=submitted_profiles.raw if submitted_profiles is not None else None,
     )
-
-    if isinstance(updated_mcp_server, McpIdentifierConflict):
-        return updated_mcp_server
-    _decrypt_env_vars_on_returned_row(updated_mcp_server)
-    return LiteLLM_MCPServerTable.model_validate(updated_mcp_server.model_dump()) if updated_mcp_server else None
+    return await _readable_updated_row(prisma_client, updated_mcp_server)
 
 
 async def get_mcp_server_oauth_client_credentials(prisma_client: PrismaClient, server_id: str) -> object | None:
