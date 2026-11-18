@@ -20,10 +20,15 @@ const COLUMNS = [
   { id: "spend", label: "customerPortal.analytics.monthlySpend" },
   { id: "budget", label: "customerPortal.hierarchy.maxBudget" },
   { id: "share", label: "customerPortal.list.columns.overallSpendShare" },
-  { id: "tokens", label: "usage.statStrip.tokenPopover.totalTokens", numeric: true },
-  { id: "cacheTokens", label: "customerPortal.tokenUsage.cacheTokens", numeric: true },
+  { id: "tokens", label: "customerPortal.list.columns.tokens", numeric: true },
   { id: "cacheCost", label: "customerPortal.tokenUsage.cacheCost", numeric: true },
   { id: "status", label: "customerPortal.list.columns.status" },
+] as const;
+const TOKEN_BREAKDOWN = [
+  { id: "inputTokens", label: "usage.statStrip.tokenPopover.inputTokens" },
+  { id: "outputTokens", label: "usage.statStrip.tokenPopover.outputTokens" },
+  { id: "cacheReadTokens", label: "customerPortal.tokenUsage.cacheReadTokens" },
+  { id: "cacheWriteTokens", label: "customerPortal.tokenUsage.cacheWriteTokens" },
 ] as const;
 
 export default function CustomerOrganizationsTable({
@@ -104,7 +109,7 @@ export default function CustomerOrganizationsTable({
             const label = organization.alias || organization.customer_org_id;
             const percentage = Math.max(0, Math.min(100, share * 100));
             const shareLabel = t("format.number", { val: share, style: "percent", maximumFractionDigits: 1 });
-            const usage = usageTotals ? (usageTotals.get(organization.customer_org_id) ?? EMPTY_CUSTOMER_USAGE) : null;
+            const usage = usageTotals ? usageTotals.get(organization.customer_org_id) ?? EMPTY_CUSTOMER_USAGE : null;
             return (
               <TableRow key={organization.customer_org_id}>
                 <TableCell className="px-4 py-5">
@@ -185,7 +190,12 @@ export default function CustomerOrganizationsTable({
                     <span className="text-xs tabular-nums text-muted-foreground">{shareLabel}</span>
                   </div>
                 </TableCell>
-                <CustomerTokenCells usage={usage} />
+                <TableCell className="px-3 text-right tabular-nums">
+                  <CustomerTokenTotal usage={usage} />
+                </TableCell>
+                <TableCell className="px-3 text-right tabular-nums">
+                  <CustomerCacheCost usage={usage} />
+                </TableCell>
                 <TableCell className="px-4 text-right">
                   <span
                     className={cn(
@@ -204,55 +214,30 @@ export default function CustomerOrganizationsTable({
   );
 }
 
-function CustomerTokenCells({ usage }: { usage: CustomerUsageTotal | null }) {
+function CustomerTokenTotal({ usage }: { usage: CustomerUsageTotal | null }) {
   const { t } = useTranslation();
-  const format = (val: number) => t("format.number", { val });
-  const total = usage ? format(usage.tokens) : "—";
+  if (!usage) return "—";
+  const total = t("format.number", { val: usage.tokens });
   return (
-    <>
-      <TableCell className="px-3 text-right tabular-nums">
-        {usage ? (
-          <Popover>
-            <PopoverTrigger
-              aria-label={t("customerPortal.tokenUsage.viewTokenBreakdown", { total })}
-              className="inline-flex items-center gap-1 rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {total}
-              <ChevronDown aria-hidden="true" className="size-3 text-muted-foreground" />
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-52">
-              <PopoverTitle>{t("customerPortal.tokenUsage.tokenBreakdown")}</PopoverTitle>
-              <dl className="space-y-1 tabular-nums">
-                <div className="flex justify-between gap-3">
-                  <dt>{t("usage.statStrip.tokenPopover.inputTokens")}</dt>
-                  <dd>{format(usage.inputTokens)}</dd>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <dt>{t("usage.statStrip.tokenPopover.outputTokens")}</dt>
-                  <dd>{format(usage.outputTokens)}</dd>
-                </div>
-              </dl>
-            </PopoverContent>
-          </Popover>
-        ) : (
-          total
-        )}
-      </TableCell>
-      <TableCell className="px-3 text-right tabular-nums">
-        {usage ? (
-          <dl className="ml-auto grid w-fit grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
-            <dt className="text-left text-xs text-muted-foreground">{t("usage.statStrip.tokenPopover.cacheReads")}</dt>
-            <dd>{format(usage.cacheReadTokens)}</dd>
-            <dt className="text-left text-xs text-muted-foreground">{t("usage.statStrip.tokenPopover.cacheWrites")}</dt>
-            <dd>{format(usage.cacheWriteTokens)}</dd>
-          </dl>
-        ) : (
-          "—"
-        )}
-      </TableCell>
-      <TableCell className="px-3 text-right tabular-nums">
-        <CustomerCacheCost usage={usage} />
-      </TableCell>
-    </>
+    <Popover>
+      <PopoverTrigger
+        aria-label={t("customerPortal.tokenUsage.viewTokenBreakdown", { total })}
+        className="inline-flex items-center gap-1 rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {total}
+        <ChevronDown aria-hidden="true" className="size-3 text-muted-foreground" />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56">
+        <PopoverTitle>{t("customerPortal.tokenUsage.tokenBreakdown")}</PopoverTitle>
+        <dl className="space-y-1 tabular-nums">
+          {TOKEN_BREAKDOWN.map(({ id, label }) => (
+            <div key={id} className="flex justify-between gap-3">
+              <dt>{t(label)}</dt>
+              <dd>{t("format.number", { val: usage[id] })}</dd>
+            </div>
+          ))}
+        </dl>
+      </PopoverContent>
+    </Popover>
   );
 }
