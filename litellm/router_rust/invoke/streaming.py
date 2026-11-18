@@ -2074,6 +2074,8 @@ async def _responses_fallback_attempt(
     reach the client only when no fallback lands."""
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ResponsesContinuationSeam
 
+    if output_started and _mid_stream_error_before_output(e):
+        _raise_original_mid_stream_error(e)
     continued: Final = _responses_continuation_request(attempt, e, source_iterator)
     seam: Final = ResponsesContinuationSeam(e.generated_content if continued is not None else "")
     partial_usage: Final = _extract_partial_responses_usage(source_iterator)
