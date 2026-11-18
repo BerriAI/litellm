@@ -192,6 +192,91 @@ def test_a_box_answer_from_openai_keeps_its_box_instead_of_becoming_a_refusal() 
     }
 
 
+def test_out_of_order_openai_answers_are_returned_in_request_order_with_their_own_values() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    answers: Final = _OPENAI_RESPONSE["answers"]
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [answers[3], answers[2], answers[0], answers[1]]}
+
+    parsed: Final = OpenAIDecisionsConfig().parse_response(payload, ir)
+
+    assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
+
+
+def test_out_of_order_openai_answers_leave_unanswered_questions_as_refusals() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    answers: Final = _OPENAI_RESPONSE["answers"]
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [answers[2], answers[0]]}
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert [answer.type for answer in response.answers] == ["predicate", "refusal", "score", "refusal"]
+    assert [answer.name for answer in response.answers] == ["damaged", None, "severity", "fraud"]
+    assert response.answers[0].model_dump(mode="json") == answers[0]
+    assert response.answers[2].model_dump(mode="json") == answers[2]
+
+
+def test_an_out_of_order_box_answer_keeps_its_own_question() -> None:
+    request: Final = {
+        "input": _OPENAI_REQUEST["input"],
+        "questions": [
+            {"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"},
+            {"type": "box", "name": "crack", "instructions": "Where is the crack?"},
+        ],
+    }
+    box: Final = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
+    box_answer: Final = {"type": "box", "name": "crack", "box": box, "confidence": 0.7}
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [box_answer, _PREDICATE_ANSWER]}
+    ir: Final = _openai_ir(request)
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [_PREDICATE_ANSWER, box_answer]
+
+
+def test_an_openai_answer_named_for_no_requested_question_is_a_provider_error() -> None:
+    answers: Final = [{**_PREDICATE_ANSWER, "name": "unrequested"}, *_OPENAI_RESPONSE["answers"][1:]]
+    payload: Final = {**_OPENAI_RESPONSE, "answers": answers}
+
+    with pytest.raises(DecisionsResponseValidationError) as raised:
+        OpenAIDecisionsConfig().transform_decisions_response(
+            "gpt-6-luna",
+            "openai",
+            httpx.Response(200, json=payload),
+            _openai_ir(_OPENAI_REQUEST),
+        )
+
+    assert raised.value.status_code == 500
+    assert "unrequested" in str(raised.value)
+
+
+def test_two_openai_answers_with_the_same_name_are_a_provider_error() -> None:
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [_PREDICATE_ANSWER, _PREDICATE_ANSWER]}
+
+    with pytest.raises(DecisionsResponseValidationError, match="more than one answer named 'damaged'"):
+        OpenAIDecisionsConfig().parse_response(payload, _openai_ir(_OPENAI_REQUEST))
+
+
+def test_out_of_order_answers_for_a_request_that_reuses_a_question_name_are_a_provider_error() -> None:
+    request: Final = {
+        "input": "Screen cracked",
+        "questions": [
+            {"type": "predicate", "name": "dup", "instructions": "Damaged?"},
+            {"type": "predicate", "name": "dup", "instructions": "Cracked?"},
+            {"type": "predicate", "name": "fraud", "instructions": "Fraud?"},
+        ],
+    }
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            {"type": "predicate", "name": "fraud", "probability": 0.2},
+            {"type": "predicate", "name": "dup", "probability": 0.7},
+        ],
+    }
+
+    with pytest.raises(DecisionsResponseValidationError, match="reuses the question name 'dup'"):
+        OpenAIDecisionsConfig().parse_response(payload, _openai_ir(request))
+
+
 def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_their_keys() -> None:
     request: Final = _SYSTEMONE_BODY.validate_python(
         {
