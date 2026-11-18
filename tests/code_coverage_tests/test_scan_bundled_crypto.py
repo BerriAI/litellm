@@ -120,6 +120,17 @@ def test_bundled_crypto_next_to_a_waiver_still_fails(tmp_path: Path, relative: s
     assert result.stdout == f"VIOLATION {bundled} [BoringSSL] bundled crypto with no waiver\n" + FAIL_ONE
 
 
+def test_cryptography_wheel_with_its_own_openssl_fails(tmp_path: Path) -> None:
+    wheel: Final = _elf(
+        tmp_path / "root" / "site-packages/cryptography/hazmat/bindings/_rust.abi3.so", b"OpenSSL 4.0.1 9 Jun 2026"
+    )
+
+    result, _ = _scan(tmp_path, [tmp_path / "root"], inventory=[str(wheel)])
+
+    assert result.returncode == 1
+    assert result.stdout == f"VIOLATION {wheel} [bundled-OpenSSL] bundled crypto with no waiver\n" + FAIL_ONE
+
+
 @pytest.mark.parametrize("arch", ["x86_64", "aarch64"], ids=["intel", "arm"])
 def test_inventory_entry_matches_any_arch_and_hash_suffix(tmp_path: Path, arch: str) -> None:
     root: Final = tmp_path / "root"
