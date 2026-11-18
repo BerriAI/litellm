@@ -28,7 +28,7 @@ from fastapi import HTTPException
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, Unpack
+from typing_extensions import ReadOnly, TypeIs, Unpack
 
 import litellm
 from litellm import Router, verbose_logger
@@ -223,6 +223,10 @@ def _chat_message_file_id(part: object, role: str) -> str | None:
     if isinstance(file_data, str) and file_data.startswith(GEMINI_FILES_API_URI_PREFIXES):
         return file_data
     return None
+
+
+def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
+    return isinstance(value, Iterable)
 
 
 def _is_transient_file_retrieve_error(error: Exception) -> bool:
@@ -1738,9 +1742,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     @staticmethod
     def _iter_file_ids_from_messages(messages: Sequence[AllMessageValues]) -> Iterator[str]:
         for message in messages:
-            if (role := message.get("role")) not in ("user", "tool", "function"):
+            if (fields := as_str_mapping(message)) is None:
                 continue
-            if not isinstance((content := message.get("content")), Iterable) or isinstance(content, (str, Mapping)):
+            if not isinstance((role := fields.get("role")), str) or role not in ("user", "tool", "function"):
+                continue
+            if not _is_object_iterable(content := fields.get("content")) or isinstance(content, (str, Mapping)):
                 continue
             for part in content:
                 if (file_id := _chat_message_file_id(part, role)) is not None:

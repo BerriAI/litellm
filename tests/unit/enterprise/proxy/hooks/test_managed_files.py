@@ -6184,7 +6184,9 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
 @pytest.mark.parametrize("role", ["user", "tool"])
 @pytest.mark.parametrize("media", ["file", "image_url", "input_image"])
 @pytest.mark.parametrize("has_access", [True, False], ids=["owner", "different-key"])
-async def test_chat_file_references_use_managed_file_access(version, role, media, has_access):
+async def test_chat_file_references_use_managed_file_access(
+    version: str, role: str, media: str, has_access: bool
+) -> None:
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
     caller: Final = (
         UserAPIKeyAuth(user_id="owner", team_id="team-owner")
@@ -6209,7 +6211,7 @@ async def test_chat_file_references_use_managed_file_access(version, role, media
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
-async def test_responses_input_checks_managed_file_access(nested: bool):
+async def test_responses_input_checks_managed_file_access(nested: bool) -> None:
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
     caller: Final = UserAPIKeyAuth(user_id="other", team_id="team-other")
     file: Final = {"type": "input_file", "file_id": "https://generativelanguage.googleapis.com/v1/files/batch-out1"}

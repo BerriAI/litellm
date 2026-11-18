@@ -1,5 +1,5 @@
 import base64
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from pathlib import Path
 from typing import Final
@@ -42,7 +42,9 @@ from litellm.types.utils import Message
         ),
     ],
 )
-def test_extended_file_inspection(version: str, file_options: dict, expected_metadata: dict) -> None:
+def test_extended_file_inspection(
+    version: str, file_options: Mapping[str, object], expected_metadata: Mapping[str, object]
+) -> None:
     uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/report"
     file_part: Final = {"file_id": uri, "format": "application/pdf", **file_options}
     messages: Final = [{"role": "user", "content": [{"type": "file", "file": file_part}]}]
@@ -107,14 +109,20 @@ def test_files_api_reference_in_gemini_tool_result(version: str) -> None:
         ),
     ],
 )
-def test_chat_tool_file_inspection_preserves_selection(source, model, mime_type, selection, expected_selection):
-    if source == "inline":
-        file = {"file_data": f"data:{mime_type};base64,cGRm"}
-        expected_part = {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
-    else:
-        uri = f"https://generativelanguage.googleapis.com/{source}/files/report"
-        file = {"file_id": uri}
-        expected_part = {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+def test_chat_tool_file_inspection_preserves_selection(
+    source: str,
+    model: str,
+    mime_type: str,
+    selection: Mapping[str, Mapping[str, int]],
+    expected_selection: Mapping[str, Mapping[str, int]],
+) -> None:
+    uri: Final = f"https://generativelanguage.googleapis.com/{source}/files/report"
+    file: Final = {"file_data": f"data:{mime_type};base64,cGRm"} if source == "inline" else {"file_id": uri}
+    expected_part: Final = (
+        {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+        if source == "inline"
+        else {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    )
     messages: Final[list[AllMessageValues]] = [
         {
             "role": "assistant",
@@ -133,11 +141,11 @@ def test_chat_tool_file_inspection_preserves_selection(source, model, mime_type,
             ],
         },
     ]
-    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
     function_response: Final = {"name": "get_media", "response": {"content": ""}}
     selected_part: Final = {**expected_part, **expected_selection}
-    if model == "gemini-4-argon":
-        expected = [
+    expected: Final = (
+        [
             {
                 "function_response": {
                     **function_response,
@@ -146,8 +154,9 @@ def test_chat_tool_file_inspection_preserves_selection(source, model, mime_type,
                 }
             }
         ]
-    else:
-        expected = [{"function_response": function_response}, selected_part]
+        if model == "gemini-4-argon"
+        else [{"function_response": function_response}, selected_part]
+    )
     assert result[-1]["parts"] == expected
 
 
