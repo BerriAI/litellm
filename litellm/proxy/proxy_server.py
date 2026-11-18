@@ -16073,7 +16073,7 @@ async def _tokenizer_or_provider_error(
 
 async def _tokenizer_model(model: str, base_model: str | None) -> str:
     kind: Final = litellm.utils.huggingface_tokenizer_kind
-    if base_model is None or kind(base_model) == kind(model):
+    if base_model is None or kind(model) is not None or kind(base_model) is None:
         return model
     if not litellm.utils.huggingface_tokenizer_may_download(base_model):
         return base_model

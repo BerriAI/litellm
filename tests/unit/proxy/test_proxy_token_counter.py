@@ -6054,6 +6054,47 @@ async def test_custom_named_llama_deployment_counts_with_its_base_models_tokeniz
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        pytest.param(
+            "anthropic/claude-sonnet-5-5", "bedrock/us.anthropic.claude-sonnet-5-5", id="bundled claude tokenizer"
+        ),
+        pytest.param(
+            "databricks/databricks-meta-llama-3-3-70b-instruct",
+            "bedrock/meta.llama3-3-70b-instruct-v1:0",
+            id="hub llama tokenizer",
+        ),
+    ],
+)
+async def test_base_model_without_a_tokenizer_leaves_the_deployment_on_its_own_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch, model: str, base_model: str
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "http://127.0.0.1:9/v1"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "based",
+                    "litellm_params": {"model": model, **credentials},
+                    "model_info": {"base_model": base_model},
+                },
+                {"model_name": "own", "litellm_params": {"model": model, **credentials}},
+            ]
+        ),
+    )
+    _stub_hub_downloads(monkeypatch, lambda identifier: None)
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    based: Final = await _token_counter_route(TokenCountRequest(model="based", messages=messages))
+    own: Final = await _token_counter_route(TokenCountRequest(model="own", messages=messages))
+
+    assert (based.tokenizer_type, based.total_tokens) == ("huggingface_tokenizer", own.total_tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
 async def test_deployment_with_a_custom_tokenizer_never_waits_for_its_base_models_tokenizer_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
