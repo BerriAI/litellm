@@ -29,6 +29,11 @@ pub enum KeyDenial {
     #[error("No connected db.")]
     NoDb,
     #[error(
+        "Authentication Error, Invalid proxy server token passed. The key does not match the master key, and no \
+         database is configured to look up virtual keys. Set DATABASE_URL to use virtual keys."
+    )]
+    NoDbConfigured,
+    #[error(
         "{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={received}, expected to start with 'sk-'.{}",
         if *jwt_hint { JWT_AUTH_DISABLED_HINT } else { "" }
     )]

@@ -64,12 +64,7 @@ export default function CustomerUsageTrend({
   return (
     <section aria-label={t("customerPortal.analytics.trend")} className="border-b pb-5">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.trend")}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("customerPortal.analytics.trendHint", { dimension: t(DIMENSION_LABELS[dimension]).toLocaleLowerCase() })}
-          </p>
-        </div>
+        <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.trend")}</h2>
         <div className="flex flex-wrap items-center gap-3">
           <Select value={dimension} onValueChange={(value) => onDimensionChange(value as CustomerUsageDimension)}>
             <SelectTrigger size="sm" aria-label={t("customerPortal.analytics.breakDownBy")}>

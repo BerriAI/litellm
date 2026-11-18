@@ -52,6 +52,7 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
     result?.connection === connection && result.accessToken === accessToken && result.attempt === attempt
       ? result.response
       : undefined;
+  const status = !shouldDiscover ? "ready" : current?.status ?? "loading";
 
   useEffect(() => {
     if (!enabled || !shouldDiscover) return;
@@ -89,12 +90,7 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
       />
       {enabled && (
         <div className="mb-4 text-sm text-muted-foreground">
-          <p role="status">
-            {!shouldDiscover && t("addModel.nimModelDiscovery.ready")}
-            {shouldDiscover && !current && t("addModel.nimModelDiscovery.loading")}
-            {current?.status === "success" && t("addModel.nimModelDiscovery.success")}
-            {current?.status === "unavailable" && t("addModel.nimModelDiscovery.unavailable")}
-          </p>
+          <p role="status">{t(`addModel.nimModelDiscovery.${status}`)}</p>
           <Button
             type="button"
             variant="ghost"

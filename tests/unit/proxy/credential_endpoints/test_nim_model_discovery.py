@@ -186,11 +186,14 @@ def test_request_endpoint_does_not_receive_the_server_environment_key(client: Te
     assert response.json() == {"status": "success", "models": ["nvidia_nim/public"]}
 
 
-def test_saved_credential_can_still_resolve_its_configured_secret(client: TestClient, app: FastAPI) -> None:
+@pytest.mark.parametrize("reference", ("os.environ/NIM_DISCOVERY_SENTINEL", "oidc/env/NIM_DISCOVERY_SENTINEL"))
+def test_saved_credential_can_still_resolve_its_configured_secret(
+    client: TestClient, app: FastAPI, reference: str
+) -> None:
     credential: Final = CredentialItem(
         credential_name="nim-reference",
         credential_info={"custom_llm_provider": "nvidia_nim"},
-        credential_values={"api_key": "os.environ/NIM_DISCOVERY_SENTINEL", "api_base": "https://nim.example/v1"},
+        credential_values={"api_key": reference, "api_base": "https://nim.example/v1"},
     )
 
     def upstream(request: httpx.Request) -> httpx.Response:

@@ -9,6 +9,7 @@ from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
 
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.exceptions import AuthenticationError, ServiceUnavailableError
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared factory leaves params untyped
 )
@@ -19,6 +20,8 @@ from litellm.proxy.common_utils.credential_hydration import (
     stored_credential_provider,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import credential_api_key_secret_reference
+from litellm.utils import aresolve_api_key_secret_reference
 
 
 class _ModelCache(Protocol):
@@ -136,23 +139,32 @@ async def discover_nim_models(
             status_code=400, detail="Connection settings must use literal values, not secret references"
         )
     values: Final = credential.credential_values if credential is not None else {}
+    saved_api_base: Final = _resolved_secret(_text(values.get("api_base")))
     api_base: Final = (
-        _resolved_secret(_text(values.get("api_base")))
-        or submitted.api_base
-        or (get_secret_str("NVIDIA_NIM_API_BASE") or _DEFAULT_API_BASE)
+        saved_api_base or submitted.api_base or (get_secret_str("NVIDIA_NIM_API_BASE") or _DEFAULT_API_BASE)
     )
     try:
         parsed: Final = urlsplit(api_base)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid NIM API base") from None
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+    has_user_info: Final = bool(parsed.username or parsed.password)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or has_user_info:
         raise HTTPException(
             status_code=400, detail="API base must be an HTTP or HTTPS endpoint without user information"
         )
     if parsed.query or parsed.fragment:
         raise HTTPException(status_code=400, detail="API base cannot contain a query or fragment")
+    saved_values: Final = credential_api_key_secret_reference(
+        {"api_key": values.get("api_key"), "api_base": saved_api_base}
+    )
+    try:
+        saved_api_key: Final = await aresolve_api_key_secret_reference(
+            _resolved_secret(_text(saved_values.get("api_key"))), None, "nvidia_nim", {"api_base": api_base}
+        )
+    except (AuthenticationError, ServiceUnavailableError):
+        return NimModelDiscoveryResponse(status="unavailable")
     api_key: Final = (
-        _resolved_secret(_text(values.get("api_key")))
+        saved_api_key
         or literal_key
         or (get_secret_str("NVIDIA_NIM_API_KEY") if credential is not None or submitted.api_base is None else None)
     )
