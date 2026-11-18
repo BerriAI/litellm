@@ -2995,9 +2995,12 @@ class RustCore(
                 self._usage_read_scope(str(prepared.get("model")), prepared),
             ):
                 driver, step = await self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
-            if step["kind"] == "failed":
-                raise driver.failed(step)
-            return await driver.finish_async(step)
+            try:
+                if step["kind"] == "failed":
+                    raise driver.failed(step)
+                return await driver.finish_async(step)
+            finally:
+                driver.clear_errors()
 
     async def _run(
         self,
@@ -3021,6 +3024,7 @@ class RustCore(
         try:
             return await self._run_steps(driver, call)
         except BaseException:
+            driver.clear_errors()
             driver.close_route_phase()
             raise
 
@@ -3072,9 +3076,12 @@ class RustCore(
             call, prepared = self._start(plan, request, overrides)
             with picks_reserve(plan.endpoint not in _UNRESERVED_OPS):
                 driver, step = self._run_sync(plan, call, prepared, fresh=True)
-            if step["kind"] == "failed":
-                raise driver.failed(step)
-            return driver.finish(step)
+            try:
+                if step["kind"] == "failed":
+                    raise driver.failed(step)
+                return driver.finish(step)
+            finally:
+                driver.clear_errors()
 
     def _run_sync(
         self,
@@ -3087,6 +3094,15 @@ class RustCore(
         fresh: bool = False,
     ) -> "tuple[_Driver, Mapping[str, object]]":
         driver: Final = _Driver(self, plan, prepared, cut_deployment, stream_failure, sync=True, fresh=fresh)
+        try:
+            return self._run_sync_steps(driver, call)
+        except BaseException:
+            driver.clear_errors()
+            raise
+
+    def _run_sync_steps(
+        self, driver: "_Driver", call: "RouterCall[_CallSteps]"
+    ) -> "tuple[_Driver, Mapping[str, object]]":
         outcome: object = None  # rebind-ok: the answer to the last step
         while True:
             step = call.next(outcome)
@@ -3168,9 +3184,12 @@ class RustCore(
         driver, step = await self._run(
             plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
         )
-        if step["kind"] == "failed":
-            raise driver.failed(step)
-        return await driver.finish_async(step)
+        try:
+            if step["kind"] == "failed":
+                raise driver.failed(step)
+            return await driver.finish_async(step)
+        finally:
+            driver.clear_errors()
 
     def recover_stream_sync(
         self,
@@ -3184,9 +3203,12 @@ class RustCore(
         driver, step = self._run_sync(
             plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
         )
-        if step["kind"] == "failed":
-            raise driver.failed(step)
-        return driver.finish(step)
+        try:
+            if step["kind"] == "failed":
+                raise driver.failed(step)
+            return driver.finish(step)
+        finally:
+            driver.clear_errors()
 
     async def retry_stream(
         self, op: str, request: Mapping[str, object], origin: Mapping[str, object], failure: BaseException
@@ -3196,16 +3218,19 @@ class RustCore(
         when no retry ran)."""
         call: Final = self._recovery_call("retry", op, request, origin, failure)
         driver, step = await self._run(plan_for(op), call, request, origin.get("deployment_id"))
-        await await_all(driver.outcomes.take_pending())
-        if step["kind"] == "failed":
-            return driver.last_error if driver.last_error is not None else failure
-        attempted: Final = step.get("attempted_retries")
-        budget: Final = step.get("max_retries")
-        return (
-            driver.response,
-            attempted if isinstance(attempted, int) else 0,
-            budget if isinstance(budget, int) else 0,
-        )
+        try:
+            await await_all(driver.outcomes.take_pending())
+            if step["kind"] == "failed":
+                return driver.last_error if driver.last_error is not None else failure
+            attempted: Final = step.get("attempted_retries")
+            budget: Final = step.get("max_retries")
+            return (
+                driver.response,
+                attempted if isinstance(attempted, int) else 0,
+                budget if isinstance(budget, int) else 0,
+            )
+        finally:
+            driver.clear_errors()
 
     def params_sent_to_deployment(self, request: Mapping[str, object], deployment_id: object) -> Mapping[str, object]:
         """The request as a deployment received it: its params, the router defaults, its tool choice, then
@@ -4520,6 +4545,12 @@ class _Driver:
         # only place the outcome message is appended: not its early raises, nor its order path.
         self._explains_failure: bool = False
 
+    def clear_errors(self) -> None:
+        self._last_error = None
+        self._level_errors.clear()
+        self._hop_first.clear()
+        self._level_picks.clear()
+
     def _blocked(self, response: object, endpoint_name: str) -> str | None:
         """How the provider blocked a served response, the first check of
         ``_should_raise_content_policy_error`` (a chat response with no choices, or whose first
@@ -5551,7 +5582,7 @@ class _Driver:
     def finish(self, step: Mapping[str, object]) -> object:
         """The response with the router's headers, in the order ``make_call`` and the wrappers above it
         stamp them: a usage read that raises leaves the counts off."""
-        self._clear_errors()
+        self.clear_errors()
         if not self._plan.sets_headers:
             self.log_outcomes_sync()
             return self._last_response
@@ -5572,7 +5603,7 @@ class _Driver:
 
     async def finish_async(self, step: Mapping[str, object]) -> object:
         """``finish``, with the usage read on the call's own loop."""
-        self._clear_errors()
+        self.clear_errors()
         if not self._plan.sets_headers:
             await await_all(self.outcomes.take_pending())
             return self._last_response
@@ -5597,13 +5628,7 @@ class _Driver:
         try:
             return self._failure(step)
         finally:
-            self._clear_errors()
-
-    def _clear_errors(self) -> None:
-        self._last_error = None
-        self._level_errors.clear()
-        self._hop_first.clear()
-        self._level_picks.clear()
+            self.clear_errors()
 
     def _failure(self, step: Mapping[str, object]) -> BaseException:
         model: Final = str(self._request.get("model"))
