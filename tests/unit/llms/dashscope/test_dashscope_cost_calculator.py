@@ -834,6 +834,118 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
 
+    @pytest.mark.parametrize(
+        ("pricing", "expected_one_hour_rate"),
+        [
+            pytest.param(
+                {
+                    "input_cost_per_token": 1.5e-06,
+                    "cache_creation_input_token_cost": 1.875e-06,
+                    "cache_creation_input_token_cost_above_1hr": 3e-06,
+                },
+                3e-06,
+                id="flat_one_hour_rate",
+            ),
+            pytest.param(
+                {
+                    "input_cost_per_token": 1.5e-06,
+                    "cache_creation_input_token_cost": 1.875e-06,
+                },
+                1.875e-06,
+                id="no_one_hour_rate_bills_the_write_rate",
+            ),
+            pytest.param(
+                {
+                    "cache_creation_input_token_cost_above_1hr": 9e-06,
+                    "tiered_pricing": [
+                        {
+                            "range": [0, 256000],
+                            "input_cost_per_token": 1.5e-06,
+                            "cache_creation_input_token_cost": 1.875e-06,
+                            "cache_creation_input_token_cost_above_1hr": 3e-06,
+                        }
+                    ],
+                },
+                3e-06,
+                id="tier_one_hour_rate_wins_over_the_model_rate",
+            ),
+            pytest.param(
+                {
+                    "cache_creation_input_token_cost_above_1hr": 3e-06,
+                    "tiered_pricing": [
+                        {
+                            "range": [0, 256000],
+                            "input_cost_per_token": 1.5e-06,
+                            "cache_creation_input_token_cost": 1.875e-06,
+                        }
+                    ],
+                },
+                1.875e-06,
+                id="tier_without_a_one_hour_rate_bills_the_tier_write_rate",
+            ),
+        ],
+    )
+    def test_dashscope_one_hour_cache_writes_bill_at_the_one_hour_rate(
+        self, pricing: dict[str, object], expected_one_hour_rate: float
+    ):
+        """
+        Regression (#52261): DashScope reports the 5m/1h cache-write split as a nested
+        prompt_tokens_details.cache_creation object, and the 1h tokens must bill at
+        cache_creation_input_token_cost_above_1hr instead of the 5m write rate.
+        """
+        litellm.model_cost["dashscope/qwen-one-hour-cache-write-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "output_cost_per_token": 4.5e-06,
+            **pricing,
+        }
+
+        usage = Usage(
+            prompt_tokens=10016,
+            completion_tokens=2,
+            total_tokens=10018,
+            prompt_tokens_details={
+                "cached_tokens": 0,
+                "cache_type": "ephemeral",
+                "cache_creation_input_tokens": 10000,
+                "cache_write_tokens": 10000,
+                "cache_creation": {"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 8000},
+                "text_tokens": 10016,
+            },
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-one-hour-cache-write-test", usage=usage)
+
+        expected_write_cost = (2000 * 1.875e-06) + (8000 * expected_one_hour_rate)
+        assert math.isclose(prompt_cost, (16 * 1.5e-06) + expected_write_cost, rel_tol=1e-10)
+
+        breakdown = get_token_type_cost_breakdown(
+            model="qwen-one-hour-cache-write-test", custom_llm_provider="dashscope", usage=usage
+        )
+        assert math.isclose(breakdown.cache_creation_cost, expected_write_cost, rel_tol=1e-10)
+
+    @pytest.mark.parametrize("malformed_split", ["1h", {"ephemeral_1h_input_tokens": "many"}])
+    def test_dashscope_malformed_cache_write_split_bills_the_write_rate(self, malformed_split: object):
+        litellm.model_cost["dashscope/qwen-malformed-cache-split-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 1.5e-06,
+            "output_cost_per_token": 4.5e-06,
+            "cache_creation_input_token_cost": 1.875e-06,
+            "cache_creation_input_token_cost_above_1hr": 3e-06,
+        }
+
+        usage = Usage(
+            prompt_tokens=10016,
+            completion_tokens=2,
+            total_tokens=10018,
+            prompt_tokens_details={"cache_creation_input_tokens": 10000, "cache_creation": malformed_split},
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-malformed-cache-split-test", usage=usage)
+
+        assert math.isclose(prompt_cost, (16 * 1.5e-06) + (10000 * 1.875e-06), rel_tol=1e-10)
+
     def test_dashscope_tier_without_an_output_rate_bills_the_model_rate(self):
         """
         Regression: a tier declaring only an input rate served every completion for free,
