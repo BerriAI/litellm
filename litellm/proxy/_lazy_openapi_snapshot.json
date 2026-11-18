@@ -12137,10 +12137,6 @@
                             "mode": {
                               "anyOf": [
                                 {
-                                  "enum": [
-                                    "implicit",
-                                    "explicit"
-                                  ],
                                   "type": "string"
                                 },
                                 {
@@ -13665,10 +13661,6 @@
                             "mode": {
                               "anyOf": [
                                 {
-                                  "enum": [
-                                    "implicit",
-                                    "explicit"
-                                  ],
                                   "type": "string"
                                 },
                                 {

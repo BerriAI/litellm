@@ -63336,7 +63336,7 @@ export interface operations {
                     prompt_cache_key?: string | null;
                     prompt_cache_options?: ({
                         /** Mode */
-                        mode?: ("implicit" | "explicit") | null;
+                        mode?: string | null;
                         /** Ttl */
                         ttl?: string | null;
                     } & {
@@ -86333,7 +86333,7 @@ export interface operations {
                     prompt_cache_key?: string | null;
                     prompt_cache_options?: ({
                         /** Mode */
-                        mode?: ("implicit" | "explicit") | null;
+                        mode?: string | null;
                         /** Ttl */
                         ttl?: string | null;
                     } & {

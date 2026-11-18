@@ -1108,12 +1108,37 @@ def test_prompt_cache_controls_reach_an_openai_deployment_unchanged(
     }
 
 
-@pytest.mark.parametrize("ttl", ("30m", "1h"), ids=("known_ttl", "unknown_ttl"))
-def test_prompt_cache_controls_are_ignored_by_a_deployment_without_prompt_cache(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, ttl: str
+def test_prompt_cache_fields_are_refused_by_a_deployment_without_prompt_cache(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     _route_decider_to(monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key"})
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "decider",
+            "input": [_CACHED_POLICY_USER_MESSAGE, _IMAGE_TEXT_MESSAGE],
+            "questions": [_PREDICATE],
+            "prompt_cache_key": "defect-review",
+            "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "['prompt_cache_key', 'prompt_cache_options']" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("ttl", ("30m", "1h"), ids=("known_ttl", "unknown_ttl"))
+def test_prompt_cache_controls_are_dropped_by_a_deployment_without_prompt_cache_that_drops_params(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, ttl: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key", "drop_params": True}
+    )
     upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 
     response: Final = client.post(
@@ -1228,11 +1253,6 @@ _MALFORMED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], str, M
         {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
     ),
     (
-        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "always"}},
-        "prompt_cache_options",
-        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
-    ),
-    (
         {
             **_PROMPT_CACHE_FIELDS,
             "input": [_IMAGE_TEXT_MESSAGE],
@@ -1247,7 +1267,6 @@ _MALFORMED_PROMPT_CACHE_IDS: Final = (
     "breakpoint_ttl",
     "non_string_key",
     "string_options",
-    "options_mode",
     "options_ttl",
 )
 _UNACCEPTED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], Mapping[str, object]], ...]] = (
@@ -1262,6 +1281,18 @@ _UNACCEPTED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], Mappi
             "prompt_cache_options": {"mode": "explicit", "ttl": "7d"},
         },
         {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "explicit"}},
+    ),
+    (
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"mode": "always"}},
+        {"input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_key": _PROMPT_CACHE_FIELDS["prompt_cache_key"]},
+    ),
+    (
+        {
+            **_PROMPT_CACHE_FIELDS,
+            "input": [_IMAGE_TEXT_MESSAGE],
+            "prompt_cache_options": {"mode": "always", "ttl": "12h"},
+        },
+        {**_PROMPT_CACHE_FIELDS, "input": [_IMAGE_TEXT_MESSAGE], "prompt_cache_options": {"ttl": "12h"}},
     ),
     (
         {
@@ -1283,6 +1314,8 @@ _UNACCEPTED_PROMPT_CACHE_REQUESTS: Final[tuple[tuple[Mapping[str, object], Mappi
 _UNACCEPTED_PROMPT_CACHE_IDS: Final = (
     "key_over_64_characters",
     "options_ttl_7d",
+    "options_mode",
+    "options_mode_with_ttl",
     "options_unknown_key",
     "breakpoint_ttl_7d",
     "breakpoint_unknown_key",

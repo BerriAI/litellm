@@ -459,14 +459,12 @@ def _fields_without_unsupported_media(
     )
 
 
-def _fields_without_unsupported_prompt_cache(
+def _fields_without_unsupported_breakpoints(
     fields: RequestFields, provider_config: BaseDecisionsConfig
 ) -> RequestFields:
     match fields:
         case OpenAIDecisionRequestFields() if not provider_config.supports_prompt_cache:
-            return replace(
-                fields, prompt_cache_key=None, prompt_cache_options=None, keeps_prompt_cache_breakpoints=False
-            )
+            return replace(fields, keeps_prompt_cache_breakpoints=False)
         case _:
             return fields
 
@@ -515,6 +513,12 @@ def _unsupported_params(
         _has_developer_or_system_message(ir_request.input)
         and not provider_config.supports_developer_and_system_messages
     )
+    refuses_prompt_cache_key: Final = (
+        ir_request.prompt_cache_key is not None and not provider_config.supports_prompt_cache
+    )
+    refuses_prompt_cache_options: Final = (
+        ir_request.prompt_cache_options is not None and not provider_config.supports_prompt_cache
+    )
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -523,6 +527,8 @@ def _unsupported_params(
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
         *(("developer and system messages",) if refuses_developer_and_system_messages else ()),
+        *(("prompt_cache_key",) if refuses_prompt_cache_key else ()),
+        *(("prompt_cache_options",) if refuses_prompt_cache_options else ()),
     )
 
 
@@ -565,6 +571,8 @@ def _without_unsupported_params(
             else with_images_where(supported_input, _no_image)
         ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
+        prompt_cache_key=ir_request.prompt_cache_key if provider_config.supports_prompt_cache else None,
+        prompt_cache_options=ir_request.prompt_cache_options if provider_config.supports_prompt_cache else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions if support.box_questions else tuple(filter(_is_not_box_question, ir_request.questions))
@@ -732,7 +740,7 @@ def prepare_call(
         headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
         support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
-        request: Final = _fields_without_unsupported_prompt_cache(
+        request: Final = _fields_without_unsupported_breakpoints(
             _fields_without_unsupported_media(fields, support, kwargs), provider_config
         ).validate(safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs))
     except ValidationError as error:

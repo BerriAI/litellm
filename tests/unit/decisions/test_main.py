@@ -2611,10 +2611,34 @@ async def test_typed_prompt_cache_values_reach_openai_on_the_wire(
 _SUPPORT_TEAM_NOTE: Final = "Answer for the support team."
 
 
+_SCREEN_MESSAGE_WITH_BREAKPOINT: Final[Mapping[str, object]] = {
+    "role": "user",
+    "content": [{"type": "input_text", "text": _SCREEN_TEXT, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+}
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
-async def test_prompt_cache_controls_are_ignored_by_a_provider_without_prompt_cache(
-    drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_prompt_cache_fields_are_refused_by_a_provider_without_prompt_cache(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['prompt_cache_key', 'prompt_cache_options'\]"):
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[_CACHED_POLICY_USER_MESSAGE, _SCREEN_MESSAGE_WITH_BREAKPOINT],
+            questions=_PREDICATE_QUESTIONS,
+            **_PROMPT_CACHE_KWARGS,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_drop_params_drops_prompt_cache_controls_for_a_provider_without_prompt_cache(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
@@ -2622,17 +2646,9 @@ async def test_prompt_cache_controls_are_ignored_by_a_provider_without_prompt_ca
     await litellm.adecisions(
         model="perplexity/pplx-decider-v1-27b",
         api_key="caller-key",
-        input=[
-            _CACHED_POLICY_USER_MESSAGE,
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": _SCREEN_TEXT, "prompt_cache_breakpoint": {"mode": "explicit"}}
-                ],
-            },
-        ],
+        input=[_CACHED_POLICY_USER_MESSAGE, _SCREEN_MESSAGE_WITH_BREAKPOINT],
         questions=_PREDICATE_QUESTIONS,
-        drop_params=drop_params,
+        drop_params=True,
         **_PROMPT_CACHE_KWARGS,
     )
 
@@ -2698,17 +2714,36 @@ def test_drop_params_refuses_input_with_only_developer_and_system_messages_for_a
     assert not route.called
 
 
-_IGNORED_PROMPT_CACHE_VALUES: Final[tuple[Mapping[str, object], ...]] = (
+_UNSENT_PROMPT_CACHE_VALUES: Final[tuple[Mapping[str, object], ...]] = (
     MappingProxyType({"prompt_cache_key": 7}),
     MappingProxyType({"prompt_cache_options": {"mode": "explicit", "ttl": "1h"}}),
 )
 
 
-@pytest.mark.parametrize("prompt_cache_kwargs", _IGNORED_PROMPT_CACHE_VALUES, ids=("non_string_key", "unknown_ttl"))
-def test_prompt_cache_values_are_not_validated_for_a_provider_without_prompt_cache(
+@pytest.mark.parametrize("prompt_cache_kwargs", _UNSENT_PROMPT_CACHE_VALUES, ids=("non_string_key", "unknown_ttl"))
+def test_prompt_cache_values_are_refused_by_a_provider_without_prompt_cache(
     prompt_cache_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match=next(iter(prompt_cache_kwargs))):
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=_SCREEN_TEXT,
+            questions=_PREDICATE_QUESTIONS,
+            **prompt_cache_kwargs,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("prompt_cache_kwargs", _UNSENT_PROMPT_CACHE_VALUES, ids=("non_string_key", "unknown_ttl"))
+def test_drop_params_drops_prompt_cache_values_for_a_provider_without_prompt_cache(
+    prompt_cache_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
     route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
 
     litellm.decisions(

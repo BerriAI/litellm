@@ -285,7 +285,7 @@ class OpenAIDecisionPromptCacheBreakpoint(LiteLLMPydanticObjectBase):
 
 
 class OpenAIDecisionPromptCacheOptions(LiteLLMPydanticObjectBase):
-    mode: Literal["implicit", "explicit"] | None = None
+    mode: str | None = None
     ttl: str | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
