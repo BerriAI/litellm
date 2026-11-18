@@ -2250,6 +2250,7 @@ def _map_azure_exception(
                 llm_provider="azure",
                 litellm_debug_info=extra_information,
                 response=response,
+                body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(

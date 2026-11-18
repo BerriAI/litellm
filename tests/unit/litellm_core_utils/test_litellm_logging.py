@@ -5899,6 +5899,30 @@ def test_get_error_information_logs_no_provider_error_code_when_the_carried_code
     assert error_information["error_provider_code"] is None
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_get_error_information_keeps_the_provider_error_code_of_a_mapped_rate_limit_error(custom_llm_provider: str):
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.llms.openai.common_utils import OpenAIError
+
+    upstream_error: Final = OpenAIError(
+        status_code=429,
+        message="You exceeded your current quota, please check your plan and billing details.",
+        body={
+            "message": "You exceeded your current quota, please check your plan and billing details.",
+            "type": "insufficient_quota",
+            "param": None,
+            "code": "insufficient_quota",
+        },
+    )
+    with pytest.raises(litellm.RateLimitError) as mapped:
+        exception_type(model="gpt-5.6", original_exception=upstream_error, custom_llm_provider=custom_llm_provider)
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(mapped.value)
+
+    assert error_information["error_code"] == "429"
+    assert error_information["error_provider_code"] == "insufficient_quota"
+
+
 def test_get_error_information_logs_a_provider_error_code_when_no_http_status_is_known():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 

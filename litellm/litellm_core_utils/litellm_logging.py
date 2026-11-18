@@ -7822,11 +7822,19 @@ def _logged_error_code(original_exception: Exception | None) -> str:
     return "" if carried_code in ("", "None") else carried_code
 
 
-def _logged_provider_error_code(original_exception: Exception | None) -> str | None:
-    carried_code: Final = str(getattr(original_exception, "code", None))
-    if carried_code in ("", "None") or _is_http_error_status(carried_code):
+def _provider_error_code(code: object) -> str | None:
+    text: Final = str(code)
+    if text in ("", "None") or _is_http_error_status(text):
         return None
-    return carried_code
+    return text
+
+
+def _logged_provider_error_code(original_exception: Exception | None) -> str | None:
+    carried_code: Final = _provider_error_code(getattr(original_exception, "code", None))
+    if carried_code is not None:
+        return carried_code
+    error_body: Final = as_str_mapping(getattr(original_exception, "body", None))
+    return _provider_error_code(error_body.get("code")) if error_body is not None else None
 
 
 class StandardLoggingPayloadSetup:
