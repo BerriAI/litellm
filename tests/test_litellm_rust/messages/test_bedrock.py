@@ -3,6 +3,7 @@ import base64
 import binascii
 import json
 import logging
+import math
 import struct
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
@@ -1584,7 +1585,7 @@ async def test_claude_platform_bills_the_claude_platform_row(server: RecordingSe
         completion_tokens=int(str(billed["completion_tokens"])),
     )
     assert billed["custom_llm_provider"] == "bedrock"
-    assert billed["response_cost"] == pytest.approx(prompt_cost + completion_cost)
+    assert math.isclose(float(str(billed["response_cost"])), prompt_cost + completion_cost)
     assert prompt_cost + completion_cost > 0
 
 
@@ -1626,7 +1627,7 @@ async def test_claude_platform_upstream_failure_raises_the_bedrock_exception(ser
         await _platform(server, api_key="k")
 
     assert rust_raised.value.status_code == 429
-    assert rust_raised.value.llm_provider == "bedrock"
+    assert getattr(rust_raised.value, "llm_provider", None) == "bedrock"
     assert "BedrockException" in str(rust_raised.value)
 
 
