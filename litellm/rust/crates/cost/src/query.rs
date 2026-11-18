@@ -15,6 +15,7 @@ use crate::usage::{Characters, DurationMeter, Images, Search, Tokens, Usage, Web
 
 pub use crate::ocr::OcrQuery;
 pub use crate::rerank::RerankQuery;
+pub use crate::search::SearchQuery;
 pub use crate::speech::SpeechQuery;
 pub use crate::transcription::TranscriptionQuery;
 pub use crate::vector_store::VectorStoreSearchQuery;
@@ -33,7 +34,7 @@ pub enum PriceQuery {
     Transcription(Box<TranscriptionQuery>),
     Ocr(Box<OcrQuery>),
     Rerank(Box<RerankQuery>),
-    Search(Header),
+    Search(Box<SearchQuery>),
     VectorStoreSearch(Box<VectorStoreSearchQuery>),
     Video(Header),
     /// Realtime, Live and Responses websocket sessions

@@ -8,7 +8,7 @@
 use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::query::{
     AdjustmentPolicy, Basis, Candidate, Header, OcrQuery, PriceQuery, PriceSource, Provider,
-    RerankQuery, SpeechQuery, TranscriptionQuery, VectorStoreSearchQuery,
+    RerankQuery, SearchQuery, SpeechQuery, TranscriptionQuery, VectorStoreSearchQuery,
 };
 use litellm_cost::receipt::{PriceOutcome, Unpriced};
 use litellm_cost::row::RowRef;
@@ -63,6 +63,26 @@ enum UnitsDocument {
         #[serde(default)]
         tokens: bool,
     },
+    Search {
+        #[serde(flatten)]
+        named: Named,
+        queries: u64,
+        #[serde(default)]
+        additional_results: u64,
+        #[serde(default)]
+        adjust: Option<AdjustFacts>,
+    },
+}
+
+/// The discount and margin key of a call main adjusts
+#[derive(Deserialize)]
+struct AdjustFacts {
+    #[serde(default)]
+    provider: Option<Box<str>>,
+    #[serde(default)]
+    model: Option<Box<str>>,
+    #[serde(default)]
+    region: Option<Box<str>>,
 }
 
 /// The model and provider main's calculator priced under
@@ -102,7 +122,8 @@ pub(crate) fn price_units(
         | UnitsDocument::VectorStoreSearch { named }
         | UnitsDocument::Ocr { named, .. }
         | UnitsDocument::Speech { named, .. }
-        | UnitsDocument::Transcription { named, .. } => named,
+        | UnitsDocument::Transcription { named, .. }
+        | UnitsDocument::Search { named, .. } => named,
     };
     let provider = named.provider.as_deref().unwrap_or_default();
     let candidate = Candidate {
@@ -140,7 +161,17 @@ pub(crate) fn price_units(
             vertex_location: None,
             at: jiff::Timestamp::now(),
         },
-        adjustments: AdjustmentPolicy::None,
+        adjustments: match &document {
+            UnitsDocument::Search {
+                adjust: Some(adjust),
+                ..
+            } => AdjustmentPolicy::Apply {
+                provider: adjust.provider.clone(),
+                model: adjust.model.clone(),
+                region: adjust.region.clone(),
+            },
+            _ => AdjustmentPolicy::None,
+        },
         reported: None,
     };
     let query = match document {
@@ -186,6 +217,15 @@ pub(crate) fn price_units(
             header,
             seconds,
             tokens,
+        })),
+        UnitsDocument::Search {
+            queries,
+            additional_results,
+            ..
+        } => PriceQuery::Search(Box::new(SearchQuery {
+            header,
+            queries,
+            additional_results,
         })),
     };
     outcome(py, litellm_cost::price(&rows, &query))

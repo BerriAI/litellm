@@ -119,7 +119,18 @@ class TranscriptionDocument(TypedDict):
     tokens: ReadOnly[bool]
 
 
-UnitsDocument = RerankDocument | VectorStoreSearchDocument | OcrDocument | SpeechDocument | TranscriptionDocument
+class SearchDocument(TypedDict):
+    kind: ReadOnly[Literal["search"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str | None]
+    queries: ReadOnly[int]
+    additional_results: ReadOnly[int]
+    adjust: ReadOnly[AdjustFacts | None]
+
+
+UnitsDocument = (
+    SearchDocument | RerankDocument | VectorStoreSearchDocument | OcrDocument | SpeechDocument | TranscriptionDocument
+)
 
 
 @dataclass(frozen=True, slots=True)
