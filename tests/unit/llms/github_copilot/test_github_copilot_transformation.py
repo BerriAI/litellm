@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -941,6 +943,18 @@ def test_transform_response_carries_upstream_usage():
     assert result.usage.total_tokens == 18
 
 
+def _config_signed_in_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, client_id: str | None
+) -> GithubCopilotConfig:
+    (tmp_path / "access-token").write_text("ghu_test-token")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    if client_id is None:
+        monkeypatch.delenv("GITHUB_COPILOT_CLIENT_ID", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", client_id)
+    return GithubCopilotConfig()
+
+
 @pytest.mark.parametrize(
     ("client_id", "integration_id"),
     [
@@ -951,17 +965,11 @@ def test_transform_response_carries_upstream_usage():
     ids=["default_app", "default_app_set_explicitly", "custom_github_app"],
 )
 def test_shared_login_tells_copilot_the_integration_its_github_app_is_allowed(
-    monkeypatch, client_id: str | None, integration_id: str
-):
-    if client_id is None:
-        monkeypatch.delenv("GITHUB_COPILOT_CLIENT_ID", raising=False)
-    else:
-        monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", client_id)
-    config = GithubCopilotConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, client_id: str | None, integration_id: str
+) -> None:
+    config: Final = _config_signed_in_through(monkeypatch, tmp_path, client_id)
 
-    headers = config.validate_environment(
+    headers: Final = config.validate_environment(
         headers={},
         model="github_copilot/claude-opus-4.5",
         messages=[{"role": "user", "content": "hi"}],
@@ -972,13 +980,12 @@ def test_shared_login_tells_copilot_the_integration_its_github_app_is_allowed(
     assert headers["copilot-integration-id"] == integration_id, headers
 
 
-def test_caller_integration_id_header_still_wins_for_a_custom_github_app(monkeypatch):
-    monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "Iv23liCustomApp")
-    config = GithubCopilotConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+def test_caller_integration_id_header_still_wins_for_a_custom_github_app(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config: Final = _config_signed_in_through(monkeypatch, tmp_path, "Iv23liCustomApp")
 
-    headers = config.validate_environment(
+    headers: Final = config.validate_environment(
         headers={"copilot-integration-id": "vscode-chat"},
         model="github_copilot/gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
