@@ -20,7 +20,11 @@ from litellm.llms.openai.decisions.transformation import (
 from litellm.types.decisions import (
     DecisionsIRRequest,
     DecisionsRequestBody,
+    OpenAIChoiceAnswer,
     OpenAIDecisionRequestBody,
+    OpenAIPredicateAnswer,
+    OpenAIRefusalAnswer,
+    OpenAIScoreAnswer,
     UnsupportedDecisionsRequest,
 )
 
@@ -132,6 +136,117 @@ def test_an_openai_response_reaches_the_caller_unchanged(usage: Mapping[str, obj
     parsed: Final = OpenAIDecisionsConfig().parse_response(payload, ir)
 
     assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == payload
+
+
+def test_openai_response_reordered_named_answers_preserve_mapping() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            _REFUSAL_ANSWER,
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 0.7,
+                "probabilities": [
+                    {"value": 0, "label": "minor", "probability": 0.3},
+                    {"value": 1, "label": "major", "probability": 0.7},
+                ],
+                "confidence": 0.6,
+            },
+            _CHOICE_ANSWER,
+            _PREDICATE_ANSWER,
+        ],
+    }
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    # Question 0: "damaged" (predicate)
+    assert response.answers[0].name == "damaged"
+    assert isinstance(response.answers[0], OpenAIPredicateAnswer)
+    assert response.answers[0].probability == _PREDICATE_ANSWER["probability"]
+
+    # Question 1: Unnamed (choice)
+    assert response.answers[1].name is None
+    assert isinstance(response.answers[1], OpenAIChoiceAnswer)
+    assert response.answers[1].choice == _CHOICE_ANSWER["choice"]
+
+    # Question 2: "severity" (score)
+    assert response.answers[2].name == "severity"
+    assert isinstance(response.answers[2], OpenAIScoreAnswer)
+    assert response.answers[2].score == 0.7
+
+    # Question 3: "fraud" (refusal)
+    assert response.answers[3].name == "fraud"
+    assert isinstance(response.answers[3], OpenAIRefusalAnswer)
+
+
+def test_openai_response_duplicate_named_answers_match_sequentially() -> None:
+    request: Final = {
+        "input": _OPENAI_REQUEST["input"],
+        "questions": [
+            {"type": "predicate", "name": "damaged", "instructions": "Is the front damaged?"},
+            {"type": "predicate", "name": "damaged", "instructions": "Is the back damaged?"},
+        ],
+    }
+    ir: Final = _openai_ir(request)
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            {"type": "predicate", "name": "damaged", "probability": 0.2},
+            {"type": "predicate", "name": "damaged", "probability": 0.8},
+        ],
+    }
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[0].name == "damaged"
+    assert isinstance(response.answers[0], OpenAIPredicateAnswer)
+    assert response.answers[0].probability == 0.2
+
+    assert response.answers[1].name == "damaged"
+    assert isinstance(response.answers[1], OpenAIPredicateAnswer)
+    assert response.answers[1].probability == 0.8
+
+
+def test_openai_response_missing_named_answer_does_not_claim_unnamed_answer() -> None:
+    request: Final = {
+        "input": _OPENAI_REQUEST["input"],
+        "questions": [
+            {"type": "predicate", "name": "missing", "instructions": "Is it missing?"},
+            {
+                "type": "choice",
+                "instructions": "Should we refund?",
+                "choices": [{"value": True, "description": "Refund now"}, {"value": "escalate"}],
+            },
+        ],
+    }
+    ir: Final = _openai_ir(request)
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            _CHOICE_ANSWER,
+            {"type": "predicate", "name": "unrelated", "probability": 0.5},
+        ],
+    }
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[0].name == "missing"
+    assert isinstance(response.answers[0], OpenAIRefusalAnswer)
+
+    assert response.answers[1].name is None
+    assert isinstance(response.answers[1], OpenAIChoiceAnswer)
+    assert response.answers[1].choice == _CHOICE_ANSWER["choice"]
+
+
+def test_openai_response_only_unnamed_answer_matches_unnamed_question() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [_CHOICE_ANSWER]}
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert isinstance(response.answers[0], OpenAIRefusalAnswer)
+    assert isinstance(response.answers[1], OpenAIChoiceAnswer)
+    assert response.answers[1].choice == _CHOICE_ANSWER["choice"]
+    assert isinstance(response.answers[2], OpenAIRefusalAnswer)
+    assert isinstance(response.answers[3], OpenAIRefusalAnswer)
 
 
 @pytest.mark.parametrize("answer_type", ["choice", "score"])

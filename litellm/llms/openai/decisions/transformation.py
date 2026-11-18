@@ -261,14 +261,46 @@ def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | Non
             return DecisionsIRRefusal()
 
 
+def _match_answers(
+    questions: Sequence[DecisionsIRQuestion],
+    answers: Sequence[OpenAIDecisionAnswer],
+) -> tuple[OpenAIDecisionAnswer | None, ...]:
+    matched: Final[list[OpenAIDecisionAnswer | None]] = [None] * len(questions)
+    claimed: Final[set[int]] = set()
+
+    for q_idx, question in enumerate(questions):
+        if question.name is not None:
+            for a_idx, answer in enumerate(answers):
+                if a_idx not in claimed and answer.name == question.name:
+                    matched[q_idx] = answer
+                    claimed.add(a_idx)
+                    break
+
+    unclaimed_unnamed_indices = [
+        a_idx for a_idx, answer in enumerate(answers) if a_idx not in claimed and answer.name is None
+    ]
+    unclaimed_iter = iter(unclaimed_unnamed_indices)
+    for q_idx, question in enumerate(questions):
+        if question.name is None:
+            a_idx = next(unclaimed_iter, None)
+            if a_idx is not None:
+                matched[q_idx] = answers[a_idx]
+                claimed.add(a_idx)
+
+    for q_idx, question in enumerate(questions):
+        if matched[q_idx] is None and q_idx < len(answers) and q_idx not in claimed:
+            if answers[q_idx].name is None:
+                matched[q_idx] = answers[q_idx]
+                claimed.add(q_idx)
+
+    return tuple(matched)
+
+
 def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    answers: Final = response.answers
+    matched_answers: Final = _match_answers(request.questions, response.answers)
     return DecisionsIRResponse(
         model=response.model,
-        answers=tuple(
-            _ir_answer(question, answers[index] if index < len(answers) else None)
-            for index, question in enumerate(request.questions)
-        ),
+        answers=tuple(_ir_answer(question, answer) for question, answer in zip(request.questions, matched_answers)),
         usage=DecisionsIRUsage(
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
