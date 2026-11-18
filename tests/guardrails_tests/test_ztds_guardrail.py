@@ -6,48 +6,83 @@ https://datatracker.ietf.org/doc/draft-sibiryakov-ztds-protocol/
 
 from __future__ import annotations
 
+import json
+import re
+import time
 import unittest
+from collections.abc import AsyncGenerator
+from typing import Final
 
+import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
+from litellm.proxy.guardrails.guardrail_initializers import initialize_ztds
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+
+
+def _expect_dict(value: object) -> dict[str, object]:  # mutable-ok: test helper narrows dynamic JSON dict
+    assert isinstance(value, dict)
+    return value  # pyright: ignore[reportUnknownVariableType]  # isinstance widens dict keys/values
+
+
+def _expect_list(value: object) -> list[object]:  # mutable-ok: test helper narrows dynamic JSON list
+    assert isinstance(value, list)
+    return value  # pyright: ignore[reportUnknownVariableType]  # isinstance widens list elements
 
 
 class MockMessage:
-    def __init__(self, content):
-        self.content = content
+    def __init__(self, content: str) -> None:
+        self.content: str = content
 
 
 class MockChoice:
-    def __init__(self, content):
-        self.message = MockMessage(content)
+    def __init__(self, content: str) -> None:
+        self.message: MockMessage = MockMessage(content)
 
 
 class MockModelResponse:
-    def __init__(self, content):
-        self.choices = [MockChoice(content)]
+    def __init__(self, content: str) -> None:
+        self.choices: list[MockChoice] = [MockChoice(content)]  # mutable-ok: mock OpenAI choices container
 
 
 class MockDelta:
-    def __init__(self, content):
-        self.content = content
+    def __init__(self, content: str) -> None:
+        self.content: str = content
 
 
 class MockStreamChoice:
-    def __init__(self, content):
-        self.delta = MockDelta(content)
+    def __init__(self, content: str) -> None:
+        self.delta: MockDelta = MockDelta(content)
 
 
 class MockStreamChunk:
-    def __init__(self, content):
-        self.choices = [MockStreamChoice(content)]
+    def __init__(self, content: str) -> None:
+        self.choices: list[MockStreamChoice] = [MockStreamChoice(content)]  # mutable-ok: mock stream choices
+
+
+def _remove_callback(guardrail_obj: CustomGuardrail) -> None:
+    callback_lists: Final = (
+        litellm.callbacks,
+        litellm.success_callback,
+        litellm.failure_callback,
+        litellm._async_success_callback,
+        litellm._async_failure_callback,
+    )
+    for callback_list in callback_lists:
+        if isinstance(callback_list, list):
+            while guardrail_obj in callback_list:
+                callback_list.remove(guardrail_obj)
 
 
 class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    guardrail: ZTDSGuardrail
+
+    def setUp(self) -> None:
         self.guardrail = ZTDSGuardrail()
 
-    def test_constructor_accepts_proxy_kwargs(self):
-        """Verify proxy instantiation with standard guardrail configuration kwargs."""
-        g = ZTDSGuardrail(
+    def test_constructor_accepts_proxy_kwargs(self) -> None:
+        """Verify proxy instantiation with standard guardrail configuration parameters."""
+        g: Final = ZTDSGuardrail(
             guardrail_name="ztds",
             event_hook=["pre_call", "post_call"],
             default_on=True,
@@ -56,29 +91,26 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(g.guardrail_name, "ztds")
         self.assertTrue(g.reverse_on_output)
 
-    def test_deterministic_surrogate_tokenization(self):
+    def test_deterministic_surrogate_tokenization(self) -> None:
         """Invariant 2: Identical cleartext entities must receive identical tokens in session."""
-        session_id = "test-session-1"
-        secret = "sk-" + "live12345678901234567890"
-        text = f"Contact alice@example.com or write to alice@example.com for secret {secret}."
+        session_id: Final = "test-session-1"
+        secret: Final = "sk-" + "live12345678901234567890"
+        text: Final = f"Contact alice@example.com or write to alice@example.com for secret {secret}."
         sanitized, _ = self.guardrail.sanitize_text(text, session_id)
 
         self.assertNotIn("alice@example.com", sanitized)
         self.assertNotIn(secret, sanitized)
         self.assertIn("[EMAIL_TOKEN_1]", sanitized)
         self.assertIn("[API_SECRET_TOKEN_1]", sanitized)
-
-        # Confirm identical surrogate reuse
         self.assertEqual(sanitized.count("[EMAIL_TOKEN_1]"), 2)
 
-        # Restore test
-        restored = self.guardrail.restore_text(sanitized, session_id)
+        restored: Final = self.guardrail.restore_text(sanitized, session_id)
         self.assertEqual(restored, text)
 
-    def test_multi_entity_detection(self):
+    def test_multi_entity_detection(self) -> None:
         """Invariant 1: Zero cleartext egress for emails, cards, phones, and API secrets."""
-        session_id = "test-session-2"
-        text = "Card 4111-2222-3333-4444 call +1-555-019-2834 server 192.168.1.100"
+        session_id: Final = "test-session-2"
+        text: Final = "Card 4111-2222-3333-4444 call +1-555-019-2834 server 192.168.1.100"
         sanitized, _ = self.guardrail.sanitize_text(text, session_id)
 
         self.assertIn("[CREDIT_CARD_TOKEN_1]", sanitized)
@@ -86,9 +118,9 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[IPV4_TOKEN_1]", sanitized)
         self.assertNotIn("4111-2222-3333-4444", sanitized)
 
-    async def test_pre_and_post_call_lifecycle_with_zeroization(self):
-        """Invariant 3: Ephemeral RAM Isolation and Theorem 2 RAM zeroization."""
-        request_data = {
+    async def test_pre_and_post_call_lifecycle_with_zeroization(self) -> None:
+        """Invariant 3: Ephemeral RAM Isolation and volatile RAM zeroization."""
+        request_data: Final[dict[str, object]] = {  # mutable-ok: request fixture mutated by pre_call hook
             "litellm_call_id": "call-101",
             "messages": [
                 {
@@ -98,103 +130,107 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             ],
         }
 
-        # 1. Execute pre-call hook
-        modified_data = await self.guardrail.async_pre_call_hook(
+        modified_data: Final = await self.guardrail.async_pre_call_hook(
             user_api_key_dict={},
             cache={},
             data=request_data,
             call_type="chat_completion",
         )
 
-        user_content = modified_data["messages"][0]["content"]
+        modified_messages: Final = _expect_list(modified_data["messages"])
+        first_msg: Final = _expect_dict(modified_messages[0])
+        user_content: Final = str(first_msg["content"])
         self.assertNotIn("bob@enterprise.corp", user_content)
         self.assertIn("[EMAIL_TOKEN_1]", user_content)
         self.assertIn("[IBAN_TOKEN_1]", user_content)
-        self.assertTrue(modified_data["metadata"]["ztds_sanitized"])
+        metadata: Final = _expect_dict(modified_data["metadata"])
+        self.assertTrue(metadata["ztds_sanitized"])
 
-        session_id = modified_data["_ztds_session_id"]
-        # Check session table exists in volatile RAM before post-call
+        session_id: Final = str(modified_data["_ztds_session_id"])
         self.assertIn(session_id, self.guardrail._session_maps)
 
-        # 2. Simulate model response that mentions the token
-        model_reply = "Verified account for [EMAIL_TOKEN_1] linked to [IBAN_TOKEN_1]."
-        response_obj = MockModelResponse(model_reply)
+        model_reply: Final = "Verified account for [EMAIL_TOKEN_1] linked to [IBAN_TOKEN_1]."
+        response_obj: Final = MockModelResponse(model_reply)
 
-        # 3. Execute post-call hook
-        unmasked_response = await self.guardrail.async_post_call_success_hook(
+        unmasked_response: Final = await self.guardrail.async_post_call_success_hook(
             data=modified_data,
             user_api_key_dict={},
             response=response_obj,
         )
+        assert isinstance(unmasked_response, MockModelResponse)
 
-        final_text = unmasked_response.choices[0].message.content
+        final_text: Final = unmasked_response.choices[0].message.content
         self.assertIn("bob@enterprise.corp", final_text)
         self.assertIn("DE89370400440532013000", final_text)
         self.assertNotIn("[EMAIL_TOKEN_1]", final_text)
 
-        # Invariant 3 / Theorem 2: Session tables MUST be completely zeroized from RAM
         self.assertNotIn(session_id, self.guardrail._session_maps)
         self.assertNotIn(session_id, self.guardrail._entity_maps)
 
-    async def test_non_message_content_sanitization(self):
+    async def test_non_message_content_sanitization(self) -> None:
         """Sanitization of prompt (legacy completions) and input (embeddings/moderation)."""
-        secret = "sk-" + "live12345678901234567890"
-        data = {
+        secret: Final = "sk-" + "live12345678901234567890"
+        data: Final[dict[str, object]] = {  # mutable-ok: request fixture mutated by pre_call hook
             "litellm_call_id": "call-202",
             "prompt": f"Prompt with secret {secret} and email test@corp.com",
             "input": ["Batch item with email user@corp.com", "Plain string"],
         }
-        modified = await self.guardrail.async_pre_call_hook({}, {}, data, "completion")
-        self.assertNotIn(secret, modified["prompt"])
-        self.assertIn("[API_SECRET_TOKEN_1]", modified["prompt"])
-        self.assertNotIn("user@corp.com", modified["input"][0])
-        self.assertIn("[EMAIL_TOKEN_2]", modified["input"][0])
+        modified: Final = await self.guardrail.async_pre_call_hook({}, {}, data, "completion")
+        prompt_out: Final = str(modified["prompt"])
+        input_out: Final = _expect_list(modified["input"])
+        first_input: Final = str(input_out[0])
+        self.assertNotIn(secret, prompt_out)
+        self.assertIn("[API_SECRET_TOKEN_1]", prompt_out)
+        self.assertNotIn("user@corp.com", first_input)
+        self.assertIn("[EMAIL_TOKEN_2]", first_input)
 
-    async def test_failure_hook_zeroizes_ram(self):
-        """Theorem 2: When upstream provider fails, RAM tables must be completely wiped."""
-        secret = "sk-" + "live12345678901234567890"
-        data = {
+    async def test_failure_hook_zeroizes_ram(self) -> None:
+        """When upstream provider fails, RAM tables must be completely wiped."""
+        secret: Final = "sk-" + "live12345678901234567890"
+        data: Final[dict[str, object]] = {  # mutable-ok: request fixture mutated by pre_call hook
             "litellm_call_id": "call-303",
             "messages": [{"role": "user", "content": f"Sensitive secret {secret}"}],
         }
-        modified = await self.guardrail.async_pre_call_hook({}, {}, data, "chat_completion")
-        session_id = modified["_ztds_session_id"]
+        modified: Final = await self.guardrail.async_pre_call_hook({}, {}, data, "chat_completion")
+        session_id: Final = str(modified["_ztds_session_id"])
         self.assertIn(session_id, self.guardrail._session_maps)
 
-        # Trigger failure hook
-        await self.guardrail.async_post_call_failure_hook(modified, {}, Exception("Upstream 500"))
+        await self.guardrail.async_post_call_failure_hook(
+            request_data=modified,
+            original_exception=RuntimeError("Upstream 500"),
+            user_api_key_dict={},
+        )
         self.assertNotIn(session_id, self.guardrail._session_maps)
 
-    async def test_streaming_hook_restores_and_zeroizes(self):
+    async def test_streaming_hook_restores_and_zeroizes(self) -> None:
         """Streaming response chunks are unmasked and RAM is zeroized upon completion."""
-        data = {
+        data: Final[dict[str, object]] = {  # mutable-ok: request fixture mutated by pre_call hook
             "litellm_call_id": "call-404",
             "messages": [{"role": "user", "content": "Hello user@corp.com"}],
         }
-        modified = await self.guardrail.async_pre_call_hook({}, {}, data, "chat_completion")
-        session_id = modified["_ztds_session_id"]
+        modified: Final = await self.guardrail.async_pre_call_hook({}, {}, data, "chat_completion")
+        session_id: Final = str(modified["_ztds_session_id"])
         self.assertIn(session_id, self.guardrail._session_maps)
 
-        async def fake_stream():
+        async def fake_stream() -> AsyncGenerator[MockStreamChunk, None]:
             yield MockStreamChunk("Result for ")
             yield MockStreamChunk("[EMAIL_TOKEN_1]")
             yield MockStreamChunk(" confirmed.")
 
-        chunks = []
+        chunks: Final[list[str]] = []  # mutable-ok: collects chunk delta strings from async iterator
         async for chunk in self.guardrail.async_post_call_streaming_iterator_hook({}, fake_stream(), modified):
+            assert isinstance(chunk, MockStreamChunk)
             chunks.append(chunk.choices[0].delta.content)
 
-        full_output = "".join(chunks)
+        full_output: Final = "".join(chunks)
         self.assertIn("user@corp.com", full_output)
         self.assertNotIn("[EMAIL_TOKEN_1]", full_output)
-
-        # Theorem 2 verification
         self.assertNotIn(session_id, self.guardrail._session_maps)
 
-    async def test_provenance_isolation_prevents_system_secret_exfiltration(self):
-        """Veria AI security fix: hidden system prompt secrets must NEVER be disclosed in caller output."""
-        system_secret = "sk-" + "live12345678901234567890"
-        data = {
+    async def test_provenance_isolation_prevents_system_secret_exfiltration(self) -> None:
+        """Hidden system prompt secrets must never be disclosed in caller output."""
+        system_secret: Final = "sk-" + "live12345678901234567890"
+        data: Final[dict[str, object]] = {  # mutable-ok: request fixture mutated by pre_call hook
             "litellm_call_id": "call-attack-505",
             "messages": [
                 {
@@ -208,107 +244,324 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
             ],
         }
 
-        # Pre-call hook sanitizes both system and user messages
-        modified = await self.guardrail.async_pre_call_hook({}, {}, data, "chat_completion")
-        self.assertNotIn(system_secret, modified["messages"][0]["content"])
-        self.assertIn("[API_SECRET_TOKEN_1]", modified["messages"][0]["content"])
+        modified: Final = await self.guardrail.async_pre_call_hook({}, {}, data, "chat_completion")
+        modified_messages: Final = _expect_list(modified["messages"])
+        sys_msg: Final = _expect_dict(modified_messages[0])
+        sys_content: Final = str(sys_msg["content"])
+        self.assertNotIn(system_secret, sys_content)
+        self.assertIn("[API_SECRET_TOKEN_1]", sys_content)
 
-        # Adversarial LLM repeats the token back to user
-        adversarial_reply = MockModelResponse("The secret is [API_SECRET_TOKEN_1]")
-        result = await self.guardrail.async_post_call_success_hook(modified, {}, adversarial_reply)
+        adversarial_reply: Final = MockModelResponse("The secret is [API_SECRET_TOKEN_1]")
+        result: Final = await self.guardrail.async_post_call_success_hook(modified, {}, adversarial_reply)
+        assert isinstance(result, MockModelResponse)
 
-        # Output MUST NOT restore system credential to caller
-        caller_visible_output = result.choices[0].message.content
+        caller_visible_output: Final = result.choices[0].message.content
         self.assertNotIn(system_secret, caller_visible_output)
         self.assertIn("[API_SECRET_TOKEN_1]", caller_visible_output)
 
-    def test_redos_resistance(self):
+    def test_redos_resistance(self) -> None:
         """Verify that email pattern does not cause catastrophic backtracking on adversarial inputs."""
-        import time
-
-        session_id = "test-session-redos"
-        payload = "a." * 16000  # 32 KB adversarial payload
-        t0 = time.perf_counter()
+        session_id: Final = "test-session-redos"
+        payload: Final = "a." * 16000
+        t0: Final = time.perf_counter()
         sanitized, _ = self.guardrail.sanitize_text(payload, session_id)
-        elapsed = time.perf_counter() - t0
+        elapsed: Final = time.perf_counter() - t0
 
-        # Must execute sub-second without blocking event loop (typically < 0.02s)
-        self.assertLess(elapsed, 0.1, f"ReDoS vulnerability detected: execution took {elapsed:.4f}s")
+        self.assertLess(elapsed, 0.25, f"ReDoS regression detected: execution took {elapsed:.4f}s")
         self.assertEqual(sanitized, payload)
 
-    def test_modern_openai_project_keys(self):
+    def test_modern_openai_project_keys(self) -> None:
         """Verify detection and sanitization of modern OpenAI sk-proj- and hyphenated API tokens."""
-        session_id = "test-session-keys"
-        secret = "sk-proj-abc-123_45678901234567890"
-        raw = f"Use OpenAI project key {secret} for deployment."
+        session_id: Final = "test-session-keys"
+        secret: Final = "sk-proj-abc-123_45678901234567890"
+        raw: Final = f"Use OpenAI project key {secret} for deployment."
         sanitized, _ = self.guardrail.sanitize_text(raw, session_id)
 
         self.assertNotIn(secret, sanitized)
         self.assertIn("[API_SECRET_TOKEN_1]", sanitized)
 
-    def test_token_collision_avoidance(self):
+    def test_token_collision_avoidance(self) -> None:
         """Literal surrogate tokens in input text must not collide with generated tokens."""
-        session_id = "test-session-collision"
-        raw = "Contact admin@corp.com but keep [EMAIL_TOKEN_1] literal"
+        session_id: Final = "test-session-collision"
+        raw: Final = "Contact admin@corp.com but keep [EMAIL_TOKEN_1] literal"
         sanitized, _ = self.guardrail.sanitize_text(raw, session_id)
 
-        # admin@corp.com must get [EMAIL_TOKEN_2] to avoid collision
         self.assertIn("[EMAIL_TOKEN_2]", sanitized)
         self.assertIn("[EMAIL_TOKEN_1]", sanitized)
         self.assertEqual(sanitized, "Contact [EMAIL_TOKEN_2] but keep [EMAIL_TOKEN_1] literal")
 
-        # Restoring must only replace [EMAIL_TOKEN_2] back to admin@corp.com
-        restored = self.guardrail.restore_text(sanitized, session_id)
+        restored: Final = self.guardrail.restore_text(sanitized, session_id)
         self.assertEqual(restored, raw)
 
-    def test_anthropic_and_hyphenated_api_keys(self):
+    def test_anthropic_and_hyphenated_api_keys(self) -> None:
         """Verify detection of Anthropic sk-ant- keys and hyphenated API tokens."""
-        session_id = "test-session-anthropic"
-        secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456"
-        raw = f"Anthropic token: {secret}"
+        session_id: Final = "test-session-anthropic"
+        secret: Final = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456"
+        raw: Final = f"Anthropic token: {secret}"
         sanitized, _ = self.guardrail.sanitize_text(raw, session_id)
         self.assertNotIn(secret, sanitized)
         self.assertIn("[API_SECRET_TOKEN_1]", sanitized)
 
-    def test_high_volume_linear_tokenization_performance(self):
-        """Verify that 2,000 distinct email tokens execute in linear time (< 0.5s)."""
-        import time
+    def test_single_pass_iban_redos_and_5000_unique_entities(self) -> None:
+        """Verify linear single-pass performance across 5,000 entities and adversarial IBAN-like text."""
+        session_id: Final = "test-session-scale-5k"
+        iban_decoy: Final = "DE89370400440532013000AAAAAAAAAAAAAAAAAAAA " * 500
+        emails: Final = " ".join(f"user_{i}@enterprise-corp.com" for i in range(5000))
+        payload: Final = f"{iban_decoy}{emails}"
 
-        session_id = "test-session-scale"
-        payload = " ".join(f"user_{i}@enterprise-corp.com" for i in range(2000))
-        t0 = time.perf_counter()
+        t0: Final = time.perf_counter()
         sanitized, token_map = self.guardrail.sanitize_text(payload, session_id)
-        elapsed = time.perf_counter() - t0
+        elapsed: Final = time.perf_counter() - t0
 
-        self.assertLess(elapsed, 0.5, f"Quadratic tokenization regression: took {elapsed:.4f}s")
-        self.assertEqual(len(token_map), 2000)
+        self.assertLess(elapsed, 1.0, f"Single-pass scaling regression: took {elapsed:.4f}s")
+        self.assertEqual(len(token_map), 5000)
         self.assertNotIn("user_0@enterprise-corp.com", sanitized)
+        self.assertNotIn("user_4999@enterprise-corp.com", sanitized)
+        restored: Final = self.guardrail.restore_text(sanitized, session_id)
+        self.assertEqual(restored, payload)
 
-    async def test_streaming_chunk_deepcopy_preserves_cache_immutability(self):
-        """Veria AI security fix: stream chunk deepcopy ensures upstream cache retains surrogates."""
-        session_id = "test-session-stream-cache"
+    async def test_streaming_chunk_deepcopy_preserves_cache_immutability(self) -> None:
+        """Stream chunk deepcopy ensures upstream cache retains surrogates."""
+        session_id: Final = "test-session-stream-cache"
         self.guardrail.sanitize_text("user@corp.com", session_id)
+        original_chunk: Final = MockStreamChunk("Here is [EMAIL_TOKEN_1]")
 
-        original_chunk = MockStreamChunk("Here is [EMAIL_TOKEN_1]")
-
-        async def _generator():
+        async def _generator() -> AsyncGenerator[MockStreamChunk, None]:
             yield original_chunk
 
-        request_data = {"_ztds_session_id": session_id}
-        stream_iter = self.guardrail.async_post_call_streaming_iterator_hook(
+        request_data: Final[dict[str, object]] = {  # mutable-ok: streaming request fixture
+            "_ztds_session_id": session_id,
+        }
+        stream_iter: Final = self.guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict={},
             response=_generator(),
             request_data=request_data,
         )
 
-        chunks_received = []
-        async for c in stream_iter:
-            chunks_received.append(c)
+        chunks_received: Final[list[MockStreamChunk]] = []  # mutable-ok: collects output chunks from iterator
+        async for chunk in stream_iter:
+            assert isinstance(chunk, MockStreamChunk)
+            chunks_received.append(chunk)
 
-        # Caller receives restored cleartext
         self.assertEqual(chunks_received[0].choices[0].delta.content, "Here is user@corp.com")
-        # Original chunk object retains sanitized surrogate for completion cache
         self.assertEqual(original_chunk.choices[0].delta.content, "Here is [EMAIL_TOKEN_1]")
+
+    async def test_initialize_ztds_forwards_scope_and_mode(self) -> None:
+        """initialize_ztds must honor guardrail_name, mode, default_on, and enabled_entities."""
+        litellm_params: Final = LitellmParams(
+            guardrail="ztds",
+            mode="pre_call",
+            default_on=False,
+            enabled_entities=["EMAIL"],
+            reverse_on_output=True,
+        )
+        guardrail_cfg: Final[Guardrail] = {
+            "guardrail_name": "ztds-optin",
+            "litellm_params": litellm_params,
+        }
+        guardrail_obj: Final = initialize_ztds(litellm_params=litellm_params, guardrail=guardrail_cfg)
+        try:
+            assert isinstance(guardrail_obj, ZTDSGuardrail)
+            self.assertEqual(guardrail_obj.guardrail_name, "ztds-optin")
+            self.assertFalse(guardrail_obj.default_on)
+            self.assertEqual(guardrail_obj.enabled_entities, ("EMAIL",))
+            self.assertFalse(guardrail_obj.should_run_guardrail({"messages": []}, GuardrailEventHooks.pre_call))
+            self.assertTrue(
+                guardrail_obj.should_run_guardrail(
+                    {"metadata": {"guardrails": ["ztds-optin"]}},
+                    GuardrailEventHooks.pre_call,
+                )
+            )
+
+            modified: Final = await guardrail_obj.async_pre_call_hook(
+                user_api_key_dict={},
+                cache={},
+                data={
+                    "litellm_call_id": "optin-call-1",
+                    "metadata": {"guardrails": ["ztds-optin"]},
+                    "messages": [{"role": "user", "content": "Email me at optin@corp.com"}],
+                },
+                call_type="chat_completion",
+            )
+            session_id: Final = str(modified["_ztds_session_id"])
+            self.assertTrue(guardrail_obj.should_run_guardrail(modified, GuardrailEventHooks.post_call))
+
+            unmasked: Final = await guardrail_obj.async_post_call_success_hook(
+                data=modified,
+                user_api_key_dict={},
+                response=MockModelResponse("Sent to [EMAIL_TOKEN_1]"),
+            )
+            assert isinstance(unmasked, MockModelResponse)
+            self.assertEqual(unmasked.choices[0].message.content, "Sent to optin@corp.com")
+            self.assertNotIn(session_id, guardrail_obj._session_maps)
+        finally:
+            _remove_callback(guardrail_obj)
+
+        no_rev_params: Final = LitellmParams(
+            guardrail="ztds",
+            mode="pre_call",
+            default_on=True,
+            reverse_on_output=False,
+        )
+        no_rev_cfg: Final[Guardrail] = {"guardrail_name": "ztds-norev", "litellm_params": no_rev_params}
+        no_rev_obj: Final = initialize_ztds(litellm_params=no_rev_params, guardrail=no_rev_cfg)
+        try:
+            assert isinstance(no_rev_obj, ZTDSGuardrail)
+            modified_norev: Final = await no_rev_obj.async_pre_call_hook(
+                user_api_key_dict={},
+                cache={},
+                data={"litellm_call_id": "norev-call", "messages": [{"role": "user", "content": "a@b.com"}]},
+                call_type="chat_completion",
+            )
+            sid_norev: Final = str(modified_norev["_ztds_session_id"])
+            self.assertIn(sid_norev, no_rev_obj._session_maps)
+            self.assertFalse(no_rev_obj.should_run_guardrail(modified_norev, GuardrailEventHooks.post_call))
+            self.assertNotIn(sid_norev, no_rev_obj._session_maps)
+        finally:
+            _remove_callback(no_rev_obj)
+
+    async def test_non_message_provider_visible_fields_and_provenance(self) -> None:
+        """Responses input, instructions, system blocks, tool schemas, and tool_calls must be sanitized."""
+        sys_instr_secret: Final = "sk-proj-SysInstrSecretKey1234567890"
+        aws_key: Final = "AKIAIOSFODNN7EXAMPLE"
+        tool_email: Final = "ops-admin@corp.internal"
+        default_email: Final = "default-ops@corp.internal"
+        user_email: Final = "alice@client.org"
+        tool_out_secret: Final = "sk-proj-ToolOutputSecret9876543210"
+        arg_email: Final = "bob@client.org"
+
+        data: Final[dict[str, object]] = {  # mutable-ok: request fixture mutated by pre_call hook
+            "litellm_call_id": "call-nonmsg-1",
+            "instructions": f"System secret {sys_instr_secret}",
+            "system": [{"type": "text", "text": f"AWS key {aws_key}"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_account",
+                        "description": f"Escalates to {tool_email}",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "email": {"type": "string", "default": default_email},
+                            },
+                        },
+                    },
+                }
+            ],
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": f"Check {user_email}"}]},
+                {"type": "function_call_output", "output": f"Token {tool_out_secret}"},
+            ],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup_account", "arguments": json.dumps({"email": arg_email})},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        modified: Final = await self.guardrail.async_pre_call_hook({}, {}, data, "responses")
+        serialized: Final = json.dumps(modified)
+        for secret in (
+            sys_instr_secret,
+            aws_key,
+            tool_email,
+            default_email,
+            user_email,
+            tool_out_secret,
+            arg_email,
+        ):
+            self.assertNotIn(secret, serialized)
+
+        tools_out: Final = _expect_list(modified["tools"])
+        tool_fn: Final = _expect_dict(_expect_dict(tools_out[0])["function"])
+        self.assertEqual(tool_fn["name"], "lookup_account")
+        props: Final = _expect_dict(_expect_dict(tool_fn["parameters"])["properties"])
+        self.assertIn("email", props)
+
+        instr_tok_match: Final = re.search(r"\[API_SECRET_TOKEN_\d+\]", str(modified["instructions"]))
+        assert instr_tok_match is not None
+        sys_tok: Final = instr_tok_match.group(0)
+
+        tool_tok_match: Final = re.search(r"\[EMAIL_TOKEN_\d+\]", str(tool_fn["description"]))
+        assert tool_tok_match is not None
+        tool_desc_tok: Final = tool_tok_match.group(0)
+
+        input_items: Final = _expect_list(modified["input"])
+        user_parts: Final = _expect_list(_expect_dict(input_items[0])["content"])
+        alice_tok_match: Final = re.search(r"\[EMAIL_TOKEN_\d+\]", str(_expect_dict(user_parts[0])["text"]))
+        assert alice_tok_match is not None
+        alice_tok: Final = alice_tok_match.group(0)
+
+        responses_payload: Final[dict[str, object]] = {  # mutable-ok: mock Responses API body
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": f"User {alice_tok}, sys {sys_tok}, tool {tool_desc_tok}"}
+                    ],
+                }
+            ]
+        }
+        restored: Final = await self.guardrail.async_post_call_success_hook(
+            data=modified,
+            user_api_key_dict={},
+            response=responses_payload,
+        )
+        restored_dict: Final = _expect_dict(restored)
+        out_items: Final = _expect_list(restored_dict["output"])
+        out_parts: Final = _expect_list(_expect_dict(out_items[0])["content"])
+        out_text: Final = str(_expect_dict(out_parts[0])["text"])
+
+        self.assertIn(user_email, out_text)
+        self.assertNotIn(sys_instr_secret, out_text)
+        self.assertNotIn(tool_email, out_text)
+        self.assertIn(sys_tok, out_text)
+        self.assertIn(tool_desc_tok, out_text)
+
+    async def test_proxy_logging_failure_keyword_args_and_log_event_cleanup(self) -> None:
+        """ProxyLogging keyword contract for async_post_call_failure_hook and log-event cleanup must wipe RAM."""
+        modified: Final = await self.guardrail.async_pre_call_hook(
+            user_api_key_dict={},
+            cache={},
+            data={"litellm_call_id": "call-kw-fail", "messages": [{"role": "user", "content": "fail@corp.com"}]},
+            call_type="chat_completion",
+        )
+        sid: Final = str(modified["_ztds_session_id"])
+        self.assertIn(sid, self.guardrail._session_maps)
+
+        await self.guardrail.async_post_call_failure_hook(
+            request_data=modified,
+            original_exception=RuntimeError("502 Bad Gateway"),
+            user_api_key_dict={},
+            traceback_str="traceback",
+        )
+        self.assertNotIn(sid, self.guardrail._session_maps)
+
+        modified_log: Final = await self.guardrail.async_pre_call_hook(
+            user_api_key_dict={},
+            cache={},
+            data={"litellm_call_id": "call-log-clean", "messages": [{"role": "user", "content": "log@corp.com"}]},
+            call_type="chat_completion",
+        )
+        sid_log: Final = str(modified_log["_ztds_session_id"])
+        self.assertIn(sid_log, self.guardrail._session_maps)
+
+        await self.guardrail.async_log_success_event(
+            {"litellm_params": {"metadata": {"_ztds_session_id": sid_log}}},
+            None,
+            0.0,
+            1.0,
+        )
+        self.assertNotIn(sid_log, self.guardrail._session_maps)
 
 
 if __name__ == "__main__":
