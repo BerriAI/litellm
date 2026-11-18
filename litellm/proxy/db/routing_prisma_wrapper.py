@@ -6,7 +6,7 @@ otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 
 import asyncio
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -279,16 +279,46 @@ class RoutingPrismaWrapper:
         if not writer_recreated:
             return False
         self._writer_unavailable = False
-        try:
-            await self._recreate_reader(http_client=http_client)
+        self._reader_unavailable = True
+        self._reader_unavailable = not await self._reader_answers(
+            self._recreate_reader(http_client=http_client),
+            "Failed to recreate reader Prisma client: %s. "
+            "Reads will fall back to the writer until the reader recovers.",
+        )
+        return True
+
+    async def degrade_reader_unless_healthy(self) -> None:
+        """Probe the reader and send reads to the writer when it does not answer."""
+        if self._reader_unavailable:
+            return
+        self._reader_unavailable = True
+        self._reader_unavailable = not await self._reader_answers(
+            self._reader.query_raw("SELECT 1"),
+            "Reader probe failed: %s. Reads will fall back to the writer until the reader recovers.",
+        )
+
+    async def recover_reader(self) -> bool:
+        """Recreate a reader that reads currently bypass, and route reads back to it on success."""
+        recovered: Final = await self._reader_answers(
+            self._recreate_and_probe_reader(),
+            "Reader Prisma client is still unavailable: %s",
+        )
+        if recovered:
             self._reader_unavailable = False
+            verbose_proxy_logger.info("Reader Prisma client recovered; reads are routed to the reader again.")
+        return recovered
+
+    async def _recreate_and_probe_reader(self) -> None:
+        await self._recreate_reader()
+        await self._reader.query_raw("SELECT 1")
+
+    @staticmethod
+    async def _reader_answers(step: Awaitable[object], failure_message: str) -> bool:
+        try:
+            await step
         except Exception as e:
-            self._reader_unavailable = True
-            verbose_proxy_logger.warning(
-                "Failed to recreate reader Prisma client: %s. "
-                "Reads will fall back to the writer until the reader recovers.",
-                e,
-            )
+            verbose_proxy_logger.warning(failure_message, e)
+            return False
         return True
 
     async def _recreate_reader(self, http_client: "HttpConfig | None" = None) -> None:
