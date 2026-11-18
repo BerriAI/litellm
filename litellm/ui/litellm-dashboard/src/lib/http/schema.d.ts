@@ -34080,6 +34080,12 @@ export interface components {
              */
             total_compression_savings_spend: number;
             /**
+             * Total Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in total_spend
+             * @default 0
+             */
+            total_customer_margin_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -50095,6 +50101,12 @@ export interface components {
              * @default 0
              */
             compression_savings_spend: number;
+            /**
+             * Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend
+             * @default 0
+             */
+            customer_margin_spend: number;
             /**
              * Failed Requests
              * @default 0
