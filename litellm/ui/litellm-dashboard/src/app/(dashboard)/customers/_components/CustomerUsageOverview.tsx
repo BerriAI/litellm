@@ -53,10 +53,7 @@ export default function CustomerUsageOverview({ customerId }: { customerId: stri
   return (
     <section className="space-y-3" aria-label={t("customerPortal.usage.title")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">{t("customerPortal.usage.title")}</h2>
-          <p className="text-xs text-muted-foreground">{t("customerPortal.usage.description")}</p>
-        </div>
+        <h2 className="text-sm font-semibold">{t("customerPortal.usage.title")}</h2>
         <AdvancedDatePicker
           value={dateValue}
           presetShortLabel={preset}

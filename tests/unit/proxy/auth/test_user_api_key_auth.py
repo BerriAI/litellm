@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ProxyErrorTypes,
     ProxyException,
 )
 from litellm.proxy.auth import auth_checks
@@ -260,6 +261,35 @@ async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
                 await user_api_key_auth(request=request, api_key=f"Bearer {key}")
             assert denied.value.code == "403"
             assert "model-b" in denied.value.message
+
+
+@pytest.mark.asyncio
+async def test_the_endpoint_reads_the_auth_its_dependency_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Depends, FastAPI
+
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    server: Final = litellm.proxy.proxy_server
+    key: Final = "sk-request-auth"
+    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), key_alias="alias-a")
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    app: Final = FastAPI()
+
+    @app.post("/chat/completions")
+    async def endpoint(auth: UserAPIKeyAuth = Depends(user_api_key_auth)) -> dict[str, object]:
+        bound: Final = REQUEST_AUTH.get()
+        return {"same": bound is auth, "key_alias": None if bound is None else bound.key_alias}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+        response: Final = await client.post(
+            "/chat/completions", json={"model": "m"}, headers={"Authorization": f"Bearer {key}"}
+        )
+    assert response.json() == {"same": True, "key_alias": "alias-a"}
 
 
 @pytest.mark.asyncio
@@ -859,9 +889,9 @@ def test_is_api_route_allowed(route, user_role, expected_result):
 
 
 @pytest.mark.asyncio
-async def test_auth_not_connected_to_db():
+async def test_auth_not_connected_to_db(monkeypatch: pytest.MonkeyPatch):
     """
-    ensure requests don't fail when `prisma_client` = None
+    ensure requests don't fail when a configured database is not connected
     """
     from fastapi import Request
     from starlette.datastructures import URL
@@ -874,6 +904,7 @@ async def test_auth_not_connected_to_db():
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "database_url_configured", True)
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
@@ -887,6 +918,11 @@ async def test_auth_not_connected_to_db():
     print("got valid token", valid_token)
     assert valid_token.key_name == "failed-to-connect-to-db"
     assert valid_token.token == "failed-to-connect-to-db"
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "database_url_configured", False)
+    with pytest.raises(ProxyException) as no_database:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    assert (no_database.value.code, no_database.value.type) == ("401", ProxyErrorTypes.auth_error)
 
 
 def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):

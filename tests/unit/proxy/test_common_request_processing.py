@@ -11540,6 +11540,25 @@ class TestStreamingClientDisconnectBilling:
         assert partial_response.usage.completion_tokens > 0
 
     @pytest.mark.asyncio
+    async def test_gemini_blocked_prompt_is_billed_as_content_filter_for_its_prompt_tokens(
+        self, stream_attempt: StreamAttempt
+    ):
+        partial_response: Final = await self._billed_after_the_first_gemini_frame(
+            stream_attempt,
+            {
+                "promptFeedback": {"blockReason": "PROHIBITED_CONTENT"},
+                "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+            },
+        )
+
+        prompt_cost, _ = litellm.cost_per_token(
+            model="gemini-3.8-flash", custom_llm_provider="gemini", prompt_tokens=9, completion_tokens=0
+        )
+        assert [choice.finish_reason for choice in partial_response.choices] == ["content_filter"]
+        assert (partial_response.usage.prompt_tokens, partial_response.usage.completion_tokens) == (9, 0)
+        assert partial_response._hidden_params["response_cost"] == pytest.approx(prompt_cost)
+
+    @pytest.mark.asyncio
     async def test_gemini_frame_that_plans_a_continuation_hop_is_not_billed_as_finished(
         self, stream_attempt: StreamAttempt
     ):

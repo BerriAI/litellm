@@ -49,6 +49,47 @@ pub fn from_json(value: serde_json::Value) -> Value {
     }
 }
 
+/// `str(value)` of what `json.loads` returns: a string's own contents, `None` for null, and
+/// `repr` for every other value.
+pub fn loaded_str(value: &serde_json::Value) -> String {
+    crate::repr::to_str(&from_json(value.clone()))
+}
+
+/// `left == right` between what `json.loads` returns for two scalars: `bool`, `int` and
+/// `float` compare by numeric value (`True == 1 == 1.0`), and other values compare as JSON.
+/// Containers compare as JSON, so a nested `[1]` is not equal to `[1.0]` here though Python
+/// says it is.
+pub fn loaded_equals(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    match (numeric(left), numeric(right)) {
+        (Some(Ok(a)), Some(Ok(b))) => a == b,
+        (Some(Err(a)), Some(Err(b))) => a == b,
+        (Some(Ok(int)), Some(Err(float))) | (Some(Err(float)), Some(Ok(int))) => {
+            int_equals_float(int, float)
+        }
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => left == right,
+    }
+}
+
+fn numeric(value: &serde_json::Value) -> Option<Result<i128, f64>> {
+    match value {
+        serde_json::Value::Bool(flag) => Some(Ok(i128::from(*flag))),
+        serde_json::Value::Number(number) => Some(
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+                .map_or_else(|| Err(number.as_f64().unwrap_or(f64::NAN)), Ok),
+        ),
+        _ => None,
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+fn int_equals_float(int: i128, float: f64) -> bool {
+    float.is_finite() && float.fract() == 0.0 && float.abs() < 1.7e38 && float as i128 == int
+}
+
 /// `type(json.loads(text)).__name__`: the type [`crate::json::from_json`] gives the value,
 /// so an integer `serde_json` holds as `f64` (beyond `u64`) reads as `float`.
 pub fn type_name(value: &serde_json::Value) -> &'static str {

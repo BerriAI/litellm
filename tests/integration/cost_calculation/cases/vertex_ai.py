@@ -3817,6 +3817,40 @@ GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
     },
 )
 
+GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K: Final = _gemini_case(
+    GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "vertex_ai/gemini-3.1-pro-preview-tiered_flex_above_200k",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.456698, input_cost=0.45056, output_cost=0.006138, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 620}],
+        "trafficType": "ON_DEMAND_FLEX",
+    },
+)
+GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX: Final = _gemini_case(
+    GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
+    "vertex_ai/gemini-3.1-pro-preview-service_tier_flex",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(spend=0.0047432, input_cost=0.002024, output_cost=0.0027192, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND_FLEX",
+    },
+)
+GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY: Final = _gemini_case(
+    GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
+    "vertex_ai/gemini-3.1-pro-preview-service_tier_priority",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.01707552, input_cost=0.0072864, output_cost=0.00978912, prompt_tokens=1840, completion_tokens=412
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND_PRIORITY",
+    },
+)
 GEMINI_4_ARGON_INPUT_TEXT: Final = GEMINI_3_8_FLASH_INPUT_TEXT.model_copy(
     update={
         "name": "vertex_ai/gemini-4-argon-input_text",
@@ -3974,6 +4008,28 @@ GEMINI_4_ARGON_TOOL_CALL: Final = GEMINI_3_8_FLASH_TOOL_CALL.model_copy(
     }
 )
 
+GEMINI_4_ARGON_SERVICE_TIER_FLEX: Final = _gemini_case(
+    GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
+    "vertex_ai/gemini-4-argon-service_tier_flex",
+    "vertex_ai/gemini-4-argon",
+    ExactExpected(spend=0.00468, input_cost=0.002208, output_cost=0.002472, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND_FLEX",
+    },
+    model_version="gemini-4-argon",
+)
+GEMINI_4_ARGON_SERVICE_TIER_PRIORITY: Final = _gemini_case(
+    GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
+    "vertex_ai/gemini-4-argon-service_tier_priority",
+    "vertex_ai/gemini-4-argon",
+    ExactExpected(spend=0.016848, input_cost=0.0079488, output_cost=0.0088992, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND_PRIORITY",
+    },
+    model_version="gemini-4-argon",
+)
 GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_4_ARGON_INPUT_TEXT, GEMINI_4_ARGON_STREAM),
     ("/v1/responses", "/v1/messages"),
@@ -4098,13 +4154,18 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
     GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
     GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
+    GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K,
     GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
+    GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX,
+    GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,
     GEMINI_4_ARGON_INPUT_TEXT,
     GEMINI_4_ARGON_STREAM,
     GEMINI_4_ARGON_CACHE_READ,
     GEMINI_4_ARGON_REASONING,
     GEMINI_4_ARGON_TOOL_CALL,
+    GEMINI_4_ARGON_SERVICE_TIER_FLEX,
+    GEMINI_4_ARGON_SERVICE_TIER_PRIORITY,
     *(pair.bridged for pair in GEMINI_4_ARGON_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_3_8_FLASH_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),

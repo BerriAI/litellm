@@ -118,11 +118,9 @@ from litellm.proxy.mcp_server.oauth_utils import (
     get_cimd_client_id,
     get_cimd_document_url,
     get_request_base_url,
-    grant_covers_scopes,
     needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
-    server_scope_names,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
 )
@@ -1068,26 +1066,22 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
-    requestable: Final = server_scope_names(server)
+    prior_scopes: Final = (prior_grant.get("scopes") if prior_grant is not None else None) or ()
+    metadata: Final = (
+        OAuthMetadata.model_validate(server.authorization_server_metadata)
+        if server.authorization_server_metadata is not None and (prior_grant is not None or scope is not None)
+        else None
+    )
+    requestable: Final = frozenset((*(server.scopes or ()), *((metadata.scopes_supported if metadata else None) or ())))
     kept_scope: Final = (
         None
         if prior_grant is None or asks_for_wildcard(scope)
-        else " ".join(
-            name
-            for name in prior_grant.get("scopes") or ()
-            if not requestable or requestable.issuperset(name.split(","))
-        )
+        else " ".join(name for name in prior_scopes if not requestable or requestable.issuperset(name.split(",")))
     )
-    merged_scope: Final = union_scopes(kept_scope, scope)
+    refused_scope: Final = " ".join(prior_grant.get("needs_scopes") or ()) if prior_grant is not None else None
+    merged_scope: Final = union_scopes(union_scopes(kept_scope, refused_scope), scope)
     selected_scope: Final = (
-        get_client_metadata_scopes(
-            merged_scope,
-            None,
-            OAuthMetadata.model_validate(server.authorization_server_metadata)
-            if server.authorization_server_metadata is not None
-            else None,
-            ["authorization_code", "refresh_token"],
-        )
+        get_client_metadata_scopes(merged_scope, None, metadata, ["authorization_code", "refresh_token"])
         if merged_scope is not None
         else None
     )
@@ -2568,9 +2562,7 @@ async def token_endpoint(
     )
 
 
-async def _vendor_credential_state(
-    user_id: str, server_id: str, requested_scopes: tuple[str, ...] = ()
-) -> VendorCredentialState:
+async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCredentialState:
     """Whether the gateway itself can see a live vendor credential for this user and server.
 
     The one reading of "authorized" the connect page displays and the finish step enforces, so
@@ -2580,9 +2572,6 @@ async def _vendor_credential_state(
         get_user_oauth_credential,
         oauth_grant_state,
     )
-    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import at module load
-        global_mcp_server_manager,
-    )
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
 
     if prisma_client is None:
@@ -2591,15 +2580,9 @@ async def _vendor_credential_state(
         credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
     except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
         return "unavailable"
-    if oauth_grant_state(credential) == "absent":
+    if oauth_grant_state(credential) == "absent" or credential is None or credential.get("needs_scopes"):
         return "absent"
-    granted_scopes: Final = credential.get("scopes") if credential else None
-    covered: Final = grant_covers_scopes(
-        tuple(granted_scopes or ()),
-        requested_scopes,
-        lambda: server_scope_names(global_mcp_server_manager.get_mcp_server_by_id(server_id)),
-    )
-    return "present" if covered else "absent"
+    return "present"
 
 
 @router.get("/authorize/flow")
