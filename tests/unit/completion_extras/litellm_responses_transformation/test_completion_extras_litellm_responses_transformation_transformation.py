@@ -6552,7 +6552,7 @@ def test_transform_request_leaves_cache_control_off_the_wire_for_bedrock_mantle(
     ]
 
 
-@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}])
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
 def test_chained_turn_keeps_leading_system_strings_in_instructions(
     continuation: dict[str, str], location: str
@@ -6578,6 +6578,23 @@ def test_chained_turn_keeps_leading_system_strings_in_instructions(
     )
     assert request["instructions"] == "Be brief. Be helpful."
     assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize("location", ["optional", "extra_body"])
+def test_unforwarded_conversation_still_sends_system_as_cacheable_input(location: str) -> None:
+    conversation: Final = {"conversation": "conv_prior"}
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai"},
+        conversation if location == "optional" else {"extra_body": conversation},
+    )
+    assert "conversation" not in request, request
+    assert request.get("instructions") is None, request
+    assert request["input"] == [
+        _system_input_item("Be brief."),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
 
 
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
