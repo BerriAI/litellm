@@ -716,10 +716,11 @@ STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
-STREAM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+VLLM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+STREAM_FINISH_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, "provider_specific_fields")
 STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
 PROVIDER_FINISH_REASONS_HIDDEN_PARAM: Final = "provider_finish_reasons"
-VLLM_CHOICE_FIELDS: Final = STREAM_FINISH_CHOICE_FIELDS + STREAM_CHUNK_CHOICE_FIELDS
+VLLM_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, *STREAM_CHUNK_CHOICE_FIELDS)
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -992,6 +993,22 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
     "verbosity",
     "store",
 ]
+
+OPENAI_CHAT_COMPLETION_TRANSPORT_PARAMS: Final = frozenset(
+    {
+        "api_base",
+        "api_key",
+        "api_version",
+        "deployment_id",
+        "organization",
+        "base_url",
+        "default_headers",
+        "timeout",
+        "request_timeout",
+        "max_retries",
+        "extra_headers",
+    }
+)
 
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",

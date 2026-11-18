@@ -367,6 +367,7 @@ def _fake_fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
         _hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported"))
     )
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
 
 
 @pytest.mark.parametrize(

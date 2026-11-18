@@ -495,11 +495,47 @@ def test_attach_sync_injects_session(per_user_credential):
         assert isinstance(kwargs[GITHUB_COPILOT_USER_SESSION_KWARG_KEY], GithubCopilotUserSession)
 
 
-def test_attach_per_user_without_connection_raises_connect_401(per_user_credential):
-    kwargs = {"litellm_credential_name": "copilot-cred", "secret_fields": {}}
+_CONNECT_STEP: Final = (
+    "Connect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials), "
+    "or run: lite --base-url <proxy URL> --api-key <this key> credentials connect copilot-cred"
+)
+
+
+def test_attach_per_user_when_connections_failed_to_load_does_not_blame_the_key(per_user_credential):
+    kwargs = {
+        "litellm_credential_name": "copilot-cred",
+        "secret_fields": {"user_provider_credentials_user_id": "user-a"},
+    }
     with pytest.raises(CallerCredentialAuthenticationError) as exc:
         attach_github_copilot_user_session(kwargs)
-    assert "Connect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials)" in str(exc.value)
+    assert exc.value.status_code == 401
+    assert (
+        "LiteLLM could not load the stored GitHub Copilot connections for user 'user-a'. "
+        "Check the proxy logs for the database error and retry."
+    ) in str(exc.value), str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("secret_fields", "cause"),
+    [
+        ({}, "This LiteLLM key is not assigned to a LiteLLM user. Use a key that belongs to your own user."),
+        (
+            {"user_provider_credentials_user_id": "user-a", "user_provider_credentials": {}},
+            "User 'user-a' (the owner of this key) has not connected GitHub Copilot for 'copilot-cred'.",
+        ),
+    ],
+    ids=["key_without_user", "user_never_connected"],
+)
+def test_attach_per_user_without_connection_names_the_cause_and_fix(
+    per_user_credential,
+    secret_fields: dict[str, object],
+    cause: str,
+):
+    kwargs = {"litellm_credential_name": "copilot-cred", "secret_fields": secret_fields}
+    with pytest.raises(CallerCredentialAuthenticationError) as exc:
+        attach_github_copilot_user_session(kwargs)
+    assert exc.value.status_code == 401
+    assert f"{cause} {_CONNECT_STEP}" in str(exc.value), str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -515,7 +551,11 @@ def test_attach_rejects_connection_from_a_different_github_host(
         with github_http(lambda request: pytest.fail(f"unexpected user lookup at {request.url}")) as requests:
             with pytest.raises(CallerCredentialAuthenticationError) as exc:
                 attach_github_copilot_user_session(kwargs)
-    assert "Connect GitHub Copilot for credential 'copilot-cred'" in str(exc.value)
+    expected: Final = (
+        f"User 'user-a' connected GitHub Copilot on '{connection_host}', but 'copilot-cred' uses "
+        f"'{credential_host}'. {_CONNECT_STEP}"
+    )
+    assert expected in str(exc.value), str(exc.value)
     assert not requests
 
 
@@ -986,11 +1026,98 @@ async def test_e2e_anthropic_messages_per_user_credential(per_user_credential):
     assert response["usage"]["input_tokens"] == 4
 
 
-_CONNECT_MESSAGE = "Connect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials)"
+_MODEL_NOT_SUPPORTED: Final = {
+    "error": {
+        "message": "The requested model is not supported.",
+        "code": "model_not_supported",
+        "param": "model",
+        "type": "invalid_request_error",
+    }
+}
+_ALICE_ACCOUNT: Final = (
+    "not available for GitHub account 'alice-gh', which LiteLLM user 'user-a' connected for LiteLLM credential "
+    "'copilot-cred'. That can be a different account from the one signed in to your editor."
+)
+
+
+def _alice_secret_fields():
+    connection: Final = _secret_fields("user-a", "gho_a")["user_provider_credentials"]["copilot-cred"]
+    return {
+        "user_provider_credentials_user_id": "user-a",
+        "user_provider_credentials": {"copilot-cred": {**connection, "github_login": "alice-gh"}},
+    }
+
+
+def _copilot_rejects_the_model(request: httpx.Request) -> httpx.Response:
+    if str(request.url) == COPILOT_USER_URL:
+        return httpx.Response(200, json=_user_payload(), request=request)
+    if request.url.host.endswith("githubcopilot.com"):
+        return httpx.Response(400, json=_MODEL_NOT_SUPPORTED, request=request)
+    pytest.fail(f"unexpected request to {request.url}")
+
+
+def test_e2e_completion_model_not_supported_names_the_connected_github_account(per_user_credential):
+    from openai import OpenAI
+
+    copilot_client: Final = OpenAI(
+        api_key="unused",
+        base_url="https://api.githubcopilot.com",
+        http_client=httpx.Client(transport=httpx.MockTransport(_copilot_rejects_the_model)),
+        max_retries=0,
+    )
+    with (
+        github_http(_user_responder()),
+        _no_authenticator(),
+        pytest.raises(BadRequestError) as caught,
+    ):
+        litellm.completion(
+            model="github_copilot/claude-opus-4.6",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_alice_secret_fields(),
+            client=copilot_client,
+        )
+    assert _ALICE_ACCOUNT in caught.value.message, caught.value.message
+
+
+def test_e2e_responses_model_not_supported_names_the_connected_github_account(per_user_credential):
+    with (
+        github_http(_copilot_rejects_the_model),
+        _no_authenticator(),
+        pytest.raises(BadRequestError) as caught,
+    ):
+        litellm.responses(
+            model="github_copilot/gpt-5.3-codex",
+            input=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_alice_secret_fields(),
+        )
+    assert _ALICE_ACCOUNT in caught.value.message, caught.value.message
+
+
+@pytest.mark.asyncio
+async def test_e2e_anthropic_messages_model_not_supported_names_the_connected_github_account(per_user_credential):
+    with (
+        github_http(_copilot_rejects_the_model),
+        _no_authenticator(),
+        pytest.raises(BadRequestError) as caught,
+    ):
+        await litellm.anthropic.messages.acreate(
+            model="github_copilot/claude-haiku-4.5",
+            custom_llm_provider="github_copilot",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_alice_secret_fields(),
+        )
+    assert _ALICE_ACCOUNT in caught.value.message, caught.value.message
+
+
+_CONNECT_MESSAGE = "has not connected GitHub Copilot for 'copilot-cred'"
 
 
 def test_e2e_completion_not_connected_raises_connect_401(per_user_credential):
-    with pytest.raises(AuthenticationError, match="Connect GitHub Copilot"):
+    with pytest.raises(AuthenticationError, match=_CONNECT_MESSAGE):
         litellm.completion(
             model="github_copilot/gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
@@ -1000,7 +1127,7 @@ def test_e2e_completion_not_connected_raises_connect_401(per_user_credential):
 
 
 def test_e2e_embedding_not_connected_raises_connect_401(per_user_credential):
-    with pytest.raises(AuthenticationError, match="Connect GitHub Copilot"):
+    with pytest.raises(AuthenticationError, match=_CONNECT_MESSAGE):
         litellm.embedding(
             model="github_copilot/text-embedding-3-small",
             input=["hi"],
@@ -1010,7 +1137,7 @@ def test_e2e_embedding_not_connected_raises_connect_401(per_user_credential):
 
 
 def test_e2e_responses_not_connected_raises_connect_401(per_user_credential):
-    with pytest.raises(AuthenticationError, match="Connect GitHub Copilot"):
+    with pytest.raises(AuthenticationError, match=_CONNECT_MESSAGE):
         litellm.responses(
             model="github_copilot/gpt-5.3-codex",
             input=[{"role": "user", "content": "hi"}],
@@ -1021,7 +1148,7 @@ def test_e2e_responses_not_connected_raises_connect_401(per_user_credential):
 
 @pytest.mark.asyncio
 async def test_e2e_anthropic_messages_not_connected_raises_connect_401(per_user_credential):
-    with pytest.raises(AuthenticationError, match="Connect GitHub Copilot"):
+    with pytest.raises(AuthenticationError, match=_CONNECT_MESSAGE):
         await litellm.anthropic.messages.acreate(
             model="github_copilot/claude-haiku-4.5",
             max_tokens=16,

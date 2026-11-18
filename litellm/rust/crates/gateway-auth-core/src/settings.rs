@@ -17,6 +17,8 @@ pub struct HostFacts {
     pub premium: bool,
     /// `prisma_client is not None`
     pub has_db: bool,
+    /// A database URL is set, so a database that is not connected is an outage and not a proxy that has none
+    pub db_configured: bool,
     /// `EXPERIMENTAL_UI_LOGIN` is not false
     pub ui_login: bool,
     /// `litellm.max_budget > 0`
@@ -69,6 +71,7 @@ impl Settings {
             key: KeySettings {
                 master_key: facts.master_key,
                 has_db: facts.has_db,
+                db_configured: facts.db_configured,
                 allow_user_auth: general.allow_user_auth,
                 ui_login: facts.ui_login,
                 jwt_auth: general.enable_jwt_auth,

@@ -19,6 +19,11 @@ pub fn isspace(c: char) -> bool {
     )
 }
 
+/// Whether `text.encode("latin-1")` succeeds: every character is below U+0100.
+pub fn is_latin1(text: &str) -> bool {
+    text.chars().all(|character| u32::from(character) < 0x100)
+}
+
 /// `unicodedata.category(c)`: the two-letter Unicode general category of a character, from the
 /// Unicode tables this crate is built with, which may be newer or older than the host Python's.
 pub fn category(c: char) -> &'static str {
