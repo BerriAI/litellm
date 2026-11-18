@@ -6377,3 +6377,121 @@ async def test_lens_ledger_record_carries_the_accepted_delivery_amount_for_each_
     expected_error: Final = "provider rejected the request" if content_kept and status == "failure" else ""
     assert [record["error_str"] for record in records] == [expected_error] * 2
     assert all(row.get("accounting_log_disabled", False) is (not content_kept) for row in rows)
+
+
+class _RecordingScheduler:
+    def __init__(self) -> None:
+        self.scheduled: list[tuple[float, Callable[[], None]]] = []  # mutable-ok: records scheduled wakes
+
+    def __call__(self, delay: float, wake: Callable[[], None]) -> asyncio.TimerHandle:
+        self.scheduled.append((delay, wake))
+        return MagicMock(spec=asyncio.TimerHandle)
+
+    def fire(self) -> None:
+        [(_, wake)] = self.scheduled
+        wake()
+
+
+def _ledger_flush_prisma(scheduler: _RecordingScheduler) -> MagicMock:
+    from litellm.proxy.utils import PrismaClient
+
+    prisma: Final = _tool_usage_prisma()
+    prisma.spend_log_flush_requested = asyncio.Event()
+    prisma.spend_log_ledger_wake = None
+    prisma._wake_for_ledger_rows = functools.partial(PrismaClient._wake_for_ledger_rows, prisma)
+    prisma.request_ledger_spend_log_flush = functools.partial(
+        PrismaClient.request_ledger_spend_log_flush, prisma, schedule=scheduler
+    )
+    return prisma
+
+
+def _ledger_row(request_id: str, call_type: str = "acompletion") -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": call_type,
+        "model_id": "dep-bridged",
+        "accounting_payload": {"request_id": request_id},
+        "lens_export": {"record": {"request_id": request_id}, "payloads": ()},
+    }
+
+
+@pytest.mark.asyncio
+async def test_concurrent_ledger_rows_share_one_short_delayed_flush() -> None:
+    from litellm.constants import LENS_LEDGER_SPEND_LOG_FLUSH_DELAY_SECONDS
+
+    scheduler: Final = _RecordingScheduler()
+    prisma: Final = _ledger_flush_prisma(scheduler)
+    writer: Final = DBSpendUpdateWriter()
+
+    await asyncio.gather(
+        *(
+            writer._insert_spend_log_to_db(payload=_ledger_row(f"req-{index}"), prisma_client=prisma)
+            for index in range(5)
+        )
+    )
+
+    assert len(prisma.spend_log_transactions) == 5
+    assert [delay for delay, _ in scheduler.scheduled] == [LENS_LEDGER_SPEND_LOG_FLUSH_DELAY_SECONDS]
+    assert not prisma.spend_log_flush_requested.is_set()
+    scheduler.fire()
+    assert prisma.spend_log_flush_requested.is_set()
+    assert prisma.spend_log_ledger_wake is None
+
+
+@pytest.mark.asyncio
+async def test_a_ledger_row_after_the_wake_fired_schedules_the_next_batch() -> None:
+    scheduler: Final = _RecordingScheduler()
+    prisma: Final = _ledger_flush_prisma(scheduler)
+    writer: Final = DBSpendUpdateWriter()
+
+    await writer._insert_spend_log_to_db(payload=_ledger_row("first"), prisma_client=prisma)
+    scheduler.fire()
+    scheduler.scheduled.clear()
+    await writer._insert_spend_log_to_db(payload=_ledger_row("second"), prisma_client=prisma)
+
+    assert len(scheduler.scheduled) == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"request_id": "plain", "call_type": "acompletion", "model_id": "dep-bridged"},
+        {"request_id": "accounting", "call_type": "acompletion", "accounting_payload": {"request_id": "accounting"}},
+    ],
+    ids=["legacy_row", "ledger_row_without_lens_export"],
+)
+@pytest.mark.asyncio
+async def test_rows_without_a_lens_export_keep_waiting_for_the_monitor_poll(payload: dict[str, object]) -> None:
+    scheduler: Final = _RecordingScheduler()
+    prisma: Final = _ledger_flush_prisma(scheduler)
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(payload=payload, prisma_client=prisma)
+
+    assert prisma.spend_log_transactions == [payload]
+    assert scheduler.scheduled == []
+    assert not prisma.spend_log_flush_requested.is_set()
+
+
+@pytest.mark.asyncio
+async def test_a_chained_responses_ledger_row_still_flushes_at_once() -> None:
+    scheduler: Final = _RecordingScheduler()
+    prisma: Final = _ledger_flush_prisma(scheduler)
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(
+        payload=_ledger_row("chained", call_type="aresponses"), prisma_client=prisma, llm_router=_responses_router()
+    )
+
+    assert prisma.spend_log_flush_requested.is_set()
+    assert scheduler.scheduled == []
+
+
+@pytest.mark.asyncio
+async def test_without_a_running_monitor_a_ledger_row_schedules_nothing() -> None:
+    scheduler: Final = _RecordingScheduler()
+    prisma: Final = _ledger_flush_prisma(scheduler)
+    prisma.spend_log_flush_requested = None
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(payload=_ledger_row("early"), prisma_client=prisma)
+
+    assert scheduler.scheduled == []
+    assert len(prisma.spend_log_transactions) == 1

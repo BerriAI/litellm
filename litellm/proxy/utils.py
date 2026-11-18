@@ -5993,6 +5993,7 @@ class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
     spend_log_flush_requested: "asyncio.Event | None" = None
+    spend_log_ledger_wake: "asyncio.TimerHandle | None" = None
     spend_log_queue_bytes: ClassVar[int] = 0
     spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     spend_log_write_lock = asyncio.Lock()
@@ -6226,6 +6227,28 @@ class PrismaClient:
         hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
 
         return hashed_token
+
+    def request_ledger_spend_log_flush(
+        self,
+        delay: float,
+        schedule: Callable[[float, Callable[[], None]], asyncio.TimerHandle] | None = None,
+    ) -> None:
+        """Wake the queue monitor shortly after a row carrying a Lens ledger export is queued.
+
+        The monitor backs off to tens of seconds while idle, which would hold ledger rows past their
+        visibility target. One wake is scheduled per delay window, so a burst of concurrent requests
+        still flushes as a single batch and no request waits on the database.
+        """
+        if self.spend_log_flush_requested is None or self.spend_log_ledger_wake is not None:
+            return
+        self.spend_log_ledger_wake = (schedule or asyncio.get_running_loop().call_later)(
+            delay, self._wake_for_ledger_rows
+        )
+
+    def _wake_for_ledger_rows(self) -> None:
+        self.spend_log_ledger_wake = None
+        if self.spend_log_flush_requested is not None:
+            self.spend_log_flush_requested.set()
 
     def jsonify_object(self, data: Mapping[str, object]) -> dict[str, object]:
         db_data: Final[dict[str, object]] = copy.deepcopy(dict(data))

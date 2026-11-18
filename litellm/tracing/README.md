@@ -47,6 +47,7 @@ Once a body is offloaded, the trace detail view and investigation reads, search 
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `LITELLM_LENS_LEDGER_FLUSH_DELAY_SECONDS` | 0.2 | How long a request carrying a Lens record waits before the spend log queue is flushed to Postgres. Requests inside the window share one write; other spend logs keep the normal queue schedule |
 | `LITELLM_LENS_EXPORT_IDLE_MS` | 250 | How often an idle cost exporter checks for new records (minimum 50) |
 | `LITELLM_LENS_EXPORT_BATCH_SIZE` | 100 | Rows claimed per pass (maximum 1000) |
 | `LITELLM_LENS_EXPORT_LEASE_SECONDS` | 120 | How long a claim is held before another pod can retry it |

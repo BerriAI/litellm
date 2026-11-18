@@ -1902,6 +1902,10 @@ class DBSpendUpdateWriter:
             await enqueue_spend_logs(prisma_client, (payload,))
             if _turn_chains_through_the_db(_SPEND_METADATA_ADAPTER.validate_python(payload), llm_router):
                 request_spend_log_flush(prisma_client)
+            elif "lens_export" in payload:
+                from litellm.constants import LENS_LEDGER_SPEND_LOG_FLUSH_DELAY_SECONDS
+
+                prisma_client.request_ledger_spend_log_flush(LENS_LEDGER_SPEND_LOG_FLUSH_DELAY_SECONDS)
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
 
