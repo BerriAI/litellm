@@ -1926,6 +1926,29 @@ def test_update_metrics_handles_none_values():
     assert metrics.compression_saved_tokens == 0
 
 
+def test_update_metrics_preserves_cache_cost_and_coverage_across_daily_rows() -> None:
+    legacy: Final = _no_spend_record()
+    legacy.cache_read_input_tokens = 25
+    priced: Final = _no_spend_record()
+    priced.cache_read_input_tokens = 60
+    priced.cache_creation_input_tokens = 40
+    priced.cache_cost = 0.025
+    priced.priced_cache_tokens = 100
+    free_cache_read: Final = _no_spend_record()
+    free_cache_read.cache_read_input_tokens = 20
+    free_cache_read.cache_cost = 0.0
+    free_cache_read.priced_cache_tokens = 20
+
+    metrics: Final = SpendMetrics()
+    for record in (priced, legacy, free_cache_read):
+        update_metrics(metrics, record)
+
+    assert metrics.cache_read_input_tokens == 105
+    assert metrics.cache_creation_input_tokens == 40
+    assert metrics.cache_cost == pytest.approx(0.025)
+    assert metrics.priced_cache_tokens == 120
+
+
 class TestEverySavingsDriverSurvivesTheReadPath:
     """A savings driver is only real if it survives the whole read path.
 
