@@ -207,3 +207,280 @@ async fn an_admitted_request_gets_the_native_404_when_no_route_takes_it() {
     assert_eq!(response.headers()[ANSWERED_BY_HEADER], "native");
     assert!(received.try_recv().is_err());
 }
+
+const MASTER_KEY: &str = "Bearer gateway-key";
+
+/// The native gateway built from `config` the way `main` builds it in front of `python`, with the
+/// real `Admit`.
+async fn configured_gateway(python: SocketAddr, config: &str) -> SocketAddr {
+    litellm_gateway::install_crypto_provider();
+    let config = Config::from_yaml(config).unwrap();
+    let state = litellm_gateway::AppState::build(&config).await.unwrap();
+    let admit = litellm_gateway::Admit::new(&config);
+    let native = middleware::global(
+        litellm_gateway::router(state, &config),
+        &middleware::Settings::default(),
+        Arc::new(litellm_license::Entitlements::Community),
+        &middleware::InFlight::new(),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(litellm_gateway_forward::serve(
+        listener,
+        format!("http://{python}").parse().unwrap(),
+        Duration::from_secs(5),
+        Duration::from_secs(1),
+        native,
+        move |request: Request| admit.clone().admit(request),
+        std::future::pending(),
+    ));
+    address
+}
+
+async fn post_as(gateway: SocketAddr, path: &str, authorization: &str) -> Response {
+    let request = Request::post(format!("http://{gateway}{path}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, authorization)
+        .body(Body::from(
+            r#"{"model":"claude","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        Client::builder(TokioExecutor::new())
+            .build_http()
+            .request(request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    response.map(Body::new)
+}
+
+async fn provider() -> wiremock::MockServer {
+    let provider = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_test", "type": "message", "role": "assistant",
+                "model": "claude-haiku-5-5", "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+            })),
+        )
+        .mount(&provider)
+        .await;
+    provider
+}
+
+fn serving(provider: &wiremock::MockServer) -> String {
+    format!(
+        "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_base: {}\n      api_key: provider-key\n    model_info:\n      id: claude-a\ngeneral_settings:\n  master_key: gateway-key\n",
+        provider.uri()
+    )
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_master_key_callers_messages_request_is_answered_natively() {
+    let (python, mut received) = python().await;
+    let provider = provider().await;
+    let gateway = configured_gateway(python, &serving(&provider)).await;
+
+    let response = post_as(gateway, "/v1/messages", MASTER_KEY).await;
+
+    assert_eq!(
+        (
+            response.status(),
+            response.headers()[ANSWERED_BY_HEADER].to_str().unwrap(),
+            response.headers()["x-litellm-model-id"].to_str().unwrap(),
+        ),
+        (StatusCode::OK, "native", "claude-a")
+    );
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["model"], "claude");
+    assert!(received.try_recv().is_err());
+}
+
+#[rstest]
+#[case::another_route("/v1/chat/completions", MASTER_KEY, "python; reason=route")]
+#[case::another_caller("/v1/messages", "Bearer sk-virtual", "python; reason=credential")]
+#[tokio::test]
+async fn python_answers_another_route_and_another_caller(
+    #[case] path: &str,
+    #[case] authorization: &str,
+    #[case] answered_by: &str,
+) {
+    let (python, mut received) = python().await;
+    let provider = provider().await;
+    let gateway = configured_gateway(python, &serving(&provider)).await;
+
+    let response = post_as(gateway, path, authorization).await;
+
+    assert_eq!(response.headers()[ANSWERED_BY_HEADER], answered_by);
+    assert_eq!(received.recv().await.unwrap().path, path);
+    assert!(provider.received_requests().await.unwrap().is_empty());
+}
+
+const PROVIDER_STREAM: &str = concat!(
+    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-haiku-5-5\",\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+);
+
+/// The milestone's config: two weighted deployments of `claude`, and `claude-down`, which
+/// points at a closed port and falls back to `claude`. The provider is handed back so it
+/// outlives the gateway that calls it.
+async fn milestone_gateway(python: SocketAddr) -> (SocketAddr, wiremock::MockServer) {
+    let provider = provider().await;
+    wiremock::Mock::given(wiremock::matchers::body_partial_json(
+        serde_json::json!({"stream": true}),
+    ))
+    .respond_with(
+        wiremock::ResponseTemplate::new(200).set_body_raw(PROVIDER_STREAM, "text/event-stream"),
+    )
+    .with_priority(1)
+    .mount(&provider)
+    .await;
+    let closed = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let deployment = |name: &str, id: &str, base: &str, rpm: &str| {
+        format!(
+            "  - model_name: {name}\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n      api_base: {base}\n{rpm}    model_info:\n      id: {id}\n"
+        )
+    };
+    let config = format!(
+        "model_list:\n{}{}{}router_settings:\n  routing_strategy: simple-shuffle\n  num_retries: 1\n  fallbacks:\n    - claude-down: [claude]\ngeneral_settings:\n  master_key: gateway-key\n",
+        deployment("claude", "claude-a", &provider.uri(), "      rpm: 300\n"),
+        deployment("claude", "claude-b", &provider.uri(), "      rpm: 100\n"),
+        deployment(
+            "claude-down",
+            "claude-down",
+            &format!("http://{closed}"),
+            ""
+        ),
+    );
+    (configured_gateway(python, &config).await, provider)
+}
+
+/// One milestone call: its status, who answered, the routing headers and its body.
+async fn milestone_call(
+    gateway: SocketAddr,
+    model: &str,
+    stream: bool,
+) -> (u16, String, Option<String>, Option<String>, String) {
+    let request = Request::post(format!("http://{gateway}/v1/messages"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, MASTER_KEY)
+        .body(Body::from(
+            serde_json::json!({"model": model, "max_tokens": 16, "stream": stream,
+                "messages": [{"role": "user", "content": "hi"}]})
+            .to_string(),
+        ))
+        .unwrap();
+    let response = Client::builder(TokioExecutor::new())
+        .build_http()
+        .request(request)
+        .await
+        .unwrap();
+    let text = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .map(|value| value.to_str().unwrap().to_owned())
+    };
+    let (status, answered_by, group, fallbacks) = (
+        response.status().as_u16(),
+        text(ANSWERED_BY_HEADER).unwrap(),
+        text("x-litellm-model-group"),
+        text("x-litellm-attempted-fallbacks"),
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        answered_by,
+        group,
+        fallbacks,
+        String::from_utf8(body.to_vec()).unwrap(),
+    )
+}
+
+#[rstest]
+#[case::shuffle("claude", false, 200, Some(("claude", "0")), r#""model":"claude""#)]
+#[case::streamed_shuffle("claude", true, 200, Some(("claude", "0")), r#""model":"claude""#)]
+#[case::fallback(
+    "claude-down",
+    false,
+    200,
+    Some(("claude", "1")),
+    r#""model":"claude-haiku-5-5""#
+)]
+#[case::streamed_fallback(
+    "claude-down",
+    true,
+    200,
+    Some(("claude", "1")),
+    r#""model":"claude-down""#
+)]
+#[case::unknown_model("nope", false, 400, None, r#""type":"invalid_request_error""#)]
+#[case::streamed_unknown_model("nope", true, 400, None, r#""type":"invalid_request_error""#)]
+#[tokio::test]
+async fn the_milestone_config_is_answered_natively(
+    #[case] model: &str,
+    #[case] stream: bool,
+    #[case] status: u16,
+    #[case] routed: Option<(&str, &str)>,
+    #[case] reports: &str,
+) {
+    let (python, mut received) = python().await;
+    let (gateway, _provider) = milestone_gateway(python).await;
+
+    let (answered, answered_by, group, fallbacks, body) =
+        milestone_call(gateway, model, stream).await;
+
+    assert_eq!(
+        (
+            answered,
+            answered_by.as_str(),
+            group.as_deref().zip(fallbacks.as_deref())
+        ),
+        (status, "native", routed)
+    );
+    assert!(body.contains(reports), "{body}");
+    assert!(received.try_recv().is_err());
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_milestone_shuffle_follows_the_deployments_weights() {
+    let (python, _received) = python().await;
+    let (gateway, _provider) = milestone_gateway(python).await;
+    let client = Client::builder(TokioExecutor::new()).build_http();
+    let served_by = |_: usize| {
+        let request = Request::post(format!("http://{gateway}/v1/messages"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, MASTER_KEY)
+            .body(Body::from(
+                r#"{"model":"claude","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}"#,
+            ))
+            .unwrap();
+        let client = client.clone();
+        async move {
+            let response = client.request(request).await.unwrap();
+            response.headers()["x-litellm-model-id"]
+                .to_str()
+                .unwrap()
+                .to_owned()
+        }
+    };
+
+    let served: Vec<String> = futures_util::future::join_all((0..400).map(served_by)).await;
+
+    let by_the_heavier = served.iter().filter(|id| *id == "claude-a").count();
+    assert!(
+        (250..=350).contains(&by_the_heavier),
+        "claude-a holds 3 of the 4 parts of the weight and answered {by_the_heavier} of 400"
+    );
+}
