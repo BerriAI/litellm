@@ -376,7 +376,9 @@ def _map_openai_exception(
         and getattr(original_exception, "status_code", None) in (400, 401, 403)
         and "model_not_supported" not in error_str
     ):
-        message = f"{message} {copilot_app_hint}"
+        message = (
+            f"{message} {copilot_app_hint}"  # rebind-ok: append the custom GitHub App hint to the provider message
+        )
 
     if ExceptionCheckers.is_error_str_rate_limit(
         error_str, status_code=getattr(original_exception, "status_code", None)
