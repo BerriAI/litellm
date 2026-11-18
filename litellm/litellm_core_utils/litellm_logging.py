@@ -6168,6 +6168,11 @@ class Logging(LiteLLMLoggingBaseClass):
             MappingProxyType(dict(optional_params)), MappingProxyType(dict(litellm_params))
         )
 
+    def record_bridged_instructions(self, instructions: str) -> None:
+        """Logs a system prompt the bridge sent in ``input`` as the request's instructions, so traces
+        and message redaction treat it as they do one sent in ``instructions``."""
+        self.model_call_details["instructions"] = instructions
+
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))
 

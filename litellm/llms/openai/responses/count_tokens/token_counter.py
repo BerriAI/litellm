@@ -13,7 +13,6 @@ from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import declared_base_model_names
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
@@ -24,7 +23,6 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
-from litellm.llms.openai.chat.gpt_reasoning_transformation import sends_system_prompt_as_developer_message
 from litellm.llms.openai.common_utils import OpenAIError, decoded_json_object, get_openai_credentials
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
@@ -91,19 +89,6 @@ def _count_credential(deployment: Mapping[str, object] | None, model_label: str)
     )
 
 
-def _system_counts_as_developer_message(model: str, deployment: Mapping[str, object] | None) -> bool:
-    resolved_deployment: Final = deployment or {}
-    litellm_params: Final = as_str_mapping(resolved_deployment.get("litellm_params")) or {}
-    return sends_system_prompt_as_developer_message(
-        model,
-        LlmProviders.OPENAI.value,
-        (
-            *declared_base_model_names(litellm_params),
-            *declared_base_model_names({"model_info": resolved_deployment.get("model_info")}),
-        ),
-    )
-
-
 def _count_error(model_to_use: str, request_model: str, message: str, status_code: int) -> TokenCountResponse:
     return TokenCountResponse(
         total_tokens=0,
@@ -133,17 +118,11 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
-        deployment: Mapping[str, object] | None,
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use,
-                    messages=messages,
-                    system=system,
-                    tools=tools,
-                    output_format=output_format,
-                    system_as_developer=_system_counts_as_developer_message(model_to_use, deployment),
+                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
@@ -228,7 +207,6 @@ class OpenAITokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
-            deployment=deployment,
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting

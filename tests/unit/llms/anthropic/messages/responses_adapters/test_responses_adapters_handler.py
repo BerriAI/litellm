@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import os
@@ -6,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
 from contextlib import nullcontext
 from itertools import chain
 from typing import Final, Protocol, cast, runtime_checkable
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -110,6 +112,76 @@ def test_build_responses_kwargs_keeps_instructions_outside_the_gate(model: str, 
 
     assert responses_kwargs["instructions"] == "Be concise."
     assert [item["role"] for item in responses_kwargs["input"]] == ["user"]
+
+
+def test_build_responses_kwargs_keeps_instructions_on_a_stored_conversation() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2",
+        system="Be concise.",
+        extra_kwargs={"custom_llm_provider": "openai", "previous_response_id": "resp_prior"},
+    )
+
+    assert responses_kwargs["instructions"] == "Be concise."
+    assert responses_kwargs["previous_response_id"] == "resp_prior"
+    assert [item["role"] for item in responses_kwargs["input"]] == ["user"]
+
+
+class _TracedSpanAttributes(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final = asyncio.Queue[Mapping[object, object]]()
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        span: Final = MagicMock()
+        OpenTelemetry().set_attributes(span, kwargs, response_obj)
+        self.seen.put_nowait({call.args[0]: call.args[1] for call in span.set_attribute.call_args_list})
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_moved_to_a_developer_item_stays_on_the_trace_and_off_the_wire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    tracer: Final = _TracedSpanAttributes()
+    monkeypatch.setattr(litellm, "callbacks", [tracer])
+    response_body: Final = {
+        "id": "resp_traced",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-6.2",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        await litellm.anthropic.messages.acreate(
+            model="openai/gpt-6.2",
+            max_tokens=64,
+            system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}],
+            messages=MESSAGES,
+            api_key="test-key",
+        )
+        attributes: Final = await asyncio.wait_for(tracer.seen.get(), timeout=10)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert attributes["gen_ai.system_instructions"] == "Be concise.\nBe helpful."
+    assert sent["input"][0]["role"] == "developer"
+    assert not {"instructions", "system_instructions"} & sent.keys()
 
 
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():

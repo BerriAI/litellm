@@ -242,7 +242,7 @@ def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[s
 
 def _system_goes_in_developer_message(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    return sends_system_prompt_as_developer_message(
+    return not forwarded_kwargs.get("previous_response_id") and sends_system_prompt_as_developer_message(
         model, provider if isinstance(provider, str) else None, declared_base_model_names(forwarded_kwargs)
     )
 
@@ -369,6 +369,7 @@ def _build_responses_kwargs(
         request_data["output_format"] = output_format
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
+    system_as_developer: Final = _system_goes_in_developer_message(model, forwarded_kwargs)
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
@@ -376,8 +377,12 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
-        system_as_developer=_system_goes_in_developer_message(model, forwarded_kwargs),
+        system_as_developer=system_as_developer,
     )
+    moved_system_prompt: Final = _ADAPTER.system_instructions(request_system) if system_as_developer else None
+    logging_obj: Final = litellm_logging_obj_from_kwargs(forwarded_kwargs)
+    if moved_system_prompt and logging_obj is not None:
+        logging_obj.record_bridged_instructions(moved_system_prompt)
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)

@@ -1451,6 +1451,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else target_input_items
         )
         instructions: Final = None if system_goes_in_input else converted_instructions
+        if system_as_developer and system_goes_in_input and converted_instructions:
+            litellm_logging_obj.record_bridged_instructions(converted_instructions)
 
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()

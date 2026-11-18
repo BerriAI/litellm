@@ -30,6 +30,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
@@ -2029,6 +2030,48 @@ def test_transform_request_system_items_left_in_input_keep_their_role_after_the_
         {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Marked."}]},
         _HELLO_ITEM,
     ]
+
+
+class _TracedSpanAttributes(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final = queue.SimpleQueue[Mapping[object, object]]()
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        span: Final = MagicMock()
+        OpenTelemetry().set_attributes(span, kwargs, response_obj)
+        self.seen.put({call.args[0]: call.args[1] for call in span.set_attribute.call_args_list})
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_moved_to_a_developer_item_stays_on_the_trace_and_off_the_wire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    tracer: Final = _TracedSpanAttributes()
+    monkeypatch.setattr(litellm, "callbacks", [tracer])
+
+    with respx.mock(assert_all_called=True) as router:
+        route: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("gpt-6.2"))
+        )
+        await litellm.acompletion(
+            model="openai/responses/gpt-6.2",
+            messages=[*_SYSTEM_MESSAGES, _HELLO_MESSAGE],
+            api_key="test-key",
+        )
+        attributes: Final = await asyncio.to_thread(tracer.seen.get, timeout=10)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert attributes["gen_ai.system_instructions"] == _JOINED_SYSTEM_TEXT
+    assert sent["input"][0] == _developer_item(_JOINED_SYSTEM_TEXT)
+    assert not {"instructions", "system_instructions"} & sent.keys()
 
 
 def test_transform_request_single_char_keys_not_matched():

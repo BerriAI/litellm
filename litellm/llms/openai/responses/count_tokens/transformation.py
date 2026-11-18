@@ -343,8 +343,6 @@ class OpenAICountTokensConfig:
         system: object,
         tools: Sequence[Mapping[str, object]] | None,
         output_format: JsonValue = None,
-        *,
-        system_as_developer: bool = False,
     ) -> ResponsesCountRequestParts:
         """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
         anthropic_request: Final = AnthropicMessagesRequest(
@@ -356,7 +354,7 @@ class OpenAICountTokensConfig:
         )
         translated: Final = _TRANSLATED_REQUEST.validate_python(
             LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
-                anthropic_request, include_encrypted_reasoning=False, system_as_developer=system_as_developer
+                anthropic_request, include_encrypted_reasoning=False
             )
         )
         return OpenAICountTokensConfig.count_request_parts(
