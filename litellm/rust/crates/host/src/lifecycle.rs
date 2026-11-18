@@ -25,12 +25,12 @@ pub struct Timing {
     pub end_time: f64,
 }
 
-/// Whether a failure surfaced inside the call, including a host op the call asked for,
-/// or in a host step around it (preparing the arguments, finalizing the response).
+/// Where a failure surfaced and whether the stream still had a reader to receive it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailureOrigin {
     Call,
     Host,
+    DetachedStream,
 }
 
 #[derive(Clone, Debug, PartialEq)]

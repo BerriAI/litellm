@@ -302,16 +302,8 @@ class TagRepository(PrismaTableRepository["prisma_models.LiteLLM_TagTable"]):
     table_name = "litellm_tagtable"
 
 
-class ModelAccessGroupBudgetRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelAccessGroupBudgetTable"]):
-    table_name = "litellm_modelaccessgroupbudgettable"
-
-
 class InvitationLinkRepository(PrismaTableRepository["prisma_models.LiteLLM_InvitationLink"]):
     table_name = "litellm_invitationlink"
-
-
-class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKeyMapping"]):
-    table_name = "litellm_jwtkeymapping"
 
 
 class MemoryRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryTable"]):

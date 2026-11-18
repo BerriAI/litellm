@@ -135,7 +135,7 @@ def anthropic_error_frame_exception(error_type: str, message: str, status_code: 
     try:
         exception_type(model=model, original_exception=frame_error, custom_llm_provider="anthropic")
     except Exception as raised:  # noqa: BLE001  # exception_type hands the mapped error back by raising it
-        return raised
+        return raised.with_traceback(None)
     return frame_error
 
 
