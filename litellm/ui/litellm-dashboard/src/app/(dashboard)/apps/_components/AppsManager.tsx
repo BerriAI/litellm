@@ -158,7 +158,11 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
       </div>
       <div className="space-y-1.5 border-t pt-4">
         <label className="flex items-center gap-2 text-sm font-medium">
-          <Checkbox checked={autoCreate} onCheckedChange={(checked) => setAutoCreate(checked === true)} />
+          <Checkbox
+            checked={autoCreate}
+            disabled={pending}
+            onCheckedChange={(checked) => setAutoCreate(checked === true)}
+          />
           {t("apps.autoCreateCustomers")}
         </label>
         <p className="text-xs text-muted-foreground">{t("apps.autoCreateCustomersHint")}</p>
