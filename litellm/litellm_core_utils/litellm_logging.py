@@ -3261,7 +3261,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         payload: Final = prepared[3]
         raw_cost: Final[object] = self.model_call_details.get("response_cost")
-        if payload is None or not isinstance(raw_cost, (int, float)):
+        if payload is None:
             return None
         recorded_usage: Final[object] = self.model_call_details.get("combined_usage_object")
         response_usage: Final[object] = getattr(prepared[2], "usage", None)
@@ -3276,6 +3276,10 @@ class Logging(LiteLLMLoggingBaseClass):
             _extract_response_obj_and_hidden_params(prepared[2], None)[0],
             combined_usage_object=normalized_usage,
         ).model_copy(deep=True)
+        if not isinstance(raw_cost, (int, float)):
+            if self.model_call_details["_accounting_usage_observed"] is UsageObservation.KNOWN:
+                self.model_call_details["combined_usage_object"] = usage
+            return None
         self.prepared_cost = PreparedCost(
             raw_cost,
             {

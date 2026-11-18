@@ -16835,6 +16835,62 @@ async def test_a_response_discarded_after_its_success_log_was_parked_is_billed_o
     assert prepared.amount == pytest.approx(both_attempts)
 
 
+_UNPRICED_MODEL: Final = "unpriced-rejection-model"
+_UNPRICED_REJECTED_AT: Final = datetime.datetime(2026, 11, 18, 12, 0, 1, tzinfo=datetime.timezone.utc)
+
+
+def _unpriced_model_logging_obj() -> LitellmLogging:
+    assert f"openai/{_UNPRICED_MODEL}" not in litellm.model_cost and _UNPRICED_MODEL not in litellm.model_cost
+    logging_obj: Final = LitellmLogging(
+        model=_UNPRICED_MODEL,
+        messages=[{"role": "user", "content": "summarize the quarterly report in three sentences"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 11, 18, 12, 0, 0),
+        litellm_call_id="unpriced-rejection",
+        function_id="unpriced-rejection",
+    )
+    logging_obj.update_environment_variables(
+        model=_UNPRICED_MODEL,
+        user="",
+        optional_params={},
+        litellm_params={"metadata": {}},
+        custom_llm_provider="openai",
+    )
+    return logging_obj
+
+
+def test_a_post_call_rejection_of_an_unpriced_model_logs_the_provider_usage_without_charging_it() -> None:
+    logging_obj: Final = _unpriced_model_logging_obj()
+    served: Final = ModelResponse(
+        id="served", model=_UNPRICED_MODEL, usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    )
+    rejected_at_local: Final = _UNPRICED_REJECTED_AT.replace(tzinfo=None)
+
+    prepared: Final = logging_obj.prepare_response_cost(served, _UNPRICED_REJECTED_AT)
+    logging_obj._failure_handler_helper_fn(
+        RuntimeError("post-call guardrail blocked"), "", rejected_at_local, rejected_at_local
+    )
+
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    logged: Final = {key: payload[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+    assert prepared is None, "an unpriced model has no prepared cost to finalize"
+    assert logged == {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}, payload
+    assert payload["response_cost"] == 0.0, payload
+
+
+def test_a_post_call_rejection_of_an_unpriced_response_without_usage_keeps_the_prompt_estimate() -> None:
+    from litellm.proxy.utils import _estimated_prompt_usage, _failure_usage_to_lift
+
+    logging_obj: Final = _unpriced_model_logging_obj()
+    prompt_estimate: Final = _estimated_prompt_usage(logging_obj.model_call_details, {}, None)
+
+    logging_obj.prepare_response_cost(ModelResponse(id="served", model=_UNPRICED_MODEL), _UNPRICED_REJECTED_AT)
+
+    assert prompt_estimate is not None and prompt_estimate.prompt_tokens > 0
+    assert _failure_usage_to_lift(logging_obj.model_call_details, {}, dispatched=True) == (prompt_estimate, 0.0)
+
+
 class _FailureKwargsRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
