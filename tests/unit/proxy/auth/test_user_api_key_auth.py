@@ -61,8 +61,8 @@ from litellm.types.proxy.auth.customer_hierarchy import (
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
-from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 
 
 @pytest.fixture
@@ -688,7 +688,7 @@ async def test_check_blocked_team():
 
 
 @pytest.mark.asyncio
-async def test_team_object_has_object_permission_id():
+async def test_team_object_has_object_permission_id(monkeypatch):
     """
     Ensure the team object passed into common_checks contains the team's object_permission_id.
     """
@@ -714,6 +714,14 @@ async def test_team_object_has_object_permission_id():
         team_models=["gpt-4o"],
     )
     user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team=FakeTeamStore(
+                rows={team_id: {"team_id": team_id, "object_permission_id": permission_id, "models": ["gpt-4o"]}}
+            )
+        ),
+    )
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
@@ -760,14 +768,16 @@ async def test_returned_user_api_key_auth(user_role, expected_role):
 
 
 class _NoMembershipRowPrisma:
+    """A connected client whose only Prisma read is the empty gateway config: team and membership rows come
+    from the Rust store fakes, which find no membership row."""
+
     def __init__(self) -> None:
         self.db: Final = prisma_with_empty_config().db
-        self.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
 
 
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
 @pytest.mark.asyncio
-async def test_aaauser_personal_budgets(key_ownership):
+async def test_aaauser_personal_budgets(key_ownership, monkeypatch):
     """
     Set a personal budget on a user
 
@@ -812,6 +822,14 @@ async def test_aaauser_personal_budgets(key_ownership):
         )
 
     user_obj = LiteLLM_UserTable(user_id=_user_id, spend=11, max_budget=10, user_email="")
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team=FakeTeamStore(
+                rows={"my-special-team": {"team_id": "my-special-team", "max_budget": 100, "models": ["gpt-4o"]}}
+            )
+        ),
+    )
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
     user_api_key_cache.set_cache(key="{}".format(_user_id), value=user_obj)
 
@@ -2583,10 +2601,14 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", [{}, {"scope": "litellm_proxy_admin"}])
 @pytest.mark.parametrize(
-    "verified, links", [({"email_verified": False}, False), ({"email_verified": "false"}, False), ({}, True)]
+    "verified, email_verified", [({"email_verified": False}, False), ({"email_verified": "false"}, False), ({}, None)]
 )
-async def test_jwt_links_the_sign_in_email_only_when_the_token_does_not_mark_it_unverified(
-    monkeypatch: pytest.MonkeyPatch, scope: dict[str, object], verified: dict[str, object], links: bool
+async def test_jwt_passes_whether_the_token_marks_its_email_unverified_to_the_sign_in(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+    scope: dict[str, object],
+    verified: dict[str, object],
+    email_verified: bool | None,
 ) -> None:
     auth_checks.last_db_access_time.clear()
     table: Final = UserTable(user_row("owner", "owner@example.com"))
@@ -2617,7 +2639,9 @@ async def test_jwt_links_the_sign_in_email_only_when_the_token_does_not_mark_it_
             request_data={},
         )
 
-    assert table.row("owner").sso_user_id == ("idp-new" if links else None)
+    assert [(sign_in["user_email"], sign_in["email_verified"]) for sign_in, _ in rust_auth_stores.user.sign_ins] == [
+        ("owner@example.com", email_verified)
+    ]
 
 
 def _qa_websocket(messages):
@@ -3066,9 +3090,11 @@ async def test_cached_admin_service_key_applies_impersonation_header(
     )
     cache: Final = UserApiKeyCache()
     team: Final = LiteLLM_TeamTableCachedObj(team_id=actor.team_id, blocked=blocked, last_refreshed_at=2)
-    database: Final = MagicMock()
-    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", database)
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(team=FakeTeamStore(rows={team.team_id: {"team_id": team.team_id, "blocked": blocked}})),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-cached-service-master")
     await cache.async_set_cache(key=token, value=actor, model_type=UserAPIKeyAuth)
