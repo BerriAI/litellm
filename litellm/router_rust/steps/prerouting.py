@@ -551,6 +551,7 @@ class PreRoutingStrategies:
             config=config,
             model_to_prefs=model_to_prefs,
             model_to_cost=model_to_cost,
+            ctx=self._ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
         )
         self._register(self.adaptive, deployment, router, "Adaptive-router")
         self._host.callbacks.add_litellm_callback(AdaptiveRouterPostCallHook(adaptive_router=router))

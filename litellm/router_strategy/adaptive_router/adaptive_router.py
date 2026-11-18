@@ -18,7 +18,8 @@ import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Final, cast
+from functools import cached_property
+from typing import TYPE_CHECKING, Final, cast
 
 from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -51,6 +52,7 @@ from litellm.router_strategy.adaptive_router.signals import (
 from litellm.router_strategy.adaptive_router.update_queue import (
     AdaptiveRouterUpdateQueue,
 )
+from litellm.router_strategy.savings_baseline import resolve_baseline_routing_fields
 from litellm.types.utils import StandardLoggingRoutingDecision
 
 # Sweep session-state cache when it exceeds this many live entries. Expired
@@ -65,6 +67,9 @@ from litellm.types.router import (
     PreRoutingHookResponse,
     RequestType,
 )
+
+if TYPE_CHECKING:
+    from litellm.router_api import RoutingContext
 
 
 def _default_prefs() -> AdaptiveRouterPreferences:
@@ -100,11 +105,14 @@ class AdaptiveRouter:
         config: AdaptiveRouterConfig,
         model_to_prefs: dict[str, AdaptiveRouterPreferences],
         model_to_cost: dict[str, float],
+        *,
+        ctx: RoutingContext | None = None,
     ) -> None:
         self.router_name = router_name
         self.config = config
         self.model_to_prefs = model_to_prefs
         self.model_to_cost = model_to_cost
+        self._ctx: Final = ctx
         self.queue = AdaptiveRouterUpdateQueue()
 
         self._cells: dict[tuple[RequestType, str], BanditCell] = {}
@@ -177,6 +185,12 @@ class AdaptiveRouter:
 
     # ---- Pre-routing hook ------------------------------------------------
 
+    @cached_property
+    def _savings_baseline_fields(self) -> StandardLoggingRoutingDecision:
+        if self._ctx is None:
+            return {}
+        return resolve_baseline_routing_fields(self._ctx, self.config.available_models)
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -220,13 +234,14 @@ class AdaptiveRouter:
         return PreRoutingHookResponse(
             model=chosen_model,
             messages=messages,
-            routing_decision=StandardLoggingRoutingDecision(
-                router_model_name=self.router_name,
-                router_type="adaptive",
-                routed_model=chosen_model,
-                cause="bandit",
-                request_type=request_type.value,
-            ),
+            routing_decision={
+                **self._savings_baseline_fields,
+                "router_model_name": self.router_name,
+                "router_type": "adaptive",
+                "routed_model": chosen_model,
+                "cause": "bandit",
+                "request_type": request_type.value,
+            },
         )
 
     # ---- Pick model ------------------------------------------------------
