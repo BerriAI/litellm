@@ -94,8 +94,15 @@ export default function CustomerHierarchyUsagePage() {
             budget={null}
             showBudgetHint={false}
             spendDetails={
-              budgetEntity &&
-              budgetSettingsHref && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+              <>
+                <CustomerSurchargeBreakdown
+                  spend={totals.spend}
+                  surcharge={data.metadata.total_customer_margin_spend}
+                />
+                {budgetEntity && budgetSettingsHref && (
+                  <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+                )}
+              </>
             }
           />
           <CustomerUsageTrend

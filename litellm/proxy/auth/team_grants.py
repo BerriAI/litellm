@@ -60,7 +60,6 @@ class TeamGrants(TypedDict, total=False):
     team_rpm_limit: ReadOnly[int | None]
     team_tpd_limit: ReadOnly[int | None]
     team_max_budget: ReadOnly[float | None]
-    team_cost_margin_percent: ReadOnly[float | None]
     team_soft_budget: ReadOnly[float | None]
     team_model_max_budget: ReadOnly[dict[str, object] | None]
     team_spend: ReadOnly[float | None]
@@ -83,7 +82,6 @@ _TEAM_GRANT_AUTH_FIELDS: Final[frozenset[str]] = frozenset(
         "team_rpm_limit",
         "team_tpd_limit",
         "team_max_budget",
-        "team_cost_margin_percent",
         "team_soft_budget",
         "team_spend",
         "team_metadata",
@@ -190,7 +188,6 @@ def team_grants(
         team_rpm_limit=team_object.rpm_limit,
         team_tpd_limit=team_object.tpd_limit,
         team_max_budget=team_object.max_budget,
-        team_cost_margin_percent=team_object.cost_margin_percent,
         team_soft_budget=team_object.soft_budget,
         team_model_max_budget=team_object.model_max_budget,
         team_spend=team_object.spend,

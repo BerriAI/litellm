@@ -816,7 +816,7 @@ async def test_new_team_persists_tpd_limit(mock_db_client, mock_admin_auth):
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     await new_team(
-        data=NewTeamRequest(team_alias="tpd-team", rpm_limit=5, tpd_limit=250000, cost_margin_percent=2),
+        data=NewTeamRequest(team_alias="tpd-team", rpm_limit=5, tpd_limit=250000),
         http_request=MagicMock(spec=Request),
         user_api_key_dict=mock_admin_auth,
     )
@@ -824,7 +824,6 @@ async def test_new_team_persists_tpd_limit(mock_db_client, mock_admin_auth):
     team_data = mock_team_create.call_args.kwargs["data"]
     assert team_data["tpd_limit"] == 250000
     assert team_data["rpm_limit"] == 5
-    assert team_data["cost_margin_percent"] == 2
 
 
 @pytest.mark.asyncio
@@ -18465,75 +18464,6 @@ _TEAM_ADMIN_CALLER = UserAPIKeyAuth(
     user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-team-admin", user_id="team-admin"
 )
 _PROXY_ADMIN_CALLER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("organization_admin", [False, True])
-@pytest.mark.parametrize("percent", [None, 2, 3])
-async def test_team_pricing_changes_require_proxy_admin(
-    disable_audit_logging_for_mocked_team, organization_admin: bool, percent: float | None
-) -> None:
-    from contextlib import ExitStack
-
-    existing: Final = LiteLLM_TeamTable(
-        team_id="test_team_id",
-        organization_id="org-1",
-        cost_margin_percent=2,
-        members_with_roles=[{"user_id": "team-admin", "role": "admin"}],
-    )
-    with ExitStack() as stack:
-        prisma: Final = _wire_update_team(stack, {})
-        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
-        stack.enter_context(_team_admin_may_edit("team_alias"))
-        stack.enter_context(_org_admins(("team-admin", "org-1")) if organization_admin else _not_org_admin())
-        stack.enter_context(
-            patch(  # test-quality-ok: this endpoint's organization loader is a module-level dependency
-                "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-                new=AsyncMock(
-                    return_value=LiteLLM_OrganizationTable(
-                        organization_id="org-1", budget_id="org-budget", created_by="admin", updated_by="admin"
-                    )
-                ),
-            )
-        )
-        request: Final = UpdateTeamRequest(team_id="test_team_id", team_alias="renamed", cost_margin_percent=percent)
-        if percent != 2:
-            with pytest.raises(ProxyException) as denied:
-                await update_team(
-                    data=request, http_request=_update_request_stub(), user_api_key_dict=_TEAM_ADMIN_CALLER
-                )
-            assert str(denied.value.code) == "403"
-            assert "Only proxy admins can change cost_margin_percent" in str(denied.value.message)
-            assert not prisma.db.litellm_teamtable.update.called
-            return
-        await update_team(data=request, http_request=_update_request_stub(), user_api_key_dict=_TEAM_ADMIN_CALLER)
-        assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["team_alias"] == "renamed"
-
-
-@pytest.mark.asyncio
-async def test_proxy_admin_can_update_team_pricing(disable_audit_logging_for_mocked_team) -> None:
-    from contextlib import ExitStack
-
-    with ExitStack() as stack:
-        prisma: Final = _wire_update_team(stack, {})
-        await update_team(
-            data=UpdateTeamRequest(team_id="test_team_id", cost_margin_percent=3),
-            http_request=_update_request_stub(),
-            user_api_key_dict=_PROXY_ADMIN_CALLER,
-        )
-        assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["cost_margin_percent"] == 3
-
-
-@pytest.mark.asyncio
-async def test_org_admin_cannot_create_team_pricing(mock_db_client: MagicMock) -> None:
-    with _org_admins(("team-admin", "org-1")), pytest.raises(ProxyException) as denied:
-        await new_team(
-            data=NewTeamRequest(team_alias="pricing", organization_id="org-1", cost_margin_percent=2),
-            http_request=_update_request_stub(),
-            user_api_key_dict=_TEAM_ADMIN_CALLER,
-        )
-    assert str(denied.value.code) == "403"
-    assert "Only proxy admins can change cost_margin_percent" in str(denied.value.message)
 
 
 def _update_request_stub():

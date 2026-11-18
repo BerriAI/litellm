@@ -273,7 +273,6 @@ model LiteLLM_ModelTable {
 
 // Assign prod keys to groups, not individuals 
 model LiteLLM_TeamTable {
-    cost_margin_percent Float?
 		team_id    String @id @default(uuid())
     team_alias  String? 
     organization_id String?
@@ -344,7 +343,6 @@ model LiteLLM_ProjectTable {
 
 // Audit table for deleted teams - preserves spend and team information for historical tracking
 model LiteLLM_DeletedTeamTable {
-    cost_margin_percent     Float?
     id                      String   @id @default(uuid())
     team_id                 String   // Original team_id
     team_alias              String?
@@ -980,6 +978,7 @@ model LiteLLM_DailyUserSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1018,6 +1017,7 @@ model LiteLLM_DailyGlobalSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1052,6 +1052,7 @@ model LiteLLM_DailyOrganizationSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1094,6 +1095,7 @@ model LiteLLM_DailyCustomerMemberSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend Float @default(0.0)
   guardrail_spend Float @default(0.0)
+  customer_margin_spend Float @default(0.0)
   api_requests        BigInt   @default(0)
   successful_requests BigInt   @default(0)
   failed_requests     BigInt   @default(0)
@@ -1130,6 +1132,7 @@ model LiteLLM_DailyEndUserSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1168,6 +1171,7 @@ model LiteLLM_DailyAgentSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1206,6 +1210,7 @@ model LiteLLM_DailyTeamSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1247,6 +1252,7 @@ model LiteLLM_DailyTagSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)

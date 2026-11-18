@@ -101,8 +101,8 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       }
 
       let providerValue: string;
-      if (selectedProvider === "global") {
-        providerValue = "global";
+      if (selectedProvider === "global" || selectedProvider === "customer") {
+        providerValue = selectedProvider;
       } else {
         const backendValue = getProviderBackendValue(selectedProvider);
         if (!backendValue) {
@@ -114,8 +114,8 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
 
       if (marginConfig[providerValue]) {
         const displayName =
-          providerValue === "global"
-            ? t("costTracking.marginConfig.global")
+          providerValue === "global" || providerValue === "customer"
+            ? t(`costTracking.marginConfig.${providerValue}`)
             : Providers[selectedProvider as keyof typeof Providers];
         toast.fromError(t("costTracking.marginConfig.toasts.duplicate", { name: displayName }));
         return false;
@@ -129,6 +129,9 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
           return false;
         }
         marginValue = percentValue / 100;
+      } else if (providerValue === "customer") {
+        toast.fromError(t("costTracking.marginConfig.toasts.customerPercentageOnly"));
+        return false;
       } else {
         const fixedValue = parseFloat(fixedAmountValue);
         if (isNaN(fixedValue) || fixedValue < 0) {

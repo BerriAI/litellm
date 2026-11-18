@@ -77,7 +77,6 @@ pub(super) struct KeyView {
     pub team_tpd_limit: Option<i64>,
     pub team_max_budget: Option<f64>,
     pub team_soft_budget: Option<f64>,
-    pub team_cost_margin_percent: Option<f64>,
     pub team_model_max_budget: Option<RawJson>,
     pub team_models: Vec<String>,
     pub team_blocked: bool,
@@ -227,16 +226,7 @@ mod tests {
         let mut tx = pool.begin().await?;
         insert_key_with_team(&mut tx).await?;
 
-        execute(
-            &mut tx,
-            r#"UPDATE "LiteLLM_TeamTable" SET cost_margin_percent = 2.5 WHERE team_id = 'kv-team'"#,
-            &[],
-        )
-        .await?;
-
         let view = key_view(&mut tx, "kv-token").await?;
-
-        assert_eq!(view.team_cost_margin_percent, Some(2.5));
 
         assert_eq!(
             (

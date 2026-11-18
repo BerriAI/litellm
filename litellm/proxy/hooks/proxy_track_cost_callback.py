@@ -49,6 +49,11 @@ from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_callback_customer_cost_margin,
+    customer_cost_margin,
+    request_has_customer,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -71,7 +76,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     should_store_prompts_for_call,
 )
-from litellm.proxy.spend_tracking.team_cost_margin import apply_callback_team_cost_margin
 from litellm.proxy.utils import (
     FAILURE_ROW_ALREADY_WRITTEN,
     FAILURE_ROW_ALREADY_WRITTEN_KEY,
@@ -890,10 +894,10 @@ class _ProxyDBLogger(CustomLogger):
                 else priced_cost
             )
             margin_payload: Final = cast(StandardLoggingPayload | None, sl_object)  # cast-ok: callback payload contract
-            response_cost: Final = apply_callback_team_cost_margin(
+            response_cost: Final = apply_callback_customer_cost_margin(
                 margin_payload,
                 allowance_adjusted_cost,
-                _BATCH_CALLBACK_FIELDS.validate_python(metadata).get("user_api_key_team_cost_margin_percent"),
+                customer_cost_margin(request_has_customer(_BATCH_CALLBACK_FIELDS.validate_python(metadata))),
             )
             tags: Final = _get_request_tags_for_cost_tracking(
                 sl_object=sl_object,

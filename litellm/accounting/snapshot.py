@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_sh
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
+from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
 from litellm.proxy.spend_tracking.savings import SavingsSpend, compute_savings_spend, marks_gateway_injection
 
 if TYPE_CHECKING:
@@ -79,6 +80,7 @@ def build_accounting_payload(
         "accounting_entities": entities,
         "accounting_savings": savings._asdict(),
         "accounting_guardrail_spend": guardrail_share_of_spend(metadata, payload["spend"]),
+        "accounting_customer_margin_spend": customer_margin_share_of_spend(metadata, payload["spend"]),
         "accounting_model_access_groups": model_access_groups,
         "accounting_windows": windows,
     }

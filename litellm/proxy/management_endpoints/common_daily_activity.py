@@ -167,6 +167,9 @@ class DailySpendRecord(Protocol):
     def guardrail_spend(self) -> float: ...
 
     @property
+    def customer_margin_spend(self) -> float: ...
+
+    @property
     def api_requests(self) -> int: ...
 
     @property
@@ -254,6 +257,9 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.gateway_injected_caching_savings_spend += record.gateway_injected_caching_savings_spend or 0
     existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
     existing_metrics.guardrail_spend += record.guardrail_spend or 0  # rebind-ok: callers rely on in-place accumulation
+    existing_metrics.customer_margin_spend += (
+        record.customer_margin_spend or 0
+    )  # rebind-ok: callers rely on in-place accumulation
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
@@ -741,6 +747,7 @@ def sum_spend_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
         gateway_injected_caching_savings_spend=sum(metric.gateway_injected_caching_savings_spend for metric in metrics),
         autorouter_savings_spend=sum(metric.autorouter_savings_spend for metric in metrics),
         guardrail_spend=sum(metric.guardrail_spend for metric in metrics),
+        customer_margin_spend=sum(metric.customer_margin_spend for metric in metrics),
         total_tokens=sum(metric.total_tokens for metric in metrics),
         successful_requests=sum(metric.successful_requests for metric in metrics),
         failed_requests=sum(metric.failed_requests for metric in metrics),
@@ -772,6 +779,7 @@ def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
         gateway_injected_caching_savings_spend=record.gateway_injected_caching_savings_spend or 0,
         autorouter_savings_spend=record.autorouter_savings_spend or 0,
         guardrail_spend=record.guardrail_spend or 0,
+        customer_margin_spend=record.customer_margin_spend or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
@@ -1056,6 +1064,7 @@ async def get_daily_activity(
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
                 total_gateway_injected_caching_savings_spend=metadata_metrics.gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
+                total_customer_margin_spend=metadata_metrics.customer_margin_spend,
                 total_response_time_ms=metadata_metrics.total_response_time_ms,
                 total_timed_requests=metadata_metrics.timed_requests,
                 page=page,
@@ -1268,6 +1277,7 @@ async def get_daily_activity_aggregated(
                     "totals"
                 ].gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
+                total_customer_margin_spend=aggregated["totals"].customer_margin_spend,
                 total_response_time_ms=aggregated["totals"].total_response_time_ms,
                 total_timed_requests=aggregated["totals"].timed_requests,
                 page=1,

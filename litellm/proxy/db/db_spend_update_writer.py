@@ -89,6 +89,7 @@ from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
 from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
+from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
 from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
     extract_cache_creation_tokens,
@@ -3470,6 +3471,10 @@ class DBSpendUpdateWriter:
                 gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
                 guardrail_spend=guardrail_share_of_spend(
+                    _metadata,
+                    payload["spend"],  # pyright: ignore[reportUnknownArgumentType]  # legacy dict | SpendLogsPayload union
+                ),
+                customer_margin_spend=customer_margin_share_of_spend(
                     _metadata,
                     payload["spend"],  # pyright: ignore[reportUnknownArgumentType]  # legacy dict | SpendLogsPayload union
                 ),

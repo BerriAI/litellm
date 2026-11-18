@@ -1988,7 +1988,6 @@ class OrgMember(MemberBase):
 
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
-from litellm.models.team import TeamCostMarginPercent
 
 RouterSettingsDict = Annotated[
     dict[str, object],
@@ -2075,7 +2074,6 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     """
 
     team_id: str  # required
-    cost_margin_percent: TeamCostMarginPercent | None = None
     team_alias: str | None = None
     organization_id: str | None = None
     metadata: dict | None = None
@@ -5444,6 +5442,7 @@ class BaseDailySpendTransaction(TypedDict):
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

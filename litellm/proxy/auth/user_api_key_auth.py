@@ -2336,7 +2336,6 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamRebuiltFrom
     return LiteLLM_TeamRebuiltFromToken(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
-        cost_margin_percent=valid_token.team_cost_margin_percent,
         soft_budget=valid_token.team_soft_budget,
         model_max_budget=valid_token.team_model_max_budget,
         spend=valid_token.team_spend,

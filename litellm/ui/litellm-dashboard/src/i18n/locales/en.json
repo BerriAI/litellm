@@ -3650,6 +3650,7 @@
     "addMarginForm": {
       "provider": {
         "global": "Global (All Providers)",
+        "customer": "Customer requests (surcharge on requests made for a customer)",
         "label": "Provider",
         "hint": "Select 'Global' to apply margin to all providers, or select a specific provider",
         "placeholder": "Select provider or 'Global'",
@@ -3689,7 +3690,9 @@
     },
     "marginTable": {
       "global": "Global",
+      "customer": "Customer requests",
       "globalAllProviders": "Global (All Providers)",
+      "customerRequests": "Customer requests",
       "columns": {
         "provider": "Provider",
         "margin": "Margin",
@@ -3718,6 +3721,7 @@
     },
     "marginConfig": {
       "global": "Global",
+      "customer": "Customer requests",
       "toasts": {
         "fetchFailed": "Failed to fetch margin configuration",
         "updated": "Margin configuration updated successfully",
@@ -3727,7 +3731,8 @@
         "invalidProvider": "Invalid provider selected",
         "duplicate": "Margin for {{name}} already exists. Edit it in the table above.",
         "percentageOutOfRange": "Percentage must be between 0% and 1000%",
-        "fixedNegative": "Fixed amount must be non-negative"
+        "fixedNegative": "Fixed amount must be non-negative",
+        "customerPercentageOnly": "A margin for customer requests must be a percentage"
       }
     },
     "blockUnpricedConfig": {
@@ -16628,7 +16633,6 @@
     }
   },
   "teams": {
-    "costMarginPercent": "Cost margin (%)",
     "teamInfo": {
       "tabs": {
         "overview": "Overview",
@@ -21127,6 +21131,9 @@
       "yearlySpend": "Yearly spend / limit",
       "customerSpendShare": "Share of customer spend",
       "noMonthlyLimit": "No monthly limit",
+      "spendBreakdown": "Spend breakdown",
+      "baseCost": "Base cost",
+      "surcharge": "Surcharge",
       "noYearlyLimit": "No yearly limit",
       "reachedLimit": "Reached limit",
       "withinMonthlyBudget": "Within monthly limit",

@@ -8,7 +8,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost, finalize_cost
 from litellm.proxy.hooks.search_free_tier import SharedCounter, allocate_search_free_tier
-from litellm.proxy.spend_tracking.team_cost_margin import apply_team_cost_margin, get_team_cost_margin_percent
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_customer_cost_margin,
+    customer_cost_margin,
+    request_has_customer,
+)
 from litellm.types.utils import CostBreakdown, StandardLoggingPayload
 
 
@@ -94,9 +98,9 @@ async def _finish_finalization(
         logging_obj.cost_allowance_discount = (  # rebind-ok: retain allocation across snapshot retries
             allocation.discount if allocation is not None else 0.0
         )
-    finalized: Final = apply_team_cost_margin(
+    finalized: Final = apply_customer_cost_margin(
         finalize_cost(amount, breakdown, logging_obj.cost_allowance_discount),
-        get_team_cost_margin_percent(payload["metadata"]),
+        customer_cost_margin(request_has_customer(payload["metadata"])),
     )
     logging_obj.record_finalized_cost(finalized)
     return finalized

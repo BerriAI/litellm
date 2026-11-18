@@ -53,6 +53,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_customer_cost_margin_to_estimate,
+    customer_cost_margin,
+)
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
@@ -66,7 +70,6 @@ from litellm.proxy.spend_tracking.native_budgets import (
     settle_native_reservation,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
-from litellm.proxy.spend_tracking.team_cost_margin import apply_team_cost_margin_to_estimate
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     end_user_counter,
@@ -286,7 +289,7 @@ async def reserve_budget_for_request(
         path_params=path_params,
     )
 
-    reservation_cost: Final = apply_team_cost_margin_to_estimate(
+    reservation_cost: Final = apply_customer_cost_margin_to_estimate(
         estimate_request_max_cost(
             request_body=request_body,
             route=route,
@@ -294,7 +297,7 @@ async def reserve_budget_for_request(
             input_token_counts=input_token_counts,
             path_params=path_params,
         ),
-        valid_token.team_cost_margin_percent,
+        customer_cost_margin(valid_token.customer_hierarchy is not None),
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -306,7 +309,7 @@ async def reserve_budget_for_request(
         valid_token=valid_token,
         reservation_cost=reservation_cost,
         input_token_counts=input_token_counts,
-        input_cost=apply_team_cost_margin_to_estimate(
+        input_cost=apply_customer_cost_margin_to_estimate(
             estimate_request_input_cost(
                 request_body=request_body,
                 route=route,
@@ -314,7 +317,7 @@ async def reserve_budget_for_request(
                 input_token_counts=input_token_counts,
                 path_params=path_params,
             ),
-            valid_token.team_cost_margin_percent,
+            customer_cost_margin(valid_token.customer_hierarchy is not None),
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )

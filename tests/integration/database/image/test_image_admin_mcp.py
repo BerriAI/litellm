@@ -76,21 +76,14 @@ async def verify_admin_tools(client: httpx2.AsyncClient) -> None:
 
     team_id: Final = "image-admin-mcp-team"
     created: Final = json.loads(await call_tool(
-        "create_team", {"body": {
-            "team_id": team_id, "team_alias": team_id, "max_budget": 25, "cost_margin_percent": 2,
-        }}
+        "create_team", {"body": {"team_id": team_id, "team_alias": team_id, "max_budget": 25}}
     ))
     assert created["team_id"] == team_id and created["max_budget"] == 25, created
     read: Final = json.loads(await call_tool("get_team", {"query": {"team_id": team_id}}))
     assert read["team_info"]["team_id"] == team_id and read["team_info"]["max_budget"] == 25, read
-    assert read["team_info"]["cost_margin_percent"] == 2, read
     await call_tool("delete_teams", {"body": {"team_ids": [team_id]}})
     deleted: Final = await client.get("/team/info", headers=headers, params={"team_id": team_id})
     assert deleted.status_code == 404, deleted.text
-    archived: Final = await proxy_server.prisma_client.db.litellm_deletedteamtable.find_first(
-        where={"team_id": team_id}
-    )
-    assert archived is not None and archived.cost_margin_percent == 2, archived
     print("admin-mcp-tools-ok")
 
 async def probe() -> None:

@@ -18635,7 +18635,6 @@ export interface paths {
          *     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
          *     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
-         *     - cost_margin_percent: Optional[float] - Team chargeback surcharge from 0 to 1000 percent, applied after provider margins. Only proxy admins can change it.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -18867,7 +18866,6 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
          *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
-         *     - cost_margin_percent: Optional[float] - Team chargeback surcharge from 0 to 1000 percent. Only proxy admins can change it. Unchanged values are accepted from other callers.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -34036,6 +34034,12 @@ export interface components {
              */
             total_compression_savings_spend: number;
             /**
+             * Total Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in total_spend
+             * @default 0
+             */
+            total_customer_margin_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -37118,8 +37122,6 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
-            /** Cost Margin Percent */
-            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -38799,8 +38801,6 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
-            /** Cost Margin Percent */
-            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -42339,8 +42339,6 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
-            /** Cost Margin Percent */
-            cost_margin_percent?: number | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -43906,8 +43904,6 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
-            /** Cost Margin Percent */
-            cost_margin_percent?: number | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -50035,6 +50031,12 @@ export interface components {
              */
             compression_savings_spend: number;
             /**
+             * Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend
+             * @default 0
+             */
+            customer_margin_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
@@ -50728,8 +50730,6 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
-            /** Cost Margin Percent */
-            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -50893,8 +50893,6 @@ export interface components {
             /** Budget Reset At */
             budget_reset_at?: string | null;
             caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
-            /** Cost Margin Percent */
-            cost_margin_percent?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */
@@ -53409,8 +53407,6 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
-            /** Cost Margin Percent */
-            cost_margin_percent?: number | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -54199,8 +54195,6 @@ export interface components {
              * @default false
              */
             team_blocked: boolean;
-            /** Team Cost Margin Percent */
-            team_cost_margin_percent?: number | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Max Budget */
