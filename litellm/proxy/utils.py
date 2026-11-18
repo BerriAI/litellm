@@ -8143,7 +8143,7 @@ class PrismaClient:
             return
         try:
             await asyncio.wait_for(
-                self._recover_reader_inside_reconnect_lock(self.db),
+                self.db.recover_reader(),
                 timeout=self._db_watchdog_reconnect_timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -8151,11 +8151,6 @@ class PrismaClient:
                 "Reader Prisma client did not recover within %ss; reads stay on the writer.",
                 self._db_watchdog_reconnect_timeout_seconds,
             )
-
-    async def _recover_reader_inside_reconnect_lock(self, routing: RoutingPrismaWrapper) -> None:
-        async with self._db_reconnect_lock:
-            if routing.reader_unavailable:
-                await routing.recover_reader()
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:

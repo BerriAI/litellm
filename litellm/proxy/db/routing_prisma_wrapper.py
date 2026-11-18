@@ -134,6 +134,7 @@ class RoutingPrismaWrapper:
         # When True, reads fall back to the writer. Flipped on by reader
         # connect/recreate failures and flipped off on the next reader recovery.
         self._reader_unavailable: bool = False
+        self._reader_repair_epoch: int = 0
         self._writer_unavailable: bool = False
 
     @property
@@ -279,32 +280,53 @@ class RoutingPrismaWrapper:
         if not writer_recreated:
             return False
         self._writer_unavailable = False
-        self._reader_unavailable = True
-        self._reader_unavailable = not await self._reader_answers(
-            self._recreate_reader(http_client=http_client),
-            "Failed to recreate reader Prisma client: %s. "
-            "Reads will fall back to the writer until the reader recovers.",
+        repair: Final = self._begin_reader_repair()
+        self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._recreate_reader(http_client=http_client),
+                "Failed to recreate reader Prisma client: %s. "
+                "Reads will fall back to the writer until the reader recovers.",
+            ),
         )
+        return True
+
+    def _begin_reader_repair(self) -> int:
+        self._reader_unavailable = True
+        self._reader_repair_epoch += 1
+        return self._reader_repair_epoch
+
+    def _finish_reader_repair(self, repair: int, reader_answered: bool) -> bool:
+        """Route reads back to the reader unless a newer repair started while this one ran."""
+        if not reader_answered or repair != self._reader_repair_epoch:
+            return False
+        self._reader_unavailable = False
         return True
 
     async def degrade_reader_unless_healthy(self) -> None:
         """Probe the reader and send reads to the writer when it does not answer."""
         if self._reader_unavailable:
             return
-        self._reader_unavailable = True
-        self._reader_unavailable = not await self._reader_answers(
-            self._reader.query_raw("SELECT 1"),
-            "Reader probe failed: %s. Reads will fall back to the writer until the reader recovers.",
+        repair: Final = self._begin_reader_repair()
+        self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._reader.query_raw("SELECT 1"),
+                "Reader probe failed: %s. Reads will fall back to the writer until the reader recovers.",
+            ),
         )
 
     async def recover_reader(self) -> bool:
         """Recreate a reader that reads currently bypass, and route reads back to it on success."""
-        recovered: Final = await self._reader_answers(
-            self._recreate_and_probe_reader(),
-            "Reader Prisma client is still unavailable: %s",
+        repair: Final = self._begin_reader_repair()
+        recovered: Final = self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._recreate_and_probe_reader(),
+                "Reader Prisma client is still unavailable: %s",
+            ),
         )
         if recovered:
-            self._reader_unavailable = False
             verbose_proxy_logger.info("Reader Prisma client recovered; reads are routed to the reader again.")
         return recovered
 
