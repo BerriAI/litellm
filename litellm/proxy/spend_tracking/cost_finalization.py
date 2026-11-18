@@ -29,12 +29,16 @@ def _request_fields(value: object) -> Mapping[str, object]:
 
 
 def _customer_attribution(logging_obj: Logging, payload: StandardLoggingPayload) -> Mapping[str, object]:
-    """The payload's customer identity plus the key's customer binding, which only the request metadata carries."""
-    request_metadata: Final = _request_fields(
-        _request_fields(logging_obj.model_call_details.get("litellm_params")).get("metadata")
+    """The payload's customer identity plus the key's customer binding, which only the request metadata carries.
+
+    The proxy stamps the binding into ``litellm_metadata`` on routes whose ``metadata`` belongs to the caller."""
+    litellm_params: Final = _request_fields(logging_obj.model_call_details.get("litellm_params"))
+    bindings: Final = tuple(
+        _request_fields(litellm_params.get(bucket)).get(CUSTOMER_USAGE_METADATA_KEY)
+        for bucket in ("litellm_metadata", "metadata")
     )
     return {
-        CUSTOMER_USAGE_METADATA_KEY: request_metadata.get(CUSTOMER_USAGE_METADATA_KEY),
+        CUSTOMER_USAGE_METADATA_KEY: next((binding for binding in bindings if binding is not None), None),
         **payload["metadata"],
     }
 
