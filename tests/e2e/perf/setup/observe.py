@@ -207,6 +207,9 @@ class Observation:
                 if record.first_token_s is not None
             ]
             return non_stream + stream
+        if metric == "client_total_seconds":
+            retried: Final = self.retried_markers
+            return [(r, r.total_s) for r in self.served if r.marker not in retried]
         if metric == "time_to_first_token_seconds":
             return [(r, r.first_token_s) for r, _ in self._clean(stream=True) if r.first_token_s is not None]
         if metric == "litellm_overhead_seconds":
@@ -217,6 +220,9 @@ class Observation:
 
     def _first_attempts(self) -> list[WireRecord]:
         return [record for record, _ in self._clean(stream=False)] + [record for record, _ in self._clean(stream=True)]
+
+    def client_total_seconds(self) -> list[float]:
+        return [value for _, value in self.latency_pairs("client_total_seconds")]
 
     def gateway_added_seconds(self) -> list[float]:
         return [value for _, value in self.latency_pairs("gateway_added_seconds")]
@@ -315,7 +321,11 @@ def _text_sha1(text: str, *, intervened: bool) -> str:
 
 
 LatencyMetric = Literal[
-    "gateway_added_seconds", "time_to_first_token_seconds", "litellm_overhead_seconds", "litellm_response_seconds"
+    "gateway_added_seconds",
+    "client_total_seconds",
+    "time_to_first_token_seconds",
+    "litellm_overhead_seconds",
+    "litellm_response_seconds",
 ]
 TOP_CONTRIBUTORS: Final = 5
 
@@ -423,6 +433,7 @@ def breakdown(
     `postgres_peak_connections`) have none."""
     if metric in (
         "gateway_added_seconds",
+        "client_total_seconds",
         "time_to_first_token_seconds",
         "litellm_overhead_seconds",
         "litellm_response_seconds",
@@ -445,6 +456,7 @@ def observe(
     """The observed value of one metric, at a percentile when the metric is per request."""
     per_request: dict[str, list[float]] = {
         "gateway_added_seconds": observation.gateway_added_seconds(),
+        "client_total_seconds": observation.client_total_seconds(),
         "time_to_first_token_seconds": observation.time_to_first_token_seconds(),
         "litellm_overhead_seconds": observation.litellm_overhead_seconds(),
         "litellm_response_seconds": observation.litellm_response_seconds(),
