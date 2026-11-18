@@ -867,7 +867,7 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
 
 
 def build_vertex_schema(
-    parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
+    parameters: dict[str, JsonValue], add_property_ordering: bool = False, send_integer_enums: bool = False
 ) -> dict[str, object]:
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -885,39 +885,41 @@ def build_vertex_schema(
     # Get valid fields from Schema TypedDict
     valid_schema_fields: Final = set(get_type_hints(Schema).keys())
 
-    defs: Final = parameters.pop("$defs", {})
+    defs_raw: Final = parameters.pop("$defs", {})
+    defs: Final = dict(defs_raw) if isinstance(defs_raw, dict) else {}
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
-    _convert_schema_types(parameters)
+    normalized_parameters: Final = dict[str, object](_normalize_tuple_items(parameters))
 
+    _convert_schema_types(normalized_parameters)
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
-    convert_anyof_null_to_nullable(parameters)
+    convert_anyof_null_to_nullable(normalized_parameters)
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
-    _fix_enum_empty_strings(parameters)
+    _fix_enum_empty_strings(normalized_parameters)
 
     # Remove enums for non-string typed fields (Gemini requires enum only on strings)
-    _fix_enum_types(parameters, send_integer_enums=send_integer_enums)
+    _fix_enum_types(normalized_parameters, send_integer_enums=send_integer_enums)
 
     # Handle empty items objects
-    process_items(parameters)
-    add_object_type(parameters)
+    process_items(normalized_parameters)
+    add_object_type(normalized_parameters)
     # Postprocessing
     # Filter out fields that don't exist in Schema
 
-    parameters = filter_schema_fields(parameters, valid_schema_fields)
+    result_parameters: Final = filter_schema_fields(normalized_parameters, valid_schema_fields)
 
     if add_property_ordering:
-        set_schema_property_ordering(parameters)
+        set_schema_property_ordering(result_parameters)
 
-    return parameters
+    return result_parameters
 
 
 _build_vertex_schema = build_vertex_schema
@@ -1197,6 +1199,42 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
             result[key] = value
 
     return result
+
+
+def _normalize_tuple_items(schema: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    root: Final = dict(schema)
+    stack: list[tuple[dict[str, JsonValue] | list[JsonValue], int]] = [(root, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+        if isinstance(node, dict):
+            items = node.get("items")
+            if isinstance(items, list):
+                if items:
+                    node["items"] = {"anyOf": items}
+                else:
+                    del node["items"]
+            for key, value in list(node.items()):
+                child = _copy_child(value)
+                if child is not None:
+                    node[key] = child
+                    stack.append((child, depth + 1))
+        else:
+            for index, value in enumerate(node):
+                child = _copy_child(value)
+                if child is not None:
+                    node[index] = child
+                    stack.append((child, depth + 1))
+    return root
+
+
+def _copy_child(value: JsonValue) -> dict[str, JsonValue] | list[JsonValue] | None:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    return None
 
 
 def convert_anyof_null_to_nullable(schema, depth=0):
