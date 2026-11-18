@@ -120,7 +120,7 @@ function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: stri
   useCloseMobileSidebarOn(navigationKey);
   return null;
 }
-const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers"]);
+const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "apps"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();

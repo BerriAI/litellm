@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
 import { $api } from "@/lib/http/api";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -8,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   BUDGET_FIELDS,
+  type BudgetFields,
   customerHierarchyFields,
   type CustomerHierarchyFields,
   type CustomerHierarchyEntity,
@@ -15,6 +17,7 @@ import {
 } from "./customerHierarchyForms";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
 import CustomerBudgetInput from "./CustomerBudgetInput";
+import { CustomerRateLimitFields, CustomerRateLimitSummary } from "./CustomerRateLimits";
 
 interface Props {
   kind: CustomerHierarchyEntity["kind"];
@@ -63,7 +66,10 @@ export default function CustomerHierarchyBudgetFields({
     update("templateId", customId);
     update("maxBudget", amount);
     if (leavingSavedGroup || (!fields.budgetEnabled && newScalarBudget)) update("budgetDuration", "1mo");
-    update("budgetEnabled", Boolean(customId || amount.trim() || keepCustom));
+    update(
+      "budgetEnabled",
+      Boolean(customId || keepCustom) || [amount, fields.tpm, fields.rpm].some((value) => value.trim()),
+    );
   };
   const templateLabel = (templateId: string): string => {
     if (!templateId) return t("customerPortal.hierarchy.noTemplate");
@@ -73,12 +79,6 @@ export default function CustomerHierarchyBudgetFields({
       return t("customerPortal.hierarchy.defaultTemplate", { name: template.name });
     return template.name;
   };
-  const numericFields = [
-    ["maxBudget", "customerPortal.hierarchy.maxBudget", "any"],
-    ["softBudget", "customerPortal.hierarchy.softBudget", "any"],
-    ["tpm", "customerPortal.hierarchy.tpm", "1"],
-    ["rpm", "customerPortal.hierarchy.rpm", "1"],
-  ] as const;
   return (
     <section className="space-y-4 border-t pt-6" aria-labelledby={`${idPrefix}-budget-title`}>
       <div>
@@ -121,6 +121,11 @@ export default function CustomerHierarchyBudgetFields({
           </Select>
         </div>
       )}
+      {kind === "member" && (
+        <CustomerRateLimitSummary
+          limits={organization.default_budgets.find((group) => group.budget_id === fields.templateId)}
+        />
+      )}
       <div hidden={!showCustomBudget} className="space-y-1.5">
         <div className="flex items-center gap-2">
           <Checkbox
@@ -136,62 +141,96 @@ export default function CustomerHierarchyBudgetFields({
         </div>
       </div>
       {showCustomBudget && fields.budgetEnabled && (
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            {numericFields.map(([name, label, step]) => (
-              <div hidden={kind === "organization" && name === "maxBudget"} className="space-y-1.5" key={name}>
-                <Label htmlFor={`${idPrefix}-${name}`}>{t(label)}</Label>
-                <Input
-                  id={`${idPrefix}-${name}`}
-                  type="number"
-                  min="0"
-                  step={step}
-                  value={fields[name]}
-                  onChange={(event) => update(name, event.target.value)}
-                />
-              </div>
-            ))}
+        <CustomerBudgetFields
+          fields={fields}
+          onChange={update}
+          idPrefix={idPrefix}
+          hideMaxBudget={kind === "organization"}
+        >
+          {kind === "member" && (
             <div className="space-y-1.5">
-              <Label htmlFor={`${idPrefix}-duration`}>{t("customerPortal.hierarchy.budgetDuration")}</Label>
+              <Label htmlFor={`${idPrefix}-expiry`}>{t("customerPortal.hierarchy.overrideExpiry")}</Label>
               <Input
-                id={`${idPrefix}-duration`}
-                value={fields.budgetDuration}
-                onChange={(event) => update("budgetDuration", event.target.value)}
-                aria-describedby={`${idPrefix}-duration-hint`}
+                id={`${idPrefix}-expiry`}
+                type="datetime-local"
+                value={fields.overrideExpiry}
+                onChange={(event) => update("overrideExpiry", event.target.value)}
+                aria-describedby={`${idPrefix}-expiry-hint`}
               />
-              <p id={`${idPrefix}-duration-hint`} className="text-xs text-muted-foreground">
-                {t("customerPortal.hierarchy.budgetDurationHint")}
+              <p id={`${idPrefix}-expiry-hint`} className="text-xs text-muted-foreground">
+                {t("customerPortal.hierarchy.overrideExpiryHint")}
               </p>
             </div>
-            {kind === "member" && (
-              <div className="space-y-1.5">
-                <Label htmlFor={`${idPrefix}-expiry`}>{t("customerPortal.hierarchy.overrideExpiry")}</Label>
-                <Input
-                  id={`${idPrefix}-expiry`}
-                  type="datetime-local"
-                  value={fields.overrideExpiry}
-                  onChange={(event) => update("overrideExpiry", event.target.value)}
-                  aria-describedby={`${idPrefix}-expiry-hint`}
-                />
-                <p id={`${idPrefix}-expiry-hint`} className="text-xs text-muted-foreground">
-                  {t("customerPortal.hierarchy.overrideExpiryHint")}
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}-models`}>{t("customerPortal.hierarchy.allowedModels")}</Label>
-            <CustomerAllowedModelsSelect
-              id={`${idPrefix}-models`}
-              value={fields.allowedModels}
-              onChange={(models) => update("allowedModels", models)}
-            />
-            <p id={`${idPrefix}-models-hint`} className="text-xs text-muted-foreground">
-              {t("customerPortal.hierarchy.allowedModelsHint")}
-            </p>
-          </div>
-        </div>
+          )}
+        </CustomerBudgetFields>
       )}
     </section>
+  );
+}
+
+export function CustomerBudgetFields({
+  fields,
+  onChange: update,
+  idPrefix,
+  hideMaxBudget = false,
+  children,
+}: {
+  fields: BudgetFields;
+  onChange: {
+    (key: Exclude<keyof BudgetFields, "allowedModels">, value: string): void;
+    (key: "allowedModels", value: readonly string[]): void;
+  };
+  idPrefix: string;
+  hideMaxBudget?: boolean;
+  children?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const numericFields = [
+    ["maxBudget", "customerPortal.hierarchy.maxBudget", "any"],
+    ["softBudget", "customerPortal.hierarchy.softBudget", "any"],
+  ] as const;
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        {numericFields.map(([name, label, step]) => (
+          <div hidden={hideMaxBudget && name === "maxBudget"} className="space-y-1.5" key={name}>
+            <Label htmlFor={`${idPrefix}-${name}`}>{t(label)}</Label>
+            <Input
+              id={`${idPrefix}-${name}`}
+              type="number"
+              min="0"
+              step={step}
+              value={fields[name]}
+              onChange={(event) => update(name, event.target.value)}
+            />
+          </div>
+        ))}
+        <div className="space-y-1.5">
+          <Label htmlFor={`${idPrefix}-duration`}>{t("customerPortal.hierarchy.budgetDuration")}</Label>
+          <Input
+            id={`${idPrefix}-duration`}
+            value={fields.budgetDuration}
+            onChange={(event) => update("budgetDuration", event.target.value)}
+            aria-describedby={`${idPrefix}-duration-hint`}
+          />
+          <p id={`${idPrefix}-duration-hint`} className="text-xs text-muted-foreground">
+            {t("customerPortal.hierarchy.budgetDurationHint")}
+          </p>
+        </div>
+        {children}
+      </div>
+      <CustomerRateLimitFields id={idPrefix} tpm={fields.tpm} rpm={fields.rpm} onChange={update} />
+      <div className="space-y-1.5">
+        <Label htmlFor={`${idPrefix}-models`}>{t("customerPortal.hierarchy.allowedModels")}</Label>
+        <CustomerAllowedModelsSelect
+          id={`${idPrefix}-models`}
+          value={fields.allowedModels}
+          onChange={(models) => update("allowedModels", models)}
+        />
+        <p id={`${idPrefix}-models-hint`} className="text-xs text-muted-foreground">
+          {t("customerPortal.hierarchy.allowedModelsHint")}
+        </p>
+      </div>
+    </div>
   );
 }

@@ -78,7 +78,7 @@ describe("CreateCustomerHierarchyDialog", () => {
       />,
     );
     await user.type(screen.getByRole("textbox", { name: "Display name" }), "Engineering");
-    await user.click(screen.getByRole("checkbox", { name: "Set a budget and limits" }));
+    await user.click(screen.getByRole("checkbox", { name: "Set custom limits" }));
     act(() =>
       fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } }),
     );

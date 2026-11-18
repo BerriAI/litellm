@@ -33,7 +33,11 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    as_str_mapping,
+    iter_items,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
@@ -1356,6 +1360,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             drop_params=drop_params,
             allow_integer_enums=False,
             allow_parameters_json_schema=False,
+            allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
         )
         return vertex_params
 

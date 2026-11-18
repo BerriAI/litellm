@@ -78,6 +78,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
     team_index: Final = api_keys_index + int(bool(scope.api_keys))
+    app_index: Final = team_index + int(scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None)
     conditions: Final = (
         f"date >= ${start_index}",
         f"date <= ${start_index + 1}",
@@ -117,6 +118,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             else ()
         ),
     )
+    app_conditions: Final = (*conditions, *((f'"app_id" = ${app_index}',) if scope.app_id is not None else ()))
     params: Final = (
         adjusted_start,
         adjusted_end,
@@ -125,8 +127,9 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
         *((list(scope.team_ids),) if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None else ()),
+        *((scope.app_id,) if scope.app_id is not None else ()),
     )
-    return " AND ".join(conditions), params
+    return " AND ".join(app_conditions), params
 
 
 def _customer_key_teams_sql(scope: DailyActivityScope) -> str:

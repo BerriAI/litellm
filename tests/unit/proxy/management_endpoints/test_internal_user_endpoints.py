@@ -20,9 +20,9 @@ from pytest_mock import MockerFixture
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
+    Litellm_EntityType,
     LiteLLM_UserTable,
     LiteLLM_UserTableFiltered,
-    Litellm_EntityType,
     LitellmUserRoles,
     NewUserRequest,
     NewUserResponse,
@@ -1803,7 +1803,9 @@ async def test_new_user_default_teams_flow(mocker):
 
 
 @pytest.mark.asyncio
-async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture) -> None:
+async def test_new_user_clears_recent_missing_user_lookup(
+    mocker: MockerFixture, rust_auth_stores: RustAuthStores
+) -> None:
     user_id: Final = "sso-created-user"
     db_access_time_key: Final = f"user_id:{user_id}"
     auth_checks.last_db_access_time.pop(db_access_time_key, None)
@@ -1856,11 +1858,11 @@ async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture)
         )
         assert created_user.user_id == user_id
 
-        prisma_client.db.litellm_usertable.find_unique.return_value = LiteLLM_UserTable(
+        rust_auth_stores.user.rows[user_id] = LiteLLM_UserTable(
             user_id=user_id,
             user_email="sso-created-user@example.com",
             user_role=LitellmUserRoles.INTERNAL_USER,
-        )
+        ).model_dump(mode="json")
         user: Final = await auth_checks.get_user_object(
             user_id=user_id,
             prisma_client=prisma_client,
@@ -2983,7 +2985,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
 )
 @pytest.mark.parametrize("all_users", [False, True], ids=["single-user", "bulk-all-users"])
 async def test_user_update_reaches_cached_user_on_every_worker(
-    mocker: MockerFixture, field: str, new_value: object, all_users: bool
+    mocker: MockerFixture, rust_auth_stores: RustAuthStores, field: str, new_value: object, all_users: bool
 ) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import get_user_object
@@ -3069,6 +3071,7 @@ async def test_user_update_reaches_cached_user_on_every_worker(
         get_data=mocker.AsyncMock(return_value=saved_user),
         updated_user=updated_user,
     )
+    rust_auth_stores.user.rows[saved_user.user_id] = updated_user.model_dump(mode="json")
     prisma_client_for_auth: Final = cast("PrismaClient", prisma_client)
     mocker.patch(  # test-quality-ok: substitute the database dependency
         "litellm.proxy.proxy_server.prisma_client", prisma_client
@@ -5757,9 +5760,11 @@ _DB_OUTAGE_503_BODY: Final = {
 }
 
 
-def _user_read_raising(mocker: MockerFixture, error: Exception) -> tuple[MagicMock, MagicMock]:
+def _user_read_raising(
+    mocker: MockerFixture, stores: RustAuthStores, error: Exception
+) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    stores.user.error = error
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
@@ -5780,8 +5785,8 @@ def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:
 
 
 @pytest.mark.asyncio
-async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_answering_403(mocker):
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_answering_403(mocker, rust_auth_stores):
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
 
     with pytest.raises(httpx.ConnectError):
         await _authorize_user_list_request(
@@ -5794,8 +5799,10 @@ async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_ans
 
 
 @pytest.mark.asyncio
-async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead_of_answering_403(mocker):
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead_of_answering_403(
+    mocker, rust_auth_stores
+):
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -5812,8 +5819,10 @@ async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(mocker, caplog):
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(
+    mocker, caplog, rust_auth_stores
+):
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -5849,11 +5858,11 @@ async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_
     ids=["user_list", "user_filter_ui"],
 )
 def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(
-    mocker, route: str, params: dict[str, str]
+    mocker, rust_auth_stores, route: str, params: dict[str, str]
 ):
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},

@@ -36,7 +36,11 @@ from litellm.constants import (
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
+from litellm.integrations.otel.runtime import (
+    phase_event,
+    phase_span,
+    seed_request_identity,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -46,6 +50,7 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_he
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
+from litellm.proxy.auth.app_auth import resolve_app_hierarchy
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     TeamNotFoundError,
     _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -128,6 +133,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
+from litellm.proxy.auth.customer_provisioning import registration_refusal, resolve_registered_customer
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.impersonation import (
     IMPERSONATE_USER_HEADER,
@@ -293,6 +299,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _normalize_claude_model(
@@ -3208,8 +3215,9 @@ async def _authorize_authenticated_request_checks(
             user_model,
         )
 
+        request_headers: Final = _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request))
         customer_identity: Final = customer_identity_from_request(
-            safe_get_request_headers(request),  # pyright: ignore[reportUnknownArgumentType]  # request headers are untyped
+            request_headers,
             user_api_key_auth_obj.jwt_claims,
             litellm_jwtauth,
             general_settings=cast(  # cast-ok: proxy settings are a string-keyed dict without type parameters
@@ -3217,26 +3225,54 @@ async def _authorize_authenticated_request_checks(
             ),
         )
         user_api_key_auth_obj.customer_hierarchy = None  # rebind-ok: request state, never inherited from a cached key
-        if customer_identity is not None and not RustAuth.is_public_route(route, core.proxy_settings()):
-            with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                try:
-                    hierarchy: Final = await resolve_customer_hierarchy(
-                        identity=customer_identity,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        llm_router=llm_router,
-                        request_model=get_model_from_request_context(
-                            request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
-                        ),
-                        route=route,
-                        key_metadata=_KEY_METADATA_ADAPTER.validate_python(
-                            user_api_key_auth_obj.metadata or {}  # pyright: ignore[reportUnknownMemberType]  # untyped key metadata, validated here
-                        ),
+        received_at: Final = getattr(getattr(request, "state", None), "litellm_received_at", None)
+        user_api_key_auth_obj.customer_hierarchy_started_at = (  # rebind-ok: server request clock, never a cached key or caller field
+            received_at if isinstance(received_at, datetime) else datetime.now(timezone.utc)
+        )
+        has_customer: Final = customer_identity is not None and not RustAuth.is_public_route(
+            route, core.proxy_settings()
+        )
+        if has_customer or RouteChecks.runs_inference_checks(route):
+            key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(
+                getattr(user_api_key_auth_obj, "metadata", None) or {}
+            )
+            request_model: Final = get_model_from_request_context(
+                request_data, route, request, llm_router, team_id=user_api_key_auth_obj.team_id
+            )
+            try:
+                if customer_identity is not None and has_customer:
+                    with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
+                        hierarchy: Final = await resolve_registered_customer(
+                            customer_identity,
+                            partial(registration_refusal, prisma_client, user_api_key_auth_obj),
+                            lambda register, register_organization: resolve_customer_hierarchy(
+                                identity=customer_identity,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                                llm_router=llm_router,
+                                request_model=request_model,
+                                route=route,
+                                key_metadata=key_metadata,
+                                register=register,
+                                register_organization=register_organization,
+                            ),
+                        )
+                    user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
+                if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):
+                    app_hierarchy: Final = await resolve_app_hierarchy(
+                        user_api_key_auth_obj.customer_hierarchy,
+                        request_headers,
+                        key_metadata,
+                        prisma_client,
+                        llm_router,
+                        request_model,
+                        route,
+                        user_api_key_auth_obj,
                     )
-                except CustomerBudgetExceededError as error:
-                    user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
-                    raise
-                user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
+                    user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
+            except CustomerBudgetExceededError as error:
+                user_api_key_auth_obj.customer_hierarchy = error.customer_hierarchy  # rebind-ok: request state
+                raise
 
         grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
         user_api_key_auth_obj.apply_access_group_rule_grants(grants)

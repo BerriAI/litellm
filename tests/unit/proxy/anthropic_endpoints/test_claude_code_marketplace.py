@@ -43,6 +43,7 @@ from litellm.types.proxy.claude_code_endpoints import (
     UpdatePluginRequest,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 
@@ -50,7 +51,7 @@ def _make_mock_prisma():
     """Stateful prisma mock that supports find_unique, find_many, create, and update."""
     store: dict = {}
 
-    mock_client = MagicMock()
+    mock_client = prisma_with_empty_config()
     mock_client.proxy_logging_obj = MagicMock()
     mock_table = MagicMock()
 
