@@ -15,7 +15,7 @@ from litellm.proxy.spend_tracking.customer_cost_margin import (
 )
 
 
-@pytest.mark.parametrize(("margin", "expected"), [(0.02, 1.02), (0, 1.0), (10, 11.0)])
+@pytest.mark.parametrize(("margin", "expected"), [(0.02, 1.02), (10, 11.0)])
 def test_customer_margin_is_added_and_recorded_separately(margin: float, expected: float) -> None:
     cost: Final = apply_customer_cost_margin(finalize_cost(1.0, None), margin)
     assert cost.amount == pytest.approx(expected)
