@@ -360,7 +360,7 @@ async fn a_binding_mismatch_on_bedrock_invoke_names_the_beta_in_the_body(call: M
     let host = RecordingCall::<Messages>::new(MessagesCall {
         extra_headers: None,
         ..binding_replay(
-            with_model(call, "anthropic.claude-sonnet-4-5-20250929-v1:0"),
+            with_model(call, "anthropic.claude-sonnet-5-5"),
             upstream.uri(),
             "bedrock",
             false,

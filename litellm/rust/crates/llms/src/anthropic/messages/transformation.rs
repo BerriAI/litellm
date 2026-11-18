@@ -315,7 +315,6 @@ pub fn retry_claude_messages_after_http_error(
     ))
 }
 
-/// The `anthropic-beta` header a retried Claude body needs.
 pub fn claude_retry_headers(headers: Headers, reasons: &[RetryReason]) -> Headers {
     if !reasons.contains(&RetryReason::ThinkingBinding) {
         return headers;

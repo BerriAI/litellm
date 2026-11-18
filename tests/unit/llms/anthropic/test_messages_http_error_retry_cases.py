@@ -1,7 +1,7 @@
 import copy
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 import httpx
 import pytest
@@ -40,7 +40,7 @@ class _TextCase(TypedDict):
     expected: ReadOnly[bool]
 
 
-_Outcome = Literal["strip", "unchanged", "drop_block"]
+_Outcome: TypeAlias = Literal["strip", "unchanged", "drop_block"]
 
 
 class _RetryCase(TypedDict):
@@ -217,9 +217,13 @@ _DROP_BLOCK_CASES: Final = tuple(case for case in RETRY["cases"] if case["outcom
 
 
 @pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in _DROP_BLOCK_CASES])
-def test_bedrock_invoke_carries_the_binding_beta_in_the_body(case: _RetryCase) -> None:
+@pytest.mark.parametrize(
+    "caller_betas",
+    (pytest.param((), id="no_caller_betas"), pytest.param(("zeta-beta", "alpha-beta"), id="caller_betas")),
+)
+def test_bedrock_invoke_carries_the_binding_beta_in_the_body(case: _RetryCase, caller_betas: tuple[str, ...]) -> None:
     config: Final = AmazonAnthropicClaudeMessagesConfig()
-    body: Final = {**_request_body(case), "anthropic_beta": ["zeta-beta", "alpha-beta"]}
+    body: Final = {**_request_body(case), **({"anthropic_beta": list(caller_betas)} if caller_betas else {})}
 
     header_beta: Final = config.anthropic_messages_retry_header_beta(_rejection(case), body)
     transformed: Final = config.transform_anthropic_messages_request_on_http_error(
@@ -228,7 +232,7 @@ def test_bedrock_invoke_carries_the_binding_beta_in_the_body(case: _RetryCase) -
 
     assert transformed == {
         **_retried_body(case, "drop_block"),
-        "anthropic_beta": tuple(sorted(("alpha-beta", RETRY["binding_beta"], "zeta-beta"))),
+        "anthropic_beta": tuple(sorted((*caller_betas, RETRY["binding_beta"]))),
     }
     assert header_beta is None
 

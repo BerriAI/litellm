@@ -786,7 +786,6 @@ fn hosted_request(
     })
 }
 
-/// The exchange that ended the retry loop, with what it actually sent.
 struct Recovered {
     upstream: Upstream,
     sent_body: Bytes,

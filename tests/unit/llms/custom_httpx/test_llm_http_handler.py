@@ -2371,7 +2371,7 @@ async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_
 
 _BINDING_BETA: Final = "thinking-binding-controls-2026-08-01"
 _DROP_BLOCK: Final = {"prefix_mismatch_behavior": "drop_block"}
-_NATIVE_OUTPUT_REJECTED: Final = "output_config.format is not supported"
+_NATIVE_OUTPUT_REJECTED: Final = "output_config.format: Extra inputs are not permitted"
 _BINDING_REPLAY: Final = (
     {"role": "user", "content": "hi"},
     {
@@ -2384,26 +2384,6 @@ _BINDING_REPLAY: Final = (
     },
     {"role": "user", "content": "again"},
 )
-
-
-class _UnsignedBedrockInvokeConfig(AmazonAnthropicClaudeMessagesConfig):
-    def sign_request(
-        self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
-        api_base: str,
-        api_key: str | None = None,
-        model: str | None = None,
-        stream: bool | None = None,
-        fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
-        return headers, None
-
-    def should_retry_anthropic_messages_without_native_output(
-        self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
-    ) -> bool:
-        return _NATIVE_OUTPUT_REJECTED in e.response.text
 
 
 def _binding_http_client(*responses: tuple[int, str], url: str = "https://api.anthropic.com/v1/messages") -> Mock:
@@ -2574,28 +2554,34 @@ async def test_a_callers_own_drop_block_adds_no_beta_to_a_strict_tools_retry(cap
 @pytest.mark.asyncio
 async def test_a_native_output_rebuild_replays_the_binding_recovery() -> None:
     client: Final = _binding_http_client((400, _BOUND_THINKING_ERROR), (400, _NATIVE_OUTPUT_REJECTED), (200, "{}"))
-    original: Final[dict[str, object]] = {
+    without_native_output: Final[dict[str, object]] = {
         "messages": list(_BINDING_REPLAY),
         "thinking": {"type": "adaptive"},
         "anthropic_beta": ["zeta-beta"],
     }
+    native_output: Final = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
 
     await _post_binding_replay(
         client,
-        _UnsignedBedrockInvokeConfig(),
-        copy.deepcopy(original),
+        AmazonAnthropicClaudeMessagesConfig(),
+        {**copy.deepcopy(without_native_output), "output_config": native_output},
         {},
-        rebuild=lambda: copy.deepcopy(original),
+        rebuild=lambda: copy.deepcopy(without_native_output),
+        litellm_params=GenericLiteLLMParams(
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_region_name="us-east-1",
+        ),
     )
 
     assert client.post.await_count == 3
-    expected: Final = {
-        **original,
+    recovered: Final = {
+        **without_native_output,
         "thinking": {"type": "adaptive", "block_binding": _DROP_BLOCK},
         "anthropic_beta": [_BINDING_BETA, "zeta-beta"],
     }
-    assert _posted_json(client, 1) == expected
-    assert _posted_json(client, 2) == expected
+    assert _posted_json(client, 1) == {**recovered, "output_config": native_output}
+    assert _posted_json(client, 2) == recovered
     assert all("anthropic-beta" not in call.kwargs["headers"] for call in client.post.await_args_list)
 
 

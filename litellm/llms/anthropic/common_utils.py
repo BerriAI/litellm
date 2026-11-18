@@ -2088,7 +2088,9 @@ def anthropic_thinking_binding_retry(error_text: str, request_body: object) -> M
     if body is None or not is_anthropic_thinking_binding_mismatch_error(error_text):
         return None
     requested: Final = body.get("thinking")
-    thinking: Final = {"type": "adaptive"} if requested is None else validated_object_mapping(requested)
+    thinking: Final[Mapping[object, object] | None] = (
+        {"type": "adaptive"} if requested is None else validated_object_mapping(requested)
+    )
     if thinking is None or thinking.get("type") != "adaptive" or "block_binding" in thinking:
         return None
     return {**thinking, "block_binding": {"prefix_mismatch_behavior": "drop_block"}}

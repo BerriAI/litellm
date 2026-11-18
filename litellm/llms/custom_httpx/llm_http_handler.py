@@ -2576,7 +2576,9 @@ class BaseLLMHTTPHandler:
                     )
                     if retry_beta := provider_config.anthropic_messages_retry_header_beta(e, request_body):
                         headers = dict(  # rebind-ok: every later attempt keeps the beta this body needs
-                            _merge_messages_header_sources(headers, {"anthropic-beta": retry_beta})
+                            _merge_messages_header_sources(
+                                _JSON_OBJECT.validate_python(headers), {"anthropic-beta": retry_beta}
+                            )
                         )
                     provider_config.transform_anthropic_messages_request_on_http_error(e=e, request_data=request_body)
                     recovered_errors = (*recovered_errors, e)

@@ -211,7 +211,6 @@ class BaseAnthropicMessagesConfig(ABC):
         return anthropic_thinking_binding_retry(e.response.text, request_body)
 
     def anthropic_messages_retry_header_beta(self, e: httpx.HTTPStatusError, request_body: object) -> str | None:
-        """The ``anthropic-beta`` value retrying ``request_body`` after ``e`` needs."""
         if self.carries_anthropic_betas_in_body() or self._thinking_binding_retry(e, request_body) is None:
             return None
         return ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER
