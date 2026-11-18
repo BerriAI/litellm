@@ -6,6 +6,7 @@ from litellm.repositories.autorouter_session_repository import AutoRouterSession
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -39,7 +40,6 @@ from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
-    EndUserRepository,
     GuardrailsRepository,
     HealthCheckRepository,
     InvitationLinkRepository,

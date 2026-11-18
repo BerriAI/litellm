@@ -168,7 +168,8 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
     user_window_counter,
 )
-from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.budget_repository import BudgetRepository, BudgetWithWindows
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
 from litellm.repositories.model_access_group_budget_repository import (
     ModelAccessGroupBudgetForAuth,
@@ -180,7 +181,6 @@ from litellm.repositories.prisma_protocols import DatabaseClient, RowT_co
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
-    EndUserRepository,
     ManagedVectorStoresRepository,
     TagRepository,
     TeamMembershipRepository,
@@ -245,9 +245,6 @@ class _PrismaVectorStoreRow(Protocol):
 
 
 class _PrismaUserRow(Protocol):
-    user_id: str
-    sso_user_id: str | None
-
     @property
     def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
 
@@ -1916,6 +1913,14 @@ _KEY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAda
 _OBJECTS_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
+def reject_windowed_budget(found: LiteLLM_BudgetTable | BudgetWithWindows) -> LiteLLM_BudgetTable:
+    if isinstance(found, BudgetWithWindows):
+        from litellm.proxy.management_helpers.utils import raise_budget_windows_unsupported
+
+        raise_budget_windows_unsupported()
+    return found
+
+
 def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
     """The default budget a key assigns to end users that carry no budget of their own."""
     if key_metadata is None:
@@ -1963,8 +1968,8 @@ async def get_default_end_user_budget(
 
     # Fetch from database
     try:
-        budget_record: Final = await _dictable_table(BudgetRepository(prisma_client), "budget").find_unique(
-            where={"budget_id": default_budget_id}
+        budget_record: Final = await bounded_db_lookup(
+            BudgetRepository(prisma_client).find_end_user_default(default_budget_id), name="budget"
         )
 
         if budget_record is None:
@@ -1974,10 +1979,7 @@ async def get_default_end_user_budget(
             )
             return None
 
-        from litellm.proxy.management_helpers.utils import reject_budget_windows
-
-        reject_budget_windows(budget_record.dict())
-        _budget_obj: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
+        _budget_obj: Final = reject_windowed_budget(budget_record)
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
             key=cache_key,
@@ -1995,7 +1997,6 @@ async def get_default_end_user_budget(
         return None
 
 
-@log_db_metrics
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def get_team_member_default_budget(
     budget_id: str,
@@ -2031,8 +2032,8 @@ async def get_team_member_default_budget(
         return cached_budget
 
     try:
-        budget_record: Final = await _dictable_table(BudgetRepository(prisma_client), "budget").find_unique(
-            where={"budget_id": budget_id}
+        budget_record: Final = await bounded_db_lookup(
+            BudgetRepository(prisma_client).find_team_member_default(budget_id), name="budget"
         )
     except Exception:
         verbose_proxy_logger.exception("Error fetching team-default member budget %s", budget_id)
@@ -2044,10 +2045,7 @@ async def get_team_member_default_budget(
         verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
         return None
 
-    from litellm.proxy.management_helpers.utils import reject_budget_windows
-
-    reject_budget_windows(budget_record.dict())
-    budget: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
+    budget: Final = reject_windowed_budget(budget_record)
     await user_api_key_cache.async_set_cache(
         key=cache_key,
         value=budget,
@@ -2323,7 +2321,10 @@ async def _load_end_user_restricted_registry(
     """The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        return await EndUserRepository(prisma_client).find_restricted_ids(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)
+        return await bounded_db_lookup(
+            EndUserRepository(prisma_client).find_restricted_ids(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1),
+            name="end_user_registry",
+        )
 
     return await _load_bounded_registry(
         cache_key=end_user_restricted_registry_cache_key(),
@@ -2368,7 +2369,6 @@ async def _end_user_is_known_unrestricted(
     return registry is not None and end_user_id not in registry
 
 
-@log_db_metrics
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def get_end_user_object(
     end_user_id: str | None,
@@ -2434,16 +2434,15 @@ async def get_end_user_object(
 
     # Fetch from database
     try:
-        response: Final = await _dictable_table(EndUserRepository(prisma_client), "end_user").find_unique(
-            where={"user_id": end_user_id},
-            include={"litellm_budget_table": True, "object_permission": True},
+        response: Final = await bounded_db_lookup(
+            EndUserRepository(prisma_client).find_with_budget_and_object_permission(end_user_id), name="end_user"
         )
 
         if response is None:
             raise Exception
 
         end_user_row: Final = await _apply_default_budget_to_end_user(
-            end_user_obj=LiteLLM_EndUserTable.model_validate(response.dict()),
+            end_user_obj=response,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
@@ -3053,78 +3052,9 @@ def read_email_verified(value: object) -> bool | None:
     return str_to_bool(value) if isinstance(value, str) else None
 
 
-async def _get_fuzzy_user_object(
-    prisma_client: PrismaClient,
-    sso_user_id: str | None = None,
-    user_email: str | None = None,
-    email_verified: bool | None = None,
-) -> "_PrismaUserRow | None":
-    """
-    Checks if sso user is in db.
-
-    Called when user id match is not found in db.
-
-    - Check if sso_user_id is sso_user_id in db
-    - Check if user_email is user_email in db, unless the email is unverified; with an sso_user_id, only an unlinked
-      row matches, and it is linked only if no other sign-in linked it first
-    """
-
-    response = None
-    if sso_user_id is not None:
-        response = await _user_table(UserRepository(prisma_client)).find_unique(
-            where={"sso_user_id": sso_user_id},
-            include={"organization_memberships": True},
-        )
-
-    links_any_user: Final = _email_fallback_links_any_user()
-    if response is None and user_email is not None and (links_any_user or email_verified is not False):
-        unlinked_only: Final[Mapping[str, None]] = (
-            {} if links_any_user or sso_user_id is None else {"sso_user_id": None}
-        )
-        response = await _user_table(UserRepository(prisma_client)).find_first(
-            where={"user_email": email_equals(user_email), **unlinked_only},
-            include={"organization_memberships": True},
-        )
-
-        if sso_user_id is not None and not links_any_user:
-            return await _link_by_email(prisma_client, response, sso_user_id)
-        if response is not None and sso_user_id is not None:
-            asyncio.create_task(  # background task to update user with sso id
-                _user_table(UserRepository(prisma_client)).update(
-                    where={"user_id": response.user_id},
-                    data={"sso_user_id": sso_user_id},
-                )
-            )
-
-    return response
-
-
-async def _link_by_email(
-    prisma_client: PrismaClient, row: "_PrismaUserRow | None", sso_user_id: str
-) -> "_PrismaUserRow | None":
-    writer: Final = UserRepository(prisma_client, use_writer=True)
-    if row is not None and await writer.link_null_sso_user_id(row.user_id, sso_user_id):
-        return row
-    return await _user_table(writer).find_unique(
-        where={"sso_user_id": sso_user_id}, include={"organization_memberships": True}
-    )
-
-
-async def _link_own_sign_in_id(
-    prisma_client: PrismaClient, row: "_PrismaUserRow | None", sso_user_id: str | None
-) -> None:
-    if row is None or row.sso_user_id is not None or sso_user_id != row.user_id or _email_fallback_links_any_user():
-        return
-    await UserRepository(prisma_client, use_writer=True).link_null_sso_user_id(row.user_id, row.user_id)
-
-
 def escape_ilike(value: str) -> str:
     """Prisma runs an insensitive `equals` as ILIKE, where `%` and `_` are wildcards and `\\` escapes them."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def email_equals(user_email: str) -> Mapping[str, str]:
-    return {"equals": escape_ilike(user_email), "mode": "insensitive"}
 
 
 def _email_fallback_links_any_user() -> bool:
@@ -3140,10 +3070,9 @@ async def _email_free_to_store(prisma_client: PrismaClient, user_email: str | No
 async def email_belongs_to_another_user(prisma_client: PrismaClient, user_email: str, user_id: str) -> bool:
     if _email_fallback_links_any_user():
         return False
-    holder: Final = await _user_table(UserRepository(prisma_client)).find_first(
-        where={"user_email": email_equals(user_email), "user_id": {"not": user_id}},
+    return await bounded_db_lookup(
+        UserRepository(prisma_client).email_belongs_to_another_user(user_email, user_id), name="user"
     )
-    return holder is not None
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -3161,19 +3090,12 @@ async def _backfill_null_user_email(
     ):
         return user_row
     _update_last_db_access_time(key=in_use_key, value=None, last_db_access_time=email_in_use_checked_at)
-    if await email_belongs_to_another_user(prisma_client, user_email, user_row.user_id):
-        return user_row
-
-    user_repo: Final = UserRepository(prisma_client)
-    await user_repo.backfill_null_user_email(
-        user_id=user_row.user_id,
-        user_email=user_email,
+    stored_email: Final = await UserRepository(prisma_client).backfill_email(
+        user_row.user_id, user_email, links_any_user=_email_fallback_links_any_user()
     )
-    db_row: Final = await user_repo.find_by_id(user_row.user_id)
-    if db_row is None:
+    if stored_email is None:
         return user_row
-    email_update: Final = {"user_email": db_row.user_email}
-    updated_row: Final = user_row.model_copy(update=email_update)
+    updated_row: Final = user_row.model_copy(update={"user_email": stored_email})
     await user_api_key_cache.async_set_cache(
         key=user_row.user_id,
         value=updated_row,
@@ -3231,91 +3153,82 @@ async def get_user_object(
         )
 
         if should_check_db:
-            response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).find_unique(
-                where={"user_id": user_id}, include={"organization_memberships": True}
-            )
-            await _link_own_sign_in_id(prisma_client, response, sso_user_id)
-
-            if response is None:
-                response = await _get_fuzzy_user_object(
-                    prisma_client=prisma_client,
+            _response = await bounded_db_lookup(
+                UserRepository(prisma_client).resolve_for_auth(
+                    user_id,
                     sso_user_id=sso_user_id,
                     user_email=user_email,
                     email_verified=email_verified,
-                )
-
+                    links_any_user=_email_fallback_links_any_user(),
+                    use_writer=bool(check_db_only),
+                ),
+                name="user",
+            )
         else:
-            response = None
+            _response = None
 
-        if response is None:
-            if user_id_upsert:
-                from litellm.proxy.management_endpoints.internal_user_endpoints import (
-                    add_new_user_to_default_team,
-                    check_if_default_team_set,
-                )
-                from litellm.proxy.management_helpers.utils import initial_budget_windows_json
+        if _response is None and user_id_upsert:
+            from litellm.proxy.management_endpoints.internal_user_endpoints import (
+                add_new_user_to_default_team,
+                check_if_default_team_set,
+            )
+            from litellm.proxy.management_helpers.utils import initial_budget_windows_json
 
-                default_params: Final = _default_internal_user_params()
-                scalar_default_params: Final = {
-                    key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
-                }
-                new_user_email: Final = await _email_free_to_store(prisma_client, user_email, user_id)
-                new_user_params: Final[dict[str, Any]] = {
-                    "user_id": user_id,
-                    **({"user_email": new_user_email} if new_user_email is not None else {}),
-                    **(
-                        {"sso_user_id": sso_user_id}
-                        if sso_user_id is not None and not _email_fallback_links_any_user()
-                        else {}
-                    ),
-                    **scalar_default_params,
-                    **(
-                        {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
-                        if "budget_limits" in scalar_default_params
-                        else {}
-                    ),
-                }
-                if (
-                    new_user_params.get("budget_duration") is not None
-                    and new_user_params.get("budget_reset_at") is None
-                ):
-                    new_user_params["budget_reset_at"] = get_budget_reset_time(
-                        budget_duration=new_user_params["budget_duration"]
-                    )
-
-                response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).create(
-                    data=new_user_params,
-                    include={"organization_memberships": True},
+            default_params: Final = _default_internal_user_params()
+            scalar_default_params: Final = {
+                key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
+            }
+            new_user_email: Final = await _email_free_to_store(prisma_client, user_email, user_id)
+            new_user_params: Final[dict[str, Any]] = {
+                "user_id": user_id,
+                **({"user_email": new_user_email} if new_user_email is not None else {}),
+                **(
+                    {"sso_user_id": sso_user_id}
+                    if sso_user_id is not None and not _email_fallback_links_any_user()
+                    else {}
+                ),
+                **scalar_default_params,
+                **(
+                    {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
+                    if "budget_limits" in scalar_default_params
+                    else {}
+                ),
+            }
+            if new_user_params.get("budget_duration") is not None and new_user_params.get("budget_reset_at") is None:
+                new_user_params["budget_reset_at"] = get_budget_reset_time(
+                    budget_duration=new_user_params["budget_duration"]
                 )
 
-                default_teams: Final = check_if_default_team_set()
-                if default_teams:
-                    await add_new_user_to_default_team(
-                        user_id=user_id,
-                        user_email=new_user_email,
-                        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-                        teams=default_teams,
-                        prisma_client=prisma_client,
-                    )
-            else:
-                if should_check_db:
-                    _update_last_db_access_time(
-                        key=db_access_time_key,
-                        value=None,
-                        last_db_access_time=last_db_access_time,
-                    )
-                raise UserNotFoundError(user_id=user_id)
+            response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).create(
+                data=new_user_params,
+                include={"organization_memberships": True},
+            )
 
-        if response.organization_memberships is not None and len(response.organization_memberships) > 0:
-            # dump each organization membership to type LiteLLM_OrganizationMembershipTable
-            _dumped_memberships: Final = [
-                LiteLLM_OrganizationMembershipTable.model_validate(membership.model_dump())
-                for membership in response.organization_memberships
-                if membership is not None
-            ]
-            response.organization_memberships = _dumped_memberships
+            default_teams: Final = check_if_default_team_set()
+            if default_teams:
+                await add_new_user_to_default_team(
+                    user_id=user_id,
+                    user_email=new_user_email,
+                    user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                    teams=default_teams,
+                    prisma_client=prisma_client,
+                )
+            if response.organization_memberships is not None and len(response.organization_memberships) > 0:
+                response.organization_memberships = [
+                    LiteLLM_OrganizationMembershipTable.model_validate(membership.model_dump())
+                    for membership in response.organization_memberships
+                    if membership is not None
+                ]
+            _response = LiteLLM_UserTable.model_validate(dict(response))
+        elif _response is None:
+            if should_check_db:
+                _update_last_db_access_time(
+                    key=db_access_time_key,
+                    value=None,
+                    last_db_access_time=last_db_access_time,
+                )
+            raise UserNotFoundError(user_id=user_id)
 
-        _response = LiteLLM_UserTable.model_validate(dict(response))
         _response = await _backfill_null_user_email(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,

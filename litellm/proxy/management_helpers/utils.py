@@ -6,7 +6,7 @@ from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, ParamSpec, Protocol, TypeVar
+from typing import Any, Final, NoReturn, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -132,10 +132,14 @@ def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _Pri
 
 def reject_budget_windows(row: Mapping[str, object]) -> None:
     if row.get("budget_limits"):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Concurrent budget windows are currently supported only by customer hierarchies."},
-        )
+        raise_budget_windows_unsupported()
+
+
+def raise_budget_windows_unsupported() -> NoReturn:
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "Concurrent budget windows are currently supported only by customer hierarchies."},
+    )
 
 
 async def validate_scalar_budget_attachment(

@@ -33,8 +33,8 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_u
 from litellm.proxy.management_endpoints import team_endpoints
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through
 from litellm.repositories import rust_database
-from litellm.rust_bridge._native import RustJwtKeyMappingRepository
-from tests.unit.proxy.auth._user_table import UserTable
+from litellm.rust_bridge._native import RustJwtKeyMappingRepository, RustUserRepository
+from tests.unit.proxy.auth._user_table import UserTable, user_store_over
 from tests.unit.proxy.rust_auth_stores import FakeJwtKeyMappingStore, JwtMapping
 
 JWKS_URL: Final = "https://idp.invalid/keys"
@@ -217,12 +217,15 @@ async def _reply(call: Call, failure_hook: AsyncMock) -> Served | Refused:
 
 async def _outcome(monkeypatch: pytest.MonkeyPatch, call: Call) -> Outcome:
     users: Final = UserTable() if call.database_up else _UnreachableUsers()
+    user_store: Final = user_store_over(users)
     mappings: Final = FakeJwtKeyMappingStore([JwtMapping("azp", MAPPED_CLIENT, _hash(MAPPED_KEY))])
     if not call.database_up:
-        mappings.error = httpx.ConnectError("connection refused")
+        user_store.error = mappings.error = httpx.ConnectError("connection refused")
     database: Final = rust_database.repository
 
     def repository(kind: Callable[..., object]) -> object:
+        if kind is RustUserRepository:
+            return user_store
         return mappings if kind is RustJwtKeyMappingRepository else database(kind)
 
     monkeypatch.setattr(rust_database, "repository", repository)

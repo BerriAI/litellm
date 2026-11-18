@@ -19,11 +19,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request, status
-from prisma import Prisma
 
 import litellm
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm._service_logger import ServiceTypes
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 from litellm.caching.caching import DualCache
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -54,7 +54,6 @@ from litellm.proxy.auth.auth_checks import (
     is_model_cost_zero,
     virtual_key_soft_budget_check,
 )
-from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
@@ -1473,87 +1472,6 @@ async def test_can_user_call_model_with_no_default_models():
         await can_user_call_model(**args)
 
 
-@pytest.mark.asyncio
-async def test_get_fuzzy_user_object() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-
-    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
-
-    # Setup mock Prisma client
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-
-    # Mock user data
-    test_user = LiteLLM_UserTable(
-        user_id="test_123",
-        sso_user_id="sso_123",
-        user_email="test@example.com",
-        organization_memberships=[],
-        max_budget=None,
-    )
-
-    # Test 1: Find user by SSO ID
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, sso_user_id="sso_123", user_email="test@example.com"
-    )
-    assert result == test_user
-    mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
-        where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
-    )
-
-    # Test 2: SSO ID not found, find by email
-    unlinked_user: Final = test_user.model_copy(update={"sso_user_id": None})
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=unlinked_user)
-    mock_prisma.writer_db.litellm_usertable.update_many = AsyncMock(return_value=1)
-
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma,
-        sso_user_id="new_sso_456",
-        user_email="test@example.com",
-    )
-    assert result == unlinked_user
-    mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}, "sso_user_id": None},
-        include={"organization_memberships": True},
-    )
-
-    mock_prisma.writer_db.litellm_usertable.update_many.assert_called_with(
-        where={"user_id": "test_123", "sso_user_id": None}, data={"sso_user_id": "new_sso_456"}
-    )
-
-    # Test 4: User not found by either method
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-    mock_prisma.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma,
-        sso_user_id="unknown_sso",
-        user_email="unknown@example.com",
-    )
-    assert result is None
-
-    # Test 5: Only email provided (no SSO ID)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, user_email="test@example.com")
-    assert result == test_user
-    mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
-        include={"organization_memberships": True},
-    )
-
-    # Test 6: Only SSO ID provided (no email)
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, sso_user_id="sso_123")
-    assert result == test_user
-    mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
-        where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
-    )
-
-
 @pytest.mark.parametrize(
     "model, alias_map, expect_to_work",
     [
@@ -2157,26 +2075,6 @@ async def _db_service_call_types(hook: AsyncMock) -> tuple[str, ...]:
     return tuple(call.kwargs["call_type"] for call in hook.await_args_list if call.kwargs["service"] == ServiceTypes.DB)
 
 
-def _prisma_client_serving(user_id: str) -> SimpleNamespace:
-    row: Final = {
-        "user_id": user_id,
-        "user_role": "internal_user",
-        "teams": [],
-        "spend": 0.0,
-        "models": [],
-        "metadata": "{}",
-        "allowed_cache_controls": [],
-        "policies": [],
-        "model_spend": "{}",
-        "model_max_budget": "{}",
-        "organization_memberships": [],
-    }
-    engine: Final = SimpleNamespace(query=AsyncMock(return_value={"data": {"result": row}}), stop=lambda: None)
-    generated_client: Final = Prisma()
-    generated_client._engine = engine
-    return SimpleNamespace(db=PrismaWrapper(original_prisma=generated_client, iam_token_db_auth=False))
-
-
 @pytest.mark.asyncio
 async def test_get_user_object_cache_hit_emits_no_postgres_service_event(db_success_hook: AsyncMock) -> None:
     user_id: Final = f"cached-user-{uuid.uuid4()}"
@@ -2218,23 +2116,23 @@ async def test_get_org_object_cache_hit_emits_no_postgres_service_event(db_succe
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_cache_miss_emits_exactly_one_postgres_get_user_object_event(
-    db_success_hook: AsyncMock,
+async def test_get_user_object_cache_miss_reads_the_rust_store_which_reports_its_own_db_event(
+    db_success_hook: AsyncMock, rust_auth_stores: RustAuthStores
 ) -> None:
     user_id: Final = f"db-user-{uuid.uuid4()}"
-    prisma_client: Final = _prisma_client_serving(user_id)
+    rust_auth_stores.user.rows = {user_id: LiteLLM_UserTable(user_id=user_id, user_role="internal_user").model_dump()}
 
     result: Final = await get_user_object(
         user_id=user_id,
-        prisma_client=prisma_client,
+        prisma_client=MagicMock(),
         user_api_key_cache=UserApiKeyCache(),
         user_id_upsert=False,
         parent_otel_span="auth-span",
     )
 
     assert result is not None and result.user_id == user_id
-    assert await _db_service_call_types(db_success_hook) == ("get_user_object",)
-    assert db_success_hook.await_args_list[0].kwargs["parent_otel_span"] == "auth-span"
+    assert [sign_in["user_id"] for sign_in, _ in rust_auth_stores.user.sign_ins] == [user_id]
+    assert await _db_service_call_types(db_success_hook) == ()
 
 
 @pytest.mark.parametrize("entry_first", [True, False])

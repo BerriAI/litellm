@@ -2583,10 +2583,14 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", [{}, {"scope": "litellm_proxy_admin"}])
 @pytest.mark.parametrize(
-    "verified, links", [({"email_verified": False}, False), ({"email_verified": "false"}, False), ({}, True)]
+    "verified, email_verified", [({"email_verified": False}, False), ({"email_verified": "false"}, False), ({}, None)]
 )
-async def test_jwt_links_the_sign_in_email_only_when_the_token_does_not_mark_it_unverified(
-    monkeypatch: pytest.MonkeyPatch, scope: dict[str, object], verified: dict[str, object], links: bool
+async def test_jwt_passes_whether_the_token_marks_its_email_unverified_to_the_sign_in(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+    scope: dict[str, object],
+    verified: dict[str, object],
+    email_verified: bool | None,
 ) -> None:
     auth_checks.last_db_access_time.clear()
     table: Final = UserTable(user_row("owner", "owner@example.com"))
@@ -2617,7 +2621,9 @@ async def test_jwt_links_the_sign_in_email_only_when_the_token_does_not_mark_it_
             request_data={},
         )
 
-    assert table.row("owner").sso_user_id == ("idp-new" if links else None)
+    assert [(sign_in["user_email"], sign_in["email_verified"]) for sign_in, _ in rust_auth_stores.user.sign_ins] == [
+        ("owner@example.com", email_verified)
+    ]
 
 
 def _qa_websocket(messages):

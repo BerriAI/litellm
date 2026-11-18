@@ -35,6 +35,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentCaller
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @pytest.mark.parametrize(
@@ -10522,24 +10523,22 @@ class TestUserMCPEntitlement:
 class TestGetUserObjectPermission:
     """Resolution of the ``user_id -> object_permission_id -> grants`` chain."""
 
-    def _prisma_with_user(self, user_row):
+    def _prisma_with_user(self, stores: RustAuthStores, user_row, user_id: str):
         prisma_client = MagicMock()
         from litellm.proxy._types import LiteLLM_UserTable
 
-        row = (
-            LiteLLM_UserTable(user_id="human", object_permission_id=user_row.object_permission_id)
-            if user_row is not None
-            else None
-        )
-        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
+        if user_row is not None:
+            stores.user.rows[user_id] = LiteLLM_UserTable(
+                user_id=user_id, object_permission_id=user_row.object_permission_id
+            ).model_dump()
         return prisma_client
 
-    async def test_resolves_through_the_shared_permission_cache(self):
+    async def test_resolves_through_the_shared_permission_cache(self, rust_auth_stores: RustAuthStores):
         from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = "perm-1"
-        prisma_client = self._prisma_with_user(user_row)
+        prisma_client = self._prisma_with_user(rust_auth_stores, user_row, "human-shared")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-shared")
         expected = MagicMock()
 
@@ -10560,17 +10559,17 @@ class TestGetUserObjectPermission:
             assert mock_get_perm.await_args.kwargs["object_permission_id"] == "perm-1"
 
             # The user_id -> object_permission_id link is cached, so the user row is read once.
-            prisma_client.db.litellm_usertable.find_unique.reset_mock()
+            reads = len(rust_auth_stores.user.sign_ins)
             await MCPRequestHandler._get_user_object_permission(auth)
-            prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+            assert len(rust_auth_stores.user.sign_ins) == reads
 
-    async def test_caches_a_sentinel_for_a_human_with_no_entitlement(self):
+    async def test_caches_a_sentinel_for_a_human_with_no_entitlement(self, rust_auth_stores: RustAuthStores):
         """A human without an entitlement is the common case and must cost no DB read per request."""
         from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = None
-        prisma_client = self._prisma_with_user(user_row)
+        prisma_client = self._prisma_with_user(rust_auth_stores, user_row, "human-no-perm")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-no-perm")
 
         with (
@@ -10585,15 +10584,15 @@ class TestGetUserObjectPermission:
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
             mock_get_perm.assert_not_awaited()
-            prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
+            assert len(rust_auth_stores.user.sign_ins) == 1
 
     @pytest.mark.parametrize("fresh_policy", [False, True])
-    async def test_missing_user_row_places_no_ceiling(self, fresh_policy):
+    async def test_missing_user_row_places_no_ceiling(self, rust_auth_stores: RustAuthStores, fresh_policy):
         """Whether this human is entitled at all is unknown when their row is absent, which is the
         state before the level existed, so it must not deny."""
         from litellm.caching.dual_cache import DualCache
 
-        prisma_client = self._prisma_with_user(None)
+        prisma_client = self._prisma_with_user(rust_auth_stores, None, "ghost")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="ghost")
         auth.requires_fresh_policy = fresh_policy
         prisma_client.writer_db = prisma_client.db
@@ -10608,11 +10607,11 @@ class TestGetUserObjectPermission:
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
-    async def test_unreadable_user_row_places_no_ceiling(self):
+    async def test_unreadable_user_row_places_no_ceiling(self, rust_auth_stores: RustAuthStores):
         from litellm.caching.dual_cache import DualCache
 
         prisma_client = MagicMock()
-        prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=Exception("db down"))
+        rust_auth_stores.user.error = Exception("db down")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-db-down")
 
         with (
@@ -10625,14 +10624,14 @@ class TestGetUserObjectPermission:
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
-    async def test_named_but_unreadable_permission_raises(self):
+    async def test_named_but_unreadable_permission_raises(self, rust_auth_stores: RustAuthStores):
         """A KNOWN entitlement with unknown contents is indeterminate: it must surface so the callers
         can deny rather than serve the wider key scope."""
         from litellm.caching.dual_cache import DualCache
 
         user_row = MagicMock()
         user_row.object_permission_id = "perm-gone"
-        prisma_client = self._prisma_with_user(user_row)
+        prisma_client = self._prisma_with_user(rust_auth_stores, user_row, "human-dangling")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-dangling")
 
         with (
@@ -10969,7 +10968,9 @@ class TestScopedSessionAdmission:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [RuntimeError("unavailable"), ValueError("User doesn't exist in db")])
-async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch, failure):
+async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
+    monkeypatch, rust_auth_stores: RustAuthStores, failure
+):
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_UserTable
@@ -10979,12 +10980,13 @@ async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
     cache = DualCache()
     await cache.async_set_cache(key="fresh-human", value=cached)
     database = MagicMock()
-    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=current)
-    database.db.litellm_usertable.find_unique = AsyncMock(return_value=cached)
+    users = rust_auth_stores.user
+    users.writer = {"fresh-human": current.model_dump()}
+    users.rows = {"fresh-human": cached.model_dump()}
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True) == "current"
-    database.db.litellm_usertable.find_unique.assert_not_awaited()
-    database.writer_db.litellm_usertable.find_unique.side_effect = failure
+    assert all(writer for _, writer in users.sign_ins)
+    users.writer["fresh-human"] = failure
     with pytest.raises(HTTPException) as denied:
         await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
     assert denied.value.status_code == 503
@@ -11054,7 +11056,9 @@ async def test_catalog_refresh_preserves_non_database_admission_and_resource_sco
 
 
 @pytest.mark.asyncio
-async def test_catalog_refresh_reads_current_user_org_without_losing_resource_scope(monkeypatch):
+async def test_catalog_refresh_reads_current_user_org_without_losing_resource_scope(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     from types import SimpleNamespace
 
     from litellm.caching.dual_cache import DualCache
@@ -11064,8 +11068,8 @@ async def test_catalog_refresh_reads_current_user_org_without_losing_resource_sc
     current = LiteLLM_UserTable(
         user_id="catalog-user", organization_id="current-org", user_role="internal_user", teams=[]
     )
-    table = SimpleNamespace(find_unique=AsyncMock(return_value=current))
-    database = SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table))
+    rust_auth_stores.user.rows = {"catalog-user": current.model_dump()}
+    database = SimpleNamespace(writer_db=SimpleNamespace())
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     caller = UserAPIKeyAuth(user_id="catalog-user", org_id="previous-org", user_role="proxy_admin")
@@ -11759,9 +11763,6 @@ class _EmptyTables:
     ``reload_admitted_user`` reads, and every other table (keys, MCP servers, config) empty, so the
     real ``_reload_admitted_key`` fails closed, since a session credential has no key row."""
 
-    def __init__(self, live_user: LiteLLM_UserTable) -> None:
-        self.litellm_usertable = SimpleNamespace(find_unique=AsyncMock(return_value=live_user))
-
     def __getattr__(self, table: str) -> SimpleNamespace:
         empty: Final = SimpleNamespace(
             find_unique=AsyncMock(return_value=None),
@@ -11773,19 +11774,23 @@ class _EmptyTables:
         return empty
 
 
-def _session_credential_storage(live_user: LiteLLM_UserTable) -> SimpleNamespace:
-    tables: Final = _EmptyTables(live_user)
+def _session_credential_storage(stores: RustAuthStores, live_user: LiteLLM_UserTable) -> SimpleNamespace:
+    stores.user.rows[live_user.user_id] = live_user.model_dump()
+    tables: Final = _EmptyTables()
     return SimpleNamespace(db=tables, writer_db=tables)
 
 
 @pytest.mark.asyncio
-async def test_catalog_refresh_reloads_session_credential_through_its_user_and_keeps_token_grants(monkeypatch):
+async def test_catalog_refresh_reloads_session_credential_through_its_user_and_keeps_token_grants(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """A ``/token``-minted or ``lite login`` credential has no key row: the catalog refresh must read the live
     user policy, never the key table, and keep the team, routes and models sealed in the token."""
     from litellm.proxy import proxy_server
 
     database = _session_credential_storage(
-        LiteLLM_UserTable(user_id="session-user", organization_id="live-org", user_role="internal_user", teams=[])
+        rust_auth_stores,
+        LiteLLM_UserTable(user_id="session-user", organization_id="live-org", user_role="internal_user", teams=[]),
     )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
@@ -11801,7 +11806,7 @@ async def test_catalog_refresh_reloads_session_credential_through_its_user_and_k
     )
     caller.via_virtual_key = True
     refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
-    assert database.writer_db.litellm_usertable.find_unique.await_count >= 1
+    assert rust_auth_stores.user.sign_ins
     database.writer_db.litellm_verificationtoken.find_unique.assert_not_awaited()
     assert (refreshed.object_permission, refreshed.object_permission_id) == (None, None)
     assert (refreshed.user_role, refreshed.org_id) == ("internal_user", "live-org")
@@ -11816,7 +11821,9 @@ async def test_catalog_refresh_reloads_session_credential_through_its_user_and_k
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["litellm:mcp litellm:llm", "litellm:mcp", None])
-async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeypatch, scope):
+async def test_token_minted_credential_lists_tools_for_every_scope_shape(
+    monkeypatch, rust_auth_stores: RustAuthStores, scope
+):
     """``tools/list`` with the credential ``/token`` mints (a session token the shared auth marks
     ``via_virtual_key`` at the key-cache boundary) returns the tool list instead of the JSON-RPC
     credential error, for the combined, MCP-only and unscoped ID-JAG shapes."""
@@ -11849,7 +11856,7 @@ async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeyp
         url="https://upstream.example.com/mcp",
         transport=MCPTransport.http,
     )
-    database = _session_credential_storage(user)
+    database = _session_credential_storage(rust_auth_stores, user)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     tool = Tool(name="eng_server-list_repos", description="list repos", inputSchema={"type": "object"})
@@ -11863,7 +11870,7 @@ async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeyp
     ):
         result = await GatewayOperations().execute(ListToolsRequest(), prepare_context(user_api_key_auth=credential))
     assert [listed.name for listed in result.tools] == ["eng_server-list_repos"]
-    assert database.writer_db.litellm_usertable.find_unique.await_count >= 1
+    assert rust_auth_stores.user.sign_ins
     database.writer_db.litellm_verificationtoken.find_unique.assert_not_awaited()
     assert credential.team_id == "team-eng" and credential.allowed_routes == list(granted.allowed_routes or ())
 
