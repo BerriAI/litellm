@@ -802,16 +802,16 @@ def test_virtual_key_management_routes_allows_spend_logs_v2():
 
 
 @pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
-def test_route_restricted_virtual_key_still_reaches_its_own_spend_logs(route):
-    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
+def test_route_restricted_virtual_key_still_reaches_its_own_spend_logs(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
     assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token) is True
     assert RouteChecks.key_allowed_routes_grant(route=route, valid_token=valid_token) is False
 
 
 @pytest.mark.parametrize("route", ["/spend/logs/ui", "/global/spend/logs", "/key/list"])
-def test_route_restricted_virtual_key_is_denied_other_spend_and_management_routes(route):
-    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
+def test_route_restricted_virtual_key_is_denied_other_spend_and_management_routes(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
     with pytest.raises(HTTPException) as exc_info:
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)

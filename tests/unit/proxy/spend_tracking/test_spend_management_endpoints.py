@@ -6054,7 +6054,9 @@ async def test_view_spend_logs_internal_user_combines_user_with_api_key(client, 
         ps.user_api_key_cache.delete_cache(other_key_hash)
 
 
-def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(client, monkeypatch):
+def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mock_client: Final = _CapturePrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
