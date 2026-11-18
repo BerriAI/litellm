@@ -400,10 +400,7 @@ pub(crate) fn price_many(
         .map(|many| {
             let (candidate, _) = many.document.candidate();
             let source = match many.row.and_then(|index| refs.get(index)) {
-                Some(row) => PriceSource::Row {
-                    row: row.clone(),
-                    breakdown_by_name: false,
-                },
+                Some(row) => PriceSource::Row { row: row.clone() },
                 None => PriceSource::Rows { rows: Vec::new() },
             };
             many.document.query(candidate, source, Vec::new())

@@ -79,6 +79,7 @@ pub(super) fn price<S: RowSource>(
         cache_write_twelve_hours: cache_write.get(),
         reasoning: rates.output.get(),
     };
+    let extras = super::extras(source, query);
     let receipt = Receipt {
         candidate: Some(candidate.clone()),
         row: None,
@@ -89,13 +90,13 @@ pub(super) fn price<S: RowSource>(
         defaulted_to_zero: Vec::new(),
         breakdown: breakdown::breakdown(&billed, usage, true),
         rates: Some(billed),
-        prompt,
+        prompt: prompt + extras.prompt_fee,
         completion,
-        tools: Usd::ZERO,
-        additional: Usd::ZERO,
+        tools: extras.tools,
+        additional: extras.additional,
         discount: Default::default(),
         margin: Default::default(),
-        parts: Vec::new(),
+        parts: extras.parts,
         cache_savings: None,
         basis: query.header.basis.clone(),
         total: 0.0,
