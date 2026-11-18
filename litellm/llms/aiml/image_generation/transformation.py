@@ -1,7 +1,10 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -21,6 +24,10 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 OPENAI_STYLE_IMAGE_MODEL_PREFIXES: Final[tuple[str, ...]] = ("openai/",)
 
@@ -115,7 +122,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         complete_url = complete_url.rstrip("/")
         # Strip /v1 suffix if present since IMAGE_GENERATION_ENDPOINT already includes v1
         complete_url = complete_url.removesuffix("/v1")
-        complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
+        complete_url = join_api_base(complete_url, self.IMAGE_GENERATION_ENDPOINT)
         return complete_url
 
     def validate_environment(
@@ -198,29 +205,33 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
 
         if "data" in response_data and isinstance(response_data["data"], list):
             # Handle OpenAI-like format: {"data": [{"url": "...", "width": 1024, "height": 768, "content_type": "image/jpeg"}]}
-            for image in response_data["data"]:
+            for raw_image in _JSON_CONTAINER.validate_python(response_data["data"]):
+                image = raw_image if isinstance(raw_image, str) else _JSON_CONTAINER.validate_python(raw_image)
                 if "url" in image:
+                    url_image = _JSON_OBJECT.validate_python(image)
                     model_response.data.append(
                         ImageObject(
                             b64_json=None,
-                            url=image["url"],
-                            revised_prompt=image.get("revised_prompt"),
+                            url=url_image["url"],
+                            revised_prompt=url_image.get("revised_prompt"),
                         )
                     )
                 elif "b64_json" in image or "image_base64" in image:
+                    b64_image = _JSON_OBJECT.validate_python(image)
                     model_response.data.append(
                         ImageObject(
-                            b64_json=image.get("b64_json") or image.get("image_base64"),
+                            b64_json=b64_image.get("b64_json") or b64_image.get("image_base64"),
                             url=None,
-                            revised_prompt=image.get("revised_prompt"),
+                            revised_prompt=b64_image.get("revised_prompt"),
                         )
                     )
         elif "output" in response_data and "choices" in response_data["output"]:
-            for choice in response_data["output"]["choices"]:
+            for raw_choice in _JSON_CONTAINER.validate_python(response_data["output"]["choices"]):
+                choice = raw_choice if isinstance(raw_choice, str) else _JSON_CONTAINER.validate_python(raw_choice)
                 if "image_base64" in choice:
                     model_response.data.append(
                         ImageObject(
-                            b64_json=choice["image_base64"],
+                            b64_json=_JSON_OBJECT.validate_python(choice)["image_base64"],
                             url=None,
                         )
                     )
@@ -228,23 +239,24 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
                     model_response.data.append(
                         ImageObject(
                             b64_json=None,
-                            url=choice["url"],
+                            url=_JSON_OBJECT.validate_python(choice)["url"],
                         )
                     )
         elif "images" in response_data:
             # Handle alternative format: {"images": [{"url": "...", "width": 1024, "height": 768, "content_type": "image/jpeg"}]}
-            for image in response_data["images"]:
+            for raw_image in _JSON_CONTAINER.validate_python(response_data["images"]):
+                image = raw_image if isinstance(raw_image, str) else _JSON_CONTAINER.validate_python(raw_image)
                 if "url" in image:
                     model_response.data.append(
                         ImageObject(
                             b64_json=None,
-                            url=image["url"],
+                            url=_JSON_OBJECT.validate_python(image)["url"],
                         )
                     )
                 elif "image_base64" in image:
                     model_response.data.append(
                         ImageObject(
-                            b64_json=image["image_base64"],
+                            b64_json=_JSON_OBJECT.validate_python(image)["image_base64"],
                             url=None,
                         )
                     )

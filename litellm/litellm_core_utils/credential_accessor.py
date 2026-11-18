@@ -1,9 +1,17 @@
 """Utils for accessing credentials."""
 
+from collections.abc import Mapping
+from copy import deepcopy
+from types import MappingProxyType
 from typing import Final
 
 import litellm
-from litellm.types.utils import CredentialItem
+from litellm.types.router import holds_api_key_secret_reference
+from litellm.types.utils import (
+    API_KEY_SECRET_REFERENCE_REJECTION,
+    CredentialItem,
+    credential_api_key_secret_reference,
+)
 
 
 class CredentialAccessor:
@@ -15,24 +23,50 @@ class CredentialAccessor:
         )
 
     @staticmethod
-    def get_credential_values(credential_name: str) -> dict:
+    def get_credential_values(
+        credential_name: str,
+    ) -> dict[str, object]:  # mutable-ok: callers merge the returned credential map
         """Safe accessor for credentials."""
 
         credential: Final = CredentialAccessor.find_credential(credential_name)
-        return {} if credential is None else credential.credential_values.copy()
+        if credential is None:
+            return {}
+        return deepcopy(
+            {
+                key: value
+                for key, value in credential_api_key_secret_reference(credential.credential_values).items()
+                if key != "github_copilot_app_private_key"
+            }
+        )
 
     @staticmethod
-    def upsert_credentials(credentials: list[CredentialItem]):
-        """Add a credential to the list of credentials."""
+    def upsert_credentials(credentials: list[CredentialItem]) -> None:
+        """Replace the first loaded credential with each incoming name, append names not loaded at call start."""
 
-        credential_names: Final = [cred.credential_name for cred in litellm.credential_list]
+        first_index_by_name: Final = MappingProxyType(
+            {cred.credential_name: i for i, cred in reversed(tuple(enumerate(litellm.credential_list)))}
+        )
 
         for credential in credentials:
-            if credential.credential_name in credential_names:
-                # Find and replace the existing credential in the list
-                for i, existing_cred in enumerate(litellm.credential_list):
-                    if existing_cred.credential_name == credential.credential_name:
-                        litellm.credential_list[i] = credential
-                        break
-            else:
-                litellm.credential_list.append(credential)
+            match first_index_by_name.get(credential.credential_name):
+                case None:
+                    litellm.credential_list.append(credential)
+                case existing_index:
+                    litellm.credential_list[existing_index] = credential
+
+
+def sends_api_key_secret_reference(params: Mapping[str, object]) -> bool:
+    named: Final = params.get("litellm_credential_name")
+    credential_values: Final = CredentialAccessor.get_credential_values(named) if isinstance(named, str) else {}
+    return holds_api_key_secret_reference({**credential_values, **params})
+
+
+def reject_api_key_secret_reference(params: Mapping[str, object]) -> None:
+    if holds_api_key_secret_reference(params):
+        raise ValueError(API_KEY_SECRET_REFERENCE_REJECTION)
+    named: Final = params.get("litellm_credential_name")
+    if isinstance(named, str) and holds_api_key_secret_reference(CredentialAccessor.get_credential_values(named)):
+        raise ValueError(
+            f"Rejected Request: litellm_credential_name={named!r} names a credential holding an oidc/ api_key "
+            "secret reference, which only a deployment a proxy admin configures can attach."
+        )

@@ -1,10 +1,13 @@
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
@@ -15,9 +18,9 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import (
     IBMWatsonXMixin,
     WatsonXAIError,
-    _get_api_params,
     aconvert_watsonx_messages_to_prompt,
     convert_watsonx_messages_to_prompt,
+    get_api_params,
 )
 
 if TYPE_CHECKING:
@@ -27,6 +30,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
@@ -102,7 +108,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         stream: bool | None = None,
         **kwargs,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -226,7 +232,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         """Shared logic to build request payload"""
         extra_body_params: Final = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
-        watsonx_api_params: Final = _get_api_params(params=optional_params, model=model)
+        watsonx_api_params: Final = get_api_params(params=optional_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(model=model, api_params=watsonx_api_params)
 
         return {
@@ -304,12 +310,15 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
         model_response.choices[0].message.content = generated_text
         model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
-        if json_resp.get("created_at"):
+        created_at: Final = decoded_json_object(_DECODED_JSON.validate_python(json_resp)).get("created_at")
+        if created_at:
+            if not isinstance(created_at, str):
+                raise TypeError("fromisoformat: argument must be str")
             try:
-                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+                created_datetime = datetime.fromisoformat(created_at)
             except ValueError:
                 # datetime.fromisoformat cannot handle 'Z' in Python 3.10
-                created_datetime = datetime.fromisoformat(f"{json_resp['created_at'].rstrip('Z')}+00:00")
+                created_datetime = datetime.fromisoformat(f"{created_at.rstrip('Z')}+00:00")
             model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
@@ -342,7 +351,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
             endpoint = WatsonXAIEndpoint.TEXT_GENERATION_STREAM if stream else WatsonXAIEndpoint.TEXT_GENERATION
-        url = url.rstrip("/") + endpoint
+        url = join_api_base(url, endpoint)
 
         ## add api version
         url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))

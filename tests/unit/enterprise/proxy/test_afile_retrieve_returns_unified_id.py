@@ -16,10 +16,10 @@ from litellm.types.llms.openai import OpenAIFileObject
 
 def _make_managed_files_instance():
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )

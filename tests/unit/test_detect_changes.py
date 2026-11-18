@@ -21,9 +21,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "detect_changes.sh"
-CLASSIFIER = REPO_ROOT / ".circleci" / "scripts" / "classify_changes.sh"
+CLASSIFIER = REPO_ROOT / ".github" / "scripts" / "ci" / "classify_changes.sh"
 
-UI_FILE = "ui/litellm-dashboard/src/components/Teams.tsx"
+UI_FILE = "litellm/ui/litellm-dashboard/src/components/Teams.tsx"
 BACKEND_FILE = "litellm/proxy/proxy_server.py"
 
 
@@ -65,9 +65,9 @@ def _scripts_tree(tmp_path: Path, classifier_body: str | None = None) -> Path:
     """Copy the scripts into a throwaway tree, preserving their relative layout."""
     root = tmp_path / "tree"
     (root / ".github" / "scripts").mkdir(parents=True)
-    (root / ".circleci" / "scripts").mkdir(parents=True)
+    (root / ".github" / "scripts" / "ci").mkdir(parents=True)
     shutil.copy(SCRIPT, root / ".github" / "scripts" / SCRIPT.name)
-    target = root / ".circleci" / "scripts" / CLASSIFIER.name
+    target = root / ".github" / "scripts" / "ci" / CLASSIFIER.name
     if classifier_body is None:
         shutil.copy(CLASSIFIER, target)
     else:
@@ -231,5 +231,5 @@ def test_ui_category_fails_open_when_the_api_fails(tmp_path: Path) -> None:
 def test_ui_category_runs_when_the_ui_workflows_themselves_change(tmp_path: Path) -> None:
     """Without this the dashboard jobs would skip on the pull request that edits
     them, shipping a workflow change nothing ever exercised."""
-    decision, _ = _run(tmp_path, files=[".github/workflows/test-litellm-ui-unit.yml"], category="ui")
+    decision, _ = _run(tmp_path, files=[".github/workflows/test-unit.yml"], category="ui")
     assert decision == "decision=run"

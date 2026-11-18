@@ -1,0 +1,16 @@
+{
+    "fireworks_ai/accounts/fireworks/models/minimax-m3": {
+        "supports_vision": {
+            "value": true,
+            "checked": "2026-09-26",
+            "source": "POST https://api.fireworks.ai/inference/v1/chat/completions read a 512x512 PNG back as digit=7, shape=circle, color=red while GET https://api.fireworks.ai/inference/v1/models still said supports_image_input false and GET https://api.fireworks.ai/v1/serverless/models?format=nested carried no supportsImageInput on the row"
+        }
+    },
+    "fireworks_ai/minimax-m3": {
+        "supports_vision": {
+            "value": true,
+            "checked": "2026-09-26",
+            "source": "POST https://api.fireworks.ai/inference/v1/chat/completions read a 512x512 PNG back as digit=7, shape=circle, color=red while GET https://api.fireworks.ai/inference/v1/models still said supports_image_input false and GET https://api.fireworks.ai/v1/serverless/models?format=nested carried no supportsImageInput on the row"
+        }
+    }
+}

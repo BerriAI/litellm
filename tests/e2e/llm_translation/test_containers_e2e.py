@@ -32,7 +32,7 @@ second regression, since the global-credential fallback then reaches the
 container anyway.
 
 The streaming cell repeats the flow with ``stream=True`` and uploads right
-after the last event. The OpenAI SDK closes the connection at ``[DONE]``, so an
+after the last event. The OpenAI SDK closes the connection after the last frame, so an
 ownership row written after the stream is cancelled with the body task and every
 follow-up container call 403s (LIT-8612); the row has to land before the
 ``response.completed`` frame goes out.
@@ -50,6 +50,7 @@ import openai
 import pytest
 from e2e_config import REQUEST_TIMEOUT, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management.management_client import ManagementClient, build_client
 from models import KeyGenerateBody, KeyGenerateResponse, LiteLLMParamsBody, TeamNewBody, UserNewBody
@@ -172,6 +173,15 @@ def _assert_file_round_trip(client: OpenAI, native_id: str, marker: str) -> None
 
 class TestAzureContainerFiles:
     @pytest.mark.covers("llm.responses.azure_openai.code_interpreter.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CONTAINERS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_service_account_key_reads_container_file_by_native_id(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -187,6 +197,15 @@ class TestAzureContainerFiles:
         _assert_file_round_trip(client, native_id, marker)
 
     @pytest.mark.covers("llm.responses.azure_openai.code_interpreter.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CONTAINERS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_service_account_key_reads_container_file_created_by_a_streamed_response(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -202,6 +221,13 @@ class TestAzureContainerFiles:
 
 
 class TestOpenAIContainerFiles:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CONTAINERS,
+            providers=(Provider.OPENAI,),
+        )
+    )
     def test_container_file_lifecycle_through_the_gateway(self, resources: ResourceManager, sdk: SdkClients) -> None:
         client: Final = sdk.openai(resources.key())
         marker: Final = unique_marker()

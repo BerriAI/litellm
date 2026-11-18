@@ -39,11 +39,11 @@ def test_gemini_messages_cache_control_creates_cached_content_and_generates_from
     def respond(request: Request) -> Reply:
         assert request.headers["x-goog-api-key"] == _API_KEY, request.headers
         if request.method == "GET":
-            assert request.target == f"/models/{_BACKEND}:cachedContents", request.target
+            assert request.target == "/cachedContents", request.target
             return Reply(body=b"{}")
         assert request.method == "POST", request.method
         body: Final = _JSON_OBJECT.validate_json(request.body)
-        if request.target == f"/models/{_BACKEND}:cachedContents":
+        if request.target == "/cachedContents":
             assert isinstance(body["displayName"], str) and body["displayName"], body
             assert body == {
                 "contents": [{"role": "user", "parts": [{"text": "."}]}],
@@ -80,7 +80,7 @@ def test_gemini_messages_cache_control_creates_cached_content_and_generates_from
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         assert payload["content"] == [{"type": "text", "text": "The policy applies."}], response.text
         assert [(request.method, request.target) for request in wire.drain()] == [
-            ("GET", f"/models/{_BACKEND}:cachedContents"),
-            ("POST", f"/models/{_BACKEND}:cachedContents"),
+            ("GET", "/cachedContents"),
+            ("POST", "/cachedContents"),
             ("POST", f"/models/{_BACKEND}:generateContent"),
         ]

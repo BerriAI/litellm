@@ -1,9 +1,11 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class EmbeddingRequest(BaseModel):
+class EmbeddingRequest(LiteLLMBaseModel):
     model: str
-    input: list[str] = []
+    input: list[str] = Field(default=[])
     timeout: int = 600
     api_base: str | None = None
     api_version: str | None = None

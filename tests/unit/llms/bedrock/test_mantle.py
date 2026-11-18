@@ -18,6 +18,10 @@ from litellm.llms.bedrock.messages.mantle_transformation import (
     AmazonMantleMessagesConfig,
 )
 
+# AWS names this header for Mantle workspaces on the Anthropic Messages API, checked 2026-10-02:
+# https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html
+_MANTLE_WORKSPACE_HEADER = "anthropic-workspace-id"
+
 
 def _anthropic_response(url: str) -> httpx.Response:
     return httpx.Response(
@@ -345,7 +349,7 @@ def test_mantle_validate_environment_sets_workspace_header():
         optional_params={},
         litellm_params={"aws_bedrock_project_id": "proj_abc123def456"},
     )
-    assert headers["anthropic-workspace"] == "proj_abc123def456"
+    assert headers[_MANTLE_WORKSPACE_HEADER] == "proj_abc123def456"
 
 
 def test_mantle_validate_environment_without_project_id():
@@ -357,7 +361,7 @@ def test_mantle_validate_environment_without_project_id():
         optional_params={},
         litellm_params={"aws_bedrock_project_id": None},
     )
-    assert "anthropic-workspace" not in headers
+    assert _MANTLE_WORKSPACE_HEADER not in headers
 
 
 def test_mantle_messages_validate_environment_sets_workspace_header():
@@ -370,7 +374,7 @@ def test_mantle_messages_validate_environment_sets_workspace_header():
         litellm_params={"aws_bedrock_project_id": "proj_abc123def456"},
         api_base="https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages",
     )
-    assert headers["anthropic-workspace"] == "proj_abc123def456"
+    assert headers[_MANTLE_WORKSPACE_HEADER] == "proj_abc123def456"
     assert api_base == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
 
 
@@ -383,7 +387,7 @@ def test_mantle_messages_validate_environment_without_project_id():
         optional_params={},
         litellm_params={},
     )
-    assert "anthropic-workspace" not in headers
+    assert _MANTLE_WORKSPACE_HEADER not in headers
 
 
 def test_mantle_completion_sends_workspace_header_and_clean_body():
@@ -409,7 +413,7 @@ def test_mantle_completion_sends_workspace_header_and_clean_body():
     assert response.choices[0].message.content == "ok"
     assert len(requests) == 1
     assert requests[0]["path"] == "/anthropic/v1/messages"
-    assert requests[0]["headers"]["anthropic-workspace"] == "proj_abc123def456"
+    assert requests[0]["headers"][_MANTLE_WORKSPACE_HEADER] == "proj_abc123def456"
     assert "aws_bedrock_project_id" not in requests[0]["body"]
 
 
@@ -443,7 +447,7 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert response["content"][0]["text"] == "ok"
     assert len(requests) == 1
     assert requests[0]["path"] == "/anthropic/v1/messages"
-    assert requests[0]["headers"]["anthropic-workspace"] == "proj_abc123def456"
+    assert requests[0]["headers"][_MANTLE_WORKSPACE_HEADER] == "proj_abc123def456"
     assert "aws_bedrock_project_id" not in requests[0]["body"]
 
 
@@ -792,3 +796,26 @@ async def test_mantle_anthropic_messages_streaming_sends_stream_and_passes_throu
     assert "event: message_start" in text
     assert '"text": "pong"' in text
     assert "event: message_stop" in text
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_mantle_messages_drops_compaction_without_its_beta():
+    """
+    The bedrock_mantle beta map has no compact-2026-09-04, so the beta is filtered
+    out on this route. ``compaction`` must go with it, or the body carries a field
+    that Bedrock refuses without the beta.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = AmazonMantleMessagesConfig()
+    headers: dict[str, str] = {}
+    request = config.transform_anthropic_messages_request(
+        model="mantle/anthropic.claude-mythos-preview",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 100, "compaction": {"type": "summarize"}},
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+
+    assert "compaction" not in request
+    assert "compact-2026-09-04" not in headers.get("anthropic-beta", "")

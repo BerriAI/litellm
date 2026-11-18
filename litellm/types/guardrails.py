@@ -1,13 +1,16 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365GuardrailConfigModel,
 )
@@ -22,6 +25,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
     CompresrGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
+    DecisionModelCheck,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
@@ -53,6 +59,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.reco import (
+    RecoConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
     RepelloAIGuardrailConfigModel,
 )
@@ -67,6 +76,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
+    WingbackGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
@@ -145,8 +157,14 @@ class SupportedGuardrailIntegrations(Enum):
     TYPESAFE = "typesafe"
     STRAIKER = "straiker"
     ALICE = "alice"
+    RECO = "reco"
     AGENT_365 = "agent_365"
+    LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    AIRIA = "airia"
+    WINGBACK = "wingback"
+    DECISION_MODEL = "decision_model"
+    COLLIEAI = "collieai"
 
 
 class Role(Enum):
@@ -166,7 +184,7 @@ class GuardrailItemSpec(TypedDict, total=False):
     callback_args: dict[str, dict]
 
 
-class GuardrailItem(BaseModel):
+class GuardrailItem(LiteLLMBaseModel):
     callbacks: list[str]
     default_on: bool
     logging_only: bool | None
@@ -367,11 +385,7 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.UK_VEHICLE_REGISTRATION,
         PiiEntityType.UK_DRIVING_LICENCE,
     ),
-    PiiEntityCategory.SPAIN: (
-        PiiEntityType.ES_NIF,
-        PiiEntityType.ES_NIE,
-        PiiEntityType.ES_PASSPORT,
-    ),
+    PiiEntityCategory.SPAIN: (PiiEntityType.ES_NIF, PiiEntityType.ES_NIE, PiiEntityType.ES_PASSPORT),
     PiiEntityCategory.ITALY: (
         PiiEntityType.IT_FISCAL_CODE,
         PiiEntityType.IT_DRIVER_LICENSE,
@@ -419,24 +433,11 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.KR_BRN,
     ),
     PiiEntityCategory.CANADA: (PiiEntityType.CA_SIN,),
-    PiiEntityCategory.SWEDEN: (
-        PiiEntityType.SE_PERSONNUMMER,
-        PiiEntityType.SE_ORGANISATIONSNUMMER,
-    ),
+    PiiEntityCategory.SWEDEN: (PiiEntityType.SE_PERSONNUMMER, PiiEntityType.SE_ORGANISATIONSNUMMER),
     PiiEntityCategory.THAILAND: (PiiEntityType.TH_TNIN,),
-    PiiEntityCategory.TURKEY: (
-        PiiEntityType.TR_NATIONAL_ID,
-        PiiEntityType.TR_LICENSE_PLATE,
-    ),
-    PiiEntityCategory.NIGERIA: (
-        PiiEntityType.NG_NIN,
-        PiiEntityType.NG_VEHICLE_REGISTRATION,
-    ),
-    PiiEntityCategory.PHILIPPINES: (
-        PiiEntityType.PH_TIN,
-        PiiEntityType.PH_UMID,
-        PiiEntityType.PH_PASSPORT,
-    ),
+    PiiEntityCategory.TURKEY: (PiiEntityType.TR_NATIONAL_ID, PiiEntityType.TR_LICENSE_PLATE),
+    PiiEntityCategory.NIGERIA: (PiiEntityType.NG_NIN, PiiEntityType.NG_VEHICLE_REGISTRATION),
+    PiiEntityCategory.PHILIPPINES: (PiiEntityType.PH_TIN, PiiEntityType.PH_UMID, PiiEntityType.PH_PASSPORT),
     PiiEntityCategory.SOUTH_AFRICA: (PiiEntityType.ZA_ID_NUMBER,),
 }
 
@@ -453,7 +454,7 @@ class GuardrailParamUITypes(str, Enum):
     PERCENTAGE = "percentage"
 
 
-class PresidioPresidioConfigModelUserInterface(BaseModel):
+class PresidioPresidioConfigModelUserInterface(LiteLLMBaseModel):
     """Configuration parameters for the Presidio PII masking guardrail on LiteLLM UI"""
 
     presidio_analyzer_api_base: str | None = Field(
@@ -562,31 +563,31 @@ BedrockChecksSensitiveInformationEntity = Literal[
 ]
 
 
-class BedrockChecksContentFilterCategoryItem(BaseModel):
+class BedrockChecksContentFilterCategoryItem(LiteLLMBaseModel):
     category: BedrockChecksContentFilterCategory
 
 
-class BedrockChecksContentFilterModel(BaseModel):
+class BedrockChecksContentFilterModel(LiteLLMBaseModel):
     categories: list[BedrockChecksContentFilterCategoryItem]
 
 
-class BedrockChecksPromptAttackCategoryItem(BaseModel):
+class BedrockChecksPromptAttackCategoryItem(LiteLLMBaseModel):
     category: BedrockChecksPromptAttackCategory
 
 
-class BedrockChecksPromptAttackModel(BaseModel):
+class BedrockChecksPromptAttackModel(LiteLLMBaseModel):
     categories: list[BedrockChecksPromptAttackCategoryItem]
 
 
-class BedrockChecksSensitiveInformationEntityItem(BaseModel):
+class BedrockChecksSensitiveInformationEntityItem(LiteLLMBaseModel):
     type: BedrockChecksSensitiveInformationEntity
 
 
-class BedrockChecksSensitiveInformationModel(BaseModel):
+class BedrockChecksSensitiveInformationModel(LiteLLMBaseModel):
     entities: list[BedrockChecksSensitiveInformationEntityItem]
 
 
-class BedrockChecksConfigModel(BaseModel):
+class BedrockChecksConfigModel(LiteLLMBaseModel):
     """Inline `checks` config for the resource-less Bedrock InvokeGuardrailChecks API.
 
     Include only the checks you want to run; at least one must be set.
@@ -605,13 +606,23 @@ class BedrockChecksConfigModel(BaseModel):
         return self
 
 
-class BedrockGuardrailConfigModel(BaseModel):
+class BedrockGuardrailOutputScope(Enum):
+    INTERVENTIONS = "INTERVENTIONS"
+    FULL = "FULL"
+
+
+class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
     guardrailIdentifier: str | None = Field(default=None, description="The ID of your guardrail on Bedrock")
     guardrailVersion: str | None = Field(
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+    )
+    outputScope: BedrockGuardrailOutputScope | None = Field(
+        default=None,
+        description="ApplyGuardrail response scope. FULL includes detected and non-detected findings. "
+        "Omit to retain Bedrock's default of returning detected findings only.",
     )
     disable_exception_on_block: bool | None = Field(
         default=False,
@@ -627,8 +638,7 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_web_identity_token: str | None = Field(default=None, description="Web identity token for AWS role assumption")
     aws_sts_endpoint: str | None = Field(default=None, description="AWS STS endpoint URL")
     aws_external_id: str | None = Field(
-        default=None,
-        description="External ID required by the target role's trust policy on sts:AssumeRole",
+        default=None, description="External ID required by the target role's trust policy on sts:AssumeRole"
     )
     aws_bedrock_runtime_endpoint: str | None = Field(default=None, description="AWS Bedrock runtime endpoint URL")
     checks: BedrockChecksConfigModel | None = Field(
@@ -681,7 +691,7 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
-class BedrockGuardrailStreamingParams(BaseModel):
+class BedrockGuardrailStreamingParams(LiteLLMBaseModel):
     streaming_buffer_until_moderated: bool = Field(
         default=True,
         description="If True (default), withhold every streamed chunk until the end-of-stream "
@@ -711,6 +721,12 @@ class BedrockGuardrailStreamingParams(BaseModel):
         "and release the withheld chunks once the scan passes, instead of holding everything to end of stream. "
         "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
     )
+    streaming_scan_in_background: bool = Field(
+        default=False,
+        description="When not buffering and not end-of-stream-only, run each sampled ApplyGuardrail scan in the "
+        "background so the sampled chunk and the ones after it stream while the scan runs. One scan runs at a time. "
+        "A flagged scan ends the stream before the next chunk, so content streamed while it ran reaches the client.",
+    )
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
@@ -721,7 +737,7 @@ class BedrockGuardrailStreamingParams(BaseModel):
         )
 
 
-class LakeraV2GuardrailConfigModel(BaseModel):
+class LakeraV2GuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
     api_key: str | None = Field(default=None, description="API key for the Lakera AI service")
@@ -734,9 +750,10 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
+    on_flagged: Literal["block", "mask", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        description="Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only "
+        "detections and allow, block anything else), 'monitor' (log only), "
         "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
     )
     advisory_system_message: str | None = Field(
@@ -746,7 +763,7 @@ class LakeraV2GuardrailConfigModel(BaseModel):
     )
 
 
-class LassoGuardrailConfigModel(BaseModel):
+class LassoGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Lasso guardrail"""
 
     lasso_user_id: str | None = Field(default=None, description="User ID for the Lasso guardrail")
@@ -754,7 +771,7 @@ class LassoGuardrailConfigModel(BaseModel):
     mask: bool | None = Field(default=False, description="Enable content masking using Lasso classifix API")
 
 
-class DeepKeepGuardrailConfigModel(BaseModel):
+class DeepKeepGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the DeepKeep AI Firewall guardrail"""
 
     deepkeep_firewall_id: str | None = Field(
@@ -766,7 +783,7 @@ class DeepKeepGuardrailConfigModel(BaseModel):
     )
 
 
-class PillarGuardrailConfigModel(BaseModel):
+class PillarGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Pillar Security guardrail"""
 
     on_flagged_action: str | None = Field(
@@ -791,7 +808,7 @@ class PillarGuardrailConfigModel(BaseModel):
     )
 
 
-class NomaGuardrailConfigModel(BaseModel):
+class NomaGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Noma Security guardrail"""
 
     use_v2: bool | None = Field(
@@ -820,7 +837,7 @@ class NomaGuardrailConfigModel(BaseModel):
     )
 
 
-class ZscalerAIGuardConfigModel(BaseModel):
+class ZscalerAIGuardConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Zscaler AI Guard guardrail"""
 
     policy_id: int | None = Field(
@@ -838,7 +855,7 @@ class ZscalerAIGuardConfigModel(BaseModel):
     )
 
 
-class JavelinGuardrailConfigModel(BaseModel):
+class JavelinGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
     guard_name: str | None = Field(default=None, description="Name of the Javelin guard to use")
@@ -855,7 +872,7 @@ class ContentFilterAction(str, Enum):
     MASK = "MASK"
 
 
-class BlockedWord(BaseModel):
+class BlockedWord(LiteLLMBaseModel):
     """Represents a blocked word with its action and optional description"""
 
     keyword: str = Field(description="The keyword to block or mask")
@@ -866,7 +883,7 @@ class BlockedWord(BaseModel):
     )
 
 
-class ContentFilterPattern(BaseModel):
+class ContentFilterPattern(LiteLLMBaseModel):
     """Represents a content filter pattern (prebuilt or custom regex)"""
 
     pattern_type: Literal["prebuilt", "regex"] = Field(
@@ -887,7 +904,7 @@ class ContentFilterPattern(BaseModel):
     action: ContentFilterAction = Field(description="Action to take when pattern matches (BLOCK or MASK)")
 
 
-class ContentFilterConfigModel(BaseModel):
+class ContentFilterConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the content filter guardrail"""
 
     patterns: list[ContentFilterPattern] | None = Field(
@@ -918,8 +935,131 @@ class ContentFilterConfigModel(BaseModel):
 
 MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
 
+GuardrailStreamScope = Literal["streaming", "non_streaming", "both"]
+DEFAULT_GUARDRAIL_STREAM_SCOPE: Final[GuardrailStreamScope] = "both"
+
+
+class GuardrailEventHooks(str, Enum):
+    pre_call = "pre_call"
+    post_call = "post_call"
+    during_call = "during_call"
+    logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
+    post_mcp_call = "post_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
+
+
+GUARDRAIL_EVENT_HOOK_VALUES: Final = frozenset(member.value for member in GuardrailEventHooks)
+
+_GUARDRAIL_STREAM_SCOPES: Final[Mapping[str, GuardrailStreamScope]] = MappingProxyType(
+    {
+        "streaming": "streaming",
+        "non_streaming": "non_streaming",
+        "both": "both",
+    }
+)
+
+
+def _as_guardrail_stream_scope(value: object) -> GuardrailStreamScope:
+    if not isinstance(value, str):
+        raise ValueError(f"stream_scope values must be strings, got {type(value).__name__}")
+    scope: Final = _GUARDRAIL_STREAM_SCOPES.get(value.lower())
+    if scope is None:
+        raise ValueError(f"stream_scope must be one of both, streaming, non_streaming, got {value!r}")
+    return scope
+
+
+def _validated_stream_scope_hook(key: object) -> str:
+    if not isinstance(key, str):
+        raise ValueError(f"stream_scope keys must be strings, got {type(key).__name__}")
+    hook: Final = key.lower()
+    if hook not in GUARDRAIL_EVENT_HOOK_VALUES:
+        raise ValueError(
+            f"stream_scope keys must be guardrail modes ({sorted(GUARDRAIL_EVENT_HOOK_VALUES)}), got {key!r}"
+        )
+    return hook
+
+
+def coerce_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _as_guardrail_stream_scope(value)
+    if isinstance(value, Mapping):
+        scope_map: Final[Mapping[str, object]] = cast(Mapping[str, object], value)  # cast-ok: keys validated below
+        return {
+            _validated_stream_scope_hook(key): _as_guardrail_stream_scope(scope) for key, scope in scope_map.items()
+        }
+    raise ValueError(f"stream_scope must be a string or mapping, got {type(value).__name__}")
+
+
+def stored_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    try:
+        return coerce_stream_scope(value)
+    except ValueError:
+        verbose_logger.warning("Ignoring invalid stored stream_scope value of type %s", type(value).__name__)
+        return None
+
+
+def with_tolerated_stream_scope(params: Mapping[str, object]) -> dict[str, object]:
+    if "stream_scope" not in params:
+        return dict(params)
+    return {
+        **params,
+        "stream_scope": stored_stream_scope(params["stream_scope"]),
+    }
+
+
+def runtime_stream_scope(
+    stream_scope: object,
+) -> tuple[GuardrailStreamScope, MappingProxyType[str, GuardrailStreamScope]]:
+    coerced: Final = coerce_stream_scope(stream_scope)
+    if coerced is None:
+        return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType({})
+    if isinstance(coerced, str):
+        return coerced, MappingProxyType({})
+    return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(coerced)
+
+
+LoggingOnlyScope = Literal["input", "output"]
+
+
+def _is_blank(value: object) -> bool:
+    return isinstance(value, str) and not value.strip()
+
+
+def _default_if_blank(field: FieldInfo | None, value: object) -> object:
+    if field is None or field.is_required() or not _is_blank(value):
+        return value
+    return field.get_default(call_default_factory=True)
+
+
+GuardrailNumRetries: TypeAlias = Annotated[
+    int | None,
+    Field(
+        ge=0,
+        le=5,
+        description=(
+            "How many more times to send a guardrail check whose connection timed out waiting for the answer "
+            "or was dropped after the request went out. Each retry opens a fresh connection and gets the full "
+            "timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 "
+            "sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', "
+            "other guardrails ignore it."
+        ),
+    ),
+]
+
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
+    mcp_block_behavior: Literal["tool_result", "raise"] | None = Field(
+        default=None,
+        description=(
+            "How to handle guardrail blocks when executing MCP tools for an LLM request. "
+            "'raise' propagates the guardrail error to the client. 'tool_result' or None "
+            "returns the block as a tool result and lets the LLM continue."
+        ),
+    )
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
 
@@ -1032,12 +1172,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
             "'end_session' speaks the message and closes the connection. "
+            "Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. "
             "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
         ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
-        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.",
     )
 
     # Model Armor params
@@ -1060,9 +1201,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     skip_unscannable_attachments: bool | None = Field(
         default=False,
         description=(
-            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
-            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
-            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+            "Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the "
+            "guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are "
+            "references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still "
+            "governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, "
+            "and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them."
         ),
     )
     sanitize_error_detail: bool | None = Field(
@@ -1083,7 +1226,30 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
             "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
-            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. "
+            "Also implemented by guardrail='decision_model'."
+        ),
+    )
+
+    max_input_chars: int | None = Field(
+        default=None,
+        gt=0,
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+    )
+
+    max_concurrent_decision_calls: int | None = Field(
+        default=None,
+        gt=0,
+        description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
+    )
+
+    forward_messages_as_sent: bool | None = Field(
+        default=False,
+        description=(
+            "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the "
+            "guardrail exactly as the client sent it, so rows can carry provider-native content blocks and "
+            "keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with "
+            "undeclared keys removed."
         ),
     )
 
@@ -1101,6 +1267,8 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description="Python-like code containing the apply_guardrail function for custom guardrail logic",
     )
+
+    num_retries: GuardrailNumRetries = None
 
     timeout: float | None = Field(
         default=None,
@@ -1159,6 +1327,47 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    stream_scope: GuardrailStreamScope | dict[str, GuardrailStreamScope] | None = Field(
+        default=None,
+        description=(
+            "Whether this guardrail runs on streaming requests, non-streaming requests, or both. "
+            "A string applies to every configured mode. A map overrides named modes "
+            "(pre_call, during_call, post_call, ...); omitted keys default to both. "
+            "Unset means both, matching historical behavior."
+        ),
+    )
+
+    @field_validator("stream_scope", mode="before")
+    @classmethod
+    def normalize_stream_scope(cls, v: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+        return coerce_stream_scope(v)
+
+    logging_only_scope: LoggingOnlyScope | None = Field(
+        default=None,
+        description=(
+            "which direction a logging_only scan observes: 'input' (request) or 'output' (response); "
+            "unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the "
+            "same guardrail keep blocking."
+        ),
+    )
+
+    logging_only_continue_on_input_failure: bool | None = Field(
+        default=None,
+        description=(
+            "when True, a flagged or raising logging_only request scan is logged and the response is "
+            "still scanned, so both verdicts land. Only applies to mode logging_only and is ignored "
+            "when logging_only_scope is 'input' or 'output'."
+        ),
+    )
+
+    @model_validator(mode="before")  # pyright: ignore[reportUntypedFunctionDecorator]  # pydantic decorators are untyped
+    @classmethod
+    def blank_values_mean_field_default(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = cast(Mapping[str, object], data)  # cast-ok: pydantic hands a before-validator the raw mapping
+        return {key: _default_if_blank(cls.model_fields.get(key), value) for key, value in fields.items()}
+
     @field_validator(
         "mode",
         "default_action",
@@ -1186,7 +1395,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
-class Mode(BaseModel):
+class Mode(LiteLLMBaseModel):
     tags: dict[str, str | list[str]] = Field(description="Tags for the guardrail mode")
     default: str | list[str] | None = Field(default=None, description="Default mode when no tags match")
 
@@ -1221,9 +1430,22 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    RecoConfigModel,
     Agent365GuardrailConfigModel,
+    WingbackGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
+    decision_model: str | None = Field(
+        default=None,
+        description="For guardrail='decision_model': the Decisions-API model that scores each check",
+    )
+    checks: BedrockChecksConfigModel | tuple[DecisionModelCheck, ...] | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # widened to also accept decision-model checks
+        default=None,
+        description=(
+            "Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate "
+            "checks a decision_model guardrail scores for guardrail='decision_model'"
+        ),
+    )
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
@@ -1249,16 +1471,24 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
         return self
 
-    def __init__(self, **kwargs) -> None:
+    @model_validator(mode="after")
+    def validate_checks_list_for_guardrail(self) -> "LitellmParams":
+        if isinstance(self.checks, tuple) and self.guardrail != SupportedGuardrailIntegrations.DECISION_MODEL.value:
+            raise ValueError(
+                f"checks as a list is only supported by guardrail='decision_model', got guardrail={self.guardrail!r}"
+            )
+        return self
+
+    def __init__(self, **kwargs: object) -> None:
         default_on: Final = kwargs.pop("default_on", None)
-        if default_on is not None:
+        if default_on is not None and not _is_blank(default_on):
             kwargs["default_on"] = default_on
         else:
             kwargs["default_on"] = False
 
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]  # pydantic validates each field's type at runtime
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
@@ -1285,17 +1515,6 @@ class guardrailConfig(TypedDict):
     guardrails: list[Guardrail]
 
 
-class GuardrailEventHooks(str, Enum):
-    pre_call = "pre_call"
-    post_call = "post_call"
-    during_call = "during_call"
-    logging_only = "logging_only"
-    pre_mcp_call = "pre_mcp_call"
-    during_mcp_call = "during_mcp_call"
-    post_mcp_call = "post_mcp_call"
-    realtime_input_transcription = "realtime_input_transcription"
-
-
 class DynamicGuardrailParams(TypedDict):
     extra_body: ReadOnly[dict[str, object]]
 
@@ -1305,7 +1524,7 @@ class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
     CONFIG = "config"
 
 
-class GuardrailInfoResponse(BaseModel):
+class GuardrailInfoResponse(LiteLLMBaseModel):
     guardrail_id: str | None = None
     guardrail_name: str
     litellm_params: BaseLitellmParams | None = None
@@ -1318,20 +1537,22 @@ class GuardrailInfoResponse(BaseModel):
         super().__init__(**kwargs)
 
 
-class ListGuardrailsResponse(BaseModel):
+class ListGuardrailsResponse(LiteLLMBaseModel):
     guardrails: list[GuardrailInfoResponse]
 
 
-class GuardrailUIAddGuardrailSettings(BaseModel):
+class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     supported_entities: list[str]
     supported_actions: list[str]
     supported_modes: list[str]
     supported_modes_by_provider: dict[str, list[str]]
+    providers_without_directional_logging_only_scope: tuple[str, ...]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
+    decision_model_providers: tuple[str, ...] = Field(default_factory=tuple)
 
 
-class PresidioPerRequestConfig(BaseModel):
+class PresidioPerRequestConfig(LiteLLMBaseModel):
     """
     presdio params that can be controlled per request, api key
     """
@@ -1340,21 +1561,41 @@ class PresidioPerRequestConfig(BaseModel):
     entities: list[PiiEntityType] | None = None
 
 
-class ApplyGuardrailRequest(BaseModel):
+NativeGuardrailResponse: TypeAlias = Mapping[str, JsonValue] | Sequence[JsonValue]
+
+
+class GuardrailResponseFormat(Enum):
+    STANDARD = "standard"
+    NATIVE = "native"
+
+
+class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
-    text: str
+    text: str = ""
+    images: tuple[str, ...] | None = Field(
+        default=None,
+        max_length=1,
+        description="One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.",
+    )
     language: str | None = None
     entities: list[PiiEntityType] | None = None
     input_type: str = "request"
     messages: list[dict[str, object]] | None = None
     metadata: dict[str, object] | None = None
+    response_format: GuardrailResponseFormat = GuardrailResponseFormat.STANDARD
+
+    @model_validator(mode="after")
+    def _require_text_or_images(self) -> "ApplyGuardrailRequest":
+        if "text" not in self.model_fields_set and not self.images:
+            raise ValueError("Provide 'text', 'images', or both.")
+        return self
 
 
-class ApplyGuardrailResponse(BaseModel):
+class ApplyGuardrailResponse(LiteLLMBaseModel):
     response_text: str
 
 
-class PatchGuardrailRequest(BaseModel):
+class PatchGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str | None = None
     litellm_params: BaseLitellmParams | None = None
     guardrail_info: dict[str, object] | None = None

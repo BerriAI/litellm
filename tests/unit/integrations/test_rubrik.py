@@ -5,6 +5,7 @@ Covers initialization, apply_guardrail (prompt moderation + response/tool
 blocking), batch logging, and Anthropic format handling.
 """
 
+import json
 import os
 from typing import Any, Dict
 from unittest.mock import AsyncMock, Mock, patch
@@ -532,6 +533,22 @@ def _mock_service_response(response_json):
     mock_client = AsyncMock()
     mock_client.post = mock_post
     return mock_client
+
+
+def _capturing_service(response_json):
+    """Like ``_mock_service_response`` but also records each posted JSON body."""
+    captured: list = []
+
+    async def mock_post(*_args, **kwargs):
+        captured.append(kwargs.get("json"))
+        mock_resp = Mock()
+        mock_resp.json.return_value = response_json
+        mock_resp.raise_for_status = Mock()
+        return mock_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = mock_post
+    return mock_client, captured
 
 
 def _echo_service():
@@ -1230,6 +1247,35 @@ class TestPromptModeration:
         )
         assert result is inputs
 
+    async def test_text_completion_prompt_is_sent_as_user_message(self, handler):
+        """/v1/completions requests carry the prompt as ``texts`` with no
+        structured_messages; the webhook must still receive it."""
+        handler.moderation_client, captured = _capturing_service({})
+
+        await handler.apply_guardrail(
+            inputs={"texts": ["write a poem", "", "about cats"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert list(captured[0]["messages"]) == [
+            {"role": "user", "content": "write a poem\nabout cats"}
+        ]
+
+    async def test_structured_messages_take_precedence_over_texts(self, handler):
+        handler.moderation_client, captured = _capturing_service({})
+
+        await handler.apply_guardrail(
+            inputs={
+                "texts": ["ignored"],
+                "structured_messages": [{"role": "user", "content": "hello"}],
+            },
+            request_data={},
+            input_type="request",
+        )
+
+        assert list(captured[0]["messages"]) == [{"role": "user", "content": "hello"}]
+
     async def test_prompt_moderation_stashes_logging_obj_on_block(self, handler):
         """On a prompt block, _stash_block_context must set the blocked flag."""
         inputs = {
@@ -1378,7 +1424,7 @@ class TestBuildPromptModerationPayload:
             "structured_messages": [{"role": "user", "content": "hi"}],
             "tools": [{"type": "function", "function": {"name": "fn"}}],
         }
-        payload = RubrikLogger._build_prompt_moderation_payload(inputs, {})
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, inputs["structured_messages"], {})
         assert payload["tools"] == [{"type": "function", "function": {"name": "fn"}}]
 
     def test_payload_includes_user_when_present(self):
@@ -1386,7 +1432,7 @@ class TestBuildPromptModerationPayload:
             "structured_messages": [{"role": "user", "content": "hi"}],
         }
         request_data = {"user": "alice"}
-        payload = RubrikLogger._build_prompt_moderation_payload(inputs, request_data)
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, inputs["structured_messages"], request_data)
         assert payload["user"] == "alice"
 
     def test_payload_uses_explicit_correlation_key(self):
@@ -1395,22 +1441,145 @@ class TestBuildPromptModerationPayload:
             "correlation_key": "corr-123",
             "litellm_call_id": "litellm-456",
         }
-        payload = RubrikLogger._build_prompt_moderation_payload(inputs, request_data)
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, inputs["structured_messages"], request_data)
         assert payload["correlation_key"] == "corr-123"
 
     def test_payload_falls_back_to_litellm_call_id(self):
         """When correlation_key is absent, litellm_call_id is used."""
         inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
         request_data = {"litellm_call_id": "litellm-789"}
-        payload = RubrikLogger._build_prompt_moderation_payload(inputs, request_data)
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, inputs["structured_messages"], request_data)
         assert payload["correlation_key"] == "litellm-789"
 
     def test_payload_omits_optional_fields_when_absent(self):
         inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
-        payload = RubrikLogger._build_prompt_moderation_payload(inputs, {})
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, inputs["structured_messages"], {})
         assert "tools" not in payload
         assert "user" not in payload
         assert "correlation_key" not in payload
+        assert "metadata" not in payload
+
+
+# -- rac_agent_id forwarding --------------------------------------------------
+
+
+def _proxy_metadata(
+    key_meta: Dict[str, Any] | None = None,
+    team_meta: Dict[str, Any] | None = None,
+    **caller_fields: Any,
+) -> Dict[str, Any]:
+    """Request metadata as the proxy hands it to guardrails: the authenticated
+    key/team metadata under ``user_api_key_*``, next to fields the caller sent"""
+    return {
+        **caller_fields,
+        "headers": {"authorization": "Bearer sk-secret"},
+        "litellm_parent_otel_span": object(),
+        "user_api_key_metadata": key_meta or {},
+        "user_api_key_team_metadata": team_meta or {},
+    }
+
+
+def _prompt_and_response_metadata(request_data: Dict[str, Any]):
+    inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
+    prompt_payload = RubrikLogger._build_prompt_moderation_payload(
+        inputs, inputs["structured_messages"], request_data
+    )
+    response_request = RubrikLogger._extract_request_data(
+        {"model": "gpt-4"}, request_data
+    )
+    return prompt_payload.get("metadata"), response_request.get("metadata")
+
+
+class TestRacAgentIdForwarding:
+    def test_forwards_rac_agent_id_from_key_metadata_only(self):
+        request_data = {"metadata": _proxy_metadata(key_meta={"rac_agent_id": "agent-42", "other": 1})}
+        assert _prompt_and_response_metadata(request_data) == (
+            {"rac_agent_id": "agent-42"},
+            {"rac_agent_id": "agent-42"},
+        )
+
+    def test_forwards_rac_agent_id_from_team_metadata(self):
+        request_data = {"metadata": _proxy_metadata(team_meta={"rac_agent_id": "team-agent"})}
+        assert _prompt_and_response_metadata(request_data) == (
+            {"rac_agent_id": "team-agent"},
+            {"rac_agent_id": "team-agent"},
+        )
+
+    def test_key_metadata_overrides_team_metadata(self):
+        request_data = {
+            "metadata": _proxy_metadata(
+                key_meta={"rac_agent_id": "key-agent"},
+                team_meta={"rac_agent_id": "team-agent"},
+            )
+        }
+        assert _prompt_and_response_metadata(request_data)[0] == {"rac_agent_id": "key-agent"}
+
+    def test_admin_metadata_under_litellm_metadata(self):
+        """/v1/messages and /v1/responses put proxy metadata under litellm_metadata"""
+        request_data = {"litellm_metadata": _proxy_metadata(key_meta={"rac_agent_id": "agent-42"})}
+        assert _prompt_and_response_metadata(request_data)[0] == {"rac_agent_id": "agent-42"}
+
+    @pytest.mark.parametrize("container", ["metadata", "litellm_metadata"])
+    def test_caller_supplied_rac_agent_id_is_ignored(self, container):
+        """A caller must not choose the policy scope: the request-body value is
+        never forwarded, even when the key has no agent configured"""
+        request_data = {container: _proxy_metadata(rac_agent_id="exempt-agent")}
+        assert _prompt_and_response_metadata(request_data) == (None, None)
+
+    def test_caller_cannot_override_the_keys_agent(self):
+        request_data = {
+            "metadata": _proxy_metadata(
+                key_meta={"rac_agent_id": "assigned-agent"},
+                rac_agent_id="exempt-agent",
+            ),
+            "litellm_metadata": {"rac_agent_id": "exempt-agent"},
+        }
+        assert _prompt_and_response_metadata(request_data) == (
+            {"rac_agent_id": "assigned-agent"},
+            {"rac_agent_id": "assigned-agent"},
+        )
+
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            {},
+            {"metadata": None},
+            {"metadata": "not-a-dict"},
+            {"metadata": _proxy_metadata()},
+            {"metadata": _proxy_metadata(key_meta={"rac_agent_id": ""})},
+            {"metadata": _proxy_metadata(key_meta={"rac_agent_id": {"nested": "object"}})},
+            {"metadata": _proxy_metadata(key_meta={"rac_agent_id": 42})},
+        ],
+    )
+    def test_metadata_omitted_without_a_valid_admin_rac_agent_id(self, request_data):
+        assert _prompt_and_response_metadata(request_data) == (None, None)
+
+    @pytest.mark.asyncio
+    async def test_both_webhooks_receive_rac_agent_id_and_payloads_serialize(
+        self, handler
+    ):
+        request_data = {"metadata": _proxy_metadata(key_meta={"rac_agent_id": "agent-42"})}
+        handler.moderation_client, prompt_captured = _capturing_service({})
+        await handler.apply_guardrail(
+            inputs={"structured_messages": [{"role": "user", "content": "hi"}]},
+            request_data=request_data,
+            input_type="request",
+        )
+        handler.moderation_client, response_captured = _capturing_service(
+            {"choices": [{"message": {"role": "assistant", "content": "hello"}}]}
+        )
+        await handler.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="response",
+        )
+
+        assert prompt_captured[0]["metadata"] == {"rac_agent_id": "agent-42"}
+        assert response_captured[0]["request"]["metadata"] == {
+            "rac_agent_id": "agent-42"
+        }
+        json.dumps(prompt_captured[0])
+        json.dumps(response_captured[0])
 
 
 # -- _extract_request_data tools preference -----------------------------------

@@ -3,12 +3,14 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from typing import Final, Literal, overload
 
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ..common_utils import resolve_dashscope_openai_api_base
 
 
 class DashScopeChatConfig(OpenAIGPTConfig):
@@ -33,7 +35,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -45,7 +47,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         if is_async:
             return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
@@ -54,14 +56,19 @@ class DashScopeChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = (
-            api_base or get_secret_str("DASHSCOPE_API_BASE") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        resolved_api_base: Final = resolve_dashscope_openai_api_base(api_base)
         dynamic_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
-        return api_base, dynamic_api_key
+        return resolved_api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def _resolve_chat_api_base(self, api_base: str | None) -> str:
-        return api_base or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        return resolve_dashscope_openai_api_base(api_base)
 
     def get_complete_url(
         self,
@@ -75,7 +82,4 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DashScope /chat/completions endpoint.
         """
-        resolved_api_base: Final = self._resolve_chat_api_base(api_base)
-        if resolved_api_base.endswith("/chat/completions"):
-            return resolved_api_base
-        return f"{resolved_api_base}/chat/completions"
+        return ensure_api_route(self._resolve_chat_api_base(api_base), "chat/completions")

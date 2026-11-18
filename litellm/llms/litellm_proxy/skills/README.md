@@ -102,7 +102,7 @@ litellm.callbacks.append(hook)
 # ONE request - LiteLLM handles everything automatically
 # The container parameter triggers the SkillsInjectionHook
 response = await litellm.acompletion(
-    model="gpt-4o-mini",
+    model="gpt-6-luna",
     messages=[{"role": "user", "content": "Create a bouncing ball GIF"}],
     container={
         "skills": [{"type": "custom", "skill_id": "litellm_skill_abc123"}]

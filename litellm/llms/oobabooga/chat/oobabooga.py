@@ -1,9 +1,13 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 import litellm
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
@@ -13,6 +17,13 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 oobabooga_config: Final = OobaboogaConfig()
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def completion(
@@ -49,7 +60,7 @@ def completion(
         )
     model = model
 
-    completion_url = completion_url + "/v1/chat/completions"
+    completion_url = join_api_base(completion_url, "v1/chat/completions")
     data: Final = oobabooga_config.transform_request(
         model=model,
         messages=messages,
@@ -65,7 +76,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    client: Final = _get_httpx_client()
+    client: Final = get_httpx_client()
     response: Final = client.post(
         completion_url,
         headers=headers,
@@ -73,7 +84,7 @@ def completion(
         stream=optional_params["stream"] if "stream" in optional_params else False,
     )
     if "stream" in optional_params and optional_params["stream"] is True:
-        return response.iter_lines()
+        return iter_sse_lines(response.iter_text())
     else:
         return oobabooga_config.transform_response(
             model=model,
@@ -103,7 +114,7 @@ def embedding(
     if model.startswith(("http://", "https://")):
         embeddings_url = model
     elif api_base:
-        embeddings_url = f"{api_base}/v1/embeddings"
+        embeddings_url = join_api_base(api_base, "v1/embeddings")
     else:
         raise OobaboogaError(
             status_code=404,
@@ -147,7 +158,7 @@ def embedding(
         }
     ]
 
-    num_tokens: Final = len(completion_response["data"][0]["embedding"])
+    num_tokens: Final = _json_len(_DECODED_JSON.validate_python(completion_response["data"][0]["embedding"]))
     # Adding metadata to response
     setattr(
         model_response,

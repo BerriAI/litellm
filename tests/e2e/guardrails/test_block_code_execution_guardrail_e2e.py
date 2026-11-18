@@ -20,7 +20,8 @@ import pytest
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import unwrap
-from guardrails_client import BlockCodeExecutionParamsBody, GuardrailsClient
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
+from guardrails_client import GUARDRAIL_BACKEND, BlockCodeExecutionParamsBody, GuardrailsClient
 from lifecycle import ResourceManager
 from models import ChatResponse
 
@@ -44,6 +45,14 @@ class TestBlockCodeExecutionGuardrail:
     @pytest.mark.covers(
         "guardrail.block_code_execution.pre_call.blocks",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(GUARDRAIL_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_blocks_execution_request_but_allows_explanation(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str

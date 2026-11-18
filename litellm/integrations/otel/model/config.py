@@ -1,10 +1,11 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
+from collections.abc import Mapping
 from enum import Enum
-from functools import lru_cache
-from typing import Annotated, Any, Final
+from functools import cache, lru_cache
+from typing import Annotated, Final
 
-from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
@@ -15,17 +16,16 @@ from litellm.integrations.otel.model.baggage import (
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
-from litellm.types.utils import OtelSpanScope
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import (
+    CAPTURE_MESSAGE_CONTENT_VALUES,
+    CaptureMessageContent,
+    OtelSpanScope,
+    captures_span_content,
+)
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
 OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
-
-
-class CaptureMessageContent(str):
-    NO_CONTENT = "no_content"
-    SPAN_ONLY = "span_only"
-    EVENT_ONLY = "event_only"
-    SPAN_AND_EVENT = "span_and_event"
 
 
 class ExporterOwner(str, Enum):
@@ -62,7 +62,7 @@ def is_otel_v2_enabled() -> bool:
     return _OTelV2Flag().enabled
 
 
-class ExporterSpec(BaseModel):
+class ExporterSpec(LiteLLMBaseModel):
     """One span-export destination.
 
     The shared ``TracerProvider`` attaches one ``SpanProcessor`` per spec, so
@@ -70,7 +70,7 @@ class ExporterSpec(BaseModel):
     Phoenix + your own Honeycomb).
     """
 
-    model_config = {"extra": "forbid"}
+    model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(
         default="console",
@@ -85,6 +85,7 @@ class ExporterSpec(BaseModel):
             "``endpoint`` is a base URL the signal path is appended to."
         ),
     )
+    logs_endpoint: str | None = None
     headers: str | None = None
     owner: ExporterOwner | None = Field(
         default=None,
@@ -94,6 +95,10 @@ class ExporterSpec(BaseModel):
             "credential source, so one tenant's vendor key never lands on a "
             "different backend's exporter."
         ),
+    )
+    resource_attributes: Mapping[str, str] = Field(
+        default_factory=dict,
+        description="Resource attributes only this exporter's copy of a span carries, under the provider's resource.",
     )
     options: dict[str, str] | None = Field(
         default=None,
@@ -122,6 +127,17 @@ class ExporterSpec(BaseModel):
     )
 
 
+def is_unconfigured_placeholder(spec: ExporterSpec) -> bool:
+    """Whether ``spec`` is the one ``_normalize`` folds in when nothing was configured.
+
+    No field set is what says the operator asked for nothing: an exporter they did
+    configure survives, even ``OTEL_EXPORTER=console`` whose value matches the default,
+    and so does the gated spec ``credential_gated_exporters`` appends, which would
+    otherwise eat itself when one preset layers onto another.
+    """
+    return not spec.model_fields_set
+
+
 class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
     def __init__(self, settings_cls: type[BaseSettings], env_settings: PydanticBaseSettingsSource) -> None:
         super().__init__(settings_cls)
@@ -131,7 +147,8 @@ class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
         return self._env_settings.get_field_value(field, field_name)
 
     def __call__(self) -> dict[str, object]:
-        return {key: value for key, value in self._env_settings().items() if key != "excluded_services"}
+        settings: Final = self._env_settings()
+        return {key: settings[key] for key in settings if key != "excluded_services"}
 
 
 class OpenTelemetryV2Config(BaseSettings):
@@ -176,6 +193,10 @@ class OpenTelemetryV2Config(BaseSettings):
             "used verbatim instead of ``endpoint`` + ``/v1/traces``."
         ),
     )
+    logs_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+    )
     headers: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OTEL_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS"),
@@ -202,7 +223,8 @@ class OpenTelemetryV2Config(BaseSettings):
         description=(
             "``llm_only`` keeps just the model-call spans on the operator's own Langfuse "
             "exporter (the spec whose owner is ``langfuse_otel``). Other exporters and "
-            "key/team destinations are not affected."
+            "key/team destinations are not affected. Destinations default to "
+            "``langfuse_destination_span_scope`` instead."
         ),
     )
     excluded_services: Annotated[frozenset[str], NoDecode] = Field(
@@ -296,16 +318,12 @@ class OpenTelemetryV2Config(BaseSettings):
         here are lower_snake_case; normalizing at the boundary keeps both
         spellings working and lets every downstream comparison stay exact.
         """
-        if isinstance(value, str):
-            return value.lower()
-        return value
+        return _normalized_capture_message_content(value)
 
     @field_validator("langfuse_span_scope", mode="before")
     @classmethod
     def _normalize_langfuse_span_scope(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value.strip().lower()
-        return value
+        return _normalized_span_scope(value)
 
     @field_validator(
         "baggage_promoted_keys",
@@ -315,7 +333,7 @@ class OpenTelemetryV2Config(BaseSettings):
         mode="before",
     )
     @classmethod
-    def _split_csv(cls, value: Any) -> Any:
+    def _split_csv(cls, value: object) -> object:
         """Accept a comma-separated string for list fields.
 
         Env vars are strings, but these fields are lists. Pydantic-settings would
@@ -336,7 +354,7 @@ class OpenTelemetryV2Config(BaseSettings):
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
         # An endpoint with the default exporter kind implies OTLP/HTTP.
-        if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
+        if self.exporter == "console" and any((self.endpoint, self.traces_endpoint, self.logs_endpoint)):
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
         # shorthand into one spec so the provider always has a destination. A spec
@@ -348,9 +366,12 @@ class OpenTelemetryV2Config(BaseSettings):
                     kind=self.exporter,
                     endpoint=self.endpoint,
                     traces_endpoint=self.traces_endpoint,
+                    logs_endpoint=self.logs_endpoint,
                     headers=self.headers,
                 )
-                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                if not self.model_fields_set.isdisjoint(
+                    ("exporter", "endpoint", "traces_endpoint", "logs_endpoint", "headers")
+                )
                 else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
@@ -370,20 +391,75 @@ class OpenTelemetryV2Config(BaseSettings):
 
     @property
     def capture_span_content(self) -> bool:
-        """Whether prompt/response content may be stamped as span attributes.
-
-        Defaults off (``no_content``): an operator must opt in before message
-        bodies leave the process, so a user request can never force its prompt
-        or completion into the configured backend while capture is disabled.
-        """
-        return self.capture_message_content in (
-            CaptureMessageContent.SPAN_ONLY,
-            CaptureMessageContent.SPAN_AND_EVENT,
-        )
+        """Whether the global setting permits prompt/response span attributes."""
+        return captures_span_content(self.capture_message_content)
 
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
+
+
+def _normalized_capture_message_content(value: object) -> object:
+    if isinstance(value, str):
+        return value.lower()
+    return value
+
+
+class _CaptureMessageContentSettings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+
+    capture_message_content: str = Field(
+        default=CaptureMessageContent.NO_CONTENT,
+        validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
+    )
+
+    @field_validator("capture_message_content", mode="before")
+    @classmethod
+    def _normalize_capture_message_content(cls, value: object) -> object:
+        return _normalized_capture_message_content(value)
+
+
+def capture_message_content_from_env() -> str:
+    """The global capture mode, read without building a settings model that rereads every other env var"""
+    return _CaptureMessageContentSettings().capture_message_content
+
+
+def _normalized_span_scope(value: object) -> object:
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+class _LangfuseDestinationSpanScopeSettings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+
+    langfuse_destination_span_scope: OtelSpanScope = Field(
+        default="full",
+        validation_alias=AliasChoices("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE"),
+    )
+
+    @field_validator("langfuse_destination_span_scope", mode="before")
+    @classmethod
+    def _normalize_scope(cls, value: object) -> object:
+        return _normalized_span_scope(value)
+
+
+def langfuse_destination_span_scope(configured: object = None) -> OtelSpanScope:
+    return _cached_langfuse_destination_span_scope(None if configured is None else str(configured))
+
+
+@cache
+def _cached_langfuse_destination_span_scope(configured: str | None) -> OtelSpanScope:
+    try:
+        return _LangfuseDestinationSpanScopeSettings.model_validate(
+            {"LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE": configured} if configured is not None else {}
+        ).langfuse_destination_span_scope
+    except ValidationError as error:
+        verbose_logger.warning(
+            "Invalid LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE or "
+            "callback_settings.otel.langfuse_destination_span_scope. "
+            "Allowed values are 'full' and 'llm_only'. Falling back to 'full'. %s",
+            error,
+        )
+        return "full"
 
 
 _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])
@@ -392,6 +468,27 @@ _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAda
 def excluded_db_systems_from(value: object) -> frozenset[str]:
     """Normalize a raw ``excluded_services`` value without building a settings model that rereads the env"""
     return _normalize_excluded_services(excluded_service_names(value))
+
+
+def invalid_excluded_service_names(value: str) -> tuple[str, ...]:
+    names: Final = tuple(service.strip().lower() for service in value.split(","))
+    return tuple(
+        name
+        for name in names
+        if name != "none" and (not name or _resolved_db_system_for_excluded_service(name) is None)
+    )
+
+
+def parse_excluded_services(value: object) -> frozenset[str] | None:
+    if not isinstance(value, str):
+        return None
+    if value.strip().lower() == "none":
+        return frozenset()
+    return excluded_db_systems_from(value)
+
+
+def parse_capture_message_content(value: object) -> str | None:
+    return value if isinstance(value, str) and value in CAPTURE_MESSAGE_CONTENT_VALUES else None
 
 
 def excluded_service_names(value: object) -> frozenset[str]:
@@ -430,9 +527,13 @@ def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:
 
 
 def _db_system_for_excluded_service(service: str) -> str | None:
-    resolved: Final = db_system(service) if service != POSTGRESQL else POSTGRESQL
+    resolved: Final = _resolved_db_system_for_excluded_service(service)
     if resolved is None:
         verbose_logger.error(
             "excluded_services: %r is not a datastore service; ignored. Allowed: postgres, redis", service
         )
     return resolved
+
+
+def _resolved_db_system_for_excluded_service(service: str) -> str | None:
+    return db_system(service) if service != POSTGRESQL else POSTGRESQL

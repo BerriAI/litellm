@@ -7,11 +7,17 @@ from .checks import start_replicas
 from .containers import Containers, ready
 from .database import Database
 from .upgrade import assert_history_clean, assert_upgraded, confirm, migration_names, provision
+from e2e_metadata import Domain, Subject, meta
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
 
 
 class TestReleaseUpgrade:
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_candidate_applies_the_pending_release_migrations(
         self, containers: Containers, baseline_database: Database
     ) -> None:
@@ -21,6 +27,11 @@ class TestReleaseUpgrade:
         assert_upgraded(before, migration_names(baseline_database))
         assert_history_clean(baseline_database)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_upgrade_preserves_keys_minted_by_the_baseline_release(
         self, containers: Containers, baseline_image: str, baseline_database: Database
     ) -> None:
@@ -34,6 +45,11 @@ class TestReleaseUpgrade:
             assert_upgraded(before, migration_names(baseline_database))
             confirm(new, key, alias)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_concurrent_replicas_upgrade_a_baseline_database_once(
         self, containers: Containers, baseline_database: Database
     ) -> None:
