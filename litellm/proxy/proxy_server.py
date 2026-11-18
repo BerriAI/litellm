@@ -22312,7 +22312,26 @@ async def delete_callback(
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
-        rewritten_keys: Final = _callback_lists_to_rewrite(matching_keys, proxy_config.litellm_settings.owned_by_config)
+        config_owned_keys: Final = tuple(
+                key for key in matching_keys if proxy_config.litellm_settings.owned_by_config(key)
+            )
+            if config_owned_keys:
+                keys_text: Final = ", ".join(f"'{key}'" for key in config_owned_keys)
+                noun: Final = "key" if len(config_owned_keys) == 1 else "keys"
+                verb: Final = "is" if len(config_owned_keys) == 1 else "are"
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            f"litellm_settings {noun} {keys_text} {verb} set in the config file "
+                            "and cannot be changed here."
+                        ),
+                        "keys": list(config_owned_keys),
+                        "section": "litellm_settings",
+                    },
+                )
+
+            rewritten_keys: Final = _callback_lists_to_rewrite(matching_keys, proxy_config.litellm_settings.owned_by_config)
         remaining_lists: Final = MappingProxyType(
             {
                 key: tuple(entry for entry in configured_lists[key] if not _is_callback_name(entry, callback_name))
