@@ -47,6 +47,8 @@ def _applies_to_call(
         return False
     if scoped_header.get("claude_models_only") and not names_a_claude_model(model):
         return False
+    if scoped_header.get("non_claude_models_only") and names_a_claude_model(model):
+        return False
     scoped_providers: Final = scoped_header.get("custom_llm_provider", "").split(",")
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
 
@@ -91,7 +93,8 @@ class ProviderSpecificHeaderUtils:
         without sharing a scope. Entries whose provider list does not contain
         `custom_llm_provider` contribute nothing, and entries marked
         `native_anthropic_messages_only` contribute only to a provider's native Messages route.
-        Entries marked `claude_models_only` contribute only when `model` names a Claude model, and
+        Entries marked `claude_models_only` contribute only when `model` names a Claude model, entries marked
+        `non_claude_models_only` only when it does not, and
         entries marked `yields_to_configured` never replace a header already in `configured_headers`.
 
         Returns:

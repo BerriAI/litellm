@@ -20,7 +20,9 @@ pub fn get_provider_specific_headers(
 }
 
 fn applies_to_call(entry: &ProviderSpecificHeader, custom_llm_provider: &str, model: &str) -> bool {
-    (!entry.claude_models_only || model.to_lowercase().contains("claude"))
+    let names_a_claude_model = model.to_lowercase().contains("claude");
+    (!entry.claude_models_only || names_a_claude_model)
+        && (!entry.non_claude_models_only || !names_a_claude_model)
         && entry
             .custom_llm_provider
             .split(',')
@@ -127,6 +129,28 @@ mod tests {
             "custom_llm_provider": "azure_ai",
             "extra_headers": {"anthropic-user-profile-id": "uprof_pin"},
             "claude_models_only": true
+        }))
+        .unwrap();
+        assert_eq!(
+            Value::Object(get_provider_specific_headers(
+                Some(&configured),
+                "azure_ai",
+                model,
+                &Map::new()
+            )),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::claude_model("claude-sonnet-5-5", json!({}))]
+    #[case::claude_model_in_any_case("Claude-Sonnet-5-5", json!({}))]
+    #[case::non_claude_model("mistral-large-2411", json!({"authorization": "Bearer caller"}))]
+    fn non_claude_entries_skip_claude_models(#[case] model: &str, #[case] expected: Value) {
+        let configured: ProviderSpecificHeaders = serde_json::from_value(json!({
+            "custom_llm_provider": "azure_ai",
+            "extra_headers": {"authorization": "Bearer caller"},
+            "non_claude_models_only": true
         }))
         .unwrap();
         assert_eq!(

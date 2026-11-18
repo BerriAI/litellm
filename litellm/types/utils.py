@@ -4997,6 +4997,7 @@ class ProviderSpecificHeader(TypedDict):
     extra_headers: ReadOnly[dict[str, str]]
     native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
     claude_models_only: NotRequired[ReadOnly[bool]]
+    non_claude_models_only: NotRequired[ReadOnly[bool]]
     yields_to_configured: NotRequired[ReadOnly[bool]]
 
 

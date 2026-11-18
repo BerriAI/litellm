@@ -10,6 +10,8 @@ pub struct ProviderSpecificHeader {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub claude_models_only: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub non_claude_models_only: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub yields_to_configured: bool,
 }
 
