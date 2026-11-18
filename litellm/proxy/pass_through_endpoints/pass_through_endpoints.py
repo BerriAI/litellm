@@ -3023,12 +3023,17 @@ def _no_session_model_group(target: str) -> str | None:
     return None
 
 
+def _owes_no_upstream_frames(recorded_upstream_frames: Sequence[Mapping[str, object]]) -> bool:
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class WebsocketFramePolicy:
     client_text: Callable[[str], ClientTextDecision]
     recorded_upstream_frame: Callable[[Mapping[str, object]], Mapping[str, object]]
     client_binary_refusal: RefusedClientText | None = None
     session_model_group: Callable[[str], str | None] = _no_session_model_group
+    owes_upstream_frames: Callable[[Sequence[Mapping[str, object]]], bool] = _owes_no_upstream_frames
 
 
 def _forward_client_text_unchanged(text: str) -> ClientTextDecision:
@@ -3372,9 +3377,12 @@ def _turn_owed(
     upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
     unlogged_frames: Sequence[Mapping[str, object]],
     ledger: _WebsocketTurnLedger,
+    frame_policy: WebsocketFramePolicy,
 ) -> bool:
-    return _turn_in_flight(upstream_frame_kind, unlogged_frames) or (
-        upstream_frame_kind is not None and ledger.unstarted_turns > 0
+    return (
+        _turn_in_flight(upstream_frame_kind, unlogged_frames)
+        or (upstream_frame_kind is not None and ledger.unstarted_turns > 0)
+        or frame_policy.owes_upstream_frames(unlogged_frames)
     )
 
 
@@ -3851,7 +3859,7 @@ async def websocket_passthrough_request(
                                 _RefuseClientFrame,
                             ):
                                 break
-                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger, frame_policy):
                         await upstream_ws.close()
                 except asyncio.CancelledError:
                     raise
@@ -3914,7 +3922,7 @@ async def websocket_passthrough_request(
             async def relay_upstream_frame(upstream_message: str | bytes) -> None:
                 record_upstream_frame(upstream_message)
                 if not _client_socket_is_open(websocket):
-                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger, frame_policy):
                         await upstream_ws.close()
                     return
                 try:
@@ -3923,7 +3931,7 @@ async def websocket_passthrough_request(
                     else:
                         await websocket.send_text(upstream_message)
                 except WebSocketDisconnect:
-                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                    if not _turn_owed(upstream_frame_kind, websocket_messages, ledger, frame_policy):
                         raise
 
             async def forward_upstream_to_client() -> Close | None:
@@ -3954,7 +3962,7 @@ async def websocket_passthrough_request(
             tasks: Final = (client_task, upstream_task)
 
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if client_task.done() and _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+            if client_task.done() and _turn_owed(upstream_frame_kind, websocket_messages, ledger, frame_policy):
                 await asyncio.wait((upstream_task,), timeout=walkout_turn_drain_seconds)
             done: Final = tuple(task for task in tasks if task.done())
             pending: Final = tuple(task for task in tasks if not task.done())

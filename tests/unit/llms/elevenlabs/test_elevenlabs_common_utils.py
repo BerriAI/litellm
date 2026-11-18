@@ -11,6 +11,7 @@ from litellm.llms.elevenlabs.common_utils import (
     elevenlabs_tts_client_text,
     elevenlabs_tts_is_priced,
     elevenlabs_tts_model,
+    elevenlabs_tts_owes_upstream_frames,
     elevenlabs_tts_recorded_upstream_frame,
     elevenlabs_tts_registry_key,
     elevenlabs_tts_requested_model,
@@ -309,3 +310,33 @@ def test_audio_without_any_alignment_bills_every_character_sent() -> None:
         )
         == 0
     )
+
+
+def _in_context(context_id: str, frame: Mapping[str, object]) -> Mapping[str, object]:
+    return {**frame, "contextId": context_id}
+
+
+@pytest.mark.parametrize(
+    ("upstream", "owed"),
+    [
+        pytest.param((), False, id="nothing-spoken"),
+        pytest.param(({"isFinal": True},), False, id="finished-without-audio"),
+        pytest.param((_in_context("a", _audio_frame("Hi")),), True, id="speaking"),
+        pytest.param((_in_context("a", _audio_frame("Hi")), {"contextId": "a", "isFinal": True}), False, id="finished"),
+        pytest.param(
+            (
+                _in_context("a", _audio_frame("Hi")),
+                _in_context("b", _audio_frame("Yo")),
+                {"contextId": "a", "isFinal": True},
+            ),
+            True,
+            id="another-context-still-speaking",
+        ),
+    ],
+)
+def test_elevenlabs_owes_frames_while_a_context_it_spoke_in_has_not_finished(
+    upstream: tuple[Mapping[str, object], ...], owed: bool
+) -> None:
+    recorded: Final = tuple(elevenlabs_tts_recorded_upstream_frame(frame) for frame in upstream)
+
+    assert elevenlabs_tts_owes_upstream_frames(recorded) is owed

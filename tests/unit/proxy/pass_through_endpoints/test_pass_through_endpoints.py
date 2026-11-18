@@ -36,6 +36,7 @@ from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.llms.elevenlabs.common_utils import elevenlabs_tts_characters
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
@@ -9770,6 +9771,17 @@ ELEVENLABS_AUDIO_FRAME: Final = json.dumps(
         "isFinal": None,
     }
 )
+ELEVENLABS_SECOND_AUDIO_ALIGNMENT: Final = MappingProxyType(
+    {"chars": list("ello"), "charStartTimesMs": [40, 80, 120, 160], "charDurationsMs": [40] * 4}
+)
+ELEVENLABS_SECOND_AUDIO_FRAME: Final = json.dumps(
+    {
+        "audio": base64.b64encode(bytes(range(64, 128))).decode(),
+        "alignment": dict(ELEVENLABS_SECOND_AUDIO_ALIGNMENT),
+        "normalizedAlignment": dict(ELEVENLABS_SECOND_AUDIO_ALIGNMENT),
+        "isFinal": None,
+    }
+)
 
 
 class FrameCountingUpstreamWebSocket:
@@ -9821,6 +9833,39 @@ class DrainingUpstreamWebSocket:
         await self._drained.wait()
 
 
+class HangUpUpstreamWebSocket:
+    def __init__(self, before_hang_up: tuple[str, ...], after_hang_up: tuple[str, ...]) -> None:
+        self._before_hang_up = iter(before_hang_up)
+        self._after_hang_up = iter(after_hang_up)
+        self._text_arrived = asyncio.Event()
+        self.delivered = asyncio.Event()
+        self.client_hung_up = asyncio.Event()
+        self.closed_by_proxy = False
+        self.sent: tuple[str | bytes, ...] = ()
+
+    async def send(self, message: str | bytes) -> None:
+        self.sent = (*self.sent, message)
+        self._text_arrived.set()
+
+    async def recv(self, decode: bool | None = None) -> str:
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
+
+        await self._text_arrived.wait()
+        frame: Final = next(self._before_hang_up, None)
+        if frame is not None:
+            return frame
+        self.delivered.set()
+        await self.client_hung_up.wait()
+        after_hang_up: Final = None if self.closed_by_proxy else next(self._after_hang_up, None)
+        if after_hang_up is None:
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        return after_hang_up
+
+    async def close(self) -> None:
+        self.closed_by_proxy = True
+
+
 _ClientReceive: TypeAlias = Callable[[], Awaitable[Mapping[str, str | bytes] | None]]
 
 
@@ -9838,11 +9883,25 @@ def _client_sends_then_waits(*frames: str | bytes) -> _ClientReceive:
     return receive
 
 
+def _client_hangs_up_once_upstream_delivered(upstream: HangUpUpstreamWebSocket, *frames: str) -> _ClientReceive:
+    messages: Final = iter(tuple({"type": "websocket.receive", "text": frame} for frame in frames))
+
+    async def receive() -> Mapping[str, str | bytes] | None:
+        message: Final = next(messages, None)
+        if message is not None:
+            return message
+        await upstream.delivered.wait()
+        upstream.client_hung_up.set()
+        return {"type": "websocket.disconnect"}
+
+    return receive
+
+
 _PreCallHook: TypeAlias = Callable[[UserAPIKeyAuth, dict[str, object], str], Awaitable[None]]
 
 
 async def _relay_elevenlabs_tts(
-    upstream_ws: FrameCountingUpstreamWebSocket | DrainingUpstreamWebSocket,
+    upstream_ws: FrameCountingUpstreamWebSocket | DrainingUpstreamWebSocket | HangUpUpstreamWebSocket,
     client_receive: _ClientReceive,
     client_send_text: AsyncMock | None = None,
     key: UserAPIKeyAuth | None = None,
@@ -9985,7 +10044,9 @@ async def test_websocket_passthrough_bills_the_session_when_the_client_drops_whi
     upstream_ws: Final = FrameCountingUpstreamWebSocket(
         2, ELEVENLABS_AUDIO_FRAME, ELEVENLABS_AUDIO_FRAME, json.dumps({"isFinal": True})
     )
-    client_send_text: Final = AsyncMock(side_effect=[None, WebSocketDisconnect(code=1006)])
+    client_send_text: Final = AsyncMock(
+        side_effect=[None, WebSocketDisconnect(code=1006), WebSocketDisconnect(code=1006)]
+    )
 
     _, success_handler = await _relay_elevenlabs_tts(
         upstream_ws,
@@ -9993,13 +10054,46 @@ async def test_websocket_passthrough_bills_the_session_when_the_client_drops_whi
         client_send_text,
     )
 
-    assert client_send_text.await_count == 2
+    assert client_send_text.await_count == 3
     success_call: Final = success_handler.call_args.kwargs
     assert success_call["request_body"] == {"client_frames": [{"text": " "}, {"text": "Hello there "}]}
     assert success_call["response_body"] == [
         {"isFinal": None, "aligned_characters": 1},
         {"isFinal": None, "aligned_characters": 1},
+        {"isFinal": True},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("before_hang_up", "billed_characters", "upstream_left_open"),
+    [
+        pytest.param((ELEVENLABS_AUDIO_FRAME,), 5, True, id="mid-speech"),
+        pytest.param((ELEVENLABS_AUDIO_FRAME, json.dumps({"isFinal": True})), 1, False, id="after-isFinal"),
+    ],
+)
+async def test_websocket_passthrough_elevenlabs_bills_the_speech_it_finishes_after_the_client_hangs_up(
+    before_hang_up: tuple[str, ...], billed_characters: int, upstream_left_open: bool
+) -> None:
+    upstream_ws: Final = HangUpUpstreamWebSocket(before_hang_up, (ELEVENLABS_SECOND_AUDIO_FRAME,))
+
+    async def send_text(message: str) -> None:
+        if upstream_ws.client_hung_up.is_set():
+            raise WebSocketDisconnect(code=1006)
+
+    _, success_handler = await _relay_elevenlabs_tts(
+        upstream_ws,
+        _client_hangs_up_once_upstream_delivered(
+            upstream_ws, json.dumps({"text": " "}), json.dumps({"text": "Hello "})
+        ),
+        AsyncMock(side_effect=send_text),
+    )
+
+    success_call: Final = success_handler.call_args.kwargs
+    client_frames: Final = success_call["request_body"]["client_frames"]
+    assert elevenlabs_tts_characters(client_frames, success_call["response_body"]) == billed_characters
+    assert upstream_ws.closed_by_proxy is not upstream_left_open
+    assert [json.loads(frame) for frame in upstream_ws.sent] == [{"text": " "}, {"text": "Hello "}]
 
 
 @dataclass(frozen=True, slots=True)

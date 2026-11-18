@@ -83,6 +83,7 @@ from litellm.llms.elevenlabs.common_utils import (
     ElevenLabsTextToSpeechStream,
     elevenlabs_tts_client_text,
     elevenlabs_tts_is_priced,
+    elevenlabs_tts_owes_upstream_frames,
     elevenlabs_tts_recorded_upstream_frame,
     elevenlabs_tts_registry_key,
     elevenlabs_tts_requested_model,
@@ -4121,6 +4122,7 @@ ELEVENLABS_TTS_FRAME_POLICY: Final = WebsocketFramePolicy(
     recorded_upstream_frame=elevenlabs_tts_recorded_upstream_frame,
     client_binary_refusal=ELEVENLABS_TTS_BINARY_FRAME_REFUSAL,
     session_model_group=elevenlabs_tts_registry_key,
+    owes_upstream_frames=elevenlabs_tts_owes_upstream_frames,
 )
 
 

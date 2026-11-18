@@ -152,6 +152,19 @@ def elevenlabs_tts_recorded_upstream_frame(frame: Mapping[str, object]) -> Mappi
     return {**without_audio, ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY: _aligned_characters(frame.get("alignment"))}
 
 
+def _context_id(frame: Mapping[str, object]) -> str | None:
+    context_id: Final = frame.get("contextId")
+    return context_id if isinstance(context_id, str) else None
+
+
+def elevenlabs_tts_owes_upstream_frames(upstream_frames: Sequence[Mapping[str, object]]) -> bool:
+    speaking: Final = frozenset(
+        _context_id(frame) for frame in upstream_frames if ELEVENLABS_TTS_ALIGNED_CHARACTERS_KEY in frame
+    )
+    finished: Final = frozenset(_context_id(frame) for frame in upstream_frames if frame.get("isFinal") is True)
+    return bool(speaking - finished)
+
+
 def elevenlabs_tts_characters(
     client_frames: Sequence[Mapping[str, object]], upstream_frames: Sequence[Mapping[str, object]]
 ) -> int:
