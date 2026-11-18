@@ -80,10 +80,10 @@ def create_mock_proxy_logging():
 
 @pytest.mark.asyncio
 async def test_empty_flush_coalesces_baseline_recovery_claims(monkeypatch: pytest.MonkeyPatch) -> None:
-    times = iter((10.0, 11.0, 16.0))
+    times: Final = iter((10.0, 11.0, 16.0))
     monkeypatch.setattr(baseline_accounting, "monotonic", lambda: next(times))
-    client = MockPrismaClient()
-    logging = create_mock_proxy_logging()
+    client: Final = MockPrismaClient()
+    logging: Final = create_mock_proxy_logging()
 
     await update_spend_logs_job(client, None, logging)
     await update_spend_logs_job(client, None, logging)
@@ -144,9 +144,9 @@ async def test_baseline_recovery_immediately_retries_a_full_claim(
     monkeypatch: pytest.MonkeyPatch, claim_size: int, expected_claims: int
 ) -> None:
     monkeypatch.setattr(baseline_accounting, "monotonic", lambda: 10.0)
-    client = MockPrismaClient()
+    client: Final = MockPrismaClient()
     client.spend_log_flush_requested = asyncio.Event()
-    claims = iter(([{"scope": f"scope-{index}"} for index in range(claim_size)], [{"scope": "next"}]))
+    claims: Final = iter(([{"scope": f"scope-{index}"} for index in range(claim_size)], [{"scope": "next"}]))
 
     async def query(statement: str, *args: object) -> list[dict[str, object]]:
         if not args:
