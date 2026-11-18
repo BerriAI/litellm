@@ -337,14 +337,9 @@ fn plain_retry_budget(
         .deployment_id
         .as_deref()
         .and_then(|id| snapshot.registry.deployment(id));
-    let configured = deployment.and_then(|d| match d.raw_params.get("num_retries") {
-        Some(serde_json::Value::Number(n)) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
-        Some(serde_json::Value::String(s)) if s.chars().all(|c| c.is_ascii_digit()) => {
-            s.parse().ok()
-        }
-        _ => None,
-    });
-    configured.unwrap_or(snapshot.settings.num_retries)
+    deployment
+        .and_then(|deployment| deployment.num_retries())
+        .unwrap_or(snapshot.settings.num_retries)
 }
 
 /// The retry policy for the request's model group (`_anthropic_messages_resolved_retry_policy`),
