@@ -1336,30 +1336,27 @@ if MCP_AVAILABLE:
 
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         processor: Final = ProxyBaseLLMRequestProcessing(data={})
-        try:
-            result: Final = await _call_tool_rest(request, user_api_key_dict, processor)
-        except HTTPException as e:
-            callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
-                data=processor.data,
-                user_api_key_dict=user_api_key_dict,
-                response=None,
-                request_headers=dict(request.headers),
-            )
-            if not callback_headers:
-                raise
-            raise HTTPException(
-                status_code=e.status_code,
-                detail=e.detail,
-                headers={**callback_headers, **(e.headers or {})},
-            ) from e
-        response.headers.update(
-            await proxy_logging_obj.post_call_response_headers_hook(
-                data=processor.data,
+
+        async def callback_headers(result: object) -> dict[str, str]:
+            return await proxy_logging_obj.post_call_response_headers_hook(
+                data=processor.data,  # pyright: ignore[reportUnknownMemberType]  # the processor holds a bare dict
                 user_api_key_dict=user_api_key_dict,
                 response=result,
                 request_headers=dict(request.headers),
             )
-        )
+
+        try:
+            result: Final = await _call_tool_rest(request, user_api_key_dict, processor)
+        except HTTPException as e:
+            failure_headers: Final = await callback_headers(None)
+            if not failure_headers:
+                raise
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers={**failure_headers, **(e.headers or {})},
+            ) from e
+        response.headers.update(await callback_headers(result))
         return result
 
     async def _call_tool_rest(
