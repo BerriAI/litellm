@@ -11,6 +11,7 @@ from typing import (
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
 from litellm.constants import AUTH_OBJECTS_TARGET
@@ -23,6 +24,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     effective_member_budget,
     organization_budget_group_ids,
     override_expiry,
+    promotes_legacy_override,
     related_budget,
     utc_datetime,
 )
@@ -85,6 +87,7 @@ _DEFINITION_PARAM: Final = "customer_app_definition"
 _DEFINITION_CACHE_KEY: Final = "customer_app_definition:global"
 _PARENT_ORG_ID: Final = TypeAdapter(str)
 AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember)
+AppAssociation: Final = TypeVar("AppAssociation", AppOrganization, AppMember)
 
 
 class AppRepository(PrismaTableRepository[PrismaRecord]):
@@ -131,16 +134,46 @@ class _AppBudgetIdentity:
     budget: Budget | None
 
 
+class _OverrideFields(TypedDict):
+    budget_override_id: ReadOnly[str | None]
+    budget_override_expires_at: ReadOnly[datetime | None]
+
+
 @dataclass(frozen=True, slots=True)
 class _AssociationOverride:
     budget_override_id: str | None
     budget_override_expires_at: datetime | None
 
-    def fields(self) -> Mapping[str, object]:
+    def fields(self) -> _OverrideFields:
         return {
             "budget_override_id": self.budget_override_id,
             "budget_override_expires_at": self.budget_override_expires_at,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _AssociationBudget:
+    permanent: Budget | None
+    effective: Budget | None
+
+
+def _association_base(current: AppAssociation | None, data: AppOrganizationPut | AppMemberPut) -> AppAssociation | None:
+    patch: Final = MemberPatch.model_validate(
+        data.model_dump(
+            include={"budget", "budget_id", "budget_override", "budget_override_expires_at"}, exclude_unset=True
+        )
+    )
+    if current is None or not promotes_legacy_override(current, patch):
+        return current
+    if isinstance(data, AppOrganizationPut) and data.tier_budget_id is not None:
+        return current
+    return current.model_copy(
+        update={
+            "budget_id": current.budget_override_id,
+            "budget_override_id": None,
+            "budget_override_expires_at": None,
+        }
+    )
 
 
 def _app_budget_identity(
@@ -340,10 +373,14 @@ class AppStore:
         return tuple(resource.model_copy(update={"app_id": apps.get(resource.resource_id)}) for resource in resources)
 
     async def budget(self, budget_id: str | None) -> Budget | None:
+        return (await self.association_budget_state(budget_id)).effective
+
+    async def association_budget_state(self, budget_id: str | None) -> _AssociationBudget:
         if budget_id is None:
-            return None
+            return _AssociationBudget(None, None)
         row: Final = await self.customers.budgets.find_unique(where={"budget_id": budget_id})
-        return related_budget(row.model_dump(), self.now) if row is not None else None
+        values: Final = row.model_dump() if row is not None else None
+        return _AssociationBudget(related_budget(values), related_budget(values, self.now))
 
     async def with_budget_usage(self, entity: AppEntity) -> AppEntity:
         identity: Final = _app_budget_identity(entity)
@@ -542,11 +579,13 @@ class AppStore:
         org: Final = AppOrganization.model_validate(row.model_dump())
         base_id: Final = org.budget_id or org.tier_budget_id or app.default_tier_budget_id
         shared: Final = await organization_budget_group_ids(self.config)
+        base: Final = await self.association_budget_state(base_id)
+        override: Final = await self.association_budget_state(org.budget_override_id)
         return org.model_copy(
             update={
-                "budget": await self.budget(org.budget_id) if org.budget_id not in shared else None,
-                "budget_override": await self.budget(org.budget_override_id),
-                "effective_budget": await self.association_effective_budget(org, await self.budget(base_id)),
+                "budget": base.permanent if org.budget_id is not None and org.budget_id not in shared else None,
+                "budget_override": override.permanent,
+                "effective_budget": self.association_effective_budget(org, base.effective, override.effective),
                 "effective_customer_member_budget": await self.budget(
                     org.customer_member_budget_id or app.default_customer_member_budget_id
                 ),
@@ -559,12 +598,14 @@ class AppStore:
             or utc_datetime(row.budget_override_expires_at) > utc_datetime(self.now)
         )
 
-    async def association_effective_budget(
-        self, row: AppOrganization | AppMember, base: Budget | None
+    def association_effective_budget(
+        self, row: AppOrganization | AppMember, base: Budget | None, override: Budget | None
     ) -> Budget | None:
-        override: Final = await self.budget(row.budget_override_id)
         if base is None and not self.override_active(row):
             return None
+        # Legacy nonexpiring app overrides replace the complete policy rather than inherit unset fields.
+        if override is not None and row.budget_override_expires_at is None:
+            return override
         return effective_member_budget(base, override, row.budget_override_expires_at, self.now)
 
     async def association_budget(
@@ -617,12 +658,13 @@ class AppStore:
         )
         identity: Final = {"app_id": app_id, "customer_org_id": customer_org_id}
         previous: Final = await self.organizations.find_unique(where={"app_id_customer_org_id": identity})
-        current: Final = AppOrganization.model_validate(previous.model_dump()) if previous is not None else None
+        original: Final = AppOrganization.model_validate(previous.model_dump()) if previous is not None else None
+        current: Final = _association_base(original, data)
         current_id: Final = (current.budget_id or current.tier_budget_id) if current else None
         inherited_id: Final = (current.tier_budget_id if current else None) or app.default_tier_budget_id
         base_id: Final = (
             await self.association_budget(current_id, inherited_id, data.budget, actor)
-            if "budget" in data.model_fields_set
+            if "budget" in data.model_fields_set and selected is None
             else selected
             if {"budget_id", "tier_budget_id"} & data.model_fields_set
             else current_id
@@ -649,10 +691,10 @@ class AppStore:
             where={"app_id_customer_org_id": identity},
             data={"create": {**identity, **fields}, "update": fields},
         )
-        if current is not None:
-            await self.customers.delete_released_budget(current_id, base_id)
-            await self.customers.delete_released_budget(current.budget_override_id, override.budget_override_id)
-            await self.customers.delete_released_budget(current.customer_member_budget_id, member)
+        if original is not None:
+            await self.customers.delete_released_budget(original.budget_id or original.tier_budget_id, base_id)
+            await self.customers.delete_released_budget(original.budget_override_id, override.budget_override_id)
+            await self.customers.delete_released_budget(original.customer_member_budget_id, member)
         return await self.organization_response(app, row)
 
     async def member(self, app: App, customer_member_id: str, org: AppOrganization) -> AppMember:
@@ -679,12 +721,15 @@ class AppStore:
             else app.default_customer_member_budget
         )
         organization_default_id: Final = organization.customer_member_budget_id if organization is not None else None
-        base: Final = await self.budget(member.budget_id) if member.budget_id is not None else inherited
+        base: Final = await self.association_budget_state(member.budget_id)
+        override: Final = await self.association_budget_state(member.budget_override_id)
         return member.model_copy(
             update={
-                "budget": await self.budget(member.budget_id),
-                "budget_override": await self.budget(member.budget_override_id),
-                "effective_budget": await self.association_effective_budget(member, base),
+                "budget": base.permanent,
+                "budget_override": override.permanent,
+                "effective_budget": self.association_effective_budget(
+                    member, base.effective if member.budget_id is not None else inherited, override.effective
+                ),
                 "budget_source": self.member_budget_source(member, app, organization_default_id),
             }
         )
@@ -748,7 +793,8 @@ class AppStore:
         )
         identity: Final = {"app_id": app_id, "customer_member_id": customer_member_id}
         previous: Final = await self.members.find_unique(where={"app_id_customer_member_id": identity})
-        current: Final = AppMember.model_validate(previous.model_dump()) if previous is not None else None
+        original: Final = AppMember.model_validate(previous.model_dump()) if previous is not None else None
+        current: Final = _association_base(original, data)
         organization: Final = await self.organization(app, parent)
         inherited_id: Final = organization.customer_member_budget_id or app.default_customer_member_budget_id
         base_id: Final = (
@@ -767,7 +813,7 @@ class AppStore:
                 "update": fields,
             },
         )
-        if current is not None:
-            await self.customers.delete_released_budget(current.budget_id, base_id)
-            await self.customers.delete_released_budget(current.budget_override_id, override.budget_override_id)
+        if original is not None:
+            await self.customers.delete_released_budget(original.budget_id, base_id)
+            await self.customers.delete_released_budget(original.budget_override_id, override.budget_override_id)
         return await self.member(app, customer_member_id, organization)

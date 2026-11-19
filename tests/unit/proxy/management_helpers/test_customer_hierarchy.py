@@ -18,6 +18,7 @@ from litellm.models.budget import BudgetLimit, LiteLLM_BudgetTable
 from litellm.proxy._types import BudgetWriteRequest
 from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchy,
+    CustomerHierarchyStore,
     ErrorCode,
     Failure,
     budget_row_values,
@@ -28,6 +29,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     CustomerMember,
     MemberCreate,
+    MemberPatch,
     OrganizationCreate,
     Team,
     TeamCreate,
@@ -710,9 +712,43 @@ def test_member_temporary_increase_is_added_to_its_inherited_maximum(expiry: dat
     assert resolved == Budget(max_budget=expected)
 
 
-def test_a_budget_row_without_windows_writes_budget_limits_as_prisma_json_null() -> None:
-    values: Final = budget_row_values({"max_budget": 1.0, "budget_limits": None, "model_tpm_limit": None})
+@pytest.mark.parametrize("column", ("budget_limits", "model_tpm_limit", "model_rpm_limit"))
+def test_null_budget_json_fields_are_encoded_as_prisma_json_null(column: str) -> None:
+    values: Final = budget_row_values({"max_budget": 1.0, column: None})
     assert values["max_budget"] == 1.0
-    assert isinstance(values["budget_limits"], Json)
-    assert values["budget_limits"].data is None
-    assert "model_tpm_limit" not in values
+    encoded: Final = values[column]
+    assert isinstance(encoded, Json)
+    assert encoded.data is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "patch, expected",
+    (
+        (
+            Budget(max_budget=20),
+            Budget(max_budget=20, model_tpm_limit={"model": 100}, model_rpm_limit={"model": 3}, allowed_models=()),
+        ),
+        (Budget(model_tpm_limit=None), Budget(max_budget=10, model_rpm_limit={"model": 3}, allowed_models=())),
+        (Budget(model_rpm_limit=None), Budget(max_budget=10, model_tpm_limit={"model": 100}, allowed_models=())),
+        (Budget(model_tpm_limit=None, model_rpm_limit=None), Budget(max_budget=10, allowed_models=())),
+    ),
+)
+async def test_owned_budget_patch_clears_null_model_limits_and_preserves_omission(
+    patch: Budget, expected: Budget
+) -> None:
+    database: Final = Database()
+    store: Final = CustomerHierarchyStore(
+        cast("Prisma", database), NOW, premium_user=True
+    )  # cast-ok: in-memory Prisma edge
+    owned_id: Final = await store.private_budget_patch(
+        None,
+        MemberPatch(budget=Budget(max_budget=10, model_tpm_limit={"model": 100}, model_rpm_limit={"model": 3})),
+        "admin",
+    )
+    assert owned_id is not None
+    updated_id: Final = await store.private_budget_patch(owned_id, MemberPatch(budget=patch), "admin")
+    assert updated_id == owned_id
+    row: Final = await store.budgets.find_unique(where={"budget_id": owned_id})
+    assert row is not None
+    assert related_budget(row.model_dump()) == expected

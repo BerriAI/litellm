@@ -153,6 +153,99 @@ describe("customer hierarchy settings payloads", () => {
     });
   });
 
+  it("should save a preset change together with a temporary limit and expiry", () => {
+    const entity: CustomerHierarchyEntity = { kind: "member", record: member };
+    const expiry = "2026-12-15T12:00";
+    const fields = {
+      ...customerHierarchyFields(entity),
+      templateId: "template-2",
+      maxBudget: "90",
+      overrideExpiry: expiry,
+    };
+    expect(buildCustomerHierarchyPatch(entity, fields)).toEqual({
+      ok: true,
+      patch: {
+        kind: "member",
+        body: {
+          budget_id: "template-2",
+          budget_override: {
+            max_budget: 90,
+            soft_budget: null,
+            tpm_limit: null,
+            rpm_limit: 4,
+            budget_duration: null,
+            allowed_models: null,
+          },
+          budget_override_expires_at: new Date(expiry).toISOString(),
+        },
+      },
+    });
+  });
+
+  it("should save a preset change together with removing the temporary budget", () => {
+    const entity: CustomerHierarchyEntity = { kind: "member", record: member };
+    expect(
+      buildCustomerHierarchyPatch(entity, {
+        ...customerHierarchyFields(entity),
+        templateId: "template-2",
+        budgetEnabled: false,
+      }),
+    ).toEqual({
+      ok: true,
+      patch: {
+        kind: "member",
+        body: { budget_id: "template-2", budget_override: null, budget_override_expires_at: null },
+      },
+    });
+  });
+
+  it.each([
+    { maxBudget: "invalid", expected: "invalidNumber" },
+    { overrideExpiry: "invalid", expected: "invalidExpiry" },
+  ])("should validate temporary edits when also selecting a preset $expected", ({ expected, ...changes }) => {
+    const entity: CustomerHierarchyEntity = { kind: "member", record: member };
+    expect(
+      buildCustomerHierarchyPatch(entity, {
+        ...customerHierarchyFields(entity),
+        templateId: "template-2",
+        ...changes,
+      }),
+    ).toEqual({ ok: false, error: expected });
+  });
+
+  it("should require a replacement preset when disabling a private permanent budget", () => {
+    const entity: CustomerHierarchyEntity = {
+      kind: "member",
+      record: {
+        ...member,
+        budget_id: "private-1",
+        budget: { max_budget: 750 },
+        budget_override: null,
+        budget_override_id: null,
+        budget_override_expires_at: null,
+      },
+    };
+    const initial = customerHierarchyFields(entity, organization);
+    expect(initial.templateId).toBe("");
+    expect(buildCustomerHierarchyPatch(entity, { ...initial, budgetEnabled: false }, organization)).toEqual({
+      ok: false,
+      error: "budgetRequired",
+    });
+  });
+
+  it("should keep a private permanent budget when removing only its temporary grant", () => {
+    const entity: CustomerHierarchyEntity = {
+      kind: "member",
+      record: { ...member, budget_id: "private-1", budget: { max_budget: 750 } },
+    };
+    const initial = customerHierarchyFields(entity, organization);
+    expect(initial.templateId).toBe("");
+    expect(buildCustomerHierarchyPatch(entity, { ...initial, budgetEnabled: false }, organization)).toEqual({
+      ok: true,
+      patch: { kind: "member", body: { budget_override: null, budget_override_expires_at: null } },
+    });
+  });
+
   it("should require a template or an override for a member", () => {
     const entity: CustomerHierarchyEntity = { kind: "member", record: member };
     expect(
@@ -200,7 +293,7 @@ describe("customer hierarchy settings payloads", () => {
     });
   });
 
-  it("should leave a new member override blank instead of copying effective template limits", () => {
+  it("should omit untouched inherited limits on the first permanent custom edit", () => {
     const entity: CustomerHierarchyEntity = {
       kind: "member",
       record: {
@@ -219,11 +312,6 @@ describe("customer hierarchy settings payloads", () => {
         body: {
           budget: {
             max_budget: 50,
-            soft_budget: null,
-            tpm_limit: null,
-            rpm_limit: null,
-            budget_duration: null,
-            allowed_models: null,
           },
         },
       },
@@ -248,7 +336,7 @@ describe("customer hierarchy settings payloads", () => {
   });
 
   it.each([null, "2026-12-01T12:00:00Z"])(
-    "should save a permanent budget without overwriting an expiring increase %s",
+    "should clear the old override when saving permanent limits with previous expiry %s",
     (expiry) => {
       const entity: CustomerHierarchyEntity = {
         kind: "member",
@@ -267,18 +355,56 @@ describe("customer hierarchy settings payloads", () => {
           body: {
             budget: {
               max_budget: 30,
-              soft_budget: null,
-              tpm_limit: null,
               rpm_limit: 4,
-              budget_duration: null,
-              allowed_models: null,
+              ...(expiry == null
+                ? { soft_budget: null, tpm_limit: null, budget_duration: null, allowed_models: null }
+                : {}),
             },
-            ...(expiry == null ? { budget_override: null } : {}),
+            budget_override: null,
+            ...(expiry == null ? {} : { budget_override_expires_at: null }),
           },
         },
       });
     },
   );
+
+  it("should make only the entered temporary limits permanent when clearing expiry", () => {
+    const entity: CustomerHierarchyEntity = {
+      kind: "member",
+      record: {
+        ...member,
+        budget: { max_budget: 10, tpm_limit: 1000, allowed_models: ["model-a"] },
+      },
+    };
+    expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), overrideExpiry: "" })).toEqual({
+      ok: true,
+      patch: {
+        kind: "member",
+        body: {
+          budget: { max_budget: 20, rpm_limit: 4 },
+          budget_override: null,
+          budget_override_expires_at: null,
+        },
+      },
+    });
+  });
+
+  it("should remove the temporary grant when selecting a preset and clearing expiry", () => {
+    const entity: CustomerHierarchyEntity = { kind: "member", record: member };
+    expect(
+      buildCustomerHierarchyPatch(entity, {
+        ...customerHierarchyFields(entity),
+        templateId: "template-2",
+        overrideExpiry: "",
+      }),
+    ).toEqual({
+      ok: true,
+      patch: {
+        kind: "member",
+        body: { budget_id: "template-2", budget_override: null, budget_override_expires_at: null },
+      },
+    });
+  });
 
   it("should initialize a private permanent member budget", () => {
     expect(
@@ -295,7 +421,7 @@ describe("customer hierarchy creation payloads", () => {
   const organizationWithTemplate: Organization = {
     ...organization,
     default_budget_template_id: "standard-template",
-    default_budgets: [{ budget_id: "standard-template", name: "Standard", is_default: true, max_budget: 50 }],
+    default_budgets: [{ budget_id: "standard-template", name: "Standard", max_budget: 50 }],
   };
   const memberTarget: CustomerHierarchyCreateTarget = {
     kind: "member",
@@ -353,6 +479,32 @@ describe("customer hierarchy creation payloads", () => {
           customer_member_id: "new-member",
           budget: { max_budget: 0, allowed_models: ["gpt-4.1"] },
         },
+      },
+    });
+  });
+
+  it("should preserve the selected preset restrictions when creating a custom member", () => {
+    const preset = {
+      max_budget: 50,
+      budget_duration: "1mo",
+      tpm_limit: 1700,
+      rpm_limit: 17,
+      allowed_models: ["model-a"],
+      budget_limits: [{ budget_duration: "12mo", max_budget: 600 }],
+    };
+    const target: CustomerHierarchyCreateTarget = {
+      ...memberTarget,
+      organization: {
+        ...organizationWithTemplate,
+        default_budgets: [{ budget_id: "standard-template", name: "Standard", ...preset }],
+      },
+    };
+    const fields = { ...newCustomerHierarchyFields(target), budgetEnabled: true, maxBudget: "75" };
+    expect(buildCustomerHierarchyCreate(target, fields, "")).toEqual({
+      ok: true,
+      create: {
+        kind: "member",
+        body: { parent_team_ids: ["team-1"], alias: null, budget: { ...preset, max_budget: 75 } },
       },
     });
   });

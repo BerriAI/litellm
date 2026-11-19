@@ -240,14 +240,14 @@ function OrganizationAppsTable({
           {rows.map(({ app, row }) => {
             const profileId = row.budget_id ?? row.tier_budget_id ?? app.default_tier_budget_id;
             const profileName = groups.find((group) => group.budget_id === profileId)?.name;
+            const source = organizationBudgetSource(row);
             let sourceLabel = t("apps.appDefault");
-            if (row.budget || row.budget_override_id) sourceLabel = t("apps.customBudget");
-            else if (row.budget_id || row.tier_budget_id) sourceLabel = profileName ?? t("apps.profile");
+            if (source === "custom") sourceLabel = t("apps.customBudget");
+            else if (source === "profile") sourceLabel = profileName ?? t("apps.profile");
             const { primary } = appBudgetWindows(row.effective_budget, row.budget_usage);
             const period = customerBudgetPeriod(primary?.budget_duration ?? null);
             const periodLabel = period === "other" ? primary?.budget_duration : t(`apps.${period}`);
-            if (!row.budget_override_id && !row.budget_id && !row.tier_budget_id && profileName)
-              sourceLabel = `${profileName} · ${sourceLabel}`;
+            if (source === "inherit" && profileName) sourceLabel = `${profileName} · ${sourceLabel}`;
             const resource: AppResource = {
               resource_type: app.resource_type,
               resource_id: app.resource_id,

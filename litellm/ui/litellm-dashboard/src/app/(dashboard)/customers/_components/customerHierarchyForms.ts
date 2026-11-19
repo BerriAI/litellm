@@ -98,6 +98,14 @@ const hierarchyEditorBudget = (
   return preset ? null : entity.record.budget;
 };
 
+const memberTemplateId = (member: Member, organization?: Organization): string => {
+  const privateBudget =
+    member.budget != null &&
+    organization != null &&
+    !organization.default_budgets.some((template) => template.budget_id === member.budget_id);
+  return privateBudget ? "" : member.budget_id ?? "";
+};
+
 export const customerHierarchyFields = (
   entity: CustomerHierarchyEntity,
   organization?: Organization,
@@ -107,12 +115,13 @@ export const customerHierarchyFields = (
     entity.kind === "organization"
       ? storedBudget?.budget_limits?.find((window) => window.budget_duration === "1mo")
       : undefined;
+  const templateId = entity.kind === "team" ? "" : entity.record.budget_id ?? "";
   return {
     alias: entity.record.alias ?? "",
     budgetEnabled: storedBudget != null,
     ...budgetFields(storedBudget),
     ...(monthly ? { maxBudget: asText(monthly.max_budget) } : {}),
-    templateId: entity.kind !== "team" ? entity.record.budget_id ?? "" : "",
+    templateId: entity.kind === "member" ? memberTemplateId(entity.record, organization) : templateId,
     overrideExpiry:
       entity.kind === "member" && entity.record.budget_override != null
         ? localDateTime(entity.record.budget_override_expires_at)
@@ -160,6 +169,18 @@ export const parseBudget = (fields: BudgetFields): Budget | null => {
   };
 };
 
+const enteredBudget = (budget: Budget): Budget => ({
+  ...(budget.max_budget != null ? { max_budget: budget.max_budget } : {}),
+  ...(budget.soft_budget != null ? { soft_budget: budget.soft_budget } : {}),
+  ...(budget.tpm_limit != null ? { tpm_limit: budget.tpm_limit } : {}),
+  ...(budget.rpm_limit != null ? { rpm_limit: budget.rpm_limit } : {}),
+  ...(budget.budget_duration != null ? { budget_duration: budget.budget_duration } : {}),
+  ...(budget.allowed_models != null ? { allowed_models: budget.allowed_models } : {}),
+});
+
+const permanentMemberBudget = (budget: Budget | null, inheritBlank: boolean): Budget | null =>
+  budget && inheritBlank ? enteredBudget(budget) : budget;
+
 export const BUDGET_FIELDS = ["budgetEnabled", "maxBudget", "softBudget", "budgetDuration", "tpm", "rpm"] as const;
 
 const budgetChanged = (fields: CustomerHierarchyFields, initial: CustomerHierarchyFields): boolean =>
@@ -172,47 +193,71 @@ const aliasChanges = (initial: string | null | undefined, value: string): { alia
 const legacyMemberBudgetClear = (member: Member): { budget_override?: null } =>
   member.budget_override != null && member.budget_override_expires_at == null ? { budget_override: null } : {};
 
+const temporaryMemberPatch = (
+  fields: CustomerHierarchyFields,
+  initial: CustomerHierarchyFields,
+  selection: components["schemas"]["MemberPatch"],
+): PatchResult => {
+  if (!fields.budgetEnabled) {
+    return {
+      ok: true,
+      patch: { kind: "member", body: { ...selection, budget_override: null, budget_override_expires_at: null } },
+    };
+  }
+  const budget = parseBudget(fields);
+  if (budget == null) return { ok: false, error: "invalidNumber" };
+  const expiry = new Date(fields.overrideExpiry);
+  if (Number.isNaN(expiry.getTime())) return { ok: false, error: "invalidExpiry" };
+  return {
+    ok: true,
+    patch: {
+      kind: "member",
+      body: {
+        ...selection,
+        budget_override: budget,
+        ...(fields.overrideExpiry !== initial.overrideExpiry
+          ? { budget_override_expires_at: expiry.toISOString() }
+          : {}),
+      },
+    },
+  };
+};
+
+const permanentMemberPatch = (
+  fields: CustomerHierarchyFields,
+  inheritBlank: boolean,
+  changes: components["schemas"]["MemberPatch"],
+): PatchResult => {
+  const budget = fields.budgetEnabled ? parseBudget(fields) : null;
+  if (fields.budgetEnabled && budget == null) return { ok: false, error: "invalidNumber" };
+  const selection = fields.budgetEnabled
+    ? { budget: permanentMemberBudget(budget, inheritBlank) }
+    : { budget_id: fields.templateId };
+  return { ok: true, patch: { kind: "member", body: { ...changes, ...selection } } };
+};
+
 const memberPatch = (
   member: Member,
   fields: CustomerHierarchyFields,
   initial: CustomerHierarchyFields,
 ): PatchResult => {
-  if (!fields.templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
   const alias = aliasChanges(member.alias, fields.alias);
-  const clearLegacy = legacyMemberBudgetClear(member);
+  const clearsExpiry = initial.overrideExpiry !== "" && fields.overrideExpiry === "";
+  const clearOverride = clearsExpiry
+    ? { budget_override: null, budget_override_expires_at: null }
+    : legacyMemberBudgetClear(member);
   const templateChanged = fields.templateId !== initial.templateId;
-  if (templateChanged && fields.templateId)
-    return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearLegacy } } };
+  const templateSelection = templateChanged ? { budget_id: fields.templateId || null } : {};
   const changed = budgetChanged(fields, initial) || fields.overrideExpiry !== initial.overrideExpiry;
-  if (!changed)
-    return { ok: true, patch: { kind: "member", body: { ...alias, ...(templateChanged ? { budget_id: null } : {}) } } };
-  if (!fields.budgetEnabled && initial.budgetEnabled && initial.overrideExpiry) {
-    return {
-      ok: true,
-      patch: { kind: "member", body: { ...alias, budget_override: null, budget_override_expires_at: null } },
-    };
-  }
-  const budget = fields.budgetEnabled ? parseBudget(fields) : null;
-  if (fields.budgetEnabled && budget == null) return { ok: false, error: "invalidNumber" };
-  if (fields.budgetEnabled && fields.overrideExpiry) {
-    const expiry = new Date(fields.overrideExpiry);
-    if (Number.isNaN(expiry.getTime())) return { ok: false, error: "invalidExpiry" };
-    return {
-      ok: true,
-      patch: {
-        kind: "member",
-        body: {
-          ...alias,
-          budget_override: budget,
-          ...(fields.overrideExpiry !== initial.overrideExpiry
-            ? { budget_override_expires_at: expiry.toISOString() }
-            : {}),
-        },
-      },
-    };
-  }
-  const selection = fields.budgetEnabled ? { budget } : { budget_id: fields.templateId };
-  return { ok: true, patch: { kind: "member", body: { ...alias, ...selection, ...clearLegacy } } };
+  const removingTemporary = !fields.budgetEnabled && initial.overrideExpiry !== "";
+  const temporaryEdit = changed && (fields.overrideExpiry !== "" || removingTemporary);
+  const retainedBase = temporaryEdit && !templateChanged && member.budget_id;
+  if (!fields.templateId && !fields.budgetEnabled && !retainedBase) return { ok: false, error: "budgetRequired" };
+  if (temporaryEdit) return temporaryMemberPatch(fields, initial, { ...alias, ...templateSelection });
+  if (templateChanged && fields.templateId)
+    return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearOverride } } };
+  if (!changed) return { ok: true, patch: { kind: "member", body: { ...alias, ...templateSelection } } };
+  return permanentMemberPatch(fields, !initial.budgetEnabled || clearsExpiry, { ...alias, ...clearOverride });
 };
 
 const organizationBudget = (original: Budget | null | undefined, parsed: Budget, groupChanged: boolean): Budget => {
@@ -258,6 +303,17 @@ export const buildCustomerHierarchyPatch = (
   };
 };
 
+const memberCreateBudget = (
+  organization: Organization,
+  templateId: string | null,
+  budget: Budget | null,
+): Budget | null => {
+  const template = organization.default_budgets.find((preset) => preset.budget_id === templateId);
+  if (!template || !budget) return budget;
+  const { name, budget_id, ...base } = template;
+  return { ...base, ...enteredBudget(budget) };
+};
+
 const createMember = (
   target: Extract<CustomerHierarchyCreateTarget, { kind: "member" }>,
   fields: CustomerHierarchyFields,
@@ -269,7 +325,9 @@ const createMember = (
   if (!templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
   const expiry = fields.budgetEnabled && fields.overrideExpiry ? new Date(fields.overrideExpiry) : null;
   if (expiry && Number.isNaN(expiry.getTime())) return { ok: false, error: "invalidExpiry" };
-  const permanent = fields.budgetEnabled ? { budget: common.budget } : { budget_id: templateId };
+  const permanent = fields.budgetEnabled
+    ? { budget: memberCreateBudget(target.organization, templateId, common.budget) }
+    : { budget_id: templateId };
   return {
     ok: true,
     create: {

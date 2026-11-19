@@ -587,7 +587,8 @@ async def test_app_budget_edit_preserves_legacy_override_unless_explicitly_clear
     )
     assert isinstance(migrated, AppMember) and migrated.budget is not None
     assert migrated.budget.max_budget == 8 and migrated.budget_override is None
-    assert await store.budget(legacy.budget_override_id) is None
+    assert migrated.budget_id == legacy.budget_override_id
+    assert await store.budget(edited.budget_id) is None
 
 
 @pytest.mark.asyncio
@@ -600,9 +601,7 @@ async def test_arbitrary_budget_rows_are_not_profiles(
         app.app_id, "org", AppOrganizationPut(tier_budget_id=private_budget), "admin"
     )
     default: Final = await store.patch(app.app_id, AppPatch(default_tier_budget_id=private_budget), "admin")
-    created: Final = await store.create(
-        AppCreate(resource_id="search", default_tier_budget_id=private_budget), "admin"
-    )
+    created: Final = await store.create(AppCreate(resource_id="search", default_tier_budget_id=private_budget), "admin")
     assert isinstance(assigned, AppFailure) and assigned.status == 422
     assert isinstance(default, AppFailure) and default.status == 422
     assert isinstance(created, AppFailure) and created.status == 422
@@ -744,7 +743,9 @@ async def test_should_reject_budget_changes_when_the_app_binding_is_unavailable(
         )
     results: Final = (
         await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=7)), "admin"),
-        await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"),
+        await store.put_organization(
+            app.app_id, "org", AppOrganizationPut(budget_override=Budget(max_budget=3)), "admin"
+        ),
         await store.put_member(app.app_id, "member", AppMemberPut(budget_override=Budget(max_budget=1)), "admin"),
     )
     assert all(isinstance(result, AppFailure) and result.status == status for result in results)
@@ -798,9 +799,7 @@ async def test_should_skip_a_key_rotated_during_identity_backfill(monkeypatch: p
     update_many: Final = database.litellm_verificationtoken.update_many
 
     async def rotate_before_backfill(where: Mapping[str, object], data: Mapping[str, object]) -> int:
-        await database.litellm_verificationtoken.update(
-            where={"token": "token-a"}, data={"token": "rotated-token"}
-        )
+        await database.litellm_verificationtoken.update(where={"token": "token-a"}, data={"token": "rotated-token"})
         return await update_many(where=where, data=data)
 
     with monkeypatch.context() as backfill:
@@ -810,3 +809,106 @@ async def test_should_skip_a_key_rotated_during_identity_backfill(monkeypatch: p
     assert len(discovered) == 1 and discovered[0].alias == "Service key"
     assert "rotated-token" not in discovered[0].model_dump_json()
     assert await store.key_resource_id("rotated-token") == discovered[0].resource_id
+
+
+async def put_budget_association(
+    store: AppStore, app: App, scope: str, data: MemberPatch
+) -> AppMember | AppOrganization:
+    values: Final = data.model_dump(exclude_unset=True)
+    result: Final = (
+        await store.put_member(app.app_id, "member", AppMemberPut.model_validate(values), "admin")
+        if scope == "member"
+        else await store.put_organization(app.app_id, "org", AppOrganizationPut.model_validate(values), "admin")
+    )
+    assert isinstance(result, (AppMember, AppOrganization))
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("member", "organization"))
+async def test_app_permanent_budget_roundtrip_excludes_additive_grant(
+    app_store: tuple[AppDatabase, AppStore, App], scope: str
+) -> None:
+    database, store, app = app_store
+    created: Final = await put_budget_association(store, app, scope, MemberPatch(budget=Budget(max_budget=15)))
+    await database.litellm_budgettable.update(
+        where={"budget_id": created.budget_id},
+        data={"temp_budget_increase": 5, "temp_budget_expiry": NOW.replace(year=2027)},
+    )
+    loaded: Final = await put_budget_association(store, app, scope, MemberPatch())
+    assert loaded.budget is not None and loaded.budget.max_budget == 15
+    assert loaded.effective_budget is not None and loaded.effective_budget.max_budget == 20
+    saved: Final = await put_budget_association(store, app, scope, MemberPatch(budget=loaded.budget))
+    assert saved.effective_budget == loaded.effective_budget
+    expired: Final = await put_budget_association(AppStore(database, NOW.replace(year=2028)), app, scope, MemberPatch())
+    assert expired.effective_budget == created.budget
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("member", "organization"))
+async def test_app_legacy_lifetime_policy_survives_read_and_temporary_grant(
+    app_store: tuple[AppDatabase, AppStore, App], scope: str
+) -> None:
+    database, store, app = app_store
+    tier: Final = await profile(store, "Standard", 10)
+    await store.customers.update_budget(
+        tier, Budget(budget_duration="1mo", rpm_limit=4, allowed_models=("base",)), "admin"
+    )
+    configured: Final = await store.patch(
+        app.app_id,
+        AppPatch(default_tier_budget_id=tier, default_customer_member_budget=await store.budget(tier)),
+        "admin",
+    )
+    assert isinstance(configured, App)
+    legacy: Final = await put_budget_association(
+        store, configured, scope, MemberPatch(budget_override=Budget(max_budget=15))
+    )
+    assert legacy.effective_budget == Budget(max_budget=15, allowed_models=())
+    temporary: Final = await put_budget_association(
+        store,
+        configured,
+        scope,
+        MemberPatch(budget_override=Budget(max_budget=30), budget_override_expires_at=NOW.replace(year=2027)),
+    )
+    assert temporary.budget == legacy.budget_override
+    assert temporary.effective_budget == Budget(max_budget=30, allowed_models=())
+    expired: Final = await put_budget_association(
+        AppStore(database, NOW.replace(year=2028)), configured, scope, MemberPatch()
+    )
+    assert expired.effective_budget == legacy.effective_budget
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("member", "organization"))
+async def test_app_legacy_custom_edit_preserves_hidden_policy(
+    app_store: tuple[AppDatabase, AppStore, App], scope: str
+) -> None:
+    _, store, app = app_store
+    legacy: Final = await put_budget_association(
+        store,
+        app,
+        scope,
+        MemberPatch(
+            budget_override=Budget(max_budget=15, model_rpm_limit={"model": 5}, cap_policy="pause_allow_increase")
+        ),
+    )
+    edited: Final = await put_budget_association(
+        store, app, scope, MemberPatch(budget=Budget(max_budget=20), budget_override=None)
+    )
+    assert legacy.budget_override is not None
+    assert edited.budget == legacy.budget_override.model_copy(update={"max_budget": 20})
+    assert edited.effective_budget == edited.budget and edited.budget_override is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selector", ("budget_id", "tier_budget_id"))
+async def test_app_preset_selection_accepts_null_custom_budget(
+    app_store: tuple[AppDatabase, AppStore, App], selector: str
+) -> None:
+    _, store, app = app_store
+    preset: Final = await profile(store, "Standard", 10)
+    selected: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut.model_validate({selector: preset, "budget": None}), "admin"
+    )
+    assert isinstance(selected, AppOrganization) and selected.budget_id == preset
+    assert selected.effective_budget == await store.budget(preset)

@@ -372,9 +372,7 @@ def test_first_custom_member_edit_copies_preset_and_preserves_temporary_grants(
     )
     assert configured.status_code == 200, configured.text
     reset_at: Final = NOW + timedelta(days=10)
-    asyncio.run(
-        database.litellm_budgettable.update(where={"budget_id": preset_id}, data={"budget_reset_at": reset_at})
-    )
+    asyncio.run(database.litellm_budgettable.update(where={"budget_id": preset_id}, data={"budget_reset_at": reset_at}))
     created: Final = http.post(
         "/management/v1/customer_members",
         json={
@@ -409,9 +407,10 @@ def test_first_custom_member_edit_copies_preset_and_preserves_temporary_grants(
     )
     assert expired.status_code == 200, expired.text
     assert expired.json()["effective_budget"] == member["budget"]
-    assert http.get("/management/v1/customer_organizations/org").json()["default_budgets"] == configured.json()[
-        "default_budgets"
-    ]
+    assert (
+        http.get("/management/v1/customer_organizations/org").json()["default_budgets"]
+        == configured.json()["default_budgets"]
+    )
     changed_preset: Final = http.patch(
         f"/management/v1/customer_organizations/org/default_budgets/{preset_id}", json={"rpm_limit": 99}
     )
@@ -2461,6 +2460,42 @@ def organization_groups(http: TestClient, *groups: Mapping[str, object]) -> Budg
 
 
 @pytest.mark.parametrize("method", ("PATCH", "POST"))
+@pytest.mark.parametrize("patch", ({"max_budget": 750}, {"rpm_limit": None}, {}))
+def test_first_custom_organization_edit_copies_preset(method: str, patch: dict[str, object]) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    group: Final = organization_groups(
+        http,
+        {
+            "name": "Shared",
+            "max_budget": 500,
+            "budget_duration": "1mo",
+            "tpm_limit": 1700,
+            "rpm_limit": 17,
+            "budget_limits": [{"budget_duration": "12mo", "max_budget": 6000}],
+        },
+    ).default_budgets[0]
+    reset_at: Final = NOW + timedelta(days=10)
+    asyncio.run(
+        database.litellm_budgettable.update(where={"budget_id": group.budget_id}, data={"budget_reset_at": reset_at})
+    )
+    created: Final = http.post(
+        "/management/v1/customer_organizations", json={"customer_org_id": "org", "budget_id": group.budget_id}
+    )
+    assert created.status_code == 201, created.text
+    path: Final = "/management/v1/customer_organizations/" + ("org" if method == "PATCH" else "upsert")
+    identity: Final = {} if method == "PATCH" else {"customer_org_id": "org"}
+    edited: Final = http.request(method, path, json={**identity, "budget": patch})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["budget_id"] != group.budget_id
+    assert edited.json()["budget"] == {**created.json()["budget"], **patch}
+    assert edited.json()["budget_reset_at"] == created.json()["budget_reset_at"]
+    assert http.get("/management/v1/customer_organization_budget_groups").json()["default_budgets"][0] == (
+        group.model_dump(mode="json")
+    )
+
+
+@pytest.mark.parametrize("method", ("PATCH", "POST"))
 def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> None:
     database: Final = Database()
     cache: Final = UserApiKeyCache()
@@ -2522,7 +2557,9 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> N
     assert kept.status_code == 200 and kept.json()["budget_id"] == group.budget_id, kept.text
     custom: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
     assert custom.status_code == 200 and custom.json()["budget_id"] != group.budget_id, custom.text
-    assert custom.json()["budget"]["budget_limits"] is None
+    assert custom.json()["budget"]["budget_limits"] == [
+        limit.model_dump(mode="json") for limit in saved.default_budgets[0].budget_limits or ()
+    ]
     assert custom.json()["budget_is_shared"] is False
     replay: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
     assert replay.json() == custom.json()
@@ -2544,3 +2581,46 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> N
     assert group.budget_id in database.litellm_budgettable.rows
     assert organization_groups(http).default_budgets == ()
     assert group.budget_id not in database.litellm_budgettable.rows
+
+
+@pytest.mark.parametrize("temporary", (False, True))
+def test_member_legacy_conversion_preserves_hidden_budget_policy(temporary: bool) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    response: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "legacy-custom",
+            "parent_team_ids": ["team"],
+            "budget_override": {
+                "max_budget": 150,
+                "budget_duration": "1mo",
+                "budget_limits": [{"max_budget": 1500, "budget_duration": "12mo"}],
+                "model_rpm_limit": {"model-a": 5},
+                "cap_policy": "pause_allow_increase",
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    original: Final = CustomerMember.model_validate(response.json())
+    updated: Final = http.patch(
+        "/management/v1/customer_members/legacy-custom",
+        json=(
+            {
+                "budget_override": {"max_budget": 200},
+                "budget_override_expires_at": (NOW + timedelta(days=1)).isoformat(),
+            }
+            if temporary
+            else {"budget": {"max_budget": 200}, "budget_override": None}
+        ),
+    )
+    assert updated.status_code == 200, updated.text
+    member: Final = CustomerMember.model_validate(updated.json())
+    expected: Final = original.effective_budget.model_copy(update={} if temporary else {"max_budget": 200})
+    assert member.budget == expected
+    later: Final = client(database=database, now=NOW + timedelta(days=2)).get(
+        "/management/v1/customer_members/legacy-custom"
+    )
+    assert later.status_code == 200, later.text
+    assert CustomerMember.model_validate(later.json()).effective_budget == expected

@@ -97,6 +97,42 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customer app budgets", () => {
+  it.each(["2000-01-01T00:00:00Z", "2099-01-01T00:00:00Z"])(
+    "should keep the preset source label for a temporary grant expiring at %s",
+    async (expiry) => {
+      bound = true;
+      assigned = true;
+      customAssociation = {
+        ...assignedBudget,
+        budget_id: "standard",
+        budget: null,
+        budget_override_id: "grant-1",
+        budget_override: { max_budget: 200 },
+        budget_override_expires_at: expiry,
+      };
+      render(<CustomerOrganizationApps organizationId="org-1" />);
+      await screen.findByRole("button", { name: "Edit budget for chat" });
+      const table = within(screen.getByRole("table", { name: "App budgets" }));
+      expect(table.getByText("Standard · Monthly")).toBeInTheDocument();
+      expect(table.queryByText(/Custom budget/)).not.toBeInTheDocument();
+    },
+  );
+
+  it("should label a non-expiring legacy override as a custom budget", async () => {
+    bound = true;
+    assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      budget_override_id: "legacy-1",
+      budget_override: { max_budget: 200 },
+      budget_override_expires_at: null,
+    };
+    render(<CustomerOrganizationApps organizationId="org-1" />);
+    await screen.findByRole("button", { name: "Edit budget for chat" });
+    const table = within(screen.getByRole("table", { name: "App budgets" }));
+    expect(table.getByText("Custom budget · Monthly")).toBeInTheDocument();
+  });
+
   it("should show recorded period usage separately from cumulative spend", async () => {
     bound = true;
     assigned = true;
