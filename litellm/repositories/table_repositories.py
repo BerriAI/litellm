@@ -185,7 +185,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         transaction: LedgerTransaction, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool
     ) -> int:
         from litellm.proxy.db.db_span import db_span
-        from litellm.repositories.spend_log_insert import spend_log_insert_statement
+        from litellm.repositories.spend_log_insert import spend_log_bound_insert_statement
 
         payloads: Final = tuple(
             {
@@ -227,7 +227,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
             )
             async with db_span("insert_spend_logs", "LiteLLM_SpendLogs"):
                 for group in groups:
-                    await transaction.query_raw(*spend_log_insert_statement(group))
+                    await transaction.query_raw(*spend_log_bound_insert_statement(group))
         return len(accepted)
 
     @staticmethod

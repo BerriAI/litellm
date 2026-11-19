@@ -1,10 +1,11 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -86,3 +87,51 @@ def spend_log_insert_statement(rows: Sequence[Mapping[str, object]]) -> tuple[Li
         "ON CONFLICT DO NOTHING RETURNING request_id"
     )
     return sql, safe_dumps(values, non_finite_as_null=True)
+
+
+def spend_log_bound_insert_statement(
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[LiteralString, *tuple[str | None, ...]]:
+    if not rows:
+        raise ValueError("Spend log insert requires at least one row")
+    fields: Final = frozenset(rows[0]) | {"created_at", "updated_at"}
+    if not fields.issubset(_COLUMNS) or any(frozenset(row) | {"created_at", "updated_at"} != fields for row in rows):
+        raise RejectedSpendLogRow("Spend log insert requires matching known columns")
+    ordered: Final = tuple(column for column in _COLUMNS if column in fields)
+    bound: Final = tuple(column for column in ordered if column in _JSON_COLUMNS)
+    if not bound or len(rows) * len(bound) >= 32_767 or DEFAULT_MAX_RECURSE_DEPTH < 2:
+        return spend_log_insert_statement(rows)
+    columns: Final = ", ".join(f'"{column}"' for column in ordered)
+    selected: Final = ", ".join(
+        f'payload."{column}"' if column in _JSON_COLUMNS else f'record."{column}"' for column in ordered
+    )
+    aliases: Final = ", ".join(f'"{column}"' for column in bound)
+    tuples: Final = ", ".join(
+        f"({row + 1}, " + ", ".join(f"${row * len(bound) + column + 2}::jsonb" for column in range(len(bound))) + ")"
+        for row in range(len(rows))
+    )
+    now: Final = datetime.now(timezone.utc).isoformat()
+    scalars: Final = tuple(
+        {
+            "created_at": now,
+            "updated_at": now,
+            **{column: _json_value(column, value) for column, value in row.items() if column not in _JSON_COLUMNS},
+        }
+        for row in rows
+    )
+    payloads: Final = tuple(
+        safe_dumps(_json_value(column, row[column]), max_depth=DEFAULT_MAX_RECURSE_DEPTH - 2, non_finite_as_null=True)
+        for row in rows for column in bound
+    )
+    query: Final = cast(
+        LiteralString,
+        f'INSERT INTO "LiteLLM_SpendLogs" ({columns}) SELECT {selected} '
+        'FROM jsonb_populate_recordset(NULL::"LiteLLM_SpendLogs", $1::jsonb) WITH ORDINALITY AS record '
+        f"JOIN (VALUES {tuples}) AS payload(ord, {aliases}) ON payload.ord = record.ordinality "
+        "ORDER BY record.ordinality ON CONFLICT DO NOTHING RETURNING request_id",
+    )
+    return (
+        query,
+        safe_dumps(scalars, non_finite_as_null=True),
+        *(None if value == "null" else value for value in payloads),
+    )
