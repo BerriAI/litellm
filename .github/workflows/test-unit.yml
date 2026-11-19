@@ -84,6 +84,7 @@ jobs:
       mode: ${{ steps.plan.outputs.mode }}
       skipped: ${{ steps.plan.outputs.skipped }}
       changed-tests: ${{ steps.plan.outputs.changed-tests }}
+      tests-only: ${{ steps.plan.outputs.tests-only }}
       lint-runtime: ${{ steps.plan.outputs.lint-runtime }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -114,20 +115,31 @@ jobs:
           fi
           [ "${mode}" != core ] || [ "${CHANGED_FILE_COUNT:-0}" -le 3000 ] || mode=full
           changed_tests=''
+          tests_only=false
           if [ "${mode}" = core ]; then
-            changed_tests="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' \
-              | python3 .github/scripts/ci/select_changed_tests.py | paste -sd ' ' -)" || { mode=full; changed_tests=''; }
+            changed_files="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')" || mode=full
+            if [ "${mode}" = core ]; then
+              classification="$(printf '%s\n' "${changed_files}" | bash .github/scripts/ci/classify_changes.sh tests-only)" || classification=skip
+              selection_args=()
+              if [ "${classification}" = run ]; then
+                tests_only=true
+                selection_args+=(--include-core)
+              fi
+              changed_tests="$(printf '%s\n' "${changed_files}" \
+                | python3 .github/scripts/ci/select_changed_tests.py "${selection_args[@]}" | paste -sd ' ' -)" || { mode=full; changed_tests=''; tests_only=false; }
+            fi
           fi
           if [ "${mode}" = full ]; then
             skipped=(unit-core unit-changed)
           else
             skipped=(unit docs helm openai-sdk-compat redis-compat)
+            [ "${tests_only}" = false ] || skipped+=(unit-core)
             [ -n "${changed_tests}" ] || skipped+=(unit-changed)
           fi
           [ "${lint_runtime}" = true ] || skipped+=(lint-runtime)
           skipped_json="$(printf '%s\n' "${skipped[@]}" | jq -R . | jq -sc .)"
-          printf 'mode=%s\nskipped=%s\nchanged-tests=%s\nlint-runtime=%s\n' \
-            "${mode}" "${skipped_json}" "${changed_tests}" "${lint_runtime}" | tee -a "$GITHUB_OUTPUT"
+          printf 'mode=%s\nskipped=%s\nchanged-tests=%s\nlint-runtime=%s\ntests-only=%s\n' \
+            "${mode}" "${skipped_json}" "${changed_tests}" "${lint_runtime}" "${tests_only}" | tee -a "$GITHUB_OUTPUT"
   unit:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, plan]
@@ -1163,7 +1175,7 @@ jobs:
   unit-core:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.mode == 'core' }}
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'core' && needs.plan.outputs.tests-only == 'false' }}
     runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
