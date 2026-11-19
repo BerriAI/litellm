@@ -4167,7 +4167,6 @@ AZURE_SHAPING_CASES: Final = (
 )
 
 UNREACHABLE_AZURE_BASE: Final = "http://127.0.0.1:9/d/dep-e03/anthropic"
-UNREACHABLE_TOKEN_URI: Final = "http://127.0.0.1:9/token"
 
 AZURE_ERROR_CASES: Final = tuple(
     replace(case, model=AZURE_CLAUDE)
@@ -4251,8 +4250,8 @@ def _vertex_service_account(private_key: str, token_uri: str) -> str:
 
 
 E2_GOOGLE_AUTH_TEXT: Final = (
-    "E2: approved difference, the exception class matches but its text is Google's SDK or HTTP client's own "
-    "(cryptography's PEM error, urllib3's connection error), which Rust cannot rebuild"
+    "E2: approved difference, the exception class matches but its text is Google's SDK's own "
+    "(cryptography's PEM error), which Rust cannot rebuild"
 )
 
 R4_ODD_TYPED_CREDENTIAL_FIELD: Final = (
@@ -4304,11 +4303,6 @@ VERTEX_CREDENTIAL_CASES: Final = tuple(
                     "https://oauth2.googleapis.com/token",
                 ),
             ),
-            gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
-        ),
-        Case(
-            "vertex_ai_token_endpoint_unreachable",
-            _kw(**VERTEX_DEPLOYMENT, vertex_credentials=_vertex_service_account(_VERTEX_KEY, UNREACHABLE_TOKEN_URI)),
             gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
         ),
         Case(
@@ -5504,7 +5498,7 @@ async def test_native_messages_match_python(
         case "dispatch":
             assert not native.fell_back
         case "request":
-            assert _comparable(_with_decoded_labels(native.requests)) == _comparable(
+            assert _comparable(_with_decoded_labels(_with_parity_token(native.requests))) == _comparable(
                 _with_decoded_labels(python.requests)
             )
         case "outcome":
@@ -5599,6 +5593,43 @@ def _with_decoded_labels(requests: Sequence[Mapping[str, object]]) -> tuple[Mapp
             **request,
             "headers": {
                 name: _decoded_labels(value) if name == "x-vertex-ai-labels" and isinstance(value, str) else value
+                for name, value in cast(Mapping[str, object], request.get("headers", {})).items()
+            },
+        }
+        for request in requests
+    )
+
+
+# Q1 (owner ruling 2026-11-19): approved difference, Rust signs a service account's token itself with Google's
+# Rust SDK, a self-signed JWT, where google-auth mints one at the account's token_uri. A request carrying the parity
+# service account's own JWT compares as the token Python's parity token endpoint granted.
+_PARITY_TOKEN: Final = "Bearer ya29.parity"
+_SERVICE_ACCOUNT_SCOPE: Final = "https://www.googleapis.com/auth/cloud-platform"
+
+
+def _is_service_account_jwt(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("Bearer "):
+        return False
+    parts: Final = value.removeprefix("Bearer ").split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        claims: Final = _OBJECT.validate_json(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:
+        return False
+    return (
+        str(claims.get("iss", "")).endswith(".iam.gserviceaccount.com")
+        and claims.get("scope") == _SERVICE_ACCOUNT_SCOPE
+    )
+
+
+def _with_parity_token(requests: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    """The requests with a service account's self-signed JWT read as the parity token Python sends."""
+    return tuple(
+        {
+            **request,
+            "headers": {
+                name: _PARITY_TOKEN if name == "authorization" and _is_service_account_jwt(value) else value
                 for name, value in cast(Mapping[str, object], request.get("headers", {})).items()
             },
         }
