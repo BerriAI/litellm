@@ -426,12 +426,7 @@ const MCPAppsPanel: React.FC<Props> = ({
             {t("chat.mcpAppsPanel.signInToUse")}
           </span>
         )}
-        <OAuth2ConnectButton
-          server={server}
-          accessToken={accessToken}
-          onConnect={markSignedIn}
-          variant="badge"
-        />
+        <OAuth2ConnectButton server={server} accessToken={accessToken} onConnect={markSignedIn} variant="badge" />
       </>
     );
   };
