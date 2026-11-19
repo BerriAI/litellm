@@ -6195,6 +6195,20 @@ class TestRequestApiKeyIsNotAlwaysABedrockCredential:
     def _guardrail():
         return BedrockGuardrail(guardrailIdentifier="gid", guardrailVersion="DRAFT")
 
+    @staticmethod
+    def _endpoint_guardrail() -> BedrockGuardrail:
+        return BedrockGuardrail(
+            guardrailIdentifier="gid", guardrailVersion="DRAFT", aws_bedrock_runtime_endpoint="https://bedrock.example"
+        )
+
+    @staticmethod
+    def _apply_guardrail_route(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "guardrail-token")
+        return respx_mock.post("https://bedrock.example/guardrail/gid/version/DRAFT/apply").mock(
+            return_value=httpx.Response(200, json={"action": "NONE", "outputs": [], "assessments": []})
+        )
+
     @pytest.mark.parametrize(
         "request_data, expected",
         [
@@ -6226,9 +6240,9 @@ class TestRequestApiKeyIsNotAlwaysABedrockCredential:
         ],
     )
     async def test_a_bare_proxy_alias_reuses_the_request_key_only_when_it_routes_to_bedrock(
-        self, monkeypatch: pytest.MonkeyPatch, model: str, expected_authorization: str
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, model: str, expected_authorization: str
     ) -> None:
-        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "guardrail-token")
+        route: Final = self._apply_guardrail_route(monkeypatch, respx_mock)
         router: Final = litellm.Router(
             model_list=[
                 {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-deploy"}},
@@ -6236,33 +6250,27 @@ class TestRequestApiKeyIsNotAlwaysABedrockCredential:
             ]
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-        guardrail: Final = self._guardrail()
 
-        with patch.object(
-            guardrail.async_handler, "post", new_callable=AsyncMock, return_value=_passing_bedrock_httpx_response("ok")
-        ) as mock_post:
-            await guardrail.make_bedrock_api_request(
-                source="INPUT",
-                messages=[{"role": "user", "content": "hello"}],
-                request_data={"model": model, "api_key": "request-key"},
-            )
+        await self._endpoint_guardrail().make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data={"model": model, "api_key": "request-key"},
+        )
 
-        assert mock_post.call_args.kwargs["headers"]["Authorization"] == expected_authorization
+        assert route.calls.last.request.headers["Authorization"] == expected_authorization
 
     @pytest.mark.asyncio
     async def test_an_image_attachment_scan_does_not_send_a_byok_key_to_aws(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
     ) -> None:
-        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "guardrail-token")
-        guardrail: Final = self._guardrail()
+        route: Final = self._apply_guardrail_route(monkeypatch, respx_mock)
         data: Final = {**_image_only_chat_request(), "model": "nvidia_nim/meta/llama-3.1-8b", "api_key": "nvapi-SECRET"}
 
-        with patch.object(
-            guardrail.async_handler, "post", new_callable=AsyncMock, return_value=_passing_bedrock_httpx_response("ok")
-        ) as mock_post:
-            await guardrail.async_scan_request_attachments(data=data, call_type=CallTypes.acompletion.value)
+        await self._endpoint_guardrail().async_scan_request_attachments(
+            data=data, call_type=CallTypes.acompletion.value
+        )
 
-        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer guardrail-token"
+        assert route.calls.last.request.headers["Authorization"] == "Bearer guardrail-token"
 
     def test_byok_key_is_not_sent_to_aws_as_a_bearer_token(self):
         """End to end through _prepare_request: the NIM key must not become Authorization."""
