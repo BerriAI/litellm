@@ -80,6 +80,45 @@ def redact_message_input_output_from_custom_logger(
     return result
 
 
+def failure_details_for_custom_logger(
+    model_call_details: dict[str, object],  # mutable-ok: the kwargs dict a CustomLogger failure hook receives
+    custom_logger: CustomLogger,
+) -> dict[str, object]:  # mutable-ok: the kwargs dict a CustomLogger failure hook receives
+    """
+    The kwargs a failure hook of ``custom_logger`` gets: the per-callback redaction its success hooks get, with the
+    request's text also scrubbed out of the error when ``redacts_failure_events`` holds for it.
+    """
+    details: Final[dict[str, object]] = redacted_model_call_details_for_custom_logger(
+        custom_logger.redact_standard_logging_payload_from_model_call_details(model_call_details=model_call_details),
+        custom_logger,
+    )
+    if not redacts_failure_events(custom_logger):
+        return details
+    texts: Final = failure_request_texts(model_call_details)
+    payload: Final = _as_mapping(details.get("standard_logging_object"))
+    traceback_exception: Final = details.get("traceback_exception")
+    return {
+        **details,
+        **(
+            {"standard_logging_object": {**payload, **scrubbed_error_fields(payload, texts)}}
+            if payload is not None
+            else {}
+        ),
+        **(
+            {"traceback_exception": scrub_request_text(traceback_exception, texts)}
+            if isinstance(traceback_exception, str)
+            else {}
+        ),
+    }
+
+
+def redacts_failure_events(custom_logger: CustomLogger) -> bool:
+    """Whether ``custom_logger`` turns off message logging or opts out of it."""
+    return bool(getattr(custom_logger, "turn_off_message_logging", False)) or _opted_out_of_message_logging(
+        custom_logger
+    )
+
+
 def redacted_model_call_details_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
     """
     Returns a copy of model_call_details with the request messages, instructions and streaming responses
@@ -840,12 +879,14 @@ def scrubbed_error_fields(payload: Mapping[str, object], texts: Collection[str])
     }
 
 
-def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
+def scrubbed_exception_text(
+    model_call_details: Mapping[str, object], custom_logger: CustomLogger | None = None
+) -> tuple[str, str] | None:
     """
     The error message and traceback a failure logged when redaction scrubbed the request's text out of
     either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was scrubbed,
-    including when the failure's message logging is not redacted. Without a logged error message, the message is
-    the exception text that ends the traceback.
+    including when neither the failure's message logging nor ``custom_logger``, the callback recording it, is
+    redacted. Without a logged error message, the message is the exception text that ends the traceback.
     """
     payload: Final = _as_mapping(model_call_details.get("standard_logging_object")) or {}
     error_information: Final = _as_mapping(payload.get("error_information")) or {}
@@ -854,21 +895,27 @@ def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[s
     traceback_text: Final = (
         logged_traceback if isinstance(logged_traceback, str) else error_information.get("traceback")
     )
-    if not any(
+    holds_marker: Final = any(
         isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, traceback_text)
-    ) or not should_redact_failure_logging(model_call_details):
+    )
+    redacted: Final = should_redact_failure_logging(model_call_details) or (
+        custom_logger is not None and redacts_failure_events(custom_logger)
+    )
+    if not (holds_marker and redacted):
         return None
     logged_traceback_text: Final = traceback_text if isinstance(traceback_text, str) else ""
     return (message if isinstance(message, str) else _exception_text(logged_traceback_text), logged_traceback_text)
 
 
-def scrubbed_exception_record(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
+def scrubbed_exception_record(
+    model_call_details: Mapping[str, object], custom_logger: CustomLogger | None = None
+) -> tuple[str, str] | None:
     """
     The message and stack trace to record for the failure's exception when redaction scrubbed the request's text
     out of the logged error, as ``scrubbed_exception_text`` reads them. A failure that logged no traceback gets the
     exception's own frames, with ``REDACTED_BY_LITELLM`` for the text of each exception it chains.
     """
-    scrubbed: Final = scrubbed_exception_text(model_call_details)
+    scrubbed: Final = scrubbed_exception_text(model_call_details, custom_logger)
     exception: Final = model_call_details.get("exception")
     if scrubbed is None or scrubbed[1] or not isinstance(exception, BaseException):
         return scrubbed
@@ -928,7 +975,7 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
 def _redact_standard_logging_object(
     payload: Mapping[str, object], *, redact_shared_fields: bool = True
 ) -> dict[str, object]:
-    standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
+    standard_logging_object: Final = _payload_copy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
 
     if standard_logging_object.get("messages") is not None:
@@ -961,6 +1008,27 @@ def _redact_standard_logging_object(
             # For other formats (empty dict, None, etc.), use simple text format
             standard_logging_object["response"] = {"text": redacted_str}
     return standard_logging_object
+
+
+def _payload_copy(payload: Mapping[str, object]) -> dict[str, object]:
+    """
+    A deep copy of ``payload``. A field other than ``response``, which redaction rewrites in place, keeps a value
+    that cannot be deep-copied, such as a lock in caller metadata, as it is.
+    """
+    try:
+        return copy.deepcopy(dict(payload))
+    except (TypeError, copy.Error):
+        return {
+            key: copy.deepcopy(value) if key == "response" else _deep_copy_or_same(value)
+            for key, value in payload.items()
+        }
+
+
+def _deep_copy_or_same(value: object) -> object:
+    try:
+        return copy.deepcopy(value)
+    except (TypeError, copy.Error):
+        return value
 
 
 def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
