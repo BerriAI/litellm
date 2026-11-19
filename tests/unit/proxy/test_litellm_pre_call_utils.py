@@ -8253,6 +8253,32 @@ async def test_a_callers_own_provider_specific_headers_reach_the_provider_beside
     assert forwarded == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_headers", [{}, {"anthropic-beta": "beta-1"}], ids=["caller-entry-only", "beside-proxy-entries"]
+)
+async def test_a_callers_provider_specific_header_cannot_gate_itself_on_configured_headers(
+    request_headers: dict[str, str],
+) -> None:
+    updated: Final = await _request_data_added_by_the_proxy(
+        {
+            "provider_specific_header": {
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"Authorization": "Bearer caller-token"},
+                "configured_credential_headers": ["x-trace"],
+            },
+        },
+        request_headers,
+        {},
+    )
+    sent: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        model="claude-sonnet-5-5",
+        provider_specific_header=_FORWARDED_ENTRIES.validate_python(updated.get("provider_specific_header")),
+        custom_llm_provider="anthropic",
+    )
+    assert sent.get("Authorization") == "Bearer caller-token"
+
+
 @pytest.mark.parametrize("custom_llm_provider", ["anthropic", "azure_ai", "bedrock", "bedrock_mantle", "vertex_ai"])
 def test_anthropic_user_profile_id_reaches_every_claude_provider(custom_llm_provider: str) -> None:
     data: Final[dict] = {}  # mutable-ok: the function under test writes into it

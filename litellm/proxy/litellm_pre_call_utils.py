@@ -21,6 +21,7 @@ from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -4229,9 +4230,18 @@ def _request_entries(value: object) -> tuple[object, ...]:
         return (value,)
 
 
-def _valid_provider_specific_header(entry: object) -> ProviderSpecificHeader | None:
+class _CallerProviderSpecificHeader(TypedDict):
+    custom_llm_provider: ReadOnly[str]
+    extra_headers: ReadOnly[dict[str, str]]
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
+
+
+_CALLER_PROVIDER_SPECIFIC_HEADER: Final = TypeAdapter(_CallerProviderSpecificHeader)
+
+
+def _caller_provider_specific_header(entry: object) -> ProviderSpecificHeader | None:
     try:
-        return _PROVIDER_SPECIFIC_HEADER.validate_python(entry)
+        return _PROVIDER_SPECIFIC_HEADER.validate_python(_CALLER_PROVIDER_SPECIFIC_HEADER.validate_python(entry))
     except PydanticValidationError:
         return None
 
@@ -4405,13 +4415,13 @@ def add_provider_specific_headers_to_request(
             if user_profile_id
             else (entry,)
             for entry in map(
-                _valid_provider_specific_header, _request_entries(request_fields.get("provider_specific_header"))
+                _caller_provider_specific_header, _request_entries(request_fields.get("provider_specific_header"))
             )
             if entry is not None
         )
     )
     entries: Final = [*caller_entries, *scoped_headers]
-    if scoped_headers:
+    if entries:
         data["provider_specific_header"] = entries[0] if len(entries) == 1 else entries
     return bool(anthropic_oauth_credential_headers)
 
