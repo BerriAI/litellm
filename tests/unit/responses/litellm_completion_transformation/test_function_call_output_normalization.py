@@ -250,7 +250,7 @@ def test_tool_references_reach_anthropic_in_order(
     original: Final = deepcopy(output)
     messages: Final = (
         LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
-            {"type": kind, "call_id": "call_load_tools", "output": output}
+            {"type": kind, "call_id": "call_load_tools", "output": output}, keep_tool_references=True
         )
     )
 
@@ -263,3 +263,43 @@ def test_tool_references_reach_anthropic_in_order(
         "content": expected_content,
     }
     assert output == original
+
+
+_REFERENCE_ONLY: Final = [{"type": "tool_reference", "tool_name": "get_weather"}]
+_TEXT_THEN_REFERENCE: Final = [
+    {"type": "input_text", "text": "Loaded "},
+    {"type": "tool_reference", "tool_name": "get_weather"},
+]
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "output", "expected_content"),
+    [
+        ("claude-opus-5-5", "anthropic", _REFERENCE_ONLY, _REFERENCE_ONLY),
+        ("claude-opus-5-5", "anthropic", _TEXT_THEN_REFERENCE, [{"type": "text", "text": "Loaded "}, *_REFERENCE_ONLY]),
+        ("gpt-5.6", "openai", _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
+        ("gemini-3.1-pro-preview", "vertex_ai", _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
+        ("gpt-5.6", "openai", _TEXT_THEN_REFERENCE, "Loaded "),
+    ],
+    ids=[
+        "anthropic-reference-only",
+        "anthropic-text-then-reference",
+        "openai-keeps-json",
+        "vertex-gemini-keeps-json",
+        "openai-keeps-text",
+    ],
+)
+def test_only_anthropic_routes_receive_tool_references(
+    model: str, custom_llm_provider: str, output: list[dict[str, str]], expected_content: object
+) -> None:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[
+            {"type": "function_call", "call_id": "call_route_refs", "name": "load_tools", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_route_refs", "output": output},
+        ],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert [message["content"] for message in request["messages"] if message["role"] == "tool"] == [expected_content]
