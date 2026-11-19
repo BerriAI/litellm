@@ -2,6 +2,7 @@
 Cost calculation for search providers.
 """
 
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -76,10 +77,24 @@ def _pricing_model(
     return mode_model
 
 
+def _finite_number(text: str) -> float | None:
+    try:
+        number: Final = float(text)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _max_results(optional_params: Mapping[str, object] | None) -> float | None:
-    """The `max_results` the request asked for, which picks a `max_results_range` tier."""
+    """The `max_results` the request asked for, a number or a numeric string, which picks a `max_results_range` tier."""
     max_results: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get("max_results")
-    return float(max_results) if isinstance(max_results, (int, float)) else None
+    match max_results:
+        case int() | float():
+            return float(max_results)
+        case str():
+            return _finite_number(max_results)
+        case _:
+            return None
 
 
 def _parallel_ai_billed(optional_params: Mapping[str, object]) -> tuple[str, int, int]:

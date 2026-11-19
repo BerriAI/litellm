@@ -207,22 +207,18 @@ fn price_of(value: &Value) -> Option<UnitPrice> {
     UnitPrice::deserialize(value).ok()
 }
 
-/// A `tiered_pricing` entry as `search_provider_cost_per_query` reads it, which compares and multiplies JSON numbers only
+/// A `tiered_pricing` entry as `search_provider_cost_per_query` reads it, which compares JSON numbers only
 fn result_tier(tier: &Value) -> ResultTier {
-    let number = |value: &Value| value.as_f64();
     ResultTier {
         results: match tier
             .get("max_results_range")
             .and_then(Value::as_array)
             .map(Vec::as_slice)
         {
-            Some([low, high]) => number(low).zip(number(high)),
+            Some([low, high]) => low.as_f64().zip(high.as_f64()),
             _ => None,
         },
-        rate: tier
-            .get("input_cost_per_query")
-            .and_then(number)
-            .and_then(UnitPrice::new),
+        rate: tier.get("input_cost_per_query").and_then(price_of),
     }
 }
 
@@ -513,7 +509,9 @@ mod tests {
     #[rstest]
     #[case::numbers(json!({"max_results_range": [0, 25], "input_cost_per_query": 0.005}), Some((0.0, 25.0)), Some(0.005))]
     #[case::fractional(json!({"max_results_range": [1, 10.5], "input_cost_per_query": 5e-3}), Some((1.0, 10.5)), Some(0.005))]
-    #[case::numeric_text(json!({"max_results_range": ["1", 10], "input_cost_per_query": "5e-3"}), None, None)]
+    #[case::numeric_text(json!({"max_results_range": ["1", 10], "input_cost_per_query": "5e-3"}), None, Some(0.005))]
+    #[case::word_rate(json!({"max_results_range": [0, 25], "input_cost_per_query": "cheap"}), Some((0.0, 25.0)), None)]
+    #[case::bool_rate(json!({"max_results_range": [0, 25], "input_cost_per_query": true}), Some((0.0, 25.0)), None)]
     #[case::token_tier(json!({"range": [0, 1000], "input_cost_per_token": 1e-6}), None, None)]
     #[case::short_range(json!({"max_results_range": [5], "input_cost_per_query": 0.005}), None, Some(0.005))]
     #[case::not_an_object(json!(7), None, None)]
