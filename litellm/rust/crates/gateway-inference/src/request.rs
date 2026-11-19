@@ -9,7 +9,8 @@ use serde_json::{Map, Value};
 use crate::{BodyError, Error};
 
 pub(crate) const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
-pub(crate) const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
+/// The largest request body an inference route reads.
+pub const MAX_BODY_BYTES: usize = MAX_FILE_BYTES + 1024 * 1024;
 
 pub(crate) struct Upload {
     pub bytes: Bytes,
@@ -17,6 +18,9 @@ pub(crate) struct Upload {
     pub mime_type: Option<String>,
 }
 
+/// A request's JSON object body. One already in the request's extensions is taken as parsed, so
+/// whoever read the body before the route does not make the route parse it again.
+#[derive(Clone)]
 pub struct JsonObject(pub Map<String, Value>);
 
 pub struct RequestId(pub Option<String>);
@@ -51,7 +55,8 @@ impl<S: Send + Sync> FromRequestParts<S> for RequestId {
 impl<S: Send + Sync> FromRequest<S> for JsonObject {
     type Rejection = Error;
 
-    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request(mut request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let parsed = request.extensions_mut().remove::<Self>();
         let body = Bytes::from_request(request, state).await.map_err(|error| {
             if error.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
                 Error::BodyTooLarge
@@ -59,7 +64,10 @@ impl<S: Send + Sync> FromRequest<S> for JsonObject {
                 BodyError::Read(error).into()
             }
         })?;
-        Ok(Self(object(&body)?))
+        match parsed {
+            Some(parsed) => Ok(parsed),
+            None => Ok(Self(object(&body)?)),
+        }
     }
 }
 
@@ -198,5 +206,38 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
         assert_eq!(body["error"]["type"], "request_too_large");
         assert_eq!(body["error"]["code"], 413);
+    }
+
+    fn already_parsed(sent: &'static str) -> Request {
+        let parsed = serde_json::from_str(r#"{"model":"parsed"}"#).unwrap();
+        let mut request = Request::post("/").body(Body::from(sent)).unwrap();
+        request.extensions_mut().insert(JsonObject(parsed));
+        request
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_body_already_parsed_is_not_parsed_again() {
+        let JsonObject(body) = JsonObject::from_request(already_parsed(r#"{"model":"sent"}"#), &())
+            .await
+            .ok()
+            .unwrap();
+
+        assert_eq!(body["model"], "parsed");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_body_already_parsed_is_still_held_to_the_body_limit() {
+        let limited = Router::new()
+            .route("/", post(|_: JsonObject| async {}))
+            .layer(DefaultBodyLimit::max(8));
+
+        let response = limited
+            .oneshot(already_parsed(r#"{"model":"sent"}"#))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 413);
     }
 }

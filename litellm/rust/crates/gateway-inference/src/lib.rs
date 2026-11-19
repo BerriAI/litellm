@@ -34,7 +34,7 @@ use litellm_secrets::source::SecretSource;
 
 pub use error::{BodyError, Ended, Error};
 pub use headers::ExposedHeader;
-pub use request::{JsonObject, RequestId};
+pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 pub use routing::Host;
 
 pub struct Gateway<H> {

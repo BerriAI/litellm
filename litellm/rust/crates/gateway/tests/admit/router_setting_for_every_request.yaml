@@ -1,0 +1,31 @@
+# A router setting the native router cannot serve that reaches every call sends every request to
+# Python. The native app is still built, from the config as written, so the config sets each of
+# them.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    routing_strategy: least-busy
+    enable_pre_call_checks: true
+    optional_pre_call_checks: [enforce_model_rate_limits]
+    enable_tag_filtering: true
+    enable_health_check_routing: true
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: router_settings.optional_pre_call_checks
+
+  - name: other caller
+    headers: {authorization: Bearer sk-someone-else}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings

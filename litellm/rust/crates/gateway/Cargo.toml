@@ -34,6 +34,7 @@ litellm-http.workspace = true
 litellm-inference-messages.workspace = true
 litellm-license.workspace = true
 litellm-llms.workspace = true
+litellm-llms-types.workspace = true
 litellm-model-catalog.workspace = true
 litellm-router-core.workspace = true
 litellm-secrets.workspace = true
@@ -49,6 +50,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true
+litellm-yaml.workspace = true
+serde_yaml_ng = "0.10.0"
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 tempfile.workspace = true
