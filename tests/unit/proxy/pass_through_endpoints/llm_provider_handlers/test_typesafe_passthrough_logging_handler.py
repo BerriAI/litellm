@@ -507,7 +507,7 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row() -
 
     model_key: Final = "typesafe/jev-1.13.0"
     pricing: Final = litellm.model_cost[model_key]
-    start: Final = datetime.now()
+    start: Final = datetime(2000, 1, 1)
     logging_obj: Final = Logging(
         model="jev-1.13.0",
         messages=[],
@@ -565,7 +565,7 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row() -
         url_route="https://api.typesafe.ai/v1/systemone",
         result="{}",
         start_time=start,
-        end_time=datetime.now(),
+        end_time=start,
         cache_hit=False,
         request_body=request_body,
         custom_llm_provider="typesafe",
@@ -583,7 +583,7 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row() -
         kwargs=details,
         response_obj=StandardPassThroughResponseObject(response="{}"),
         start_time=start,
-        end_time=datetime.now(),
+        end_time=start,
     )
     assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (12, 1, 13)
     assert row["spend"] == pytest.approx(expected_cost)
