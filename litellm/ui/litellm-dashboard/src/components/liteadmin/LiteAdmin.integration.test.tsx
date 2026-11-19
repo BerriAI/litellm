@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { Fragment, useEffect, type ComponentType } from "react";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
 import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { AriaUsageTrigger, LiteAdminFrame, LiteAdminPage, AriaSidebarLink } from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -26,6 +27,7 @@ vi.unmock("@/lib/toast");
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 const MANAGEMENT = "https://management.test/proxy";
+const browserCrypto = globalThis.crypto;
 const INFERENCE = "https://management.test/inference";
 const EXTERNAL_INFERENCE = "https://inference.test/proxy";
 const NEW_KEY = "sk-created-for-widget-test";
@@ -121,7 +123,9 @@ function renderWidget(
           {Menu && <Menu onLogout={() => undefined} />}
           <LiteAdminFrame>
             <Page />
-            <AriaSidebarLink active={page} />
+            <SidebarProvider>
+              <AriaSidebarLink active={page} />
+            </SidebarProvider>
             {page && <LiteAdminPage />}
             {usage && (
               <>
@@ -253,9 +257,24 @@ beforeEach(() => {
 afterEach(() => {
   toast.dismiss();
   document.cookie = "token=; Max-Age=0; Path=/";
+  vi.stubGlobal("crypto", browserCrypto);
 });
 
 describe("Aria Agent in the gateway", () => {
+  it("sends a question and displays the answer without a secure browser context", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });
+    const requests = gateway([answer("Your gateway is ready.")]);
+    renderWidget(undefined, false, true);
+    const input = await screen.findByPlaceholderText("Ask Aria…");
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "Is my gateway ready?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("Is my gateway ready?")).toBeInTheDocument();
+    expect(await screen.findByText("Your gateway is ready.")).toBeInTheDocument();
+    const completion = requests.find((request) => request.url.endsWith("/chat/completions"));
+    expect(completion?.body.messages).toContainEqual({ role: "user", content: "Is my gateway ready?" });
+  });
+
   it.each(["internal_user", "internal_user_viewer"])("hides Aria for %s with no internal access", async (role) => {
     session(role);
     gateway([], { uiSettings: async () => json({ values: { aria_internal_user_access: "none" } }) });

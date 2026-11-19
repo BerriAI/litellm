@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../../tests/test-utils";
+import {
+  act,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../../tests/test-utils";
 import CustomersPage from "./page";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
@@ -114,14 +122,24 @@ afterEach(() => {
   document.cookie = "token=; Max-Age=0; Path=/";
 });
 
-const customerLinks = () => within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
+const customerLinks = () =>
+  within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link", {
+    name: (name) => name !== "App budgets",
+  });
 
 describe("customer organization overview", () => {
-  it("keeps complete totals and shares while sorting, paginating, and searching", async () => {
+  it("should keep complete totals and shares while sorting, paginating, and searching", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
     await screen.findByRole("link", { name: "Customer 29" });
     expect(customerLinks()[0]).toHaveTextContent("Customer 29");
+    expect(customerLinks()[0]).toHaveAttribute(
+      "href",
+      "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15",
+    );
+    expect(
+      within(screen.getByRole("row", { name: /Customer 29/ })).getByRole("link", { name: "App budgets" }),
+    ).toHaveAttribute("href", "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15#app-budgets");
     const overview = screen.getByRole("region", { name: "Overall customer usage" });
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
     expect(within(overview).getByText("20")).toBeInTheDocument();
@@ -129,9 +147,9 @@ describe("customer organization overview", () => {
       "aria-valuenow",
       "25",
     );
-    await user.click(screen.getByRole("button", { name: "Share of overall spend" }));
+    await user.click(screen.getByRole("button", { name: "Overall spend share" }));
     await waitFor(() => expect(customerLinks()[0]).toHaveTextContent("Customer 00"));
-    expect(screen.getByRole("columnheader", { name: "Share of overall spend" })).toHaveAttribute(
+    expect(screen.getByRole("columnheader", { name: "Overall spend share" })).toHaveAttribute(
       "aria-sort",
       "descending",
     );
@@ -140,53 +158,64 @@ describe("customer organization overview", () => {
     expect(within(row).getByText("Reached limit")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page" }));
     expect(await screen.findByText("Page 2 of 2")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: /Search by customer/ }), { target: { value: "Customer 29" } });
+    act(() => {
+      fireEvent.change(screen.getByRole("textbox", { name: /Search by name or ID/ }), {
+        target: { value: "Customer 29" },
+      });
+    });
     await screen.findByText("Page 1 of 1");
     expect(customerLinks()).toHaveLength(1);
     expect(within(screen.getByRole("row", { name: /Customer 29/ })).getByText("25%")).toBeInTheDocument();
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
   });
 
-  it("restores saved sorting and changes summary dates without changing monthly shares", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<CustomersPage />, {
-      searchParams: "?sort_by=customer&sort_order=asc&range=2024-02-01..2024-02-29",
-    });
-    await screen.findByRole("link", { name: "Customer 00" });
-    expect(customerLinks()[0]).toHaveTextContent("Customer 00");
-    expect(
-      within(screen.getByRole("region", { name: "Overall customer usage" })).getByText("$20.00"),
-    ).toBeInTheDocument();
-    expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
-      "href",
-      "/ui/customers/usage?org=customer-00&from=2024-02-01&to=2024-02-29",
-    );
-    await user.click(screen.getByRole("button", { name: /1 Feb 2024/ }));
-    await user.click(screen.getByRole("button", { name: /This month/ }));
-    await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(
-      await within(screen.getByRole("region", { name: "Overall customer usage" })).findByText("$100.00"),
-    ).toBeInTheDocument();
-    expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
-  });
+  it.each(["range=2024-02-01..2024-02-29", "from=2024-02-01&to=2024-02-29"])(
+    "should restore saved sorting and %s without changing monthly shares",
+    async (dates) => {
+      const user = userEvent.setup();
+      renderWithProviders(<CustomersPage />, {
+        searchParams: `?sort_by=customer&sort_order=asc&${dates}`,
+      });
+      await screen.findByRole("link", { name: "Customer 00" });
+      expect(customerLinks()[0]).toHaveTextContent("Customer 00");
+      expect(
+        within(screen.getByRole("region", { name: "Overall customer usage" })).getByText("$20.00"),
+      ).toBeInTheDocument();
+      expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
+        "href",
+        "/ui/customers/usage?org=customer-00&from=2024-02-01&to=2024-02-29",
+      );
+      await user.click(screen.getByRole("button", { name: /1 Feb 2024/ }));
+      await user.click(screen.getByRole("button", { name: /This month/ }));
+      await user.click(screen.getByRole("button", { name: "Apply" }));
+      expect(
+        await within(screen.getByRole("region", { name: "Overall customer usage" })).findByText("$100.00"),
+      ).toBeInTheDocument();
+      expect(within(screen.getByRole("row", { name: /Customer 00/ })).getByText("75%")).toBeInTheDocument();
+    },
+  );
 
-  it("shows a newly created customer first and resets the search, sort, and page", async () => {
+  it("should show a newly created customer first and resets the search, sort, and page", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />, { searchParams: "?search=customer&sort_by=customer&sort_order=asc&page=2" });
     await screen.findByRole("link", { name: "Customer 25" });
-    await user.click(screen.getByRole("button", { name: "Create customer organization" }));
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New organization" } });
-    fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: "new-org" } });
+    await user.click(screen.getByRole("button", { name: "Create organization" }));
+    act(() => {
+      fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "New organization" } });
+    });
+    act(() => {
+      fireEvent.change(screen.getByLabelText("Customer organization id"), { target: { value: "new-org" } });
+    });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create customer" }));
     await screen.findByRole("link", { name: "New organization" });
     expect(customerLinks()[0]).toHaveTextContent("New organization");
-    expect(screen.getByRole("textbox", { name: /Search by customer/ })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: /Search by name or ID/ })).toHaveValue("");
     expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
     expect(creations).toEqual([expect.objectContaining({ customer_org_id: "new-org", alias: "New organization" })]);
   });
 
-  it("reports failed usage instead of displaying partial totals or zero shares", async () => {
+  it("should report failed usage instead of displaying partial totals or zero shares", async () => {
     failed = true;
     renderWithProviders(<CustomersPage />);
     expect(await screen.findAllByText("Could not load customer organization usage.")).toHaveLength(2);

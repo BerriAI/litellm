@@ -31,6 +31,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 )
 from litellm.proxy.utils import hash_token
 from litellm.types.passthrough_endpoints.pass_through_endpoints import WebSocketSessionMeter
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 GET_CREDENTIALS: Final = (
     "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
@@ -423,7 +424,7 @@ def test_deepgram_listen_authorizes_the_model_it_will_actually_send_upstream(que
         patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
             "litellm.proxy.proxy_server",
             master_key="sk-master",
-            prisma_client=MagicMock(),
+            prisma_client=prisma_with_empty_config(),
             user_api_key_cache=cache,
             llm_model_list=None,
             llm_router=None,
@@ -461,7 +462,7 @@ def test_deepgram_listen_strips_a_second_model_that_would_outrank_the_authorized
         patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
             "litellm.proxy.proxy_server",
             master_key="sk-master",
-            prisma_client=MagicMock(),
+            prisma_client=prisma_with_empty_config(),
             user_api_key_cache=cache,
             llm_model_list=None,
             llm_router=None,
@@ -643,7 +644,7 @@ def test_deepgram_speak_relays_only_the_voice_the_key_was_checked_against(
     with patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
         "litellm.proxy.proxy_server",
         master_key="sk-master",
-        prisma_client=MagicMock(),
+        prisma_client=prisma_with_empty_config(),
         user_api_key_cache=cache,
         llm_model_list=None,
         llm_router=None,
@@ -674,7 +675,7 @@ def test_deepgram_speak_refuses_a_voice_the_key_is_not_allowed(query: str, monke
     with patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
         "litellm.proxy.proxy_server",
         master_key="sk-master",
-        prisma_client=MagicMock(),
+        prisma_client=prisma_with_empty_config(),
         user_api_key_cache=cache,
         llm_model_list=None,
         llm_router=None,

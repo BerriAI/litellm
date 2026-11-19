@@ -5,7 +5,7 @@ import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../t
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getProxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import SkillDetail, { skillHubDetail } from "./skill_detail";
-import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse } from "./types";
+import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse, SkillHubSkill } from "./types";
 
 const digest = "a".repeat(64);
 const archivePath = `/claude-code/plugins/my-skill/archive/${digest}.zip`;
@@ -26,6 +26,19 @@ const renderSkill = (source = skill.source, isAdmin = false) =>
   renderWithProviders(
     <SkillDetail skill={{ ...skill, source }} onBack={vi.fn()} accessToken="dashboard-token" isAdmin={isAdmin} />,
   );
+const renderHub = (overrides: Partial<SkillHubSkill> = {}) => {
+  const hubSkill: SkillHubSkill = {
+    ...skill,
+    security_scan_passed: false,
+    visibility: "private",
+    download_url: "/skill-hub/skills/my-skill/archive",
+    content_url: "/skill-hub/skills/my-skill/content",
+    ...overrides,
+  };
+  return renderWithProviders(
+    <SkillDetail skill={skillHubDetail(hubSkill)} onBack={vi.fn()} accessToken="dashboard-token" isAdmin />,
+  );
+};
 const downloadsUrl = `${getProxyBaseUrl()}/skill-hub/skills/my-skill/downloads?limit=25`;
 const event = {
   id: "9007199254740993",
@@ -75,11 +88,11 @@ it.each(["legacy", "portable"])(
     URL.createObjectURL = vi.fn(() => "blob:skill-download");
     setGlobalLitellmHeaderName("X-LiteLLM-Key");
     const expectedUrl = kind === "portable" ? `${getProxyBaseUrl()}/skill-hub/skills/my-skill/archive` : url;
-    const detail =
-      kind === "portable"
-        ? skillHubDetail({ ...skill, visibility: "private", download_url: "/skill-hub/skills/my-skill/archive" })
-        : skill;
-    renderWithProviders(<SkillDetail skill={detail} onBack={vi.fn()} accessToken="dashboard-token" />);
+    renderHub(kind === "legacy" ? { download_url: url, content_url: null } : {});
+    if (kind === "legacy") {
+      expect(screen.getByRole("tab", { name: "How to Use" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Install / Share" })).not.toBeInTheDocument();
+    }
     skillRequestMock.mockResolvedValueOnce(Response.json({ detail: "Archive not found" }, { status: 404 }));
     fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
     expect(screen.getByRole("button", { name: "Downloading…" })).toBeDisabled();
@@ -105,14 +118,40 @@ it.each(["legacy", "portable"])(
 
 it("keeps an external archive as a link while retaining stored download history", async () => {
   const externalUrl = `https://external.example.com${archivePath}`;
-  renderSkill({ ...skill.source, url: externalUrl }, true);
+  const reference = {
+    source: { ...skill.source, url: externalUrl },
+    download_url: null,
+    content_url: null,
+    author: { name: "Maintainer", email: "maintainer@example.test" },
+    category: "Review",
+    homepage: "https://example.test/skill",
+  };
+  renderHub(reference);
+  for (const name of ["Maintainer", "maintainer@example.test", "Review", "https://example.test/skill"])
+    expect(screen.getByRole("cell", { name })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Install / Share" })).not.toBeInTheDocument();
   expect(screen.getByRole("link")).toHaveAttribute("href", externalUrl);
   expect(screen.getByRole("link")).toHaveAttribute("target", "_blank");
   expect(screen.queryByRole("button", { name: "Download ZIP" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "How to Use" }));
+  expect(screen.getByText("/plugin install my-skill@litellm")).toBeInTheDocument();
   skillRequestMock.mockResolvedValueOnce(Response.json(page([event])));
   fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
   expect(await screen.findByRole("cell", { name: event.user_email })).toBeInTheDocument();
   expect(screen.getByText(/External downloads are not tracked/)).toBeInTheDocument();
+});
+
+it("renders the stored GitLab ref and subdirectory as the source link", () => {
+  const source = {
+    source: "git-subdir",
+    url: "https://gitlab.com/team/nested/repo.git",
+    ref: "release-2",
+    path: "plugins/example",
+  };
+  renderSkill(source);
+  const href = "https://gitlab.com/team/nested/repo/-/tree/release-2/plugins/example";
+  expect(screen.getByRole("link")).toHaveAttribute("href", href);
+  expect(screen.getByRole("link")).toHaveTextContent(href.replace("https://", ""));
 });
 
 it("shows attribution and string cursors, retains rows on failure, and hides populated history on role loss", async () => {
@@ -198,13 +237,7 @@ it("copies the selected private install without sharing a session key and report
   const writeText = vi.spyOn(navigator.clipboard, "writeText").mockReturnValueOnce(pendingCopy.promise);
   setGlobalLitellmHeaderName("X-LiteLLM-Key");
   skillRequestMock.mockResolvedValue(Response.json({ detail: "Not Found" }, { status: 404 }));
-  renderWithProviders(
-    <SkillDetail
-      skill={skillHubDetail({ ...skill, visibility: "private", download_url: "/skill-hub/skills/my-skill/archive" })}
-      onBack={vi.fn()}
-      accessToken="dashboard-token"
-    />,
-  );
+  renderHub();
   expect(skillRequestMock).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Install / Share" }));
   await chooseSelectOption(user, screen.getByRole("combobox", { name: "Coding agent" }), "Claude Code");
@@ -239,13 +272,7 @@ it("offers the indexed public skill name and discards its availability when reop
       skills: [{ name: "my-skill-2", type: "archive", url: `${getProxyBaseUrl()}${portablePath}?digest=sha256:abc` }],
     }),
   );
-  renderWithProviders(
-    <SkillDetail
-      skill={skillHubDetail({ ...skill, visibility: "public", download_url: portablePath })}
-      onBack={vi.fn()}
-      accessToken="dashboard-token"
-    />,
-  );
+  renderHub({ visibility: "public", download_url: portablePath });
   fireEvent.click(screen.getByRole("button", { name: "Install / Share" }));
   fireEvent.click(await screen.findByRole("radio", { name: "Public command" }));
   focusManager.setFocused(false);

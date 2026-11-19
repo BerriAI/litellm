@@ -34,7 +34,7 @@ import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
 import ConditionalPublicModelName from "./conditional_public_model_name";
-import LiteLLMModelNameField from "./litellm_model_name";
+import NimModelNameField from "./NimModelNameField";
 import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { authTypesFor } from "./provider_auth_types";
@@ -295,7 +295,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                           />
                         )}
                       </MountedFormField>
-                      <LiteLLMModelNameField
+                      <NimModelNameField
+                        accessToken={accessToken}
+                        canDiscover={canCreateCredential}
                         selectedProvider={selectedProvider}
                         providerModels={providerModels}
                         getPlaceholder={getPlaceholder}

@@ -25,7 +25,6 @@ import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
 import { navigateToUiPage } from "@/utils/uiNavigation";
 import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -80,7 +79,6 @@ function LoginPageContent() {
   const [isLoading, setIsLoading] = useState(true);
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
   const loginMutation = useLogin();
-  const router = useRouter();
   const { workers, selectWorker } = useWorker();
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const workerFieldId = useId();
@@ -149,12 +147,12 @@ function LoginPageContent() {
       if (returnUrl && isValidReturnUrl(returnUrl)) {
         ssoUrl += `?redirect_to=${encodeURIComponent(returnUrl)}`;
       }
-      router.push(ssoUrl);
+      window.location.assign(ssoUrl);
       return;
     }
 
     setIsLoading(false);
-  }, [isConfigLoading, router, uiConfig]);
+  }, [isConfigLoading, uiConfig]);
 
   const handleSubmit = ({ username, password }: LoginFormValues) => {
     // If a worker is selected, point proxyBaseUrl at it before login
@@ -355,7 +353,7 @@ function LoginPageContent() {
                         // include return_to so the callback redirects back here
                         const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
                         const returnTo = encodeURIComponent(getLoginUrl(window.location.origin));
-                        router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
+                        window.location.assign(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
                       }}
                       className="w-full"
                     >

@@ -63,26 +63,22 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Final
 
 import pytest
-
 from e2e_config import (
     MEMORY_CONCURRENCY,
     MEMORY_IDLE_RSS_BUDGET_MB,
     MEMORY_REQUESTS_PER_PHASE,
     MEMORY_RETRIES_PER_REQUEST,
     MEMORY_RSS_CEILING_MB,
-    MEMORY_RSS_SAMPLE_INTERVAL_SECONDS,
-    MEMORY_RSS_SETTLE_SAMPLES,
     MEMORY_TRANSCRIPT_TURNS,
     PROXY_REPLICA_URLS,
     unique_marker,
 )
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
-from memory_readings import RssCapture, RssReading, WorkerKey, read_rss_everywhere
+from memory_readings import RssCapture, RssReading, WorkerKey, settled_rss_per_worker
 from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
 from proxy_client import ProxyClient
 
@@ -91,7 +87,6 @@ pytestmark = [pytest.mark.e2e, pytest.mark.perf]
 REFUSING_MODEL: Final = "openai/gpt-5.5"
 
 DEPLOYMENTS_PER_GROUP: Final = 2
-RSS_SAMPLE_CAP: Final = 4 * MEMORY_RSS_SETTLE_SAMPLES
 WARMUP_BATCHES: Final = 2
 MEASURED_BATCHES: Final = 2
 FIRST_MEASURED_BATCH: Final = WARMUP_BATCHES + 1
@@ -131,9 +126,7 @@ def _register_refusing_group(proxy: ProxyClient, resources: ResourceManager, nam
 
 def _transcript(turns: int) -> tuple[ChatMessage, ...]:
     return tuple(
-        ChatMessage(role=role, content=f"turn {turn} {role}")
-        for turn in range(turns)
-        for role in ("user", "assistant")
+        ChatMessage(role=role, content=f"turn {turn} {role}") for turn in range(turns) for role in ("user", "assistant")
     )
 
 
@@ -162,40 +155,6 @@ def _fail_many(proxy: ProxyClient, key: str, model: str, override: RouterSetting
             pool.submit(_fail_once, proxy, key, model, override) for _ in range(MEMORY_REQUESTS_PER_PHASE)
         )
         return tuple(future.result() for future in futures)
-
-
-def _read_rss_everywhere_after_pause(proxy: ProxyClient) -> tuple[RssReading, ...]:
-    time.sleep(MEMORY_RSS_SAMPLE_INTERVAL_SECONDS)
-    capture: Final = read_rss_everywhere(proxy)
-    assert not capture.failures, (
-        f"{len(capture.failures)} replica(s) gave no RSS reading mid-checkpoint, so their workers cannot be "
-        f"compared with themselves: {'; '.join(capture.failures)}"
-    )
-    return capture.readings
-
-
-def _readings_until_no_new_worker(
-    proxy: ProxyClient, readings: tuple[RssReading, ...], samples: int, samples_since_new_worker: int
-) -> tuple[RssReading, ...]:
-    if samples >= RSS_SAMPLE_CAP or samples_since_new_worker >= MEMORY_RSS_SETTLE_SAMPLES:
-        return readings
-    sample: Final = _read_rss_everywhere_after_pause(proxy)
-    known: Final = frozenset(reading.worker for reading in readings)
-    new_worker_answered: Final = any(reading.worker not in known for reading in sample)
-    return _readings_until_no_new_worker(
-        proxy, readings + sample, samples + 1, 0 if new_worker_answered else samples_since_new_worker + 1
-    )
-
-
-def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading]:
-    readings: Final = _readings_until_no_new_worker(proxy, (), 0, 0)
-    assert readings, "no /debug/memory/summary read carried ram_usage_mb, so the proxy cannot report its RSS"
-    return MappingProxyType(
-        {
-            worker: min((reading for reading in readings if reading.worker == worker), key=lambda r: r.ram_usage_mb)
-            for worker in {reading.worker for reading in readings}
-        }
-    )
 
 
 def _record_batch_growth(
@@ -232,7 +191,7 @@ def _settled_rss_after_batches(
 ) -> Mapping[WorkerKey, RssReading]:
     calls: Final = _fail_many(proxy, key, model, override)
     _assert_every_call_failed_through_fallback(calls, fallback)
-    after: Final = _settled_rss_per_worker(proxy)
+    after: Final = settled_rss_per_worker(proxy)
     _record_batch_growth(record_property, batch, before, after)
     if batch == last_batch:
         return after
@@ -327,7 +286,7 @@ class TestReliabilityMemory:
             override,
             fallback,
             record_property,
-            _settled_rss_per_worker(proxy),
+            settled_rss_per_worker(proxy),
             1,
             WARMUP_BATCHES,
         )

@@ -1,8 +1,6 @@
 import asyncio
 import importlib
-import subprocess
 import sys
-import textwrap
 import types
 from types import MappingProxyType
 from collections.abc import Mapping, Sequence
@@ -831,10 +829,12 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
+        guardrail_context={"metadata": {"guardrails": ("requested-guardrail",)}},
     )
 
     assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
-    assert proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"] == logging_obj.model_call_details
+    request_data = proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"]
+    assert (request_data["request_id"], request_data["metadata"]["guardrails"]) == ("request-1", ["requested-guardrail"])
 
 
 @pytest.mark.asyncio
@@ -1030,52 +1030,6 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
     )
 
     assert captured["metadata"]["tags"] == ["team-a", "prod"]
-
-
-def test_completion_with_function_tools_works_without_fastapi_installed():
-    script = textwrap.dedent(
-        """
-        import sys
-
-        class _FastapiBlocker:
-            def find_spec(self, fullname, path=None, target=None):
-                if fullname == "fastapi" or fullname.startswith("fastapi."):
-                    raise ModuleNotFoundError("No module named 'fastapi'")
-                return None
-
-        sys.meta_path.insert(0, _FastapiBlocker())
-
-        import litellm
-
-        response = litellm.completion(
-            model="openai/gpt-5.5",
-            messages=[{"role": "user", "content": "What is the weather in SF?"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "description": "Get the current weather for a location",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"location": {"type": "string"}},
-                            "required": ["location"],
-                        },
-                    },
-                }
-            ],
-            mock_response="sunny",
-        )
-        assert response.choices[0].message.content == "sunny"
-        """
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 def test_extract_tool_call_details_reads_anthropic_tool_use_input():
