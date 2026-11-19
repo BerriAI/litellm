@@ -17,10 +17,10 @@ from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import AllowInfNan, BaseModel, JsonValue, NonNegativeFloat, TypeAdapter
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -547,12 +547,12 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
-_AGENT_PRICE: Final = TypeAdapter(float)
+_AGENT_PRICE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[NonNegativeFloat, AllowInfNan(False)])
 
 
 @dataclass(frozen=True, slots=True)
 class A2AAgentBilling:
-    agent_id: str
+    agent_id: str | None
     cost_per_query: object
 
 
@@ -1828,7 +1828,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
         return (end_seconds - start_seconds) * 1000
 
-    def bill_as_a2a_agent(self, agent_id: str, cost_per_query: object) -> None:
+    def bill_as_a2a_agent(self, agent_id: str | None, cost_per_query: object) -> None:
         self.a2a_agent_billing = A2AAgentBilling(agent_id=agent_id, cost_per_query=cost_per_query)
         self.resume_billing_as_a2a_agent()
 
@@ -1838,7 +1838,8 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         self.a2a_agent_cost_per_query = billing.cost_per_query
         self.a2a_agent_id = billing.agent_id
-        self.model_call_details["agent_id"] = billing.agent_id
+        if billing.agent_id is not None:
+            self.model_call_details["agent_id"] = billing.agent_id
 
     def stop_billing_as_a2a_agent(self) -> None:
         if self.a2a_agent_id is not None:
