@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import type { SpendMetrics } from "@/components/UsagePage/types";
+import type { components } from "@/lib/http/schema";
 import {
   act,
   fireEvent,
@@ -13,10 +15,6 @@ import CustomersPage from "./page";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 const NOW = new Date("2024-03-15T12:00:00Z");
-const requests: URL[] = [];
-const creations: unknown[] = [];
-let failed = false;
-let cachePricing: { cache_cost: number; priced_cache_tokens: number } | null = null;
 const original = Array.from({ length: 30 }, (_, index) => ({
   customer_org_id: `customer-${String(index).padStart(2, "0")}`,
   alias: `Customer ${String(index).padStart(2, "0")}`,
@@ -32,90 +30,98 @@ const original = Array.from({ length: 30 }, (_, index) => ({
   member_count: 0,
   created_at: new Date(Date.UTC(2024, 1, index + 1)).toISOString(),
 }));
-let organizations = [...original];
-const handleRequest = async (request: Request): Promise<Response> => {
-  const url = new URL(request.url);
-  if (url.pathname.endsWith("/.well-known/litellm-ui-config"))
-    return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
-  if (url.pathname === "/management/v1/users/me")
-    return Response.json({ user_id: "admin", user_role: "proxy_admin", user_email: null });
-  if (url.pathname === "/management/v1/customer_organizations" && request.method === "GET")
-    return Response.json({
-      data: organizations,
-      meta: { total_count: organizations.length, page: 1, page_size: 100, total_pages: 1 },
-      links: {},
-    });
-  if (url.pathname === "/management/v1/customer_organizations/daily/activity/aggregated") {
-    requests.push(url);
-    if (failed) return Response.json({ detail: "Unavailable" }, { status: 503 });
-    const previous = url.searchParams.get("start_date") === "2024-02-01";
-    const metrics = (spend: number) => ({
-      spend,
-      api_requests: 10,
-      successful_requests: 9,
-      failed_requests: 1,
-      total_tokens: 100,
-      prompt_tokens: 60,
-      completion_tokens: 40,
-      cache_read_input_tokens: previous ? 12 : 10,
-      cache_creation_input_tokens: previous ? 6 : 4,
-      cache_cost: spend / 100,
-      priced_cache_tokens: previous ? 12 : 14,
-      ...cachePricing,
-      total_response_time_ms: 9000,
-      timed_requests: 9,
-    });
-    return Response.json({
-      results: [
-        {
-          date: previous ? "2024-02-15" : "2024-03-15",
-          metrics: {
-            ...metrics(previous ? 20 : 100),
-            api_requests: 20,
-            successful_requests: 18,
-            failed_requests: 2,
-            total_tokens: 200,
-            prompt_tokens: 120,
-            completion_tokens: 80,
-          },
-          breakdown: {
-            entities: {
-              "customer-00": { metrics: metrics(previous ? 5 : 75) },
-              "customer-29": { metrics: metrics(previous ? 15 : 25) },
+const mockCustomerApi = ({
+  failed = false,
+  cachePricing,
+}: Readonly<{
+  failed?: boolean;
+  cachePricing?: Readonly<Pick<SpendMetrics, "cache_cost" | "priced_cache_tokens">>;
+}> = {}) => {
+  const createOrganization = vi.fn((body: components["schemas"]["OrganizationCreate"]) => ({
+    ...original[1],
+    customer_org_id: body.customer_org_id,
+    alias: body.alias,
+    created_at: NOW.toISOString(),
+  }));
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/.well-known/litellm-ui-config"))
+      return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
+    if (url.pathname === "/management/v1/users/me")
+      return Response.json({ user_id: "admin", user_role: "proxy_admin", user_email: null });
+    if (url.pathname === "/management/v1/customer_organizations" && request.method === "GET") {
+      const organizations = [
+        ...original,
+        ...createOrganization.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
+      ];
+      return Response.json({
+        data: organizations,
+        meta: { total_count: organizations.length, page: 1, page_size: 100, total_pages: 1 },
+        links: {},
+      });
+    }
+    if (url.pathname === "/management/v1/customer_organizations/daily/activity/aggregated") {
+      if (failed) return Response.json({ detail: "Unavailable" }, { status: 503 });
+      const previous = url.searchParams.get("start_date") === "2024-02-01";
+      const metrics = (spend: number) => ({
+        spend,
+        api_requests: 10,
+        successful_requests: 9,
+        failed_requests: 1,
+        total_tokens: 100,
+        prompt_tokens: 60,
+        completion_tokens: 40,
+        cache_read_input_tokens: previous ? 12 : 10,
+        cache_creation_input_tokens: previous ? 6 : 4,
+        cache_cost: spend / 100,
+        priced_cache_tokens: previous ? 12 : 14,
+        ...cachePricing,
+        total_response_time_ms: 9000,
+        timed_requests: 9,
+      });
+      return Response.json({
+        results: [
+          {
+            date: previous ? "2024-02-15" : "2024-03-15",
+            metrics: {
+              ...metrics(previous ? 20 : 100),
+              api_requests: 20,
+              successful_requests: 18,
+              failed_requests: 2,
+              total_tokens: 200,
+              prompt_tokens: 120,
+              completion_tokens: 80,
+            },
+            breakdown: {
+              entities: {
+                "customer-00": { metrics: metrics(previous ? 5 : 75) },
+                "customer-29": { metrics: metrics(previous ? 15 : 25) },
+              },
             },
           },
-        },
-      ],
-      metadata: { has_more: false, total_pages: 1 },
-    });
-  }
-  if (url.pathname === "/management/v1/customer_organizations" && request.method === "POST") {
-    const body = await request.json();
-    creations.push(body);
-    organizations = [
-      ...organizations,
-      { ...original[1], customer_org_id: body.customer_org_id, alias: body.alias, created_at: NOW.toISOString() },
-    ];
-    return Response.json({ customer_org_id: body.customer_org_id }, { status: 201 });
-  }
-  throw new Error(`Unexpected request ${request.method} ${url.pathname}`);
+        ],
+        metadata: { has_more: false, total_pages: 1 },
+      });
+    }
+    if (url.pathname === "/management/v1/customer_organizations" && request.method === "POST") {
+      const body: components["schemas"]["OrganizationCreate"] = await request.json();
+      const created = createOrganization(body);
+      return Response.json({ customer_org_id: created.customer_org_id }, { status: 201 });
+    }
+    throw new Error(`Unexpected request ${request.method} ${url.pathname}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { createOrganization };
 };
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   testQueryClient.clear();
-  requests.length = 0;
-  creations.length = 0;
-  organizations = [...original];
-  failed = false;
-  cachePricing = null;
   const claims = { key: "sk-test", user_id: "admin", user_role: "proxy_admin", exp: NOW.getTime() / 1000 + 3600 };
   document.cookie = `token=${btoa("{}")}.${btoa(JSON.stringify(claims))}.test; Path=/`;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((input: RequestInfo | URL, init?: RequestInit) => handleRequest(new Request(input, init))),
-  );
+  mockCustomerApi();
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
     window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
   );
@@ -220,6 +226,7 @@ describe("customer organization overview", () => {
   );
 
   it("should show a newly created customer first and resets the search, sort, and page", async () => {
+    const { createOrganization } = mockCustomerApi();
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />, { searchParams: "?search=customer&sort_by=customer&sort_order=asc&page=2" });
     await screen.findByRole("link", { name: "Customer 25" });
@@ -235,14 +242,16 @@ describe("customer organization overview", () => {
     expect(customerLinks()[0]).toHaveTextContent("New organization");
     expect(screen.getByRole("textbox", { name: /Search by name or ID/ })).toHaveValue("");
     expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
-    expect(creations).toEqual([expect.objectContaining({ customer_org_id: "new-org", alias: "New organization" })]);
+    expect(createOrganization).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ customer_org_id: "new-org", alias: "New organization" }),
+    );
   });
 
   it.each([
     { pricedTokens: 0, display: "—" },
     { pricedTokens: 14, display: "$0.00" },
   ])("shows $display for zero cache cost with $pricedTokens priced tokens", async ({ pricedTokens, display }) => {
-    cachePricing = { cache_cost: 0, priced_cache_tokens: pricedTokens };
+    mockCustomerApi({ cachePricing: { cache_cost: 0, priced_cache_tokens: pricedTokens } });
     const user = userEvent.setup();
     renderWithProviders(<CustomersPage />);
     const row = await screen.findByRole("row", { name: /Customer 29/ });
@@ -252,7 +261,7 @@ describe("customer organization overview", () => {
   });
 
   it("should report failed usage instead of displaying partial totals or zero shares", async () => {
-    failed = true;
+    mockCustomerApi({ failed: true });
     renderWithProviders(<CustomersPage />);
     expect(await screen.findAllByText("Could not load customer organization usage.")).toHaveLength(2);
     expect(screen.queryByRole("link", { name: "Customer 29" })).not.toBeInTheDocument();

@@ -125,7 +125,6 @@ const gatewayApps = [
   { ...audit, app_id: "app-chat", resource_type: "team", resource_id: "gateway-chat", alias: "chat" },
   { ...audit, app_id: "app-search", resource_type: "team", resource_id: "gateway-search", alias: "search" },
 ];
-let appsEnabled = false;
 const appForRecord = (record: (typeof records)[number]) => (record.key === "hash-b" ? "app-search" : "app-chat");
 const fetchMock = vi.fn<typeof fetch>();
 const json = (body: unknown, status = 200) =>
@@ -158,92 +157,100 @@ const activityUrl = (resource: string, id: string, endDate = "2026-11-03") => {
       url.searchParams.get("end_date") === endDate,
   );
 };
-const serve = (input: Parameters<typeof fetch>[0]): Response => {
-  const url = requestUrl(input);
-  if (url.pathname === "/management/v1/apps/definition") return json({ resource_type: appsEnabled ? "team" : null });
-  if (url.pathname === "/management/v1/apps") return json(appsEnabled ? gatewayApps : []);
-  if (url.pathname === "/management/v1/apps/resources")
-    return json([
-      ...gatewayApps.map((app) => ({
-        resource_type: app.resource_type,
-        resource_id: app.resource_id,
-        app_id: app.app_id,
-        alias: app.alias,
-      })),
-      { resource_type: "team", resource_id: "unbound-team", app_id: null, alias: "Unconfigured resource" },
-    ]);
-  if (url.pathname === "/management/v1/customer_organization_budget_groups")
-    return json({ default_budgets: [], revision: "a".repeat(64) });
-  const app = gatewayApps.find(
-    (item) => url.pathname === `/management/v1/apps/${item.app_id}/customer_organizations/org-1`,
-  );
-  if (app) {
-    const appBudget = {
-      app_id: app.app_id,
-      customer_org_id: "org-1",
-      spend: app.app_id === "app-chat" ? 27 : 3,
-      budget_override_id: `budget-${app.app_id}`,
-      effective_budget: { max_budget: 100, budget_duration: "1mo" },
-    };
-    return json(appBudget);
-  }
-  const aggregated = url.pathname.endsWith("/daily/activity/aggregated");
-  if (url.pathname.endsWith("/daily/activity") || aggregated) {
-    const resource = url.pathname.split("/").at(aggregated ? -4 : -3);
-    const dimension = activityDimension(resource);
-    const filter = filterFor(resource);
-    const ids = aggregated ? [url.searchParams.get("customer_org_id")] : url.searchParams.get(filter)?.split(",") ?? [];
-    const selected = records
-      .filter((record) => ids.includes(record[dimension]))
-      .filter((record) => !url.searchParams.get("app_id") || appForRecord(record) === url.searchParams.get("app_id"))
-      .filter(
-        (record) =>
-          record.date >= (url.searchParams.get("start_date") ?? "") &&
-          record.date <= (url.searchParams.get("end_date") ?? ""),
-      );
-    const results = selected.map((record) => {
-      const key = { metrics: record.metrics, metadata: { key_alias: record.alias, team_id: null } };
-      const entry = { metrics: record.metrics, metadata: {}, api_key_breakdown: { [record.key]: key } };
-      return {
-        date: record.date,
-        metrics: record.metrics,
-        breakdown: {
-          model_groups: { [record.model]: entry },
-          api_keys: { [record.key]: key },
-          entities: { [record[dimension]]: entry },
-        },
-      };
-    });
-    return json({
-      results,
-      metadata: {
-        ...EMPTY_DAILY_ACTIVITY_METADATA,
-        total_spend: selected.reduce((total, record) => total + record.metrics.spend, 0),
-      },
-    });
-  }
-  if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
-  if (url.pathname === "/management/v1/customer_teams") return json(list(teams));
-  if (url.pathname === "/management/v1/customer_members")
-    return json(
-      list(members.filter((member) => member.parent_team_ids.includes(url.searchParams.get("parent_team_id") ?? ""))),
+const createUsageHandler =
+  ({ appsEnabled = false }: Readonly<{ appsEnabled?: boolean }> = {}) =>
+  (input: Parameters<typeof fetch>[0]): Response => {
+    const url = requestUrl(input);
+    if (url.pathname === "/management/v1/apps/definition") return json({ resource_type: appsEnabled ? "team" : null });
+    if (url.pathname === "/management/v1/apps") return json(appsEnabled ? gatewayApps : []);
+    if (url.pathname === "/management/v1/apps/resources")
+      return json([
+        ...gatewayApps.map((app) => ({
+          resource_type: app.resource_type,
+          resource_id: app.resource_id,
+          app_id: app.app_id,
+          alias: app.alias,
+        })),
+        { resource_type: "team", resource_id: "unbound-team", app_id: null, alias: "Unconfigured resource" },
+      ]);
+    if (url.pathname === "/management/v1/customer_organization_budget_groups")
+      return json({ default_budgets: [], revision: "a".repeat(64) });
+    const app = gatewayApps.find(
+      (item) => url.pathname === `/management/v1/apps/${item.app_id}/customer_organizations/org-1`,
     );
-  const team = teams.find((team) => url.pathname.endsWith(`/customer_teams/${team.customer_team_id}`));
-  if (team) return json(team);
-  const member = members.find((member) => url.pathname.endsWith(`/customer_members/${member.customer_member_id}`));
-  if (member) return json(member);
-  throw new Error(`Unexpected usage request ${url.pathname}`);
+    if (app) {
+      const appBudget = {
+        app_id: app.app_id,
+        customer_org_id: "org-1",
+        spend: app.app_id === "app-chat" ? 27 : 3,
+        budget_override_id: `budget-${app.app_id}`,
+        effective_budget: { max_budget: 100, budget_duration: "1mo" },
+      };
+      return json(appBudget);
+    }
+    const aggregated = url.pathname.endsWith("/daily/activity/aggregated");
+    if (url.pathname.endsWith("/daily/activity") || aggregated) {
+      const resource = url.pathname.split("/").at(aggregated ? -4 : -3);
+      const dimension = activityDimension(resource);
+      const filter = filterFor(resource);
+      const ids = aggregated
+        ? [url.searchParams.get("customer_org_id")]
+        : url.searchParams.get(filter)?.split(",") ?? [];
+      const selected = records
+        .filter((record) => ids.includes(record[dimension]))
+        .filter((record) => !url.searchParams.get("app_id") || appForRecord(record) === url.searchParams.get("app_id"))
+        .filter(
+          (record) =>
+            record.date >= (url.searchParams.get("start_date") ?? "") &&
+            record.date <= (url.searchParams.get("end_date") ?? ""),
+        );
+      const results = selected.map((record) => {
+        const key = { metrics: record.metrics, metadata: { key_alias: record.alias, team_id: null } };
+        const entry = { metrics: record.metrics, metadata: {}, api_key_breakdown: { [record.key]: key } };
+        return {
+          date: record.date,
+          metrics: record.metrics,
+          breakdown: {
+            model_groups: { [record.model]: entry },
+            api_keys: { [record.key]: key },
+            entities: { [record[dimension]]: entry },
+          },
+        };
+      });
+      return json({
+        results,
+        metadata: {
+          ...EMPTY_DAILY_ACTIVITY_METADATA,
+          total_spend: selected.reduce((total, record) => total + record.metrics.spend, 0),
+        },
+      });
+    }
+    if (url.pathname === "/management/v1/customer_organizations/org-1") return json(organization);
+    if (url.pathname === "/management/v1/customer_teams") return json(list(teams));
+    if (url.pathname === "/management/v1/customer_members")
+      return json(
+        list(members.filter((member) => member.parent_team_ids.includes(url.searchParams.get("parent_team_id") ?? ""))),
+      );
+    const team = teams.find((team) => url.pathname.endsWith(`/customer_teams/${team.customer_team_id}`));
+    if (team) return json(team);
+    const member = members.find((member) => url.pathname.endsWith(`/customer_members/${member.customer_member_id}`));
+    if (member) return json(member);
+    throw new Error(`Unexpected usage request ${url.pathname}`);
+  };
+const serve = createUsageHandler();
+const mockUsageApi = (options: Parameters<typeof createUsageHandler>[0] = {}) => {
+  const handler = createUsageHandler(options);
+  fetchMock.mockImplementation((input) => Promise.resolve(handler(input)));
 };
 
 describe("CustomerHierarchyUsagePage", () => {
   beforeEach(() => {
-    appsEnabled = false;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-11-13T12:00:00Z"));
     testQueryClient.clear();
     registerBaseUrlGetter(() => "http://localhost");
     fetchMock.mockReset();
-    fetchMock.mockImplementation((input) => Promise.resolve(serve(input)));
+    mockUsageApi();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
       callback({ didTimeout: false, timeRemaining: () => 50 });
@@ -258,7 +265,7 @@ describe("CustomerHierarchyUsagePage", () => {
   });
 
   it("should show app spend and budget actions on the customer landing below its global budget", async () => {
-    appsEnabled = true;
+    mockUsageApi({ appsEnabled: true });
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl });
     expect(await screen.findByRole("button", { name: "Edit budget for chat" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit budget for search" })).toBeInTheDocument();
@@ -269,7 +276,7 @@ describe("CustomerHierarchyUsagePage", () => {
   });
 
   it("should filter the usage graph by app while retaining the global customer budget and date range", async () => {
-    appsEnabled = true;
+    mockUsageApi({ appsEnabled: true });
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<CustomerHierarchyUsagePage />, { searchParams: initialUrl, onUrlUpdate });
@@ -300,13 +307,12 @@ describe("CustomerHierarchyUsagePage", () => {
   });
 
   it("should retain the global budget while an app filter error can be retried", async () => {
-    appsEnabled = true;
-    let unavailable = true;
+    const appHandler = createUsageHandler({ appsEnabled: true });
     fetchMock.mockImplementation((input) =>
       Promise.resolve(
-        requestUrl(input).pathname === "/management/v1/apps" && unavailable
+        requestUrl(input).pathname === "/management/v1/apps"
           ? json({ detail: "App list unavailable" }, 503)
-          : serve(input),
+          : appHandler(input),
       ),
     );
     const user = userEvent.setup();
@@ -316,7 +322,7 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(
       within(screen.getByRole("region", { name: "Current budget" })).getByText("$40.00 / $100.00"),
     ).toBeInTheDocument();
-    unavailable = false;
+    mockUsageApi({ appsEnabled: true });
     await user.click(chart.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(chart.queryByRole("alert")).not.toBeInTheDocument());
     await chooseSelectOption(user, chart.getByRole("combobox", { name: "App" }), "search");
