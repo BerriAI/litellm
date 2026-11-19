@@ -21,9 +21,35 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "monthly": "30d",
 }
 
+_SPELLED_UNIT_MAP: Final[dict[str, str]] = {
+    "months": "mo",
+    "month": "mo",
+    "days": "d",
+    "day": "d",
+    "hours": "h",
+    "hour": "h",
+    "minutes": "m",
+    "minute": "m",
+    "mins": "m",
+    "seconds": "s",
+    "second": "s",
+    "secs": "s",
+    "weeks": "w",
+    "week": "w",
+}
+
 
 def normalize_duration(duration: str) -> str:
-    return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
+    stripped = duration.strip().lower()
+    if stripped in _BUDGET_DURATION_WORD_ALIASES:
+        return _BUDGET_DURATION_WORD_ALIASES[stripped]
+    # Normalize long-form unit suffixes: "7days" → "7d", "12months" → "12mo"
+    m = re.match(r"(\d+)([a-z]+)", stripped)
+    if m:
+        short = _SPELLED_UNIT_MAP.get(m.group(2))
+        if short:
+            return f"{m.group(1)}{short}"
+    return stripped
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
@@ -226,24 +252,6 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
         current_time = current_time.astimezone(tz)
 
     return current_time, tz
-
-
-_SPELLED_UNIT_MAP: Final[dict[str, str]] = {
-    "months": "mo",
-    "month": "mo",
-    "days": "d",
-    "day": "d",
-    "hours": "h",
-    "hour": "h",
-    "minutes": "m",
-    "minute": "m",
-    "mins": "m",
-    "seconds": "s",
-    "second": "s",
-    "secs": "s",
-    "weeks": "w",
-    "week": "w",
-}
 
 
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
