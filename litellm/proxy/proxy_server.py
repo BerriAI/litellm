@@ -15643,7 +15643,7 @@ def _deployment_with_request_drop_settings(
             "previous_response_id",
             "conversation",
         )
-        if sent_params.get(name) is not None
+        if name in sent_params
     }
     if not overrides:
         return deployment

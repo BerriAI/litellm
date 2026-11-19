@@ -1191,6 +1191,41 @@ def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
     )
 
 
+@pytest.mark.parametrize(("params", "preserve_instructions"), [({"store": None}, True), ({}, False)])
+def test_messages_count_tokens_lets_a_request_store_null_override_the_deployment_store(
+    monkeypatch: pytest.MonkeyPatch,
+    params: dict[str, object],
+    preserve_instructions: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-sol",
+                    "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "sk-test", "store": False},
+                }
+            ]
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(messages_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    with respx.mock(assert_all_called=True) as upstream:
+        count: Final = upstream.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 10})
+        )
+        response: Final = TestClient(app).post(
+            "/v1/messages/count_tokens",
+            json={"model": "count-sol", "system": "Stable prefix", "messages": [{"role": "user", "content": "hi"}], **params},
+        )
+    assert response.status_code == 200, response.text
+    body: Final = json.loads(count.calls[0].request.content)
+    assert (body.get("instructions") == "Stable prefix") is preserve_instructions, body
+
+
 def test_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
     monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
 ) -> None:
