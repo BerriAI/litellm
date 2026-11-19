@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import {
+  jsonResponse as json,
   fireEvent,
   renderWithProviders as render,
   screen,
@@ -19,8 +20,6 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: () => ({ data: { data: [] }, isLoading: false, isError: false }),
 }));
 const fetchMock = vi.fn<typeof fetch>();
-const json = (value: unknown, status = 200) =>
-  new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const resource = { resource_type: "team", resource_id: "team-chat", alias: "chat", app_id: null };
 const app = {
   ...resource,
@@ -55,8 +54,10 @@ beforeEach(() => {
     if (path.endsWith("/apps/resources")) return json(resources);
     if (path.endsWith("/apps/app-chat")) return json(configuredApps[0]);
     if (path.endsWith("/customer_organization_budget_groups"))
+      return json({ default_budgets: [{ budget_id: "org-standard", name: "Standard", max_budget: 1000 }] });
+    if (path.endsWith("/app_customer_organization_budget_groups"))
       return json({
-        default_budgets: [{ budget_id: "standard", name: "Standard", max_budget: 100 }],
+        default_budgets: [{ budget_id: "standard", name: "Tier 1", max_budget: 100 }],
         revision: "a".repeat(64),
       });
     if (path.endsWith("/apps") && request.method === "POST") return json(app);
@@ -99,7 +100,7 @@ describe("Gateway app definition", () => {
     const user = userEvent.setup();
     render(<AppsManager />);
     await user.click(await screen.findByRole("button", { name: "chat" }));
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), "Standard");
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), "Tier 1");
     expect(screen.getByText("$100.00")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
     await waitFor(() => expect(requests.some((request) => request.method === "POST")).toBe(true));
@@ -112,6 +113,31 @@ describe("Gateway app definition", () => {
     };
     expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject(expectedSettings);
     expect(requests.some((request) => new URL(request.url).pathname.includes("/tiers"))).toBe(false);
+  });
+
+  it("changes app and member-default rates without persisting unchanged displayed spend caps", async () => {
+    definition = { resource_type: "team" };
+    resources = [{ ...resource, app_id: app.app_id }];
+    const budget = {
+      max_budget: 150,
+      budget_duration: "1mo",
+      rpm_limit: 20,
+      budget_limits: [{ max_budget: 1200, budget_duration: "12mo" }],
+    };
+    configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
+    const user = userEvent.setup();
+    render(<AppsManager />);
+    await user.click(await screen.findByRole("button", { name: "chat" }));
+    const overall = within(await screen.findByRole("group", { name: "Overall app budget" }));
+    const member = within(screen.getByRole("group", { name: "Default per-member budget" }));
+    expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
+    fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
+    fireEvent.change(member.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "30" } });
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
+    const body = await requests.find((request) => request.method === "PATCH")!.json();
+    expect(body.budget).toEqual({ rpm_limit: 0 });
+    expect(body.default_customer_member_budget).toEqual({ rpm_limit: 30 });
   });
 
   it("should send the app's customer creation switch turned off when the admin unchecks it", async () => {

@@ -135,19 +135,9 @@ function CustomerOrganizations() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-pressed={sorting[0]?.id === "created_at" && sorting[0].desc}
-              onClick={() => onSortingChange([CUSTOMER_ORGANIZATION_TABLE.defaultSort])}
-            >
-              {t("customerPortal.list.newestFirst")}
-            </Button>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> {t("customerPortal.list.create")}
-            </Button>
-          </div>
+          <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" /> {t("customerPortal.list.create")}
+          </Button>
         </div>
         {organizations.isError || monthlyUsage.isError ? (
           <ErrorState
