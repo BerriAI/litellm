@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     price_many,
     prompt_and_completion,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+from litellm.litellm_core_utils.usage.token_details import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
 from litellm.llms.vertex_ai.batches.transformation import (
@@ -324,7 +324,7 @@ def _output_line_cost_or_pending(
 
 
 def _combined_reported_batch_usage(usages: tuple[Usage | None, ...]) -> Mapping[str, object] | None:
-    from litellm.cost_calculator import BaseTokenUsageProcessor
+    from litellm.litellm_core_utils.usage.token_usage_processors import BaseTokenUsageProcessor
 
     reported: Final = [usage for usage in usages if usage is not None]
     if not reported:

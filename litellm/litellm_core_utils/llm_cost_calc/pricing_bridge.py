@@ -22,9 +22,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CacheWriteCounts,
     ModalityCounts,
     billed_usage,
-    parse_completion_tokens_details,
-    parse_prompt_tokens_details,
 )
+from litellm.litellm_core_utils.usage.token_details import parse_completion_tokens_details, parse_prompt_tokens_details
 from litellm.rust_bridge._native import NativeRateCard, NativeReceipt, NativeUnpriced
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 

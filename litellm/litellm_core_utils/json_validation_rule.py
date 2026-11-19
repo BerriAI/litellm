@@ -5,7 +5,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
+from litellm.litellm_core_utils.core_helpers import is_str_keyed_dict
 
 _DECODED_RESPONSE: Final = TypeAdapter(object)
 

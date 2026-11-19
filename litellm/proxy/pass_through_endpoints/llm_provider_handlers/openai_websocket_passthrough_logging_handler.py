@@ -8,9 +8,10 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.cost_calculator import RealtimeAPITokenUsageProcessor, handle_realtime_stream_cost_calculation
+from litellm.cost_calculator import handle_realtime_stream_cost_calculation
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.usage.token_usage_processors import RealtimeAPITokenUsageProcessor
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponsesAPIResponse
