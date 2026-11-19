@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
@@ -4720,6 +4721,9 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._queued_web_search_call_ids = set()
         iterator._tool_search_requested = False
         iterator._tool_search_call_ids = set()
+        iterator._mcp_calls = MappingProxyType({})
+        iterator._done_mcp_call_ids = frozenset()
+        iterator._requested_mcp_calls = MappingProxyType({})
         return iterator
 
     def _make_text_chunk(self):

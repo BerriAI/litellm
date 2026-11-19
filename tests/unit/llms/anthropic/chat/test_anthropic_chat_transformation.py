@@ -23,7 +23,8 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
-from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import _EMPTY_TEXT_PLACEHOLDER, anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -42,6 +43,24 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, ModelResponse, ServerToolUse, Usage
+from tests.unit.llms.anthropic.anthropic_deferred_mcp_result import (
+    CLIENT_TOOL_CALL_ID,
+    CLIENT_TOOL_USE,
+    DEFERRED_MCP_FOLLOW_UP,
+    DEFERRED_MCP_PROMPT,
+    DEFERRED_MCP_SERVER,
+    DEFERRED_MCP_TOOL_RESULT,
+    LOCAL_TIME_OUTPUT,
+    LOCAL_TIME_TOOL,
+    MCP_TOOL_USE,
+    TURN_ONE_MESSAGE,
+    TURN_ONE_STREAM_EVENTS,
+    TURN_THREE_MESSAGE,
+    TURN_TWO_MESSAGE,
+    TURN_TWO_STREAM_EVENTS,
+    TURN_TWO_TEXT,
+    anthropic_sse,
+)
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -3938,6 +3957,141 @@ def test_native_mcp_call_is_replayed_only_next_to_its_result():
     )
 
     assert replayed[1]["content"] == [_MCP_CALL, _mcp_result(False), answer]
+
+
+_DEFERRED_MCP_CHAT_TOOLS: Final = [
+    {
+        "type": "mcp",
+        "server_label": DEFERRED_MCP_SERVER["name"],
+        "server_url": DEFERRED_MCP_SERVER["url"],
+        "require_approval": "never",
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": LOCAL_TIME_TOOL["name"],
+            "description": LOCAL_TIME_TOOL["description"],
+            "parameters": LOCAL_TIME_TOOL["input_schema"],
+        },
+    },
+]
+
+
+def _anthropic_reply(
+    message: Mapping[str, object], stream_events: tuple[Mapping[str, object], ...] | None
+) -> httpx.Response:
+    if stream_events is None:
+        return httpx.Response(200, json=message)
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=anthropic_sse(stream_events))
+
+
+def _chat_turn(messages: list[Mapping[str, object]], stream: bool) -> dict[str, object]:
+    if not stream:
+        response: Final = litellm.completion(
+            model="anthropic/claude-haiku-5-5", messages=messages, tools=_DEFERRED_MCP_CHAT_TOOLS, api_key="sk-ant-fake"
+        )
+        return response.choices[0].message.model_dump()
+    chunks: Final = list(
+        litellm.completion(
+            model="anthropic/claude-haiku-5-5",
+            messages=messages,
+            tools=_DEFERRED_MCP_CHAT_TOOLS,
+            stream=True,
+            api_key="sk-ant-fake",
+        )
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=chunks, messages=messages)
+    return assembled.choices[0].message.model_dump()
+
+
+def _as_replayed(message: dict[str, object], keeps_provider_fields: bool) -> dict[str, object]:
+    if keeps_provider_fields:
+        return message
+    return {key: value for key, value in message.items() if key != "provider_specific_fields"}
+
+
+def _sent_assistant_turns(route: respx.Route, call_index: int) -> list[object]:
+    sent: Final = json.loads(route.calls[call_index].request.content)
+    return [message["content"] for message in sent["messages"] if message["role"] == "assistant"]
+
+
+_TURN_TWO_TEXT_BLOCK: Final = {"type": "text", "text": TURN_TWO_TEXT}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize(
+    ("turn_one_keeps_fields", "turn_two_keeps_fields", "expected_turn_three"),
+    [
+        pytest.param(
+            True,
+            True,
+            [[MCP_TOOL_USE, CLIENT_TOOL_USE], [DEFERRED_MCP_TOOL_RESULT, _TURN_TWO_TEXT_BLOCK]],
+            id="fields_kept",
+        ),
+        pytest.param(True, False, [[CLIENT_TOOL_USE], [_TURN_TWO_TEXT_BLOCK]], id="turn_two_fields_dropped"),
+        pytest.param(False, True, [[CLIENT_TOOL_USE], [_TURN_TWO_TEXT_BLOCK]], id="turn_one_fields_dropped"),
+        pytest.param(False, False, [[CLIENT_TOOL_USE], [_TURN_TWO_TEXT_BLOCK]], id="fields_dropped"),
+    ],
+)
+def test_a_deferred_mcp_result_is_sent_back_only_with_the_mcp_call_it_answers(
+    respx_mock: respx.MockRouter,
+    stream: bool,
+    turn_one_keeps_fields: bool,
+    turn_two_keeps_fields: bool,
+    expected_turn_three: list[list[Mapping[str, object]]],
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            _anthropic_reply(TURN_ONE_MESSAGE, TURN_ONE_STREAM_EVENTS if stream else None),
+            _anthropic_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS if stream else None),
+            _anthropic_reply(TURN_THREE_MESSAGE, None),
+        ]
+    )
+    first_turn: Final = [{"role": "user", "content": DEFERRED_MCP_PROMPT}]
+    second_turn: Final = [
+        *first_turn,
+        _as_replayed(_chat_turn(first_turn, stream), turn_one_keeps_fields),
+        {"role": "tool", "tool_call_id": CLIENT_TOOL_CALL_ID, "content": LOCAL_TIME_OUTPUT},
+    ]
+    turn_two: Final = _chat_turn(second_turn, stream)
+    _chat_turn(
+        [
+            *second_turn,
+            _as_replayed(turn_two, turn_two_keeps_fields),
+            {"role": "user", "content": DEFERRED_MCP_FOLLOW_UP},
+        ],
+        False,
+    )
+    streamed_empty_text: Final = [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}] if stream else []
+
+    assert turn_two["tool_calls"] is None
+    assert message_field(turn_two["provider_specific_fields"], "tool_results") == [DEFERRED_MCP_TOOL_RESULT]
+    assert _sent_assistant_turns(route, 1) == [
+        [*streamed_empty_text, MCP_TOOL_USE, CLIENT_TOOL_USE]
+        if turn_one_keeps_fields
+        else [*streamed_empty_text, CLIENT_TOOL_USE]
+    ]
+    assert _sent_assistant_turns(route, 2) == [[*streamed_empty_text, *expected_turn_three[0]], expected_turn_three[1]]
+
+
+def test_a_streamed_deferred_mcp_result_reaches_the_client_in_a_chunk(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS)
+    )
+
+    chunks: Final = litellm.completion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": DEFERRED_MCP_PROMPT}],
+        tools=_DEFERRED_MCP_CHAT_TOOLS,
+        stream=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert [
+        tool_results
+        for chunk in chunks
+        if (tool_results := message_field(chunk.choices[0].delta.provider_specific_fields, "tool_results"))
+    ][:1] == [[DEFERRED_MCP_TOOL_RESULT]]
 
 
 _SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn(

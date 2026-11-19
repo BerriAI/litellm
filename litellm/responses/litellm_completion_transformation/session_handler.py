@@ -59,6 +59,7 @@ class ResponsesSessionHandler:
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
         item_cache_control: bool = False,
+        replay_mcp_calls: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -99,6 +100,7 @@ class ResponsesSessionHandler:
                     proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
                     item_cache_control=item_cache_control,
+                    replay_mcp_calls=replay_mcp_calls,
                 )
             )
 
@@ -131,6 +133,7 @@ class ResponsesSessionHandler:
             | Message
         ],
         item_cache_control: bool = False,
+        replay_mcp_calls: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -164,6 +167,7 @@ class ResponsesSessionHandler:
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     replay_tool_search=True,
+                    replay_mcp_calls=replay_mcp_calls,
                 )
             )
 

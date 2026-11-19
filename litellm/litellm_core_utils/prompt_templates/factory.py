@@ -24,6 +24,11 @@ from litellm.constants import REDACTED_BY_LITELLM
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import (
+    McpReplayPlan,
+    mcp_replay_plan,
+    mcp_server_name,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -2006,11 +2011,36 @@ def _assistant_tool_calls_with_server_tool_calls(
     )
 
 
+def _is_or_answers(block: _AnthropicToolInvokeItem, ids: frozenset[str]) -> bool:
+    return message_field(block, "id") in ids or message_field(block, "tool_use_id") in ids
+
+
+def _unpaired_mcp_tool_use_ids(blocks: Sequence[_AnthropicToolInvokeItem]) -> frozenset[object]:
+    result_ids: Final = _mcp_tool_result_ids(blocks)
+    return frozenset(
+        block_id
+        for block in blocks
+        if message_field(block, "type") == "mcp_tool_use" and (block_id := message_field(block, "id")) not in result_ids
+    )
+
+
+def _mcp_replayed_tool_invokes(
+    tool_invokes: Sequence[_AnthropicToolInvokeItem], mcp_replay: McpReplayPlan, message_index: int
+) -> tuple[_AnthropicToolInvokeItem, ...]:
+    dropped_ids: Final = mcp_replay.dropped_ids_at(message_index)
+    kept: Final = tuple(block for block in tool_invokes if not _is_or_answers(block, dropped_ids))
+    if any(message_field(block, "type") == "tool_use" for block in kept):
+        return kept
+    unpaired_ids: Final = _unpaired_mcp_tool_use_ids(kept) - mcp_replay.answered_later_ids
+    return tuple(block for block in kept if message_field(block, "id") not in unpaired_ids)
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: Sequence[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    keep_unpaired_mcp_uses: bool = False,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2076,22 +2106,21 @@ def convert_to_anthropic_tool_invoke(
             if tool_id in answered_tool_ids
             else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         )
-        mcp_server_name = message_field(
-            message_field(get_attribute_or_key(tool, "function"), "provider_specific_fields"), "server_name"
-        )
         if tool_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX) and tool_id not in answered_tool_ids:
-            if server_tool_result is None or not isinstance(mcp_server_name, str) or not mcp_server_name:
+            mcp_server_name_of_tool = mcp_server_name(tool)
+            if mcp_server_name_of_tool is None or (server_tool_result is None and not keep_unpaired_mcp_uses):
                 continue
             anthropic_tool_invoke.append(
                 {
                     "type": "mcp_tool_use",
                     "id": tool_id,
                     "name": tool_name,
-                    "server_name": mcp_server_name,
+                    "server_name": mcp_server_name_of_tool,
                     "input": tool_input,
                 }
             )
-            anthropic_tool_invoke.append(server_tool_result)
+            if server_tool_result is not None:
+                anthropic_tool_invoke.append(server_tool_result)
         elif server_tool_result is not None:
             anthropic_tool_invoke.append(
                 {
@@ -2727,6 +2756,7 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
+    mcp_replay: Final = mcp_replay_plan(messages)
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
 
@@ -2885,6 +2915,11 @@ def anthropic_messages_pt(
                 if _compaction_blocks and isinstance(_compaction_blocks, list):
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)
+            assistant_content.extend(
+                cast(  # cast-ok: an mcp_tool_result block Claude returned goes back exactly as it arrived
+                    tuple[AnthropicMessagesAssistantMessageValues, ...], mcp_replay.lone_results_at(msg_i)
+                )
+            )
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
@@ -2927,11 +2962,16 @@ def anthropic_messages_pt(
                     _provider_specific_fields_tc = cast(dict[str, Any], _provider_specific_fields_raw_tc)
                 _web_search_results_tc = _provider_specific_fields_tc.get("web_search_results")
                 _tool_results_tc = _provider_specific_fields_tc.get("tool_results")
-                tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_web_search_results_tc,
-                    tool_results=_tool_results_tc,
-                    answered_tool_ids=client_answered_tool_ids,
+                tool_invoke_results = _mcp_replayed_tool_invokes(
+                    convert_to_anthropic_tool_invoke(
+                        assistant_tool_calls,
+                        web_search_results=_web_search_results_tc,
+                        tool_results=_tool_results_tc,
+                        answered_tool_ids=client_answered_tool_ids,
+                        keep_unpaired_mcp_uses=True,
+                    ),
+                    mcp_replay,
+                    msg_i,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -3111,11 +3151,16 @@ def anthropic_messages_pt(
                     _provider_specific_fields = cast(dict[str, Any], _provider_specific_fields_raw)
                 _web_search_results = _provider_specific_fields.get("web_search_results")
                 _tool_results = _provider_specific_fields.get("tool_results")
-                tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_web_search_results,
-                    tool_results=_tool_results,
-                    answered_tool_ids=client_answered_tool_ids,
+                tool_invoke_results = _mcp_replayed_tool_invokes(
+                    convert_to_anthropic_tool_invoke(
+                        assistant_tool_calls,
+                        web_search_results=_web_search_results,
+                        tool_results=_tool_results,
+                        answered_tool_ids=client_answered_tool_ids,
+                        keep_unpaired_mcp_uses=True,
+                    ),
+                    mcp_replay,
+                    msg_i,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates

@@ -1,7 +1,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -20,6 +20,26 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
+from tests.unit.llms.anthropic.anthropic_deferred_mcp_result import (
+    CLIENT_TOOL_CALL_ID,
+    CLIENT_TOOL_USE,
+    DEFERRED_MCP_CALL_ID,
+    DEFERRED_MCP_FOLLOW_UP,
+    DEFERRED_MCP_PROMPT,
+    DEFERRED_MCP_TOOL_RESULT,
+    LOCAL_TIME_OUTPUT,
+    LOCAL_TIME_TOOL,
+    MCP_TOOL_ARGUMENTS,
+    MCP_TOOL_USE,
+    TURN_ONE_MESSAGE,
+    TURN_ONE_STREAM_EVENTS,
+    TURN_THREE_MESSAGE,
+    TURN_TWO_MESSAGE,
+    TURN_TWO_STREAM_EVENTS,
+    TURN_TWO_TEXT,
+    WIKI_PAGES,
+    anthropic_sse,
+)
 from tests.unit.proxy.conftest import httpx_transport
 
 
@@ -1129,3 +1149,479 @@ def test_responses_through_chat_keeps_reporting_a_choice_the_provider_received(r
     assert json.loads(route.calls[0].request.content)["tool_choice"]["type"] == "allowed_tools"
     assert response.tool_choice["type"] == "allowed_tools"
     assert list(response.tool_choice["tools"]) == _FLAT_ALLOWED_WEATHER["tools"]
+
+
+def _sent_assistant_content(route: respx.Route) -> list[object]:
+    sent: Final = json.loads(route.calls.last.request.content)
+    return next(message["content"] for message in sent["messages"] if message["role"] == "assistant")
+
+
+class _RecordingRawAnthropicMessages:
+    def __init__(self, reply: Mapping[str, object] | None = None) -> None:
+        self.body: str = ""
+        self._reply = reply
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.body = request.content.decode()
+        if self._reply is None:
+            return _anthropic_message({"type": "text", "text": "dog."})
+        return httpx.Response(200, json=self._reply)
+
+
+_MCP_CALL_ID: Final = "mcptoolu_01WDx6ixKDtjRVLLUhL652Xa"
+_MCP_ARGUMENTS: Final = '{"repoName": "facebook/react"}'
+_DEEPWIKI_SERVER: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_MCP_TOOL_USE: Final = {
+    "type": "mcp_tool_use",
+    "id": _MCP_CALL_ID,
+    "name": "read_wiki_structure",
+    "input": {"repoName": "facebook/react"},
+    "server_name": "deepwiki",
+}
+
+
+def _mcp_tool_result(is_error: bool, *texts: str) -> Mapping[str, object]:
+    return {
+        "type": "mcp_tool_result",
+        "tool_use_id": _MCP_CALL_ID,
+        "is_error": is_error,
+        "content": [{"type": "text", "text": text} for text in texts],
+    }
+
+
+@pytest.mark.parametrize(
+    ("result_blocks", "expected_result"),
+    [
+        pytest.param(
+            (_mcp_tool_result(False, "1 React Repository Overview", "2 Core Reconciler Architecture"),),
+            {"status": "completed", "output": "1 React Repository Overview\n2 Core Reconciler Architecture"},
+            id="completed",
+        ),
+        pytest.param(
+            (_mcp_tool_result(True, "Repository not found"),),
+            {"status": "failed", "error": "Repository not found"},
+            id="is_error",
+        ),
+        pytest.param((), {"status": "in_progress"}, id="no_result"),
+    ],
+)
+def test_responses_over_anthropic_return_an_mcp_connector_call_as_an_mcp_call_item(
+    respx_mock: respx.MockRouter,
+    result_blocks: tuple[Mapping[str, object], ...],
+    expected_result: Mapping[str, str],
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message(_MCP_TOOL_USE, *result_blocks, {"type": "text", "text": "Done."})
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL, input="List the wiki pages of facebook/react.", tools=[_DEEPWIKI_SERVER], api_key="sk-ant-fake"
+    )
+
+    assert [item.type for item in response.output] == ["message", "mcp_call"]
+    assert response.output[1].model_dump(exclude_none=True) == {
+        "id": f"mcp_{_MCP_CALL_ID}",
+        "type": "mcp_call",
+        "name": "read_wiki_structure",
+        "arguments": _MCP_ARGUMENTS,
+        "server_label": "deepwiki",
+        **expected_result,
+    }
+
+
+def _mcp_call_item(item_id: str, **result: str) -> Mapping[str, object]:
+    return {
+        "type": "mcp_call",
+        "id": item_id,
+        "name": "read_wiki_structure",
+        "arguments": _MCP_ARGUMENTS,
+        "server_label": "deepwiki",
+        **result,
+    }
+
+
+def _replayed_mcp_input(item: Mapping[str, object]) -> list[object]:
+    return [
+        {"role": "user", "content": "List the wiki pages of facebook/react."},
+        item,
+        {"role": "user", "content": "Which page covers the reconciler?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_result_block"),
+    [
+        pytest.param(
+            {"status": "completed", "output": "1 React Repository Overview"},
+            _mcp_tool_result(False, "1 React Repository Overview"),
+            id="completed",
+        ),
+        pytest.param(
+            {"status": "failed", "error": "Repository not found"},
+            _mcp_tool_result(True, "Repository not found"),
+            id="is_error",
+        ),
+    ],
+)
+def test_responses_over_anthropic_send_a_replayed_mcp_call_back_as_the_mcp_block_pair(
+    respx_mock: respx.MockRouter, result: Mapping[str, str], expected_result_block: Mapping[str, object]
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "Page 2."})
+    )
+
+    litellm.responses(
+        model=_MODEL,
+        input=_replayed_mcp_input(_mcp_call_item(f"mcp_{_MCP_CALL_ID}", **result)),
+        tools=[_DEEPWIKI_SERVER],
+        api_key="sk-ant-fake",
+    )
+
+    assert _sent_assistant_content(route) == [_MCP_TOOL_USE, expected_result_block]
+
+
+def test_responses_over_anthropic_drop_a_replayed_mcp_call_that_holds_no_claude_call_id(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "Page 2."})
+    )
+
+    litellm.responses(
+        model=_MODEL,
+        input=_replayed_mcp_input(_mcp_call_item("mcp_68a1b2c3d4e5f6a7b8c9d0e1", status="completed", output="1")),
+        tools=[_DEEPWIKI_SERVER],
+        api_key="sk-ant-fake",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert [message["role"] for message in sent["messages"]] == ["user"]
+
+
+def test_responses_through_openai_chat_drop_a_replayed_claude_mcp_call(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://localhost:12346/v1/chat/completions").mock(return_value=_chat_answer())
+
+    litellm.responses(
+        model="openai/gpt-5.5",
+        input=_replayed_mcp_input(_mcp_call_item(f"mcp_{_MCP_CALL_ID}", status="completed", output="1")),
+        use_chat_completions_api=True,
+        api_base="http://localhost:12346/v1",
+        api_key="sk-fake",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert [message["role"] for message in sent["messages"]] == ["user", "user"]
+
+
+def _stored_mcp_turn(response: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "request_id": "chatcmpl-mcp-turn",
+        "call_type": "aresponses",
+        "session_id": "session-mcp",
+        "proxy_server_request": {
+            "model": _MODEL,
+            "input": "List the wiki pages of facebook/react.",
+            "tools": [_DEEPWIKI_SERVER],
+        },
+        "response": response,
+    }
+
+
+_STORED_CHAT_COMPLETION_MCP_TURN: Final = _stored_mcp_turn(
+    {
+        "id": "chatcmpl-mcp-turn",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "Done.",
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": _MCP_CALL_ID,
+                                "type": "function",
+                                "function": {
+                                    "name": "read_wiki_structure",
+                                    "arguments": _MCP_ARGUMENTS,
+                                    "provider_specific_fields": {"server_name": "deepwiki"},
+                                },
+                            }
+                        ],
+                        "tool_results": [_mcp_tool_result(False, "1 React Repository Overview")],
+                    },
+                },
+            }
+        ],
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_sends_a_stored_mcp_call_and_its_result_back_to_claude() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_STORED_CHAT_COMPLETION_MCP_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-mcp-turn",
+            input="Which page covers the reconciler?",
+            tools=[_DEEPWIKI_SERVER],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    sent_blocks: Final = chain.from_iterable(
+        message["content"] for message in json.loads(anthropic.body)["messages"] if message["role"] == "assistant"
+    )
+    assert [block for block in sent_blocks if block["type"] != "text"] == [
+        _MCP_TOOL_USE,
+        _mcp_tool_result(False, "1 React Repository Overview"),
+    ]
+
+
+_LOCAL_TIME_FUNCTION: Final = {
+    "type": "function",
+    "name": LOCAL_TIME_TOOL["name"],
+    "description": LOCAL_TIME_TOOL["description"],
+    "parameters": LOCAL_TIME_TOOL["input_schema"],
+}
+_DEFERRED_MCP_TOOLS: Final = (_DEEPWIKI_SERVER, _LOCAL_TIME_FUNCTION)
+_PENDING_MCP_CALL_ITEM: Final = {
+    "id": f"mcp_{DEFERRED_MCP_CALL_ID}",
+    "type": "mcp_call",
+    "name": "read_wiki_structure",
+    "arguments": json.dumps(MCP_TOOL_ARGUMENTS),
+    "server_label": "deepwiki",
+    "status": "in_progress",
+}
+_ANSWERED_MCP_CALL_ITEM: Final = {**_PENDING_MCP_CALL_ITEM, "status": "completed", "output": WIKI_PAGES}
+_LOCAL_TIME_OUTPUT_ITEM: Final = {
+    "type": "function_call_output",
+    "call_id": CLIENT_TOOL_CALL_ID,
+    "output": LOCAL_TIME_OUTPUT,
+}
+_TURN_TWO_TEXT_BLOCK: Final = {"type": "text", "text": TURN_TWO_TEXT}
+_DEFERRED_MCP_PROMPT_ITEM: Final = {"role": "user", "content": DEFERRED_MCP_PROMPT}
+
+
+def _deferred_mcp_reply(
+    message: Mapping[str, object], stream_events: tuple[Mapping[str, object], ...], stream: bool
+) -> httpx.Response:
+    if stream:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=anthropic_sse(stream_events))
+    return httpx.Response(200, json=message)
+
+
+def _dumped(item: object) -> Mapping[str, object]:
+    return item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else cast(Mapping[str, object], item)
+
+
+def _deferred_mcp_turn(
+    input_items: Sequence[object], stream: bool
+) -> tuple[list[Mapping[str, object]], tuple[object, ...]]:
+    response: Final = litellm.responses(
+        model=_MODEL, input=list(input_items), tools=list(_DEFERRED_MCP_TOOLS), stream=stream, api_key="sk-ant-fake"
+    )
+    if not stream:
+        return [_dumped(item) for item in response.output], ()
+    events: Final = tuple(response)
+    return [_dumped(item) for item in events[-1].response.output], events
+
+
+def _assistant_turns(body: bytes | str) -> list[object]:
+    return [message["content"] for message in json.loads(body)["messages"] if message["role"] == "assistant"]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+def test_responses_over_anthropic_return_a_deferred_mcp_result_on_its_call_and_send_it_back_with_that_turn(
+    respx_mock: respx.MockRouter, stream: bool
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            _deferred_mcp_reply(TURN_ONE_MESSAGE, TURN_ONE_STREAM_EVENTS, stream),
+            _deferred_mcp_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS, stream),
+            httpx.Response(200, json=TURN_THREE_MESSAGE),
+        ]
+    )
+
+    turn_one, _ = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM], stream)
+    turn_two_input: Final = [_DEFERRED_MCP_PROMPT_ITEM, *turn_one, _LOCAL_TIME_OUTPUT_ITEM]
+    turn_two, _ = _deferred_mcp_turn(turn_two_input, stream)
+    _deferred_mcp_turn([*turn_two_input, *turn_two, {"role": "user", "content": DEFERRED_MCP_FOLLOW_UP}], False)
+
+    assert [item["type"] for item in turn_one] == ["mcp_call", "function_call"]
+    assert turn_one[0] == _PENDING_MCP_CALL_ITEM
+    assert _assistant_turns(route.calls[1].request.content) == [[MCP_TOOL_USE, CLIENT_TOOL_USE]]
+    assert [item["type"] for item in turn_two] == ["mcp_call", "message"]
+    assert turn_two[0] == _ANSWERED_MCP_CALL_ITEM
+    assert _assistant_turns(route.calls[2].request.content) == [
+        [MCP_TOOL_USE, CLIENT_TOOL_USE],
+        [DEFERRED_MCP_TOOL_RESULT, _TURN_TWO_TEXT_BLOCK],
+    ]
+
+
+def _item_events(events: Sequence[object], item_id: str) -> list[tuple[object, object]]:
+    return [
+        (getattr(event, "type"), getattr(event, "output_index", None))
+        for event in events
+        if (getattr(event, "item_id", None) or getattr(getattr(event, "item", None), "id", None)) == item_id
+    ]
+
+
+def test_streamed_responses_over_anthropic_emit_the_deferred_mcp_call_pending_then_answered(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            _deferred_mcp_reply(TURN_ONE_MESSAGE, TURN_ONE_STREAM_EVENTS, True),
+            _deferred_mcp_reply(TURN_TWO_MESSAGE, TURN_TWO_STREAM_EVENTS, True),
+        ]
+    )
+
+    turn_one, turn_one_events = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM], True)
+    _, turn_two_events = _deferred_mcp_turn([_DEFERRED_MCP_PROMPT_ITEM, *turn_one, _LOCAL_TIME_OUTPUT_ITEM], True)
+
+    item_id: Final = _PENDING_MCP_CALL_ITEM["id"]
+    assert _item_events(turn_one_events, item_id) == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0),
+        (ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS, 0),
+        (ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA, 0),
+        (ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE, 0),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 0),
+    ]
+    assert _item_events(turn_two_events, item_id) == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0),
+        (ResponsesAPIStreamEvents.MCP_CALL_COMPLETED, 0),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 0),
+    ]
+    added_items: Final = [
+        (event.output_index, _dumped(event.item))
+        for event in turn_two_events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert added_items[0] == (0, _PENDING_MCP_CALL_ITEM)
+    assert [(index, item["type"]) for index, item in added_items[1:]] == [(1, "message")]
+    done_mcp_items: Final = [
+        _dumped(event.item)
+        for event in turn_two_events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _dumped(event.item)["type"] == "mcp_call"
+    ]
+    assert done_mcp_items == [_ANSWERED_MCP_CALL_ITEM]
+
+
+def _stored_deferred_mcp_turn(
+    request_id: str, request_input: object, response: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "session-deferred-mcp",
+        "proxy_server_request": {"model": _MODEL, "input": request_input, "tools": list(_DEFERRED_MCP_TOOLS)},
+        "response": {"id": request_id, **response},
+    }
+
+
+def _stored_chat_completion(finish_reason: str, message: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [{"index": 0, "finish_reason": finish_reason, "message": message}],
+    }
+
+
+_STORED_DEFERRED_MCP_TURN_ONE: Final = _stored_deferred_mcp_turn(
+    "resp-deferred-mcp-1",
+    DEFERRED_MCP_PROMPT,
+    _stored_chat_completion(
+        "tool_calls",
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": CLIENT_TOOL_CALL_ID,
+                    "type": "function",
+                    "function": {"name": "get_local_time", "arguments": "{}"},
+                }
+            ],
+            "provider_specific_fields": {
+                "server_tool_calls": [
+                    {
+                        "id": DEFERRED_MCP_CALL_ID,
+                        "type": "function",
+                        "function": {
+                            "name": "read_wiki_structure",
+                            "arguments": json.dumps(MCP_TOOL_ARGUMENTS),
+                            "provider_specific_fields": {"server_name": "deepwiki"},
+                        },
+                    }
+                ]
+            },
+        },
+    ),
+)
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_returns_a_deferred_mcp_result_with_the_fields_of_the_stored_call() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages(TURN_TWO_MESSAGE)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_STORED_DEFERRED_MCP_TURN_ONE])):
+        response: Final = await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="resp-deferred-mcp-1",
+            input=[_LOCAL_TIME_OUTPUT_ITEM],
+            tools=list(_DEFERRED_MCP_TOOLS),
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert _assistant_turns(anthropic.body) == [[MCP_TOOL_USE, CLIENT_TOOL_USE]]
+    assert [item.type for item in response.output] == ["mcp_call", "message"]
+    assert _dumped(response.output[0]) == _ANSWERED_MCP_CALL_ITEM
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_sends_a_deferred_mcp_result_back_with_the_turn_that_received_it() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages(TURN_THREE_MESSAGE)
+    stored_turn_two: Final = _stored_deferred_mcp_turn(
+        "resp-deferred-mcp-2",
+        [_LOCAL_TIME_OUTPUT_ITEM],
+        _stored_chat_completion(
+            "stop",
+            {
+                "role": "assistant",
+                "content": TURN_TWO_TEXT,
+                "provider_specific_fields": {"tool_results": [DEFERRED_MCP_TOOL_RESULT]},
+            },
+        ),
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        _FakePrismaClient([_STORED_DEFERRED_MCP_TURN_ONE, stored_turn_two]),
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="resp-deferred-mcp-2",
+            input=DEFERRED_MCP_FOLLOW_UP,
+            tools=list(_DEFERRED_MCP_TOOLS),
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert _assistant_turns(anthropic.body) == [
+        [MCP_TOOL_USE, CLIENT_TOOL_USE],
+        [DEFERRED_MCP_TOOL_RESULT, _TURN_TWO_TEXT_BLOCK],
+    ]

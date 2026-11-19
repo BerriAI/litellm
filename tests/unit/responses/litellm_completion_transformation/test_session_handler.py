@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -15,6 +16,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import Message
 
@@ -814,3 +816,32 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+def _role_and_text(message: object) -> tuple[object, object]:
+    role: Final = message_field(message, "role")
+    content: Final = message_field(message, "content")
+    if isinstance(content, list):
+        return role, "".join(str(message_field(block, "text") or "") for block in content)
+    return role, content
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_whose_model_no_provider_resolves_still_replays_the_stored_turns() -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-unresolved-route", "What is 2+2?", "Four.")
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient(results=[[first_turn]])):
+        request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="chatcmpl-first",
+            litellm_completion_request={
+                "model": "my-router-alias",
+                "messages": [{"role": "user", "content": "Double it."}],
+            },
+            instructions=None,
+        )
+
+    assert [_role_and_text(message) for message in request["messages"]] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", "Double it."),
+    ]

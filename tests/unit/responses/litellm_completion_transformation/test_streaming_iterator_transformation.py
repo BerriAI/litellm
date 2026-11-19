@@ -357,6 +357,144 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
         )
 
 
+_STREAMED_MCP_CALL_ID: Final = "mcptoolu_01UR8mwPQ78wgo46s7PyNFFZ"
+_STREAMED_MCP_CALL: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "message_start",
+        "message": {
+            "id": "msg_01Wiki",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+        },
+    },
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "mcp_tool_use",
+            "id": _STREAMED_MCP_CALL_ID,
+            "name": "read_wiki_structure",
+            "input": {},
+            "server_name": "deepwiki",
+        },
+    },
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"repoN'}},
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": 'ame": "facebook/react"}'},
+    },
+    {"type": "content_block_stop", "index": 0},
+)
+
+
+def _streamed_mcp_result_then_answer(is_error: bool, text: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_result",
+                "tool_use_id": _STREAMED_MCP_CALL_ID,
+                "is_error": is_error,
+                "content": [{"type": "text", "text": text}],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Done."}},
+        {"type": "content_block_stop", "index": 2},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 20}},
+    )
+
+
+_PAUSED_AFTER_THE_MCP_CALL: Final[tuple[dict[str, object], ...]] = (
+    {"type": "message_delta", "delta": {"stop_reason": "pause_turn"}, "usage": {"output_tokens": 5}},
+)
+_MCP_CALL_OPENING_EVENTS: Final = [
+    "response.output_item.added",
+    "response.mcp_call.in_progress",
+    "response.mcp_call_arguments.delta",
+    "response.mcp_call_arguments.done",
+]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("after_the_call", "expected_closing_events", "expected_result", "expected_output_types"),
+    [
+        pytest.param(
+            _streamed_mcp_result_then_answer(False, "Available pages for facebook/react"),
+            ["response.mcp_call.completed", "response.output_item.done"],
+            {"status": "completed", "output": "Available pages for facebook/react"},
+            ["mcp_call", "message"],
+            id="completed",
+        ),
+        pytest.param(
+            _streamed_mcp_result_then_answer(True, "Repository not found"),
+            ["response.mcp_call.failed", "response.output_item.done"],
+            {"status": "failed", "error": "Repository not found"},
+            ["mcp_call", "message"],
+            id="is_error",
+        ),
+        pytest.param(
+            _PAUSED_AFTER_THE_MCP_CALL,
+            ["response.output_item.done"],
+            {"status": "in_progress"},
+            ["mcp_call", "message"],
+            id="no_result_closed_at_stream_end",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_streamed_anthropic_mcp_call_streams_as_one_mcp_call_item(
+    sync_mode: bool,
+    after_the_call: tuple[dict[str, object], ...],
+    expected_closing_events: list[str],
+    expected_result: dict[str, str],
+    expected_output_types: list[str],
+) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [parser.chunk_parser(event) for event in (*_STREAMED_MCP_CALL, *after_the_call)]
+        ),
+        request_input="List the wiki pages of facebook/react.",
+        responses_api_request={
+            "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = [event.model_dump(exclude_none=True) for event in await _collect_events(iterator, sync_mode)]
+
+    output: Final = events[-1]["response"]["output"]
+    mcp_item_id: Final = f"mcp_{_STREAMED_MCP_CALL_ID}"
+    mcp_events: Final = [
+        event for event in events if event.get("item_id", event.get("item", {}).get("id")) == mcp_item_id
+    ]
+    assert [item["type"] for item in output] == expected_output_types
+    assert output[0] == {
+        "id": mcp_item_id,
+        "type": "mcp_call",
+        "name": "read_wiki_structure",
+        "arguments": '{"repoName": "facebook/react"}',
+        "server_label": "deepwiki",
+        **expected_result,
+    }
+    assert [event["type"] for event in mcp_events] == [*_MCP_CALL_OPENING_EVENTS, *expected_closing_events]
+    assert {event["output_index"] for event in mcp_events} == {0}
+    assert (mcp_events[0]["item"]["status"], mcp_events[0]["item"]["arguments"]) == ("in_progress", "")
+    assert (mcp_events[2]["delta"], mcp_events[3]["arguments"]) == (output[0]["arguments"], output[0]["arguments"])
+    assert mcp_events[-1]["item"] == output[0]
+    assert not any(event.get("item", {}).get("type") == "function_call" for event in events)
+
+
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
