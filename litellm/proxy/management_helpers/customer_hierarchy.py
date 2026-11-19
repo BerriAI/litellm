@@ -48,9 +48,6 @@ if TYPE_CHECKING:
     from prisma import Json, Prisma
     from prisma.models import LiteLLM_BudgetWindowSpend
 
-BaseModel = LiteLLMBaseModel
-
-
 BudgetSort: TypeAlias = Literal["budget_asc", "budget_desc"]
 
 
@@ -361,7 +358,7 @@ _BUDGET_IDS: Final = TypeAdapter(tuple[str, ...])
 _ORGANIZATION_DEFAULT_GROUP: Final = "customer_organization_default_budget_group"
 
 
-class _BudgetGroupDefault(BaseModel):
+class _BudgetGroupDefault(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     budget_id: str | None = None
