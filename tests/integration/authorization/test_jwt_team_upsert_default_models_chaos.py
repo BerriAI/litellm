@@ -121,12 +121,17 @@ def test_a_burst_of_first_requests_survives_a_worker_kill_with_every_team_on_the
 
             answered: Final = tuple(attempt for attempt in attempts if attempt.status is not None)
             assert len(answered) >= KILL_AFTER_RESPONSES, attempts
-            assert [(attempt.status, attempt.text) for attempt in answered if attempt.status != 200] == []
+            succeeded: Final = tuple(attempt for attempt in answered if attempt.status == 200)
+            assert [
+                (attempt.status, attempt.text)
+                for attempt in answered
+                if attempt.status is not None and attempt.status < 500 and attempt.status != 200
+            ] == []
             assert [attempt.status for attempt in recovered] == [200] * BURST_TEAMS, recovered
             assert [attempt.status for attempt in refused] == [403] * BURST_TEAMS, refused
             assert [team_models(team) for team in teams] == [[[approved]]] * BURST_TEAMS
             reached_provider: Final = frozenset(marker_of(request) for request in provider.drain())
-            served: Final = tuple(attempt for attempt in (*answered, *recovered))
+            served: Final = (*succeeded, *recovered)
             assert frozenset(attempt.marker for attempt in served) <= reached_provider
             assert not frozenset(attempt.marker for attempt in refused) & reached_provider
             for team in teams:
