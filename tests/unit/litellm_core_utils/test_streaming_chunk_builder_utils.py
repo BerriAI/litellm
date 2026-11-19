@@ -3167,6 +3167,46 @@ def test_stream_chunk_builder_reads_a_data_line_after_any_line_break_an_sse_read
     assert built.choices[0].message.content == "HelloLEAKED-SECRET world"
 
 
+def _received_text(content: str, created_at: float) -> ModelResponseStream:
+    chunk: Final = _streamed_text(content)
+    chunk._hidden_params = {"created_at": created_at}
+    return chunk
+
+
+@pytest.mark.parametrize(
+    "carried_fields",
+    [
+        pytest.param({}, id="frame_without_a_timestamp"),
+        pytest.param({"_hidden_params": {"created_at": 0}}, id="frame_with_an_upstream_timestamp"),
+    ],
+)
+def test_stream_chunk_builder_keeps_a_raw_frame_where_it_arrived(carried_fields: Mapping[str, object]) -> None:
+    carried: Final = _data_line(
+        {**_SECRET_CHUNK, **carried_fields, "choices": [{"index": 0, "delta": {"content": "45-"}}]}
+    )
+
+    built: Final = stream_chunk_builder(
+        chunks=[_received_text("SSN: 123-", created_at=1.0), carried.encode(), _received_text("6789.", created_at=2.0)]
+    )
+
+    assert built is not None
+    assert built.choices[0].message.content == "SSN: 123-45-6789."
+
+
+def test_stream_chunk_builder_reads_every_choice_a_raw_frame_carries() -> None:
+    carried: Final = _data_line(
+        {
+            **_SECRET_CHUNK,
+            "choices": [{"index": 0, "delta": {"content": " there"}}, {"index": 1, "delta": {"content": "other"}}],
+        }
+    )
+
+    built: Final = stream_chunk_builder(chunks=[_streamed_text("Hello"), carried.encode(), _streamed_text(" world")])
+
+    assert built is not None
+    assert [choice.message.content for choice in built.choices] == ["Hello there world", "other"]
+
+
 @pytest.mark.parametrize(
     "frame",
     [
@@ -3193,6 +3233,16 @@ def test_stream_chunk_builder_reads_a_data_line_after_any_line_break_an_sse_read
             )
         ),
         pytest.param(_data_line(_SECRET_CHUNK).replace("LEAKED", "LEAK\u2028ED"), id="line_break_inside_the_json"),
+        *(
+            pytest.param(
+                _data_line({**_SECRET_CHUNK, "choices": [first, {"index": 0, "delta": {"content": "LEAKED-SECRET"}}]}),
+                id=f"second_choice_at_index_0_{name}",
+            )
+            for name, first in (
+                ("after_index_0", {"index": 0, "delta": {"content": "safe"}}),
+                ("after_no_index", {"delta": {"content": "safe"}}),
+            )
+        ),
         pytest.param(json.dumps(_SECRET_CHUNK), id="chunk_without_a_data_field"),
         pytest.param("a plain text frame", id="plain_text_str"),
         pytest.param(b"a plain text frame", id="plain_text_bytes"),

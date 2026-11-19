@@ -283,8 +283,8 @@ def apply_grounding_request_counts(
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: Sequence[object] | None = None):
-        self.chunks = self._sort_chunks(chunks)
+    def __init__(self, chunks: list, messages: Sequence[object] | None = None, keep_order: bool = False):
+        self.chunks = chunks if keep_order else self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
 
@@ -1858,6 +1858,7 @@ def _is_chat_chunk(payload: Mapping[str, object]) -> bool:
             and isinstance(delta.get("content"), (str, type(None)))
             for raw_choice in choices
         )
+        and len(frozenset(map(_stream_choice_index, choices))) == len(choices)
     )
 
 
@@ -1921,7 +1922,8 @@ def _assembled_stream_response(
         if not chunks:
             return None
 
-        processor: Final = ChunkProcessor(list(_with_raw_frames_unpacked(chunks)), messages)
+        unpacked: Final = _with_raw_frames_unpacked(chunks)
+        processor: Final = ChunkProcessor(list(unpacked), messages, keep_order=unpacked is not chunks)
         chunks = processor.chunks
 
         ### BASE-CASE ###
