@@ -21,6 +21,7 @@ const audit = {
 };
 const organization: Organization = {
   budget_groups_revision: "a".repeat(64),
+  member_count: 1,
   ...audit,
   customer_org_id: "org-1",
   alias: "Example",
@@ -42,6 +43,7 @@ const memberOrganization = {
 const member: Member = {
   ...audit,
   customer_member_id: "member-1",
+  parent_org_id: organization.customer_org_id,
   parent_team_ids: ["team-1"],
   alias: "Member One",
   budget_id: "template-1",
@@ -176,8 +178,8 @@ describe("customer hierarchy settings payloads", () => {
 
   it.each([null, 100])("edits a monthly window while retaining the yearly and scalar %s limits", (max_budget) => {
     const windows = [
-      { budget_duration: "1mo", max_budget: 50 },
-      { budget_duration: "12mo", max_budget: 500 },
+      { budget_duration: "1mo" as const, max_budget: 50 },
+      { budget_duration: "12mo" as const, max_budget: 500 },
     ];
     const entity: CustomerHierarchyEntity = {
       kind: "organization",
@@ -188,9 +190,18 @@ describe("customer hierarchy settings payloads", () => {
       },
     };
     const fields = customerHierarchyFields(entity);
-    expect(fields.maxBudget).toBe("50");
-    expect(buildCustomerHierarchyPatch(entity, { ...fields, maxBudget: "0" })).toMatchObject({
+    expect(fields.maxBudget).toBe(max_budget == null ? "" : String(max_budget));
+    expect(
+      buildCustomerHierarchyPatch(entity, {
+        ...fields,
+        budgetWindows: fields.budgetWindows.map((window, index) =>
+          index === 0 ? { ...window, maxBudget: "0" } : window,
+        ),
+      }),
+    ).toEqual({
+      ok: true,
       patch: {
+        kind: "organization",
         body: {
           budget: {
             budget_limits: [{ budget_duration: "1mo", max_budget: 0 }, windows[1]],
@@ -203,7 +214,13 @@ describe("customer hierarchy settings payloads", () => {
   it("should clear an explicit budget when disabled", () => {
     const entity: CustomerHierarchyEntity = {
       kind: "team",
-      record: { ...audit, customer_team_id: "team-1", parent_org_id: "org-1", budget: { max_budget: 100 } },
+      record: {
+        ...audit,
+        customer_team_id: "team-1",
+        parent_org_id: "org-1",
+        budget: { max_budget: 100 },
+        effective_budget: { max_budget: 100 },
+      },
     };
     expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), budgetEnabled: false })).toEqual({
       ok: true,
@@ -325,7 +342,7 @@ describe("customer hierarchy settings payloads", () => {
   });
 
   it("clears visible legacy limits while preserving hidden policy during permanent conversion", () => {
-    const yearly = { budget_duration: "12mo", max_budget: 5000, reset_at: "2027-01-01T00:00:00Z" };
+    const yearly = { budget_duration: "12mo" as const, max_budget: 5000, reset_at: "2027-01-01T00:00:00Z" };
     const entity: CustomerHierarchyEntity = {
       kind: "member",
       record: {
@@ -384,12 +401,12 @@ describe("customer hierarchy creation payloads", () => {
   const organizationWithTemplate: Organization = {
     ...organization,
     default_budget_template_id: "standard-template",
-    default_budgets: [{ budget_id: "standard-template", name: "Standard", is_default: true, max_budget: 50 }],
+    default_budgets: [{ budget_id: "standard-template", name: "Standard", max_budget: 50 }],
   };
   const memberTarget: CustomerHierarchyCreateTarget = {
     kind: "member",
     organization: organizationWithTemplate,
-    team: { ...audit, customer_team_id: "team-1", parent_org_id: organization.customer_org_id },
+    team: { ...audit, customer_team_id: "team-1", parent_org_id: organization.customer_org_id, effective_budget: {} },
   };
 
   it("should create a team under its organization with an automatic identifier", () => {

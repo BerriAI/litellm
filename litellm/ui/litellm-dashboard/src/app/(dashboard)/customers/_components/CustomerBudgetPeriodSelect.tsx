@@ -16,13 +16,13 @@ export default function CustomerBudgetPeriodSelect({
   onChange,
   disabled,
   standardOnly = false,
-  allowNoReset = true,
+  unavailablePeriods = [],
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   standardOnly?: boolean;
-  allowNoReset?: boolean;
+  unavailablePeriods?: readonly string[];
 }) {
   const { t } = useTranslation();
   const [custom, setCustom] = useState(false);
@@ -39,6 +39,7 @@ export default function CustomerBudgetPeriodSelect({
         <Input
           aria-label={t("customerPortal.budgetEditor.customPeriod")}
           value={value}
+          disabled={disabled}
           className="w-20 shrink-0 rounded-none border-0 border-l shadow-none"
           onChange={(event) => onChange(event.target.value)}
         />
@@ -53,9 +54,8 @@ export default function CustomerBudgetPeriodSelect({
         <SelectContent>
           {Object.entries(periodLabels)
             .slice(0, standardOnly ? 2 : undefined)
-            .filter(([period]) => allowNoReset || period !== "none")
             .map(([value, label]) => (
-              <SelectItem key={value} value={value}>
+              <SelectItem key={value} value={value} disabled={unavailablePeriods.includes(value)}>
                 {t(label)}
               </SelectItem>
             ))}

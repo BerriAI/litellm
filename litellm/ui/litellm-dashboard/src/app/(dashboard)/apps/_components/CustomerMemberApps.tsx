@@ -149,8 +149,21 @@ function MemberBudgetLoader(props: {
     queryFn: () => loadOrganizationApp(props.app.app_id, props.organizationId),
     enabled: needsInherited,
   });
-  if (needsInherited && inherited.isPending) return <p role="status">{t("apps.loading")}</p>;
-  if (needsInherited && inherited.isError) return <ErrorState onRetry={() => void inherited.refetch()} />;
+  if (needsInherited && (inherited.isPending || inherited.isError))
+    return (
+      <CustomerBudgetDialog
+        title={t("apps.editMemberBudget", { alias: props.app.alias })}
+        description={t("apps.memberOverrideHint")}
+        pending={false}
+        onClose={props.onCancel}
+      >
+        {inherited.isPending ? (
+          <p role="status">{t("apps.loading")}</p>
+        ) : (
+          <ErrorState onRetry={() => void inherited.refetch()} />
+        )}
+      </CustomerBudgetDialog>
+    );
   const original = appBaseBudget(
     props.row,
     inherited.data?.effective_customer_member_budget ?? props.app.default_customer_member_budget,
@@ -220,7 +233,6 @@ function MemberBudgetForm({
             modelScope={app}
             id={`app-member-${app.app_id}`}
             fields={fields}
-            original={original}
             disabled={pending}
             onChange={setFields}
           />

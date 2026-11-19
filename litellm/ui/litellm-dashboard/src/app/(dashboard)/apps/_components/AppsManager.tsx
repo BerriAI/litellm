@@ -1,6 +1,10 @@
 "use client";
 
-import { budgetEditorFields, permanentBudgetEditorValue } from "../../customers/_components/customerBudgetForm";
+import {
+  budgetEditorFields,
+  budgetPolicyChanges,
+  permanentBudgetEditorValue,
+} from "../../customers/_components/customerBudgetForm";
 
 import { useMemo, useState } from "react";
 import { parseAsInteger, parseAsString, useQueryState } from "nuqs";
@@ -212,6 +216,7 @@ const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default
   const customSource = app?.budget ? "custom" : "inherit";
   return {
     budget: budgetEditorFields(app?.budget),
+    policy: app?.budget,
     budgetSource: profiles.some((profile) => profile.budget_id === app?.budget_id)
       ? `profile:${app?.budget_id}`
       : customSource,
@@ -249,7 +254,7 @@ function AppDefaultsForm({
         ok: true,
         value: {
           ...(fields.budgetSource === "custom"
-            ? { budget: budget.value }
+            ? { budget: { ...budget.value, ...budgetPolicyChanges(fields.policy, app?.budget) } }
             : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
           default_customer_member_budget: member.value,
           default_tier_budget_id: fields.profile || null,
@@ -274,6 +279,21 @@ function AppDefaultsForm({
       setSaved(true);
     },
   });
+  const changeBudgetSource = (source: string | null) => {
+    if (!source) return;
+    setFields((current) => {
+      const selected =
+        source === "custom"
+          ? profiles.find((profile) => `profile:${profile.budget_id}` === current.budgetSource)
+          : null;
+      return {
+        ...current,
+        budgetSource: source,
+        budget: { ...(selected ? budgetEditorFields(selected) : current.budget), budgetEnabled: source === "custom" },
+        policy: selected ?? current.policy,
+      };
+    });
+  };
   return (
     <form onSubmit={save} className="space-y-6" aria-label={t("apps.defaultsFor", { alias: resource.alias })}>
       <AppBudgetEditor
@@ -287,14 +307,7 @@ function AppDefaultsForm({
         source={{
           profiles,
           value: fields.budgetSource,
-          onChange: (source) => {
-            if (source)
-              setFields((current) => ({
-                ...current,
-                budgetSource: source,
-                budget: { ...current.budget, budgetEnabled: source === "custom" },
-              }));
-          },
+          onChange: changeBudgetSource,
         }}
       />
       <a href={`${uiHref("customers/settings")}?tab=overall-app`} className="text-xs text-primary hover:underline">

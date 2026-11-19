@@ -19,6 +19,8 @@ const audit = { created_at: "", updated_at: "", created_by: "", updated_by: "", 
 const standard = { budget_id: "standard", name: "Standard", max_budget: 500, allowed_models: ["preset-model"] };
 const organization: Organization = {
   customer_org_id: "org-1",
+  budget_groups_revision: "a".repeat(64),
+  member_count: 1,
   alias: "Example",
   ...audit,
   default_budgets: [],
@@ -34,7 +36,13 @@ const organization: Organization = {
     budget_limits: [{ max_budget: 1000, budget_duration: "12mo" }],
   },
 };
-const memberOrganization: Organization = { ...audit, customer_org_id: "org-1", default_budgets: [standard] };
+const memberOrganization: Organization = {
+  ...audit,
+  customer_org_id: "org-1",
+  budget_groups_revision: organization.budget_groups_revision,
+  member_count: 1,
+  default_budgets: [standard],
+};
 const baseBudget = {
   max_budget: 100,
   budget_duration: "1mo",
@@ -44,9 +52,9 @@ const baseBudget = {
   allowed_models: ["configured-model"],
   budget_limits: [
     { max_budget: 1000, budget_duration: "12mo", reset_at: "2027-01-01T00:00:00Z" },
-    { max_budget: 30, budget_duration: "7d" },
+    { max_budget: 30, budget_duration: "1mo" },
   ],
-};
+} satisfies NonNullable<Member["budget"]>;
 const member: Member = {
   ...audit,
   customer_member_id: "member-1",
@@ -76,18 +84,16 @@ const views = {
       budgetResetAt: null,
     },
     memberId: null,
-    amount: "Spend limit (USD)",
     dialog: "Edit organization budget",
     error: "Budget update unavailable",
   },
   member: {
     entity: customerUsageEntity(member.customer_member_id, member),
     memberId: member.customer_member_id,
-    amount: "Monthly budget",
     dialog: "Edit member budget",
     error: "Member budget unavailable",
   },
-} as const;
+};
 
 let viewScope: keyof typeof views;
 
@@ -102,7 +108,7 @@ async function openBudget(scope: keyof typeof views) {
       settingsHref={`/customers/manage?org=org-1${memberId ? `&member=${memberId}` : ""}&tab=settings`}
     />,
   );
-  await user.click(screen.getByRole("button", { name: "Edit budget", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Edit budget" }));
   return user;
 }
 
@@ -119,7 +125,7 @@ beforeEach(() => {
     if (path.endsWith("/models")) return json({ data: [{ id: "configured-model", owned_by: "openai" }] });
     throw new Error(`Unexpected request ${path}`);
   });
-  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => fetchMock(new Request(input, init)));
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -133,7 +139,14 @@ describe("organization budget dialog", () => {
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Soft budget (USD)" }), { target: { value: "150" } });
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "2000" } });
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
-    await chooseSelectOption(user, dialog.getByRole("combobox", { name: "Reset period" }), "/ month");
+    await user.click(dialog.getAllByRole("combobox", { name: "Reset period" })[0]);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "/ month",
+      "/ year",
+      "No reset",
+      "Custom period",
+    ]);
+    await user.click(screen.getByRole("option", { name: "/ month" }));
     await user.click(dialog.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(writes()).toHaveLength(1);
@@ -165,10 +178,12 @@ describe("organization budget dialog", () => {
 describe("member budget dialog", () => {
   it("saves monthly and yearly base limits without changing the active temporary grant", async () => {
     const user = await openBudget("member");
-    const dialog = within(await screen.findByRole("dialog", { name: "Edit member budget", exact: true }));
-    expect(await dialog.findByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(100);
-    fireEvent.change(dialog.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "200" } });
-    fireEvent.change(dialog.getByRole("spinbutton", { name: "Yearly budget" }), { target: { value: "2400" } });
+    const dialog = within(await screen.findByRole("dialog", { name: "Edit member budget" }));
+    expect(await dialog.findByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(100);
+    fireEvent.change(dialog.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "200" } });
+    fireEvent.change(dialog.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[0], {
+      target: { value: "2400" },
+    });
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     await user.click(dialog.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -188,7 +203,7 @@ describe("member budget dialog", () => {
     const user = await openBudget("member");
     const source = await screen.findByRole("combobox", { name: "Member limits" });
     await chooseSelectOption(user, source, /^Standard/);
-    expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(await writes()[0].clone().json()).toEqual({
@@ -210,8 +225,8 @@ describe("member budget dialog", () => {
       await screen.findByRole("combobox", { name: "Member limits" }),
       "Enter custom limits instead",
     );
-    expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(500);
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "750" } });
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(500);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "750" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(await writes()[0].clone().json()).toEqual({
@@ -241,16 +256,18 @@ describe("member budget dialog", () => {
       return saved ? refresh.promise : json(member);
     });
     const user = await openBudget("member");
-    fireEvent.change(await screen.findByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "250" } });
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Spend limit (USD)" }), {
+      target: { value: "250" },
+    });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Edit budget", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Edit budget" }));
     try {
-      expect(await screen.findByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(250);
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "275" } });
+      expect(await screen.findByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(250);
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "275" } });
       refresh.resolve(json(updated));
       await waitFor(() => expect(testQueryClient.isFetching()).toBe(0));
-      expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(275);
+      expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(275);
     } finally {
       refresh.resolve(json(updated));
     }
@@ -292,10 +309,10 @@ describe("member budget dialog", () => {
       json(new URL((input as Request).url).pathname.endsWith("/customer_members/member-1") ? custom : organization),
     );
     const user = await openBudget("member");
-    fireEvent.change(await screen.findByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Spend limit (USD)" }), {
       target: { value: "" },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "Custom reset period" }), { target: { value: "14d" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Custom period" }), { target: { value: "14d" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(await writes()[0].clone().json()).toEqual({
@@ -306,21 +323,23 @@ describe("member budget dialog", () => {
 
 describe.each(["organization", "member"] as const)("%s budget draft", (scope) => {
   it("discards a cancelled draft and retains unsaved values after a failed save", async () => {
-    const { amount, dialog, error } = views[scope];
+    const { dialog, error } = views[scope];
     const serve = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation(async (input, init) =>
       input instanceof Request && input.method === "PATCH" ? json({ detail: error }, 503) : serve(input, init),
     );
     const user = await openBudget(scope);
-    fireEvent.change(await screen.findByRole("spinbutton", { name: amount }), { target: { value: "999" } });
-    await user.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Spend limit (USD)" }), {
+      target: { value: "999" },
+    });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(writes()).toHaveLength(0);
-    await user.click(screen.getByRole("button", { name: "Edit budget", exact: true }));
-    expect(await screen.findByRole("spinbutton", { name: amount })).toHaveValue(100);
-    fireEvent.change(screen.getByRole("spinbutton", { name: amount }), { target: { value: "200" } });
+    await user.click(screen.getByRole("button", { name: "Edit budget" }));
+    expect(await screen.findByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(100);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "200" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(error);
-    expect(screen.getByRole("spinbutton", { name: amount })).toHaveValue(200);
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(200);
     expect(screen.getByRole("dialog", { name: dialog })).toBeInTheDocument();
   });
 });

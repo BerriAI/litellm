@@ -158,7 +158,7 @@ describe("customer app budgets", () => {
       const source = screen.getByRole("combobox", { name: "Budget source" });
       await chooseAppOption(user, source, /^Tier 2/);
       await chooseAppOption(user, source, "Enter custom limits instead");
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "250" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "250" } });
       expect(await saveBudget(user)).toEqual({
         budget: { max_budget: 250, budget_duration: "1mo", ...selectedPolicy },
         customer_member_budget: null,
@@ -229,7 +229,7 @@ describe("customer app budgets", () => {
     };
     const user = await openBudget();
     await chooseAppOption(user, screen.getByRole("combobox", { name: "Budget source" }), "Enter custom limits instead");
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), {
       target: { value: "0" },
     });
     expect(await saveBudget(user)).toEqual({
@@ -268,7 +268,7 @@ describe("customer app budgets", () => {
     };
     const user = await openBudget();
     const section = within(await screen.findByRole("region", { name: "Per-member limits (optional)" }));
-    expect(section.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(150);
+    expect(section.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
     fireEvent.change(section.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     expect(await saveBudget(user)).toEqual({
       budget_id: "standard",
@@ -413,7 +413,7 @@ describe("customer app budgets", () => {
     render(<CustomerOrganizationApps organizationId="org-1" />);
     await screen.findByRole("button", { name: "Edit budget for chat" });
     const table = within(screen.getByRole("table", { name: "App budgets" }));
-    expect(await table.findByRole("cell", { name: "Tier 1", exact: true })).toBeInTheDocument();
+    expect(await table.findByRole("cell", { name: "Tier 1" })).toBeInTheDocument();
     expect(table.getByText("$100.00")).toBeInTheDocument();
     expect(table.queryByText("$1,000.00")).not.toBeInTheDocument();
     expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
@@ -441,9 +441,9 @@ describe("customer app budgets", () => {
     await user.click(await screen.findByRole("option", { name: /^Tier 1/ }));
     const member = within(screen.getByRole("region", { name: "Per-member limits (optional)" }));
     await user.click(member.getByRole("switch", { name: "Set per-member limits" }));
+    await chooseAppOption(user, member.getByRole("combobox", { name: "Reset period" }), "/ year");
     act(() => {
-      fireEvent.change(member.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "20" } });
-      fireEvent.change(member.getByRole("spinbutton", { name: "Yearly budget" }), { target: { value: "200" } });
+      fireEvent.change(member.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "200" } });
       fireEvent.change(member.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "30000" } });
       fireEvent.change(member.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
     });
@@ -453,12 +453,11 @@ describe("customer app budgets", () => {
     expect(mutations.map((request) => request.method)).toEqual(["POST", "PUT"]);
     expect(await mutations[0].json()).toEqual({ resource_id: "team-chat", resource_type: "team" });
     expect(new URL(mutations[1].url).pathname).toBe("/management/v1/apps/app-chat/customer_organizations/org-1");
-    expect(await mutations[1].json()).toMatchObject({
+    expect(await mutations[1].json()).toEqual({
       budget_id: "standard",
       customer_member_budget: {
-        max_budget: 20,
-        budget_duration: "1mo",
-        budget_limits: [{ budget_duration: "12mo", max_budget: 200 }],
+        max_budget: 200,
+        budget_duration: "12mo",
         tpm_limit: 30000,
         rpm_limit: 60,
       },
@@ -475,7 +474,7 @@ describe("customer app budgets", () => {
     await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Budget for chat" }));
     expect(dialog.getByRole("textbox", { name: "Customer organization" })).toHaveValue("Customer Y");
-    expect(dialog.getByRole("textbox", { name: "App", exact: true })).toHaveValue("chat");
+    expect(dialog.getByRole("textbox", { name: "App" })).toHaveValue("chat");
     expect(dialog.getByRole("combobox", { name: "Budget source" })).toHaveTextContent("Tier 1");
     await user.click(dialog.getByRole("button", { name: "Cancel" }));
     await user.click(screen.getByRole("button", { name: "Add app budget" }));
@@ -492,19 +491,18 @@ describe("customer app budgets", () => {
     await chooseAppOption(user, await screen.findByRole("combobox", { name: "Select an app" }), "search");
     await user.click(screen.getByRole("combobox", { name: "Budget source" }));
     await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
+    await chooseAppOption(user, screen.getByRole("combobox", { name: "Reset period" }), "/ year");
     act(() => {
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "100" } });
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Yearly budget" }), { target: { value: "1000" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "1000" } });
       fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
       fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "120" } });
     });
 
     expect(screen.getByRole("switch", { name: "Set per-member limits" })).not.toBeChecked();
-    expect(await saveBudget(user)).toMatchObject({
+    expect(await saveBudget(user)).toEqual({
       budget: {
-        max_budget: 100,
-        budget_duration: "1mo",
-        budget_limits: [{ budget_duration: "12mo", max_budget: 1000 }],
+        max_budget: 1000,
+        budget_duration: "12mo",
         tpm_limit: 50000,
         rpm_limit: 120,
       },
@@ -533,15 +531,17 @@ describe("customer app budgets", () => {
     });
     const user = await openBudget();
     const limits = within(screen.getByRole("region", { name: "Budget source" }));
-    expect(limits.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(100);
-    expect(limits.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(1000);
+    expect(limits.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(null);
+    const caps = limits.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" });
+    expect(caps[0]).toHaveValue(100);
+    expect(caps[1]).toHaveValue(1000);
     const member = within(screen.getByRole("region", { name: "Per-member limits (optional)" }));
     expect(member.getByRole("switch", { name: "Set per-member limits" })).toBeChecked();
-    expect(member.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(20);
+    expect(member.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(20);
     await user.click(limits.getByRole("combobox", { name: "Budget source" }));
     await user.click(await screen.findByRole("option", { name: /^Tier 1/ }));
     await user.click(member.getByRole("switch", { name: "Set per-member limits" }));
-    expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
     expect(await saveBudget(user)).toEqual({
       budget_id: "standard",
       budget_override: null,
@@ -571,8 +571,8 @@ describe("customer app budgets", () => {
         budget_override_id: legacy || temporary ? "override" : null,
       };
       const user = await openBudget();
-      expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(5);
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "7" } });
+      expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(5);
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "7" } });
       expect(await saveBudget(user)).toEqual({
         ...expectedPatch,
         customer_member_budget: null,
@@ -620,10 +620,10 @@ describe("customer app budgets", () => {
     const user = await openBudget();
     await user.click(await screen.findByRole("combobox", { name: "Budget source" }));
     await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
-    expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(500);
-    expect(screen.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(5000);
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(500);
+    expect(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveValue(5000);
     expect(screen.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(10000);
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "750" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "750" } });
     expect(await saveBudget(user)).toEqual({
       budget: { max_budget: 750, budget_duration: "1mo" },
       customer_member_budget: null,

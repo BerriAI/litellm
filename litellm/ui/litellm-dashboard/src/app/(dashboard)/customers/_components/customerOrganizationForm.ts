@@ -1,19 +1,19 @@
 import type { components } from "@/lib/http/schema";
-import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
+import {
+  budgetChanges,
+  budgetEditorFields,
+  compactBudgetEditorValue,
+  parseBudget,
+  type BudgetEditorFields,
+} from "./customerBudgetForm";
 
 export type CustomerCapPolicy = NonNullable<components["schemas"]["BudgetTemplate"]["cap_policy"]>;
 export const defaultCustomerCapPolicy: CustomerCapPolicy = "pause_until_reset";
 
-export interface CustomerBudgetGroupFields {
-  budgetLimits?: components["schemas"]["Budget"]["budget_limits"];
+export interface CustomerBudgetGroupFields extends BudgetEditorFields {
   id: string;
   name: string;
-  monthlyBudget: string;
-  yearlyBudget: string;
-  tpm: string;
-  rpm: string;
   capPolicy: CustomerCapPolicy;
-  allowedModels?: readonly string[];
 }
 
 export interface CustomerOrganizationFields {
@@ -22,7 +22,9 @@ export interface CustomerOrganizationFields {
   budgetMode: "inherit" | "custom" | "profile";
   budgetId: string;
   budgetAmount: string;
-  budgetDuration: "1mo" | "12mo";
+  budgetDuration: string;
+  softBudget: string;
+  allowedModels: readonly string[];
   tpm: string;
   rpm: string;
   groups: CustomerBudgetGroupFields[];
@@ -36,57 +38,41 @@ export const initialCustomerOrganizationFields = (): CustomerOrganizationFields 
   budgetId: "",
   budgetAmount: "",
   budgetDuration: "1mo",
+  softBudget: "",
+  allowedModels: [],
   tpm: "",
   rpm: "",
-  groups: [
-    {
-      id: "power",
-      name: "power_user",
-      monthlyBudget: "200",
-      yearlyBudget: "2000",
-      tpm: "",
-      rpm: "",
-      capPolicy: defaultCustomerCapPolicy,
-    },
-    {
-      id: "default",
-      name: "default_user",
-      monthlyBudget: "50",
-      yearlyBudget: "500",
-      tpm: "",
-      rpm: "",
-      capPolicy: defaultCustomerCapPolicy,
-    },
-    {
-      id: "low",
-      name: "low_user",
-      monthlyBudget: "10",
-      yearlyBudget: "100",
-      tpm: "",
-      rpm: "",
-      capPolicy: defaultCustomerCapPolicy,
-    },
-  ],
+  groups: (
+    [
+      ["power", 200],
+      ["default", 50],
+      ["low", 10],
+    ] as const
+  ).map(([id, max_budget]) => ({
+    ...budgetEditorFields({ max_budget, budget_duration: "1mo" }),
+    id,
+    name: `${id}_user`,
+    capPolicy: defaultCustomerCapPolicy,
+  })),
   defaultGroupId: "default",
 });
 
 const optionalAmount = (value: string): number | null => (value.trim() === "" ? null : Number(value));
-const validAmount = (value: string): boolean => {
-  const amount = optionalAmount(value);
-  return amount === null || (Number.isFinite(amount) && amount >= 0);
-};
 const validRate = (value: string): boolean => {
   const rate = optionalAmount(value);
   return rate === null || (Number.isSafeInteger(rate) && rate >= 0);
 };
-export const limit = (value: string, duration: "1mo" | "12mo") => {
-  const amount = optionalAmount(value);
-  return amount === null ? [] : [{ budget_duration: duration, max_budget: amount }];
-};
+export const normalizeGroupModels = (models: readonly string[] = []): string[] =>
+  [...new Set(models.map((model) => model.trim()).filter(Boolean))].sort();
 
-export const normalizeGroupModels = (models: readonly string[] = []): string[] => [
-  ...new Set(models.map((model) => model.trim()).filter(Boolean)),
-];
+export const customerBudgetGroupValue = (group: CustomerBudgetGroupFields) => {
+  const parsed = compactBudgetEditorValue({ ...group, allowedModels: normalizeGroupModels(group.allowedModels) });
+  if (!parsed.ok || !parsed.value) return null;
+  return {
+    ...parsed.value,
+    budget_duration: parsed.value.max_budget != null ? parsed.value.budget_duration : null,
+  };
+};
 
 export type CustomerOrganizationFormError =
   | "nameRequired"
@@ -115,18 +101,23 @@ export function validateCustomerBudgetGroups(
     fields.groups.some(
       (group) =>
         !existingGroupIds.includes(group.id) &&
-        !mergeBudgetLimits(group.budgetLimits, [], CALENDAR_BUDGET_DURATIONS).length &&
         !normalizeGroupModels(group.allowedModels).length &&
-        [group.monthlyBudget, group.yearlyBudget, group.tpm, group.rpm].every((value) => !value.trim()),
+        [
+          group.maxBudget,
+          group.softBudget,
+          group.tpm,
+          group.rpm,
+          ...group.budgetWindows.map((window) => window.maxBudget),
+        ].every((value) => !value.trim()),
     )
   ) {
     return { ok: false, error: "groupLimitRequired" } as const;
   }
-  if (fields.groups.some((group) => !validAmount(group.monthlyBudget) || !validAmount(group.yearlyBudget))) {
-    return { ok: false, error: "invalidBudget" } as const;
-  }
   if (fields.groups.some((group) => !validRate(group.tpm) || !validRate(group.rpm))) {
     return { ok: false, error: "invalidRateLimit" } as const;
+  }
+  if (fields.groups.some((group) => !customerBudgetGroupValue(group))) {
+    return { ok: false, error: "invalidBudget" } as const;
   }
   return { ok: true } as const;
 }
@@ -138,41 +129,25 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
   const useProfile = fields.budgetMode === "profile";
   const useCustom = fields.budgetMode === "custom";
   if (useProfile && !fields.budgetId) return { ok: false, error: "profileRequired" } as const;
-  if (useCustom && !validAmount(fields.budgetAmount)) return { ok: false, error: "invalidBudget" } as const;
   if (useCustom && [fields.tpm, fields.rpm].some((value) => !validRate(value))) {
     return { ok: false, error: "invalidRateLimit" } as const;
   }
-  const budget = optionalAmount(fields.budgetAmount);
-  const tpm = optionalAmount(fields.tpm);
-  const rpm = optionalAmount(fields.rpm);
-  const hasCustomBudget = useCustom && [budget, tpm, rpm].some((value) => value !== null);
+  const parsed = useCustom ? parseBudget({ ...fields, maxBudget: fields.budgetAmount }) : null;
+  if (useCustom && !parsed) return { ok: false, error: "invalidBudget" } as const;
+  const budget = parsed
+    ? budgetChanges({ ...parsed, budget_duration: parsed.max_budget != null ? parsed.budget_duration : null })
+    : {};
+  const hasCustomBudget = useCustom && Object.keys(budget).length > 0;
   const body = {
     alias: fields.name.trim(),
     ...(fields.customerOrgId.trim() ? { customer_org_id: fields.customerOrgId.trim() } : {}),
     ...(useProfile ? { budget_id: fields.budgetId } : {}),
     ...(useCustom && !hasCustomBudget ? { budget_id: null } : {}),
-    ...(hasCustomBudget
-      ? {
-          budget: {
-            ...(budget !== null ? { max_budget: budget, budget_duration: fields.budgetDuration } : {}),
-            ...(tpm !== null ? { tpm_limit: tpm } : {}),
-            ...(rpm !== null ? { rpm_limit: rpm } : {}),
-          },
-        }
-      : {}),
+    ...(hasCustomBudget ? { budget } : {}),
     default_budgets: fields.groups.map((group): components["schemas"]["BudgetTemplate"] => ({
       name: group.name.trim(),
       cap_policy: group.capPolicy,
-      budget_limits: mergeBudgetLimits(
-        group.budgetLimits,
-        [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
-        CALENDAR_BUDGET_DURATIONS,
-      ),
-      ...(group.tpm.trim() ? { tpm_limit: Number(group.tpm) } : {}),
-      ...(group.rpm.trim() ? { rpm_limit: Number(group.rpm) } : {}),
-      ...(normalizeGroupModels(group.allowedModels).length
-        ? { allowed_models: normalizeGroupModels(group.allowedModels) }
-        : {}),
+      ...budgetChanges(customerBudgetGroupValue(group)!),
     })),
     default_budget_template: fields.groups.find((group) => group.id === fields.defaultGroupId)?.name.trim(),
   } satisfies components["schemas"]["OrganizationCreate"];

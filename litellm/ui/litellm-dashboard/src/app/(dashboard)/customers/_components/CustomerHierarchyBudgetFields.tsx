@@ -9,10 +9,9 @@ import {
   type CustomerHierarchyEntity,
   type Organization,
 } from "./customerHierarchyForms";
-import type { Budget, BudgetEditorFields } from "./customerBudgetForm";
+import type { BudgetEditorFields } from "./customerBudgetForm";
 import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
 import CustomerOrganizationBudgetFields from "./CustomerOrganizationBudgetFields";
-import { CustomerBudgetFields } from "./CustomerBudgetFields";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
 
 interface Props {
@@ -22,7 +21,6 @@ interface Props {
   onChange: <K extends keyof CustomerHierarchyFields>(key: K, value: CustomerHierarchyFields[K]) => void;
   idPrefix: string;
   compact?: boolean;
-  original?: Budget | null;
 }
 
 export default function CustomerHierarchyBudgetFields({
@@ -32,7 +30,6 @@ export default function CustomerHierarchyBudgetFields({
   onChange: update,
   idPrefix,
   compact = false,
-  original,
 }: Props) {
   const { t } = useTranslation();
   if (kind === "organization") {
@@ -99,17 +96,8 @@ export default function CustomerHierarchyBudgetFields({
           </div>
         </div>
       )}
-      {kind === "member" && (
-        <CustomerBudgetCompactFields
-          fields={fields}
-          original={original}
-          onChange={updateCompact}
-          disabled={false}
-          id={idPrefix}
-        />
-      )}
-      {kind === "team" && fields.budgetEnabled && (
-        <CustomerBudgetFields fields={fields} onChange={update} idPrefix={idPrefix} />
+      {(kind === "member" || fields.budgetEnabled) && (
+        <CustomerBudgetCompactFields fields={fields} onChange={updateCompact} disabled={false} id={idPrefix} />
       )}
     </CustomerBudgetEditor>
   );

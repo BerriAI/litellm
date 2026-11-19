@@ -28,7 +28,7 @@ import { appBaseBudget, appOrganizationPresetId, type App, type AppResource, typ
 import CustomerBudgetCompactFields from "../../customers/_components/CustomerBudgetCompactFields";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
 import {
-  budgetChanges,
+  budgetPolicyChanges,
   customerBudgetPatch,
   hasLegacyCustomerBudget,
 } from "../../customers/_components/customerBudgetForm";
@@ -393,14 +393,7 @@ function OrganizationAppForm({
         const parsed = customerBudgetPatch({ ...budget, budgetEnabled: source === "custom" }, original, row);
         const memberBudget = permanentBudgetEditorValue(member, memberOriginal);
         if (!parsed.ok || !memberBudget.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
-        const policyChanges = budgetChanges(
-          {
-            model_tpm_limit: policy?.model_tpm_limit ?? null,
-            model_rpm_limit: policy?.model_rpm_limit ?? null,
-            cap_policy: policy?.cap_policy ?? null,
-          },
-          original,
-        );
+        const policyChanges = budgetPolicyChanges(policy, original);
         return {
           ok: true,
           value: {
@@ -470,7 +463,6 @@ function OrganizationAppForm({
         <CustomerBudgetCompactFields
           modelScope={resource}
           fields={fields.budget}
-          original={original}
           onChange={(value) => update("budget", value)}
           disabled={pending}
           id="org-app-override"
@@ -495,7 +487,6 @@ function OrganizationAppForm({
           <CustomerBudgetCompactFields
             modelScope={resource}
             fields={fields.member}
-            original={row?.customer_member_budget_id ? row.effective_customer_member_budget : null}
             onChange={(value) => update("member", value)}
             disabled={pending}
             id="org-app-member"

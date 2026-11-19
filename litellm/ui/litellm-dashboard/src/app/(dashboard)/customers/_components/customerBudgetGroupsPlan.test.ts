@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Organization } from "./customerHierarchyForms";
 import { customerBudgetGroupRows, planCustomerBudgetGroups } from "./customerBudgetGroupsPlan";
+import { budgetEditorFields } from "./customerBudgetForm";
 
 const organization: Organization = {
   customer_org_id: "org-1",
@@ -16,6 +17,11 @@ const organization: Organization = {
     {
       budget_id: "standard",
       name: "Standard",
+      max_budget: 25,
+      budget_duration: "7d",
+      soft_budget: 20,
+      model_tpm_limit: { "model-a": 300 },
+      model_rpm_limit: { "model-a": 3 },
       budget_limits: [
         { budget_duration: "1mo", max_budget: 10, reset_at: "2027-01-15T00:00:00Z" },
         { budget_duration: "12mo", max_budget: 100, reset_at: "2027-11-15T00:00:00Z" },
@@ -104,15 +110,16 @@ describe("planCustomerBudgetGroups", () => {
     const result = planCustomerBudgetGroups(
       organization,
       [
-        { ...rows[0], name: "Legacy", monthlyBudget: "0", yearlyBudget: "" },
+        {
+          ...rows[0],
+          name: "Legacy",
+          budgetWindows: [{ ...rows[0].budgetWindows[0], maxBudget: "0" }],
+        },
         { ...rows[1], name: "Standard", capPolicy: "pause_allow_increase" },
         {
+          ...budgetEditorFields({ max_budget: 30, budget_duration: "1mo" }),
           id: "new",
           name: " New ",
-          monthlyBudget: "30",
-          yearlyBudget: "300",
-          tpm: "",
-          rpm: "",
           capPolicy: "pause_until_reset",
         },
       ],
@@ -125,48 +132,54 @@ describe("planCustomerBudgetGroups", () => {
         expected_revision: organization.budget_groups_revision,
         default_budget_template: "New",
         default_budgets: [
-          { budget_id: "standard", name: "Legacy", budget_limits: [{ budget_duration: "1mo", max_budget: 0 }] },
+          {
+            budget_id: "standard",
+            name: "Legacy",
+            budget_limits: [{ ...organization.default_budgets[0].budget_limits![0], max_budget: 0 }],
+          },
           { budget_id: "legacy", name: "Standard", cap_policy: "pause_allow_increase" },
           {
             name: "New",
             cap_policy: "pause_until_reset",
-            budget_limits: [
-              { budget_duration: "1mo", max_budget: 30 },
-              { budget_duration: "12mo", max_budget: 300 },
-            ],
+            max_budget: 30,
+            budget_duration: "1mo",
           },
         ],
       },
     });
   });
 
-  it("should clear existing calendar caps without clearing other budget rules", () => {
+  it.each(["clear", "edit"])("%s existing calendar caps, preserving untouched rules and reset dates", (action) => {
     const rows = customerBudgetGroupRows(organization);
-    expect(
-      planCustomerBudgetGroups(
-        organization,
-        [{ ...rows[0], monthlyBudget: "", yearlyBudget: "" }, ...rows.slice(1)],
-        "legacy",
-      ),
-    ).toMatchObject({
-      ok: true,
-      changed: true,
-      body: {
-        default_budget_template: "Legacy",
-        default_budgets: [
-          { budget_id: "standard", name: "Standard", budget_limits: [] },
-          { budget_id: "legacy", name: "Legacy" },
-          { budget_id: "rate", name: "Rate only" },
-        ],
+    const budgetWindows =
+      action === "clear" ? [] : [{ ...rows[0].budgetWindows[0], maxBudget: "0" }, rows[0].budgetWindows[1]];
+    const stored = organization.default_budgets[0].budget_limits!;
+    expect(planCustomerBudgetGroups(organization, [{ ...rows[0], budgetWindows }, ...rows.slice(1)], "legacy")).toEqual(
+      {
+        ok: true,
+        changed: true,
+        body: {
+          expected_revision: organization.budget_groups_revision,
+          default_budget_template: "Legacy",
+          default_budgets: [
+            {
+              budget_id: "standard",
+              name: "Standard",
+              budget_limits: action === "clear" ? null : [{ ...stored[0], max_budget: 0 }, stored[1]],
+            },
+            { budget_id: "legacy", name: "Legacy" },
+            { budget_id: "rate", name: "Rate only" },
+          ],
+        },
       },
-    });
+    );
   });
 
   it.each([
     [{ name: "" }, "groupNameRequired"],
     [{ name: "Legacy" }, "duplicateGroups"],
-    [{ monthlyBudget: "-1" }, "invalidBudget"],
-    [{ monthlyBudget: "Infinity" }, "invalidBudget"],
+    [{ maxBudget: "-1" }, "invalidBudget"],
+    [{ softBudget: "Infinity" }, "invalidBudget"],
   ])("should reject invalid edits before sending a request", (patch, error) => {
     const rows = customerBudgetGroupRows(organization);
     expect(planCustomerBudgetGroups(organization, [{ ...rows[0], ...patch }, ...rows.slice(1)], "standard")).toEqual({
@@ -180,17 +193,27 @@ describe("planCustomerBudgetGroups", () => {
     expect(
       planCustomerBudgetGroups(
         organization,
-        [...rows, { ...rows[1], id: "new", name: "New", rpm: "", allowedModels }],
+        [...rows, { ...rows[1], id: "new", name: "New", maxBudget: "", rpm: "", allowedModels }],
         "standard",
       ),
     ).toEqual({ ok: false, error: "groupLimitRequired" });
   });
 
-  it("changes rates without resubmitting spend windows or touching other groups", () => {
+  it.each([
+    [
+      { tpm: "50000", rpm: "0" },
+      { tpm_limit: 50000, rpm_limit: 0 },
+    ],
+    [
+      { maxBudget: "0", budgetDuration: "" },
+      { max_budget: 0, budget_duration: null },
+    ],
+    [{ softBudget: "" }, { soft_budget: null }],
+  ])("patches only edited fields without clearing stored windows or hidden policies", (patch, expected) => {
     const rows = customerBudgetGroupRows(organization);
     const result = planCustomerBudgetGroups(
       organization,
-      [{ ...rows[0], tpm: "50000", rpm: "0" }, { ...rows[1], rpm: "" }, rows[2]],
+      [{ ...rows[0], ...patch }, { ...rows[1], rpm: "" }, rows[2]],
       "standard",
     );
     expect(result).toEqual({
@@ -200,7 +223,7 @@ describe("planCustomerBudgetGroups", () => {
         expected_revision: organization.budget_groups_revision,
         default_budget_template: "Standard",
         default_budgets: [
-          { budget_id: "standard", name: "Standard", tpm_limit: 50000, rpm_limit: 0 },
+          { budget_id: "standard", name: "Standard", ...expected },
           { budget_id: "legacy", name: "Legacy", rpm_limit: null },
           { budget_id: "rate", name: "Rate only" },
         ],
@@ -214,12 +237,9 @@ describe("planCustomerBudgetGroups", () => {
       [
         ...customerBudgetGroupRows(organization),
         {
+          ...budgetEditorFields({ rpm_limit: 60 }),
           id: "new",
           name: "Rate plan",
-          monthlyBudget: "",
-          yearlyBudget: "",
-          tpm: "",
-          rpm: "60",
           capPolicy: "pause_until_reset",
         },
       ],
@@ -234,7 +254,7 @@ describe("planCustomerBudgetGroups", () => {
           { budget_id: "standard", name: "Standard" },
           { budget_id: "legacy", name: "Legacy" },
           { budget_id: "rate", name: "Rate only" },
-          { name: "Rate plan", budget_limits: [], rpm_limit: 60 },
+          { name: "Rate plan", rpm_limit: 60 },
         ],
       },
     });

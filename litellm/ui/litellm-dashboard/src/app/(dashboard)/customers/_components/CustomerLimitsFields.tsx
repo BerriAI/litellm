@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Fragment, type ComponentProps, type ReactNode } from "react";
-import { CustomerBudgetLimitFields } from "./CustomerBudgetFields";
+import { CustomerBudgetFields } from "./CustomerBudgetFields";
+import type { BudgetFields } from "./customerBudgetForm";
 import { rateFields } from "./CustomerRateLimits";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { customerBudgetPeriod } from "./customerBudgetUsage";
@@ -9,7 +10,7 @@ import type { CustomerOrganizationFields } from "./customerOrganizationForm";
 
 export type CustomerLimits = Pick<
   CustomerOrganizationFields,
-  "budgetMode" | "budgetId" | "budgetAmount" | "budgetDuration" | "tpm" | "rpm"
+  "budgetMode" | "budgetId" | "budgetAmount" | "budgetDuration" | "tpm" | "rpm" | "softBudget" | "allowedModels"
 >;
 
 const currencyOptions = { style: "currency", minimumFractionDigits: 0, maximumFractionDigits: 2 } as const;
@@ -197,7 +198,7 @@ export default function CustomerLimitsFields({
     const profile = profiles?.find((group) => `profile:${group.budget_id}` === value);
     if (profile) onChange({ budgetMode: "profile", budgetId: profile.budget_id });
   };
-  const changeLimit = (key: "maxBudget" | "budgetDuration" | "tpm" | "rpm", value: string) =>
+  const changeLimit = <K extends keyof BudgetFields>(key: K, value: BudgetFields[K]) =>
     onChange({ [key === "maxBudget" ? "budgetAmount" : key]: value });
   return (
     <CustomerBudgetEditor
@@ -218,16 +219,17 @@ export default function CustomerLimitsFields({
             }
       }
     >
-      <CustomerBudgetLimitFields
+      <CustomerBudgetFields
         fields={{
           maxBudget: fields.budgetAmount,
           budgetDuration: fields.budgetDuration,
           tpm: fields.tpm,
           rpm: fields.rpm,
+          softBudget: fields.softBudget,
+          allowedModels: fields.allowedModels,
         }}
         disabled={disabled}
         idPrefix={idPrefix}
-        period="standard"
         onChange={changeLimit}
       />
     </CustomerBudgetEditor>

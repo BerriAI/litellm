@@ -2,9 +2,8 @@
 
 import { type BudgetEditorFields } from "../../customers/_components/customerBudgetForm";
 import type { ComponentProps } from "react";
-import CustomerBudgetWindows from "../../customers/_components/CustomerBudgetWindows";
+import CustomerBudgetCompactFields from "../../customers/_components/CustomerBudgetCompactFields";
 import { useTranslation } from "react-i18next";
-import { CustomerBudgetFields } from "../../customers/_components/CustomerBudgetFields";
 import { CustomerBudgetEditor, CustomerBudgetSourceSelect } from "../../customers/_components/CustomerLimitsFields";
 import type { CustomerModelScope } from "../../customers/_components/customerModelOptions";
 
@@ -48,22 +47,13 @@ export default function AppBudgetEditor({
         ...source,
       }}
     >
-      <CustomerBudgetFields
-        layout="scalar"
+      <CustomerBudgetCompactFields
         fields={fields}
-        onChange={update}
-        idPrefix={id}
+        onChange={onChange}
+        id={id}
         modelScope={modelScope}
         disabled={disabled}
-      >
-        <CustomerBudgetWindows
-          id={id}
-          windows={fields.budgetWindows}
-          onChange={(windows) => update("budgetWindows", windows)}
-          removable
-          disabled={disabled}
-        />
-      </CustomerBudgetFields>
+      />
     </CustomerBudgetEditor>
   );
 }

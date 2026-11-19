@@ -2,7 +2,8 @@ import { useTranslation } from "react-i18next";
 import { $api } from "@/lib/http/api";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
-import { CustomerBudgetFields } from "./CustomerBudgetFields";
+import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
+import type { BudgetEditorFields } from "./customerBudgetForm";
 import {
   BUDGET_FIELDS,
   customerHierarchyFields,
@@ -35,6 +36,9 @@ export default function CustomerOrganizationBudgetFields({
     onChange("budgetEnabled", true);
     onChange(key, value);
   };
+  const updateBudgetFields = (next: BudgetEditorFields) => {
+    for (const key of [...BUDGET_FIELDS, "allowedModels", "budgetWindows"] as const) updateCustom(key, next[key]);
+  };
   const selectSource = (value: string | null) => {
     if (value === "custom") {
       onChange("templateId", originalGroup ? "" : organization.budget_id ?? "");
@@ -65,8 +69,7 @@ export default function CustomerOrganizationBudgetFields({
       error={groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
     >
       {budgetReady && (
-        <CustomerBudgetFields
-          layout="scalar"
+        <CustomerBudgetCompactFields
           fields={{
             ...fields,
             maxBudget: fields.budgetEnabled ? fields.maxBudget : "",
@@ -75,8 +78,9 @@ export default function CustomerOrganizationBudgetFields({
             rpm: fields.budgetEnabled ? fields.rpm : "",
             allowedModels: fields.budgetEnabled ? fields.allowedModels : [],
           }}
-          idPrefix={idPrefix}
-          onChange={updateCustom}
+          id={idPrefix}
+          disabled={false}
+          onChange={updateBudgetFields}
         />
       )}
     </CustomerBudgetEditor>

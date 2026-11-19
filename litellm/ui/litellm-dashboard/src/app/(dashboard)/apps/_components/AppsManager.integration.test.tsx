@@ -12,6 +12,7 @@ import {
   testQueryClient,
 } from "../../../../../tests/test-utils";
 import AppsManager from "./AppsManager";
+import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "test-session", userRole: "Admin", isLoading: false }),
@@ -30,7 +31,7 @@ const app = {
   created_by: "",
   updated_by: "",
 };
-const overallPreset = {
+const overallPreset: BudgetGroups["default_budgets"][number] = {
   budget_id: "overall-standard",
   name: "App Standard",
   max_budget: 150,
@@ -48,12 +49,14 @@ const paginatedResources = Array.from({ length: 30 }, (_, index) => ({
 }));
 let definition: { resource_type: string | null };
 let configuredApps: unknown[];
+let overallPresets: BudgetGroups["default_budgets"];
 let resources: unknown[];
 let requests: Request[];
 
 beforeEach(() => {
   definition = { resource_type: "team" };
   configuredApps = [];
+  overallPresets = [overallPreset];
   resources = [resource];
   requests = [];
   testQueryClient.clear();
@@ -70,7 +73,7 @@ beforeEach(() => {
     if (path.endsWith("/apps/resources")) return json(resources);
     if (path.endsWith("/apps/app-chat")) return json(configuredApps[0]);
     if (path.endsWith("/app_budget_groups"))
-      return json({ default_budgets: [overallPreset], budget_groups_revision: "a".repeat(64) });
+      return json({ default_budgets: overallPresets, budget_groups_revision: "a".repeat(64) });
     if (path.endsWith("/customer_organization_budget_groups"))
       return json({ default_budgets: [{ budget_id: "org-standard", name: "Standard", max_budget: 1000 }] });
     if (path.endsWith("/app_customer_organization_budget_groups"))
@@ -182,11 +185,12 @@ describe("Gateway app definition", () => {
     expect(linked.budget_id).toBe(overallPreset.budget_id);
     expect(linked).not.toHaveProperty("budget");
     await chooseAppOption(user, source, "Enter custom limits instead");
+    expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
     await waitFor(() => expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(2));
     const custom = await requests.filter((request) => request.method === "PATCH")[1].json();
-    expect(custom.budget).toEqual({ rpm_limit: 0 });
+    expect(custom.budget).toEqual({ max_budget: 150, budget_duration: "1mo", rpm_limit: 0 });
     expect(custom).not.toHaveProperty("budget_id");
     expect(custom.default_customer_member_budget).toBeNull();
   });
@@ -202,6 +206,95 @@ describe("Gateway app definition", () => {
     expect(body.budget_id).toBeNull();
     expect(body).not.toHaveProperty("budget");
     expect(body.default_customer_member_budget).toBeNull();
+  });
+
+  it("copies the newly selected preset into Custom and preserves its draft through No limit", async () => {
+    const selected: typeof overallPreset = {
+      ...overallPreset,
+      budget_id: "overall-scale",
+      name: "App Scale",
+      max_budget: 250,
+      rpm_limit: 25,
+      allowed_models: ["model-b"],
+      budget_limits: [{ max_budget: 3000, budget_duration: "12mo" }],
+      model_tpm_limit: { "model-b": 200 },
+      cap_policy: "pause_allow_increase",
+    };
+    overallPresets = [overallPreset, selected];
+    resources = [{ ...resource, app_id: app.app_id }];
+    configuredApps = [
+      {
+        ...app,
+        budget_id: overallPreset.budget_id,
+        budget: {
+          ...overallPreset,
+          soft_budget: 50,
+          model_tpm_limit: { "model-a": 100 },
+          model_rpm_limit: { "model-a": 10 },
+          cap_policy: "pause_until_reset",
+        },
+      },
+    ];
+    const user = await openAppSettings();
+    const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
+    const source = overall.getByRole("combobox", { name: "Overall app budget" });
+    await chooseAppOption(user, source, /^App Scale/);
+    await chooseAppOption(user, source, "Enter custom limits instead");
+    expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(250);
+    expect(overall.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(25);
+    fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
+    await chooseAppOption(user, source, /^No limit/);
+    await chooseAppOption(user, source, "Enter custom limits instead");
+    expect(overall.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(0);
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
+    const expected = {
+      budget: {
+        max_budget: 250,
+        budget_duration: "1mo",
+        soft_budget: null,
+        rpm_limit: 0,
+        allowed_models: ["model-b"],
+        budget_limits: [{ max_budget: 3000, budget_duration: "12mo" }],
+        model_tpm_limit: { "model-b": 200 },
+        model_rpm_limit: null,
+        cap_policy: "pause_allow_increase",
+      },
+      default_customer_member_budget: null,
+      default_tier_budget_id: null,
+      auto_create_customers: true,
+      customer_margin: null,
+    };
+    expect(await requests.find((request) => request.method === "PATCH")!.json()).toEqual(expected);
+  });
+
+  it.each([
+    ["Overall app budget", "budget"],
+    ["Default per-member budget", "default_customer_member_budget"],
+  ])("recalculates the reset when changing a stored spend period in %s", async (title, key) => {
+    resources = [{ ...resource, app_id: app.app_id }];
+    const yearly = { max_budget: 1200, budget_duration: "12mo", reset_at: "2027-01-01T00:00:00Z" };
+    const budget = { rpm_limit: 20, budget_limits: [yearly] };
+    configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
+    const user = await openAppSettings();
+    const editor = within(await screen.findByRole("region", { name: title }));
+    const periods = editor.getAllByRole("combobox", { name: "Reset period" });
+    await user.click(periods[0]);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "/ month",
+      "/ year",
+      "No reset",
+      "Custom period",
+    ]);
+    await user.keyboard("{Escape}");
+    await user.click(periods[1]);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["/ month", "/ year"]);
+    await user.click(screen.getByRole("option", { name: "/ month", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
+    const body = await requests.find((request) => request.method === "PATCH")!.json();
+    expect(body[key]).toEqual({ budget_limits: [{ ...yearly, budget_duration: "1mo", reset_at: null }] });
+    expect(body[key === "budget" ? "default_customer_member_budget" : "budget"]).toEqual({});
   });
 
   it.each([
@@ -220,13 +313,23 @@ describe("Gateway app definition", () => {
     configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
     const user = await openAppSettings();
     const editor = within(await screen.findByRole("region", { name: title }));
+    await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[1]);
+    expect(await screen.findByRole("option", { name: "/ year", exact: true })).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Escape}");
     const amount = editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[0];
     expect(amount).toHaveAttribute("placeholder", "No limit");
     expect(amount).toHaveAccessibleDescription(
       "Leave an amount blank to remove that spend limit. Other spend limits and TPM/RPM limits stay unchanged.",
     );
-    if (action === "clear") fireEvent.change(amount, { target: { value: "" } });
-    else await user.click(editor.getAllByRole("button", { name: "Remove limit" })[0]);
+    if (action === "clear") {
+      fireEvent.change(amount, { target: { value: "" } });
+      await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[2]);
+      expect(await screen.findByRole("option", { name: "/ month", exact: true })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      await user.keyboard("{Escape}");
+    } else await user.click(editor.getAllByRole("button", { name: "Remove limit" })[0]);
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
     await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
     const body = await requests.find((request) => request.method === "PATCH")!.json();

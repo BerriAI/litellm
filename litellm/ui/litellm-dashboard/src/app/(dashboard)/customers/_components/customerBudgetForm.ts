@@ -1,5 +1,4 @@
 import type { components } from "@/lib/http/schema";
-import { CALENDAR_BUDGET_DURATIONS, mergeBudgetLimits } from "@/lib/forms/budgetWindows";
 
 export type Budget = components["schemas"]["Budget"];
 const budgetKeys = [
@@ -90,14 +89,9 @@ export const budgetEditorValue = (fields: BudgetEditorFields, original?: Budget 
       return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
     windows.push({ ...window.budget, max_budget: parsedWindow.max_budget });
   }
-  const merged = mergeBudgetLimits(
-    original?.budget_limits,
-    windows,
-    original?.budget_limits?.map((window) => window.budget_duration) ?? [],
-  );
   return {
     ok: true,
-    value: { ...budgetSettings(original), ...parsed, budget_limits: merged.length ? merged : null },
+    value: { ...budgetSettings(original), ...parsed, budget_limits: windows.length ? windows : null },
   } as const;
 };
 
@@ -105,42 +99,6 @@ export const compactBudgetEditorFields = (budget?: Budget | null): BudgetEditorF
   ...budgetEditorFields(budget),
   budgetDuration: budget == null ? "1mo" : budget.budget_duration ?? "",
 });
-
-type BudgetPeriod = (typeof CALENDAR_BUDGET_DURATIONS)[number];
-
-export const budgetPeriodAmount = (fields: BudgetEditorFields, duration: BudgetPeriod): string => {
-  const scalar = fields.budgetDuration === duration ? fields.maxBudget : "";
-  const amounts = [
-    scalar,
-    ...fields.budgetWindows
-      .filter((window) => window.budget.budget_duration === duration)
-      .map((window) => window.maxBudget),
-  ].filter((amount) => amount.trim() !== "");
-  return amounts.reduce(
-    (smallest, amount) => (smallest === "" || Number(amount) < Number(smallest) ? amount : smallest),
-    "",
-  );
-};
-
-export const updateBudgetPeriod = (
-  fields: BudgetEditorFields,
-  duration: BudgetPeriod,
-  amount: string,
-): BudgetEditorFields => {
-  const scalarPeriod = fields.budgetDuration === duration;
-  const hasWindow = fields.budgetWindows.some((window) => window.budget.budget_duration === duration);
-  const updatedWindows = fields.budgetWindows.map((window) =>
-    window.budget.budget_duration === duration ? { ...window, maxBudget: amount } : window,
-  );
-  return {
-    ...fields,
-    ...(scalarPeriod ? { maxBudget: amount } : {}),
-    budgetWindows:
-      scalarPeriod || hasWindow || !amount.trim()
-        ? updatedWindows
-        : [...updatedWindows, { budget: { budget_duration: duration, max_budget: 0 }, maxBudget: amount }],
-  };
-};
 
 export const compactBudgetEditorValue = (fields: BudgetEditorFields, original?: Budget | null) =>
   budgetEditorValue(
@@ -168,6 +126,16 @@ export function budgetChanges(value: Budget, initial?: Budget | null): Budget {
     ...(changed.max_budget != null ? { budget_duration: value.budget_duration } : {}),
   };
 }
+
+export const budgetPolicyChanges = (policy: Budget | null | undefined, original: Budget | null | undefined): Budget =>
+  budgetChanges(
+    {
+      model_tpm_limit: policy?.model_tpm_limit ?? null,
+      model_rpm_limit: policy?.model_rpm_limit ?? null,
+      cap_policy: policy?.cap_policy ?? null,
+    },
+    original,
+  );
 
 interface BudgetAssignment {
   budget?: Budget | null;
