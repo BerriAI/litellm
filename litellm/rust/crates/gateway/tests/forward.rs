@@ -70,6 +70,21 @@ async fn python() -> (SocketAddr, mpsc::UnboundedReceiver<Received>) {
 /// admitting every request or refusing every one.
 async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAddr {
     let config = Config::from_yaml("model_list: []").unwrap();
+    let litellm_gateway::Inference {
+        gateway: inference,
+        key_limiter,
+    } = litellm_gateway::build_inference(
+        &config,
+        &Environment::default(),
+        &litellm_gateway::Resources::build(&config).unwrap(),
+        litellm_gateway_inference::RoutingCache::new(
+            None,
+            litellm_gateway_inference::RouterTiers::default(),
+        ),
+        &litellm_gateway::RedisClients::default(),
+    )
+    .await
+    .unwrap();
     let native = middleware::root_path::layer(middleware::root_path::Settings::from_environment(
         &Environment {
             server_root_path: root_path.into(),
@@ -79,16 +94,8 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
     .layer(middleware::global(
         litellm_gateway::router(
             litellm_gateway::AppState {
-                inference: litellm_gateway::build_inference(
-                    &config,
-                    &litellm_gateway::Resources::build(&config).unwrap(),
-                    litellm_gateway_inference::RoutingCache::new(
-                        None,
-                        litellm_gateway_inference::RouterTiers::default(),
-                    ),
-                )
-                .await
-                .unwrap(),
+                key_limiter,
+                inference,
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
                 keys: None,

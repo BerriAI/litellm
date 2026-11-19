@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     AppState, Gateway,
+    callbacks::parallel_request_limiter,
     host::{self, NativeRows},
 };
 use checks::Fields;
@@ -89,6 +90,20 @@ const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
     (Box::new(Request::from_parts(request, body)), reason)
+}
+
+/// A key that counts tokens reserves what the body asks for before the call, and only Python's
+/// estimator reads a body that carries media, so that call goes to Python.
+fn token_estimate(
+    caller: &Authenticated<NativeRows>,
+    path: &str,
+    fields: &mut Fields,
+) -> Option<Reason> {
+    let counts_tokens = parallel_request_limiter::Caller::of(caller)
+        .limits
+        .counts_tokens();
+    (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
+        .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }
 
 impl Admit {
@@ -186,7 +201,7 @@ impl Admit {
             return Err(refused(parts, body, reason));
         }
         let (body, whole) = body::read(&parts, body).await;
-        let Some(fields) =
+        let Some(mut fields) =
             whole.and_then(|sent| serde_json::from_slice::<Map<String, Value>>(&sent).ok())
         else {
             return Err(refused(
@@ -198,11 +213,11 @@ impl Admit {
         if let Some(reason) = checks::BODY.iter().find_map(|check| check(&self, &fields)) {
             return Err(refused(parts, body, reason));
         }
-        let denied = authenticated
-            .as_ref()
-            .ok()
-            .and_then(|caller| self.model_access(caller, &fields));
-        if let Some(reason) = denied {
+        let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
+            self.model_access(caller, &fields)
+                .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
+        });
+        if let Some(reason) = over_its_caller {
             return Err(refused(parts, body, reason));
         }
         parts.extensions.insert(JsonObject(fields));
