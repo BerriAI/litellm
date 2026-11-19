@@ -1300,43 +1300,131 @@ class TestWebSocketErrorHandling:
     """Test error handling in WebSocket mode"""
 
     @pytest.mark.asyncio
-    async def test_managed_handler_handles_invalid_json(self):
-        """Test that invalid JSON in response.create is handled gracefully"""
-        from unittest.mock import AsyncMock, MagicMock
-
+    async def test_managed_handler_handles_invalid_json(self) -> None:
         from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.responses.streaming_iterator import (
-            ManagedResponsesWebSocketHandler,
-        )
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
 
-        mock_websocket = MagicMock()
-        mock_websocket.send_text = AsyncMock()
-        mock_websocket.recv = AsyncMock(return_value="invalid json {{{")
-
-        mock_logging_obj = Logging(
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
             model="test-model",
-            messages=[],
-            stream=True,
-            call_type="aresponses",
-            start_time=0,
-            litellm_call_id="test-id",
-            function_id="test-func",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
         )
 
-        handler = ManagedResponsesWebSocketHandler(
-            websocket=mock_websocket,
-            model="test-model",
-            logging_obj=mock_logging_obj,
-        )
-
-        # Process invalid JSON
         await handler._process_response_create("invalid json {{{")
 
-        # Should have sent an error event
-        mock_websocket.send_text.assert_called_once()
-        error_event = mock_websocket.send_text.call_args[0][0]
-        assert "error" in error_event
-        assert "Invalid JSON" in error_event
+        websocket.send_text.assert_called_once()
+        error_event: Final = json.loads(websocket.send_text.call_args[0][0])
+        assert error_event["status"] == 400
+        assert error_event["error"]["type"] == "invalid_request_error"
+        assert "Invalid JSON" in error_event["error"]["message"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("provider_answer", "expected_status"),
+        [
+            (httpx.Response(400, json={"error": {"message": "bad input", "type": "invalid_request_error"}}), 400),
+            (httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}), 429),
+            (httpx.Response(503, json={"error": {"message": "overloaded", "type": "server_error"}}), 503),
+            (httpx.ConnectError("connection refused"), 500),
+        ],
+        ids=["400", "429", "503", "transport-error"],
+    )
+    async def test_provider_failure_frame_carries_the_http_status_the_failure_raised(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        provider_answer: httpx.Response | httpx.ConnectError,
+        expected_status: int,
+    ) -> None:
+        """Codex ignores error frames without a top-level status and hangs until its idle timeout."""
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        provider: Final = respx_mock.post("https://provider.test/v1/responses").mock(side_effect=[provider_answer])
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="openai/gpt-6.2-sol",
+            logging_obj=Logging(
+                model="openai/gpt-6.2-sol",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            api_key="sk-fake",
+            api_base="https://provider.test/v1",
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert provider.call_count == 1
+        websocket.send_text.assert_called_once()
+        error_event: Final = json.loads(websocket.send_text.call_args[0][0])
+        assert (error_event["type"], error_event["status"], error_event["error"]["type"]) == (
+            "error",
+            expected_status,
+            "server_error",
+        )
+
+    @pytest.mark.asyncio
+    async def test_unexpected_failure_reaching_run_sends_a_500_frame(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        class _BrokenQuotaStore:
+            async def enforce_project_io_token_quota_for_frame(
+                self,
+                user_api_key_dict: UserAPIKeyAuth | None,
+                requested_model: str | None,
+                estimated_input_tokens: int,
+                estimated_output_tokens: int,
+            ) -> None:
+                raise RuntimeError("quota store down")
+
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=json.dumps({"type": "response.create", "input": "hi"}),
+            quota_callbacks=[_BrokenQuotaStore()],
+        )
+
+        await handler.run()
+
+        websocket.send_text.assert_called_once()
+        assert json.loads(websocket.send_text.call_args[0][0]) == {
+            "type": "error",
+            "status": 500,
+            "error": {"type": "server_error", "message": "Internal server error: quota store down"},
+        }
 
 
 class TestWebSocketProjectQuotaEnforcement:
