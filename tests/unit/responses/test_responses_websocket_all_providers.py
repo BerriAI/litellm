@@ -2601,7 +2601,7 @@ class TestWebSocketTurnAdmission:
         assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [json.loads(first)]
         assert turn_admission.await_count == 1
         assert [(status, error["type"]) for status, error in _errors(websocket)] == [
-            (None, "invalid_request_error"),
+            (400, "invalid_request_error"),
             (429, "rate_limit_exceeded"),
         ]
 
@@ -2650,7 +2650,7 @@ class TestWebSocketTurnAdmission:
         assert answered == ["one"]
         assert turn_admission.await_count == 1
         assert [(status, error["type"]) for status, error in _errors(websocket)] == [
-            (None, "invalid_request_error"),
+            (400, "invalid_request_error"),
             (429, "rate_limit_exceeded"),
         ]
 
