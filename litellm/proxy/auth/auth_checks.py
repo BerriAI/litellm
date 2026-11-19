@@ -7244,7 +7244,7 @@ _TEAM_MEMBER_ALERT_CONFIG_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = Ty
 
 
 def _is_valid_alert_threshold_pct(pct: str) -> bool:
-    return pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
+    return pct.isascii() and pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
 
 
 def _alert_recipients(raw: object) -> Sequence[str] | None:
@@ -7292,6 +7292,77 @@ def team_member_max_budget_alert_check(
         organization_id=organization_id,
         user_email=user_email,
         event_group=Litellm_EntityType.TEAM_MEMBER,
+        max_budget_alert_emails=alert_email_config,
+    )
+    asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
+
+
+TEAM_MAX_BUDGET_ALERT_EMAILS_KEY: Final = "max_budget_alert_emails"
+_TEAM_ALERT_CONFIG_WRITE_ADAPTER: Final[TypeAdapter[Mapping[str, str | Sequence[str]]]] = TypeAdapter(
+    Mapping[str, str | Sequence[str]]
+)
+
+
+_ALERT_RECIPIENT_PATTERN: Final = re.compile(r"[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f.]+(?:\.[^@\s\x00-\x1f\x7f.]+)+")
+
+
+def _team_alert_threshold_error(pct: str, recipients: str | Sequence[str]) -> str | None:
+    if not (_is_valid_alert_threshold_pct(pct) and str(int(pct)) == pct):
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct!r} must be a whole number from 1 to 100"
+    emails: Final = _parse_email_list(recipients)
+    if not emails or not all(_ALERT_RECIPIENT_PATTERN.fullmatch(email) for email in emails):
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct} needs at least one valid recipient email"
+    return None
+
+
+def team_max_budget_alert_emails_error(raw_config: object, max_budget: float | None) -> str | None:
+    if raw_config is None:
+        return None
+    try:
+        config: Final = _TEAM_ALERT_CONFIG_WRITE_ADAPTER.validate_python(raw_config)
+    except ValidationError:
+        return (
+            f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} must map a whole-number percentage (1 to 100) "
+            "to a list of recipient emails"
+        )
+    if not config:
+        return None
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0:
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} requires the team max_budget to be a positive number"
+    return next(
+        (error for pct, recipients in config.items() if (error := _team_alert_threshold_error(pct, recipients))),
+        None,
+    )
+
+
+def team_max_budget_alert_check(
+    team_id: str | None,
+    team_alias: str | None,
+    team_metadata: Mapping[str, object] | None,
+    max_budget: float | None,
+    proxy_logging_obj: ProxyLogging,
+    spend: float,
+) -> None:
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0:
+        return
+    if spend <= 0:
+        return
+    alert_email_config: Final = _merge_budget_alert_email_configs(
+        global_cfg=None,
+        per_key_cfg=_valid_alert_threshold_config(
+            team_metadata.get(TEAM_MAX_BUDGET_ALERT_EMAILS_KEY) if team_metadata else None
+        ),
+    )
+    if not alert_email_config:
+        return
+    if spend < max_budget * (min(int(pct) for pct in alert_email_config) / 100.0):
+        return
+    call_info: Final = CallInfo(
+        spend=spend,
+        max_budget=max_budget,
+        team_id=team_id,
+        team_alias=team_alias,
+        event_group=Litellm_EntityType.TEAM,
         max_budget_alert_emails=alert_email_config,
     )
     asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
@@ -7497,6 +7568,15 @@ async def team_max_budget_check(
             counter_key=team_counter(team_object.team_id),
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
+        )
+
+        team_max_budget_alert_check(
+            team_id=team_object.team_id,
+            team_alias=team_object.team_alias,
+            team_metadata=team_object.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_TeamTable.metadata is a bare dict
+            max_budget=team_object.max_budget,
+            proxy_logging_obj=proxy_logging_obj,
+            spend=spend,
         )
 
         native: Final = _native_budget_decision(

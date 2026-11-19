@@ -83,6 +83,8 @@ from litellm.proxy.auth.auth_checks import (
     personal_key_owner_teams_with_status,
     request_skips_budget_checks,
     route_skips_budget_checks,
+    team_max_budget_alert_check,
+    team_max_budget_alert_emails_error,
     team_max_budget_check,
     team_member_max_budget_alert_check,
     vector_store_access_check,
@@ -5332,6 +5334,189 @@ async def test_check_team_member_budget_dispatches_the_configured_alert_before_t
     assert (call_info.spend, call_info.max_budget) == (0.10, 0.10)
     assert (call_info.user_id, call_info.user_email, call_info.team_id) == ("user-1", "member@co.com", "team-1")
     assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
+
+
+TEAM_ALERT_CONFIG = {"50": ["a@co.com"], "75": ["b@co.com"], "90": ["c@co.com"]}
+
+
+class _RecordingProxyLogging:
+    def __init__(self) -> None:
+        self.alerts: list[tuple[str, CallInfo]] = []
+
+    async def budget_alerts(self, type, user_info):
+        self.alerts.append((type, user_info))
+
+
+def _counter_spend(value: float):
+    async def get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return value
+
+    return get_current_spend
+
+
+@pytest.mark.parametrize(
+    "counter_spend, expect_alert",
+    [(49.99, False), (50.0, True), (74.0, True), (90.0, True), (99.0, True)],
+)
+@pytest.mark.asyncio
+async def test_team_max_budget_check_dispatches_team_alert_from_the_shared_spend_counter(counter_spend, expect_alert):
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="platform",
+        spend=0.0,
+        max_budget=100.0,
+        metadata={"max_budget_alert_emails": TEAM_ALERT_CONFIG},
+    )
+    proxy_logging_obj = _RecordingProxyLogging()
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", _counter_spend(counter_spend)):
+        await team_max_budget_check(
+            team_object=team_object,
+            valid_token=UserAPIKeyAuth(token="rotating-key", team_id="team-1", user_id="owner"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    await asyncio.sleep(0)
+
+    if not expect_alert:
+        assert proxy_logging_obj.alerts == []
+        return
+    assert [type for type, _ in proxy_logging_obj.alerts] == ["max_budget_alert"]
+    call_info = proxy_logging_obj.alerts[0][1]
+    assert call_info.event_group == Litellm_EntityType.TEAM
+    assert (call_info.spend, call_info.max_budget) == (counter_spend, 100.0)
+    assert (call_info.team_id, call_info.team_alias) == ("team-1", "platform")
+    assert (call_info.token, call_info.user_id, call_info.user_email) == (None, None, None)
+    assert call_info.max_budget_alert_emails == {"50": ["a@co.com"], "75": ["b@co.com"], "90": ["c@co.com"]}
+
+
+@pytest.mark.asyncio
+async def test_team_max_budget_check_still_rejects_over_budget_after_dispatching_the_alert():
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        max_budget=100.0,
+        metadata={"max_budget_alert_emails": TEAM_ALERT_CONFIG},
+    )
+    proxy_logging_obj = _RecordingProxyLogging()
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", _counter_spend(120.0)):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await team_max_budget_check(
+                team_object=team_object,
+                valid_token=UserAPIKeyAuth(token="tok", team_id="team-1"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    await asyncio.sleep(0)
+
+    assert (exc_info.value.entity_type, exc_info.value.entity_id) == ("team", "team-1")
+    assert sorted(type for type, _ in proxy_logging_obj.alerts) == ["max_budget_alert", "team_budget"]
+
+
+@pytest.mark.parametrize(
+    "max_budget, metadata, spend",
+    [
+        (None, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (0.0, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (-5.0, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (float("inf"), {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (100.0, {"max_budget_alert_emails": TEAM_ALERT_CONFIG}, 0.0),
+        (100.0, None, 90.0),
+        (100.0, {"cost_center": "eng"}, 90.0),
+        (100.0, {"max_budget_alert_emails": "50"}, 90.0),
+        (100.0, {"max_budget_alert_emails": {"abc": ["a@co.com"], "0": ["a@co.com"], "101": ["a@co.com"]}}, 90.0),
+        (100.0, {"team_member_max_budget_alert_emails": TEAM_ALERT_CONFIG}, 90.0),
+        (100.0, {"soft_budget_alerting_emails": ["a@co.com"]}, 90.0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_max_budget_alert_check_stays_silent_without_an_effective_config(max_budget, metadata, spend):
+    proxy_logging_obj = _RecordingProxyLogging()
+
+    team_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata=metadata,
+        max_budget=max_budget,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=spend,
+    )
+    await asyncio.sleep(0)
+
+    assert proxy_logging_obj.alerts == []
+
+
+@pytest.mark.parametrize(
+    "raw_config, max_budget, expect_error",
+    [
+        ({"50": ["a@co.com"], "90": "b@co.com, c@co.com"}, 100.0, False),
+        ({}, None, False),
+        (None, None, False),
+        ({"50": ["a@co.com"]}, None, True),
+        ({"50": ["a@co.com"]}, 0.0, True),
+        ({"50": ["a@co.com"]}, float("nan"), True),
+        ("50", 100.0, True),
+        (["50"], 100.0, True),
+        ({"50": 7}, 100.0, True),
+        ({"50": ["a@co.com", 7]}, 100.0, True),
+        ({"50": []}, 100.0, True),
+        ({"50": ""}, 100.0, True),
+        ({"50": ["not-an-email"]}, 100.0, True),
+        ({"50": ["a@"]}, 100.0, True),
+        ({"50": ["@b.com"]}, 100.0, True),
+        ({"50": ["a@b"]}, 100.0, True),
+        ({"50": ["a b@c.com"]}, 100.0, True),
+        ({"50": ["a@b.com", "c@d..com"]}, 100.0, True),
+        ({"50": "a@b.com, c@"}, 100.0, True),
+        ({"50": ["first.last+tag@sub.example.co.uk"]}, 100.0, False),
+        ({"0": ["a@co.com"]}, 100.0, True),
+        ({"101": ["a@co.com"]}, 100.0, True),
+        ({"abc": ["a@co.com"]}, 100.0, True),
+        ({"050": ["a@co.com"]}, 100.0, True),
+        ({"7.5": ["a@co.com"]}, 100.0, True),
+    ],
+)
+def test_team_max_budget_alert_emails_error_flags_only_configs_that_could_never_alert(
+    raw_config, max_budget, expect_error
+):
+    error = team_max_budget_alert_emails_error(raw_config, max_budget)
+
+    assert (error is not None) is expect_error, error
+
+
+@pytest.mark.parametrize("pct", ["\u00b2", "\u0663\u0660", "\uff15\uff10"])
+def test_non_ascii_digit_thresholds_are_rejected_on_write_and_ignored_at_runtime(pct):
+    assert team_max_budget_alert_emails_error({pct: ["a@co.com"]}, 100.0) is not None
+
+
+@pytest.mark.parametrize("pct", ["\u00b2", "\u0663\u0660", "\uff15\uff10"])
+@pytest.mark.asyncio
+async def test_runtime_alert_checks_skip_non_ascii_digit_thresholds_without_raising(pct):
+    team_logging = _RecordingProxyLogging()
+    member_logging = _RecordingProxyLogging()
+    config = {pct: ["bad@co.com"], "50": ["good@co.com"]}
+
+    team_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata={"max_budget_alert_emails": config},
+        max_budget=100.0,
+        proxy_logging_obj=team_logging,
+        spend=60.0,
+    )
+    team_member_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata={"team_member_max_budget_alert_emails": config},
+        organization_id=None,
+        user_id="user-1",
+        user_email=None,
+        proxy_logging_obj=member_logging,
+        spend=60.0,
+        max_budget=100.0,
+    )
+    await asyncio.sleep(0)
+
+    assert [info.max_budget_alert_emails for _, info in team_logging.alerts] == [{"50": ["good@co.com"]}]
+    assert [info.max_budget_alert_emails for _, info in member_logging.alerts] == [{"50": ["good@co.com"]}]
 
 
 @pytest.mark.asyncio

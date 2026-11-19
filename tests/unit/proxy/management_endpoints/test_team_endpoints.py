@@ -11181,6 +11181,226 @@ async def test_update_team_soft_budget_validation(
                 assert error_message in str(exc_info.value.message)
 
 
+def _team_alert_row(existing_metadata, existing_max_budget):
+    row = MagicMock()
+    row.team_id = "test-team-123"
+    row.organization_id = None
+    row.soft_budget = None
+    row.max_budget = existing_max_budget
+    row.metadata = existing_metadata
+    row.model_dump.return_value = {
+        "team_id": "test-team-123",
+        "organization_id": None,
+        "soft_budget": None,
+        "max_budget": existing_max_budget,
+        "metadata": existing_metadata,
+    }
+    return row
+
+
+async def _update_team_for_alert_validation(existing_metadata, existing_max_budget, **update_fields):
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_UserTable, UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    existing_row = _team_alert_row(existing_metadata, existing_max_budget)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()),
+    ):
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=existing_row)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_get_cache = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="admin-user", max_budget=None)
+        )
+        mock_cache.async_set_cache = AsyncMock()
+        await update_team(
+            data=UpdateTeamRequest(team_id="test-team-123", **update_fields),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user", models=[]
+            ),
+        )
+        return mock_prisma.db.litellm_teamtable.update.call_args
+
+
+@pytest.mark.parametrize(
+    "update_fields, existing_max_budget",
+    [
+        ({"metadata": {"max_budget_alert_emails": {"90": ["lead@co.com"]}}}, None),
+        ({"metadata": {"max_budget_alert_emails": {"90": ["lead@co.com"]}}, "max_budget": 0}, 100.0),
+        ({"metadata": {"max_budget_alert_emails": {"90": []}}}, 100.0),
+        ({"metadata": {"max_budget_alert_emails": {"150": ["lead@co.com"]}}}, 100.0),
+        ({"metadata": {"max_budget_alert_emails": ["lead@co.com"]}}, 100.0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_team_rejects_new_budget_alert_config_that_could_never_send(
+    update_fields, existing_max_budget, disable_audit_logging_for_mocked_team
+):
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_team_for_alert_validation({}, existing_max_budget, **update_fields)
+
+    assert exc_info.value.code == "400"
+    assert "max_budget_alert_emails" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_accepts_valid_budget_alert_config_against_the_stored_max_budget(
+    disable_audit_logging_for_mocked_team,
+):
+    call = await _update_team_for_alert_validation(
+        {"cost_center": "eng"},
+        100.0,
+        metadata={"cost_center": "eng", "max_budget_alert_emails": {"50": ["a@co.com"], "90": "b@co.com"}},
+    )
+
+    assert call is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_leaves_stored_invalid_budget_alert_config_alone_on_unrelated_edits(
+    disable_audit_logging_for_mocked_team,
+):
+    stored = {"max_budget_alert_emails": {"150": []}, "cost_center": "eng"}
+
+    call = await _update_team_for_alert_validation(
+        stored, None, metadata={**stored, "cost_center": "finance"}, team_alias="renamed"
+    )
+
+    assert call is not None
+
+
+@pytest.mark.asyncio
+async def test_update_team_can_clear_a_stored_budget_alert_config_even_when_it_is_invalid(
+    disable_audit_logging_for_mocked_team,
+):
+    call = await _update_team_for_alert_validation(
+        {"max_budget_alert_emails": {"150": []}}, None, metadata={"cost_center": "eng"}
+    )
+
+    assert call is not None
+
+
+STORED_ALERTS = {"cost_center": "eng", "max_budget_alert_emails": {"90": ["lead@co.com"]}}
+
+
+@pytest.mark.parametrize("update_fields", [{"max_budget": 0}, {"max_budget": None}])
+@pytest.mark.asyncio
+async def test_update_team_rejects_a_max_budget_change_that_would_silently_disable_stored_alerts(
+    update_fields, disable_audit_logging_for_mocked_team
+):
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_team_for_alert_validation(STORED_ALERTS, 100.0, **update_fields)
+
+    assert exc_info.value.code == "400"
+    assert "max_budget_alert_emails" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_accepts_a_new_positive_max_budget_with_stored_alerts(
+    disable_audit_logging_for_mocked_team,
+):
+    call = await _update_team_for_alert_validation(STORED_ALERTS, 100.0, max_budget=250.0)
+
+    assert call.kwargs["data"]["max_budget"] == 250.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_rejects_new_alerts_sent_with_an_explicit_null_max_budget_even_if_one_is_stored(
+    disable_audit_logging_for_mocked_team,
+):
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_team_for_alert_validation(
+            {}, 100.0, max_budget=None, metadata={"max_budget_alert_emails": {"50": ["a@co.com"]}}
+        )
+
+    assert exc_info.value.code == "400"
+    assert "max_budget_alert_emails" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_clears_alerts_together_with_the_max_budget(disable_audit_logging_for_mocked_team):
+    call = await _update_team_for_alert_validation(STORED_ALERTS, 100.0, max_budget=None, metadata={"cost_center": "eng"})
+
+    written = call.kwargs["data"]
+    assert written["max_budget"] is None
+    assert "max_budget_alert_emails" not in written["metadata"]
+    assert written["metadata"]["cost_center"] == "eng"
+
+
+@pytest.mark.asyncio
+async def test_update_team_keeps_stored_invalid_alerts_through_unrelated_edits_that_leave_the_budget_alone(
+    disable_audit_logging_for_mocked_team,
+):
+    stored = {"max_budget_alert_emails": {"150": ["nobody"]}, "cost_center": "eng"}
+
+    call = await _update_team_for_alert_validation(
+        stored, 100.0, max_budget=100.0, team_alias="renamed", metadata={**stored, "cost_center": "ops"}
+    )
+
+    assert call.kwargs["data"]["metadata"]["max_budget_alert_emails"] == {"150": ["nobody"]}
+    assert call.kwargs["data"]["metadata"]["cost_center"] == "ops"
+
+
+@pytest.mark.parametrize(
+    "recipient",
+    ["a@", "@b.com", "a@b", "a@@b.com", "a b@c.com", "a@b..com", "a\n@b.com", "a@b.c\x00om", "a@.com", "a@b.com."],
+)
+@pytest.mark.asyncio
+async def test_update_team_rejects_malformed_alert_recipients(recipient, disable_audit_logging_for_mocked_team):
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_team_for_alert_validation(
+            {}, 100.0, metadata={"max_budget_alert_emails": {"50": [recipient]}}
+        )
+
+    assert exc_info.value.code == "400"
+
+
+@pytest.mark.parametrize(
+    "max_budget, metadata",
+    [
+        (None, {"max_budget_alert_emails": {"90": ["lead@co.com"]}}),
+        (100.0, {"max_budget_alert_emails": {"90": []}}),
+        (100.0, {"max_budget_alert_emails": {"0": ["lead@co.com"]}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_new_team_rejects_budget_alert_config_that_could_never_send(max_budget, metadata):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=NewTeamRequest(team_alias="alerts", max_budget=max_budget, metadata=metadata),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user", models=[]
+                ),
+            )
+
+    assert exc_info.value.code == "400"
+    assert "max_budget_alert_emails" in str(exc_info.value.message)
+
+
 @pytest.mark.asyncio
 async def test_new_team_positive_budgets_accepted():
     """

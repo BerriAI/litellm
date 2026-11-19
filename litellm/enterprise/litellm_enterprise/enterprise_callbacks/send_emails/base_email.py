@@ -35,6 +35,7 @@ from litellm.integrations.email_templates.key_rotated_email import (
 from litellm.integrations.email_templates.templates import (
     MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
+    TEAM_MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
 )
@@ -57,6 +58,8 @@ _BUDGET_ALERT_CLAIMS_TARGET: Final = "budget_alert_claims"
 
 
 def _max_budget_alert_id(user_info: CallInfo) -> str:
+    if user_info.event_group == Litellm_EntityType.TEAM:
+        return f"team:{user_info.team_id}"
     if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
         return f"team_member:{user_info.user_id}:{user_info.team_id}"
     return user_info.token or user_info.user_id or "default_id"
@@ -435,6 +438,18 @@ class BaseEmailLogger(CustomLogger):
                     email_support_contact=email_params.support_contact,
                     email_footer=email_params.signature,
                 )
+            elif event.event_group == Litellm_EntityType.TEAM:
+                email_html_content = TEAM_MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+                    email_logo_url=email_params.logo_url,
+                    team_alias=html.escape(event.team_alias or event.team_id or ""),
+                    percentage=percentage,
+                    spend=spend_str,
+                    max_budget=max_budget_str,
+                    alert_threshold=alert_threshold_str,
+                    base_url=email_params.base_url,
+                    email_support_contact=email_params.support_contact,
+                    email_footer=email_params.signature,
+                )
             else:
                 email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
                     email_logo_url=email_params.logo_url,
@@ -698,11 +713,12 @@ class BaseEmailLogger(CustomLogger):
             if send_count is not None and send_count > 1:
                 continue
 
-            event_message = (
-                f"Team Member Budget Alert - {threshold_pct}% of Team Member Budget Reached"
-                if user_info.event_group == Litellm_EntityType.TEAM_MEMBER
-                else f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
-            )
+            if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
+                event_message = f"Team Member Budget Alert - {threshold_pct}% of Team Member Budget Reached"
+            elif user_info.event_group == Litellm_EntityType.TEAM:
+                event_message = f"Team Budget Alert - {threshold_pct}% of Team Budget Reached"
+            else:
+                event_message = f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
             webhook_event = WebhookEvent(
                 event="max_budget_alert",
                 event_message=event_message,
