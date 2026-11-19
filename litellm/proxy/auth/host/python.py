@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -513,8 +514,13 @@ class PythonAuthHost:
         if response is None:
             return None
         discovery: Final = OIDC_DISCOVERY_PATH in url
+        what: Final = "OIDC discovery endpoint" if discovery else "JWKS endpoint"
+        if response.is_server_error or response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
+            verbose_proxy_logger.error(
+                "JWT Auth: %s %s returned status %s: %s", what, url, response.status_code, response.text
+            )
+            return None
         if response.status_code != 200:
-            what: Final = "OIDC discovery endpoint" if discovery else "JWKS endpoint"
             raise Exception(f"JWT Auth: {what} {url} returned status {response.status_code}: {response.text}")
         try:
             return response.json()
