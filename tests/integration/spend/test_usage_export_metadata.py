@@ -687,7 +687,7 @@ def test_export_burst_survives_a_worker_kill_and_each_chat_lands_once(gateway: G
             }, body[:2000]
             _assert_no_secret(body)
         for _, _, body in owner:
-            assert _metadata_of(_ROWS.validate_json(body)) == [({}, {})], body[:2000]
+            assert _metadata_of(_ROWS.validate_json(body)) == [("absent", "absent")], body[:2000]
             _assert_no_secret(body)
 
         assert len(set(chats)) == len(chats), "duplicate response id in burst"
