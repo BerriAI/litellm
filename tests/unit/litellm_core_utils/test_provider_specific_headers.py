@@ -1,3 +1,4 @@
+import time
 from typing import Final
 
 import pytest
@@ -271,6 +272,29 @@ def test_a_configured_credential_prefix_applies_only_beside_a_matching_value(
         == expected
     )
 
+
+
+def test_many_conditional_entries_beside_many_configured_headers_resolve_in_linear_time() -> None:
+    configured_headers: Final = {f"x-configured-{index}": "deployment" for index in range(10_000)}
+    scoped_headers: Final[tuple[ProviderSpecificHeader, ...]] = tuple(
+        {
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {f"x-caller-{index}": "client"},
+            "configured_credential_headers": ("x-absent", "X-Configured-9999"),
+            "configured_credential_prefix": "deploy",
+            "yields_to_configured": True,
+        }
+        for index in range(10_000)
+    )
+
+    started: Final = time.perf_counter()
+    headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        scoped_headers, "anthropic", configured_headers=configured_headers
+    )
+    elapsed: Final = time.perf_counter() - started
+
+    assert len(headers) == 10_000
+    assert elapsed < 1.0, f"10,000 entries beside 10,000 configured headers took {elapsed:.2f}s"
 
 @pytest.mark.parametrize(
     "configured_headers,expected",

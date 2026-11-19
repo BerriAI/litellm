@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
@@ -14,6 +14,10 @@ pub fn get_provider_specific_headers(
         Some(ProviderSpecificHeaders::One(entry)) => std::slice::from_ref(entry),
         Some(ProviderSpecificHeaders::Many(entries)) => entries,
     };
+    let configured_names: HashSet<String> = configured_headers
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
     let applicable: Vec<&ProviderSpecificHeader> = entries
         .iter()
         .filter(|entry| applies_to_call(entry, custom_llm_provider, model))
@@ -22,20 +26,20 @@ pub fn get_provider_specific_headers(
         .iter()
         .filter(|entry| entry.configured_credential_headers.is_empty())
         .flat_map(|entry| {
-            contributed_headers(entry, configured_headers)
+            contributed_headers(entry, &configured_names)
                 .into_iter()
                 .map(|(name, _)| name)
         })
         .collect();
-    let kept_configured: Map<String, Value> = configured_headers
-        .iter()
-        .filter(|(name, _)| !replaced_names.contains(*name))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
+    let kept_configured = sorted_text_values_by_name(
+        configured_headers
+            .iter()
+            .filter(|(name, _)| !replaced_names.contains(*name)),
+    );
     applicable
         .into_iter()
         .filter(|entry| configures_a_listed_credential(entry, &kept_configured))
-        .flat_map(|entry| contributed_headers(entry, configured_headers))
+        .flat_map(|entry| contributed_headers(entry, &configured_names))
         .collect()
 }
 
@@ -49,35 +53,56 @@ fn applies_to_call(entry: &ProviderSpecificHeader, custom_llm_provider: &str, mo
             .any(|scoped| scoped.trim() == custom_llm_provider)
 }
 
+fn sorted_text_values_by_name<'a>(
+    headers: impl Iterator<Item = (&'a String, &'a Value)>,
+) -> HashMap<String, Vec<&'a str>> {
+    let mut values_by_name: HashMap<String, Vec<&'a str>> = HashMap::new();
+    for (name, value) in headers {
+        values_by_name
+            .entry(name.to_ascii_lowercase())
+            .or_default()
+            .push(value.as_str().unwrap_or(""));
+    }
+    values_by_name
+        .values_mut()
+        .for_each(|values| values.sort_unstable());
+    values_by_name
+}
+
+fn carries(values_by_name: &HashMap<String, Vec<&str>>, name: &str, prefix: &str) -> bool {
+    values_by_name.get(name).is_some_and(|values| {
+        values
+            .get(values.partition_point(|value| *value < prefix))
+            .is_some_and(|value| value.starts_with(prefix))
+    })
+}
+
 fn configures_a_listed_credential(
     entry: &ProviderSpecificHeader,
-    configured_headers: &Map<String, Value>,
+    configured_values: &HashMap<String, Vec<&str>>,
 ) -> bool {
     entry.configured_credential_headers.is_empty()
-        || configured_headers.iter().any(|(configured, value)| {
-            entry
-                .configured_credential_headers
-                .iter()
-                .any(|credential| configured.eq_ignore_ascii_case(credential))
-                && (entry.configured_credential_prefix.is_empty()
-                    || value.as_str().is_some_and(|value| {
-                        value.starts_with(&entry.configured_credential_prefix)
-                    }))
-        })
+        || entry
+            .configured_credential_headers
+            .iter()
+            .any(|credential| {
+                carries(
+                    configured_values,
+                    &credential.to_ascii_lowercase(),
+                    &entry.configured_credential_prefix,
+                )
+            })
 }
 
 fn contributed_headers(
     entry: &ProviderSpecificHeader,
-    configured_headers: &Map<String, Value>,
+    configured_names: &HashSet<String>,
 ) -> Map<String, Value> {
     entry
         .extra_headers
         .iter()
         .filter(|(name, _)| {
-            !entry.yields_to_configured
-                || !configured_headers
-                    .keys()
-                    .any(|configured| configured.eq_ignore_ascii_case(name))
+            !entry.yields_to_configured || !configured_names.contains(&name.to_ascii_lowercase())
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
@@ -315,6 +340,42 @@ mod tests {
                 configured.as_object().unwrap()
             )),
             expected
+        );
+    }
+
+    #[test]
+    fn many_conditional_entries_beside_many_configured_headers_resolve_in_linear_time() {
+        let configured: Map<String, Value> = (0..10_000)
+            .map(|index| (format!("x-configured-{index}"), json!("deployment")))
+            .collect();
+        let entries: ProviderSpecificHeaders = serde_json::from_value(Value::Array(
+            (0..10_000)
+                .map(|index| {
+                    json!({
+                        "custom_llm_provider": "anthropic",
+                        "extra_headers": {format!("x-caller-{index}"): "client"},
+                        "configured_credential_headers": ["x-absent", "X-Configured-9999"],
+                        "configured_credential_prefix": "deploy",
+                        "yields_to_configured": true
+                    })
+                })
+                .collect(),
+        ))
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let headers = get_provider_specific_headers(
+            Some(&entries),
+            "anthropic",
+            "claude-haiku-5-5",
+            &configured,
+        );
+        let elapsed = started.elapsed();
+
+        assert_eq!(headers.len(), 10_000);
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "10,000 entries beside 10,000 configured headers took {elapsed:?}"
         );
     }
 }
