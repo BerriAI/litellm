@@ -213,11 +213,13 @@ class _RateLimitGroupRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.groups: list[object] = []
+        self.exceptions: asyncio.Queue[tuple[Exception, object]] = asyncio.Queue()
 
     async def log_model_group_rate_limit_error(
         self, exception: Exception, original_model_group: object, kwargs: Mapping[str, object]
     ) -> None:
         self.groups.append(original_model_group)
+        self.exceptions.put_nowait((exception, kwargs.get("exception")))
 
 
 @pytest.mark.asyncio
@@ -242,6 +244,40 @@ async def test_rate_limit_hook_preserves_metadata_with_non_string_keys(monkeypat
     )
 
     assert recorder.groups == [123]
+
+
+@pytest.mark.asyncio
+async def test_async_router_rate_limit_callback_gets_the_exception_in_kwargs(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    recorder: Final = _RateLimitGroupRecorder()
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "true")
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "judge",
+                "litellm_params": {
+                    "model": "openai/judge",
+                    "api_key": "fake",
+                    "api_base": "https://failure.example/v1",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    respx_mock.post("https://failure.example/v1/chat/completions").mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion("judge", [{"role": "user", "content": "hello"}])
+
+    exception, callback_exception = await asyncio.wait_for(recorder.exceptions.get(), timeout=5)
+    assert isinstance(exception, litellm.RateLimitError)
+    assert callback_exception is exception
 
 
 @pytest.mark.asyncio
