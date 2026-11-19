@@ -106,6 +106,8 @@ def test_customer_usage_survives_logging_and_accounting_with_correct_request_cou
         "autorouter_savings_spend": 0,
         "guardrail_spend": 0,
         "customer_margin_spend": 0,
+        "cache_cost": 0,
+        "priced_cache_tokens": 0,
         "total_response_time_ms": 0,
         "timed_requests": 1,
     }
@@ -181,6 +183,59 @@ async def test_daily_projection_matches_legacy_writer(
     assert dict(stored_daily.key)["date"] == legacy["date"]
     assert dict(stored_daily.key)["api_key"] == legacy["api_key"]
     assert not {"messages", "response", "proxy_server_request", "requester_ip_address"}.intersection(accounting)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "route", "endpoint"),
+    [
+        ("acompletion", "/v1beta/models/projection-test:generateContent", "/models/{model}:generateContent"),
+        ("acompletion", "/models/projection-test:streamGenerateContent", "/models/{model}:streamGenerateContent"),
+        ("agenerate_content", "/models/projection-test:generateContent", "/models/{model}:generateContent"),
+        (
+            "agenerate_content_stream",
+            "/v1beta/models/projection-test:streamGenerateContent",
+            "/models/{model}:streamGenerateContent",
+        ),
+        ("acompletion", "/chat/completions", "/chat/completions"),
+        ("aembedding", "/models/projection-test:generateContent", "/embeddings"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_rollup_and_ledger_count_a_request_under_the_endpoint_it_came_in_on(
+    call_type: str, route: str, endpoint: str
+) -> None:
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "projection-test",
+            "custom_llm_provider": "openai",
+            "call_type": call_type,
+            "litellm_call_id": "endpoint-request",
+            "litellm_params": {
+                "metadata": {"user_api_key": "key", "user_api_key_user_id": "user", "user_api_key_request_route": route}
+            },
+        },
+        response_obj=ModelResponse(
+            id="endpoint-request", model="projection-test", usage=Usage(prompt_tokens=10, completion_tokens=5)
+        ),
+        start_time=_NOW,
+        end_time=_NOW,
+    )
+    legacy: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
+        payload, PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj), "user"
+    )
+    accounting: Final = build_accounting_payload(
+        payload,
+        entities={"api_key": payload["api_key"], "user": payload["user"]},
+        model_access_groups=(),
+        windows=(),
+        router=lambda: None,
+    )
+    restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
+    stored_daily: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
+    assert payload["call_type"] == call_type
+    assert legacy is not None
+    assert legacy["endpoint"] == endpoint
+    assert dict(stored_daily.key)["endpoint"] == endpoint
 
 
 def test_projection_uses_frozen_savings_and_keeps_duplicate_entity_tags() -> None:
@@ -710,7 +765,11 @@ async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(stat
                 "litellm_params": {"metadata": {"user_api_key": "key", "status": status, **identities}},
             },
             response_obj=ModelResponse(
-                id="customer-request", model="projection-test", usage=Usage(prompt_tokens=10, completion_tokens=5)
+                id="customer-request",
+                model="projection-test",
+                usage=Usage(
+                    prompt_tokens=10, completion_tokens=5, cache_read_input_tokens=4, cache_creation_input_tokens=2
+                ),
             ),
             start_time=start,
             end_time=start,
@@ -718,8 +777,18 @@ async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(stat
         "spend": cost,
         "startTime": start,
     }
+    recorded: Final[SpendLogsPayload] = {
+        **payload,
+        "metadata": json.dumps(
+            {
+                **_FIELDS.validate_json(payload["metadata"]),
+                "usage_object": {"cache_read_input_tokens": 4, "cache_creation_input_tokens": 2},
+                "cost_breakdown": {"cache_read_cost": 0.005, "cache_creation_cost": 0.02} if cost else None,
+            }
+        ),
+    }
     accounting: Final = build_accounting_payload(
-        payload,
+        recorded,
         entities={"api_key": "key", "team_id": "internal-team", **identities},
         model_access_groups=(),
         windows=(),
@@ -736,7 +805,7 @@ async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(stat
     hierarchy: Final = customer_hierarchy_ids_from_request(
         {"litellm_params": {"metadata": {f"user_api_key_{key}": value for key, value in identities.items()}}}
     )
-    await writer.add_spend_log_transaction_to_daily_customer_member_transaction(payload, hierarchy, client)
+    await writer.add_spend_log_transaction_to_daily_customer_member_transaction(recorded, hierarchy, client)
     rows: Final = (
         await writer.daily_customer_member_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     )
@@ -746,6 +815,8 @@ async def test_customer_daily_usage_matches_ledger_and_legacy_with_utc_date(stat
     assert legacy["api_requests"] == 1
     assert legacy["successful_requests"] == int(status == "success")
     assert legacy["failed_requests"] == int(status == "failure")
+    assert legacy["cache_cost"] == pytest.approx(0.025 if cost else 0)
+    assert legacy["priced_cache_tokens"] == (6 if cost else 0)
 
 
 def test_receipts_without_customer_identity_do_not_create_customer_daily_rows() -> None:

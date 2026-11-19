@@ -3983,6 +3983,7 @@ class SpendLogsMetadata(TypedDict):
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    route_call_type: ReadOnly[NotRequired[str | None]]
     upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool | None]]
@@ -5470,6 +5471,8 @@ class BaseDailySpendTransaction(TypedDict):
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
     customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    cache_cost: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    priced_cache_tokens: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

@@ -1,9 +1,12 @@
+mod admit;
 mod db;
 mod error;
 mod health;
+mod license;
 mod redis;
 mod resources;
 mod state;
+pub use admit::{Admit, Refused};
 pub use error::Error;
 pub use redis::RedisClients;
 pub use resources::Resources;

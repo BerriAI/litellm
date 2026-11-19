@@ -302,7 +302,15 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_LITELLM_PARAMS: Final = (
+    "additional_drop_params",
+    "drop_params",
+    "store",
+    "extra_body",
+    "previous_response_id",
+    "conversation",
+    "truncation",
+)
 
 
 class _CountTokensBodyOptions(TypedDict):

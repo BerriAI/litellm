@@ -9,3 +9,8 @@
 ## Route settings
 
 - `RouteList` is the typed form of a route list in config and key metadata, and both hosts read through it. A value that is not a list of strings is `RouteList::Malformed`, which grants nothing. A route template inside such a list is starlette syntax, so it is parsed by `litellm-starlette`, never here
+
+## Environment
+
+- `Environment` is the variables the proxy reads outside its config file, one field per variable, named as the variable in lower case. The host deserializes it once and hands it to whatever builds settings from it
+- Values stay as written: a comma-separated list is a `String`, an optional number is an `Option`. Splitting a list, applying a default and validating belong to the consumer

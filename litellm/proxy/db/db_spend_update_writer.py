@@ -84,11 +84,12 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, db_writ
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction, utc_date_from_start_time
 from litellm.proxy.db.request_error_tracking import request_error_accumulator
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
-from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.route_llm_request import spend_endpoint
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
 from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
+from litellm.proxy.spend_tracking.customer_cache_cost import recorded_customer_cache_cost
 from litellm.proxy.spend_tracking.customer_cost_margin import customer_margin_share_of_spend
 from litellm.proxy.spend_tracking.savings import (
     compute_savings_spend,
@@ -3462,16 +3463,14 @@ class DBSpendUpdateWriter:
             )
             return None
         try:
-            # Map call_type to endpoint using ROUTE_ENDPOINT_MAPPING
             call_type: Final = payload.get("call_type", None)
-            endpoint = None
-            if call_type:
-                endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
+            endpoint: Final = spend_endpoint(call_type, _metadata) if call_type else None
 
             is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
             caller_request: Final = not is_internal_call and not _is_billed_retry_attempt(_metadata)
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
+            cost_breakdown: Final = _metadata.get("cost_breakdown")
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
@@ -3481,7 +3480,7 @@ class DBSpendUpdateWriter:
                 model_id=payload.get("model_id"),
                 llm_router=get_llm_router,
                 usage_object=usage_obj,
-                cost_breakdown=_metadata.get("cost_breakdown"),
+                cost_breakdown=cost_breakdown,
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
                 recorded_autorouter_savings_estimate=_metadata.get("autorouter_savings_estimate"),
                 billed_at=payload.get("endTime"),
@@ -3525,7 +3524,14 @@ class DBSpendUpdateWriter:
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
             )
-            return daily_transaction
+            if type != "customer_member":
+                return daily_transaction
+            cache_cost, priced_cache_tokens = recorded_customer_cache_cost(
+                cost_breakdown,
+                daily_transaction["cache_read_input_tokens"],
+                daily_transaction["cache_creation_input_tokens"],
+            )
+            return {**daily_transaction, "cache_cost": cache_cost, "priced_cache_tokens": priced_cache_tokens}
         except Exception as e:
             raise e
 

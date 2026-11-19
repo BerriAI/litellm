@@ -3220,6 +3220,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-link",
 ]
 
 [[package]]
@@ -3848,6 +3849,7 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
+ "envy",
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4019,8 +4021,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "envy",
+ "flate2",
  "futures-util",
  "http-body-util",
+ "hyper-util",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-config-load",
@@ -4033,6 +4037,7 @@ dependencies = [
  "litellm-gateway-inference",
  "litellm-http",
  "litellm-inference",
+ "litellm-license",
  "litellm-llms",
  "litellm-model-catalog",
  "litellm-python-compat",
@@ -4048,6 +4053,7 @@ dependencies = [
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -4116,6 +4122,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tower",
+ "tower-http",
  "tower-service",
  "tracing",
 ]
@@ -4442,6 +4450,29 @@ dependencies = [
  "litellm-tracing",
  "rstest",
  "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-license"
+version = "0.1.0"
+dependencies = [
+ "backon",
+ "base64 0.22.1",
+ "jiff",
+ "litellm-error",
+ "litellm-http",
+ "rand 0.8.7",
+ "rsa",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "wiremock",
@@ -6569,6 +6600,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
+ "sha2 0.10.9",
  "signature",
  "spki",
  "subtle",
