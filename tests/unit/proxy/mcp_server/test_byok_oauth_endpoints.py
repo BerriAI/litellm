@@ -17,6 +17,7 @@ import json
 import re
 import time
 import uuid
+from collections.abc import Iterator
 from typing import Any, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2104,6 +2105,14 @@ def salted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
 
 
+@pytest.fixture
+def window_clock() -> Iterator[MagicMock]:
+    """Pins the module's clock mid-window, so a cap test never straddles a window boundary."""
+    with patch("litellm.proxy.mcp_server.byok_oauth_endpoints.time") as clock:
+        clock.time.return_value = (time.time() // 300) * 300 + 150
+        yield clock
+
+
 @pytest.mark.asyncio
 async def test_a_code_issued_on_one_worker_is_redeemed_on_another_through_the_shared_store(
     client: TestClient, salted: None
@@ -2190,7 +2199,9 @@ def test_no_code_is_handed_out_when_the_shared_store_drops_the_write(
     assert "location" not in resp.headers
 
 
-def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(client: TestClient, salted: None) -> None:
+def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(
+    client: TestClient, salted: None, window_clock: MagicMock
+) -> None:
     from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
 
     shared: Final = _SharedStore()
@@ -2205,7 +2216,9 @@ def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(clie
 
 
 @pytest.mark.asyncio
-async def test_finished_connects_do_not_count_toward_the_pending_code_cap(client: TestClient, salted: None) -> None:
+async def test_finished_connects_do_not_count_toward_the_pending_code_cap(
+    client: TestClient, salted: None, window_clock: MagicMock
+) -> None:
     from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
 
     shared: Final = _SharedStore()
@@ -2223,19 +2236,39 @@ async def test_finished_connects_do_not_count_toward_the_pending_code_cap(client
 
 @pytest.mark.asyncio
 async def test_redeeming_a_code_after_its_window_expired_does_not_lend_the_user_an_extra_slot(
-    client: TestClient, salted: None
+    client: TestClient, salted: None, window_clock: MagicMock
 ) -> None:
     from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
 
     shared: Final = _SharedStore()
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         code: Final = _issued_code("busy-user")
-        shared.counts.pop(_SHARED_WINDOW + "busy-user")
+        shared.counts.pop(next(key for key in shared.counts if key.startswith(_SHARED_WINDOW + "busy-user")))
         redeemed: Final = await _redeem(code, _CredentialTable())
         pending: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
         refused: Final = _authorize_as("busy-user")
     assert redeemed.status_code == 200
     assert pending == [302] * _AUTH_CODES_PER_USER_MAX
+    assert refused.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_redeeming_a_code_from_the_previous_window_does_not_free_a_slot_in_the_current_one(
+    client: TestClient, salted: None, window_clock: MagicMock
+) -> None:
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODE_TTL_SECONDS, _AUTH_CODES_PER_USER_MAX
+
+    shared: Final = _SharedStore()
+    window_end: Final = (time.time() // _AUTH_CODE_TTL_SECONDS + 1) * _AUTH_CODE_TTL_SECONDS
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        window_clock.time.return_value = window_end - 1
+        old_code: Final = _issued_code("busy-user")
+        window_clock.time.return_value = window_end + 1
+        current: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        redeemed: Final = await _redeem(old_code, _CredentialTable())
+        refused: Final = _authorize_as("busy-user")
+    assert current == [302] * _AUTH_CODES_PER_USER_MAX
+    assert redeemed.status_code == 200
     assert refused.status_code == 429
 
 
