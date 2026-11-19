@@ -1224,9 +1224,21 @@ def bedrock_capability_model(model: str, base_model: object) -> str:
     return model
 
 
+BEDROCK_ROUTING_PREFIXES: Final = (
+    "bedrock/",
+    "chat_completions/",
+    "converse/",
+    "invoke/",
+    "openai/",
+    "mantle/",
+    "nova-2/",
+    "nova/",
+)
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
+    for prefix in BEDROCK_ROUTING_PREFIXES:
         if model.startswith(prefix):
             model = model.split("/", 1)[1]
     return model

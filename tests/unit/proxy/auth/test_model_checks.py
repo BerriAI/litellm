@@ -2031,10 +2031,32 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
         ("bedrock", "converse"),
         ("bedrock", "us-east-1"),
         ("bedrock", "deepseek_r1"),
+        ("bedrock", "invoke"),
+        ("bedrock", "llama"),
+        ("bedrock", "qwen3"),
+        ("bedrock", "moonshot"),
+        ("bedrock", "converse_like"),
+        ("bedrock", "async_invoke"),
+        ("bedrock", "claude_platform"),
+        ("bedrock", "mantle"),
+        ("bedrock", "openai"),
+        ("bedrock", "chat_completions"),
+        ("bedrock", "nova"),
+        ("bedrock", "us-east-1/converse"),
+        ("bedrock", "us-east-1/nova-2"),
+        ("bedrock", "invoke/us-east-1"),
+        ("bedrock", "converse/us-east-1"),
         ("openai", "responses"),
         ("openai", "chat_completions"),
         ("azure", "o_series"),
+        ("azure", "gpt5_series"),
+        ("azure", "responses"),
+        ("azure", "responses/o_series"),
         ("vertex_ai", "gemini"),
+        ("huggingface", "together"),
+        ("huggingface", "hf-inference"),
+        ("huggingface", "novita"),
+        ("huggingface", "fireworks-ai"),
         ("cohere", "v1"),
         ("cohere", "v2"),
         ("cohere_chat", "v1"),
@@ -2084,6 +2106,7 @@ def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcar
         "openai",
         "cohere",
         "cohere_chat",
+        "vertex_ai",
     ],
 )
 def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: str) -> None:
@@ -2100,6 +2123,56 @@ def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: st
 
     assert listed_under_known_org == [f"{provider}/model-u"]
     assert listed_under_unknown_org == []
+
+
+@pytest.mark.parametrize(
+    ("provider", "route"),
+    [
+        ("bedrock", "unknown-org-route-missing-org"),
+        ("bedrock", "us-east-1/unknown-org-route-missing-org"),
+        ("bedrock", "converse/unknown-org-route-missing-org"),
+        ("vertex_ai", "gemini/unknown-org-route-missing-org"),
+        ("vertex_ai", "us-central1"),
+        ("azure", "unknown-org-route-missing-org"),
+    ],
+)
+def test_wildcard_over_a_segment_the_provider_sends_inside_the_model_id_lists_no_catalog_id(
+    provider: str, route: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    bare_listing: Final = get_known_models_from_wildcard(f"{provider}/*", LiteLLM_Params(model=f"{provider}/*"))
+    routed_listing: Final = get_known_models_from_wildcard(
+        f"{provider}/*", LiteLLM_Params(model=f"{provider}/{route}/*")
+    )
+
+    assert bare_listing
+    assert routed_listing == []
+
+
+@pytest.mark.parametrize(
+    ("arn_route", "expected"),
+    [
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile", ["bedrock/us.arn-route-vendor.model-p"]),
+        ("converse/arn:aws:bedrock:us-east-1:123456789012:inference-profile", ["bedrock/us.arn-route-vendor.model-p"]),
+        ("arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:inference-profile", ["bedrock/us.arn-route-vendor.model-p"]),
+        ("arn:aws:bedrock:us-east-1::foundation-model", ["bedrock/arn-route-vendor.model-f"]),
+        ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile", []),
+        ("llama/arn:aws:bedrock:us-east-1:123456789012:imported-model", []),
+    ],
+)
+def test_bedrock_arn_wildcard_lists_only_the_catalog_ids_its_resource_type_can_name(
+    arn_route: str, expected: list[str]
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    catalog: Final = ("bedrock/us.arn-route-vendor.model-p", "bedrock/arn-route-vendor.model-f")
+    with _registered_chat_models(dict.fromkeys(catalog, "bedrock")):
+        listed: Final = get_known_models_from_wildcard("bedrock/*", LiteLLM_Params(model=f"bedrock/{arn_route}/*"))
+
+    assert [listed_id for listed_id in listed if listed_id in catalog] == expected
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic", "gemini", "fireworks_ai", "deepseek"])

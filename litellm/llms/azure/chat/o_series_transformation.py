@@ -24,6 +24,8 @@ from .gpt_transformation import sanitized_tools_update
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
+    O_SERIES_ROUTE: Final = "o_series/"
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for the Azure O-Series models
@@ -98,7 +100,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         return True
 
     def is_o_series_model(self, model: str) -> bool:
-        return "o1" in model or "o3" in model or "o4" in model or "o_series/" in model
+        return "o1" in model or "o3" in model or "o4" in model or self.O_SERIES_ROUTE in model
 
     def transform_request(
         self,
@@ -108,7 +110,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        model = model.replace("o_series/", "")  # handle o_series/my-random-deployment-name
+        model = model.replace(self.O_SERIES_ROUTE, "")  # handle o_series/my-random-deployment-name
         flattened_params: Final = {
             **optional_params,
             **sanitized_tools_update(optional_params),
