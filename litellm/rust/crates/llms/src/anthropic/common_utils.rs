@@ -1021,49 +1021,23 @@ fn is_raw_advisor_use(block: &Value) -> bool {
         && block.get("name").and_then(Value::as_str) == Some("advisor")
 }
 
-/// A JSON value as a Python dict key: `True`, `1` and `1.0` are one key. Python cannot hash a
-/// list or dict at all, so those keep JSON equality.
-#[derive(PartialEq, Eq, Hash)]
-enum PythonKey<'a> {
-    Integer(i128),
-    Float(u64),
-    Json(&'a Value),
-}
-
-impl<'a> PythonKey<'a> {
-    fn of(value: &'a Value) -> Self {
-        const I128_RANGE: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0;
-        match value {
-            Value::Bool(flag) => Self::Integer(i128::from(*flag)),
-            Value::Number(number) => match (number.as_i128(), number.as_f64()) {
-                (Some(integer), _) => Self::Integer(integer),
-                (None, Some(float)) if float.fract() == 0.0 && float.abs() < I128_RANGE => {
-                    Self::Integer(float as i128)
-                }
-                (None, Some(float)) => Self::Float(float.to_bits()),
-                (None, None) => Self::Json(value),
-            },
-            _ => Self::Json(value),
-        }
-    }
-}
-
 /// Python's `strip_advisor_blocks_from_messages` on a raw assistant message: every advisor
-/// `server_tool_use` with a truthy id goes, with the `advisor_tool_result` answering it.
+/// `server_tool_use` with a non-empty string id goes, with the `advisor_tool_result` answering it.
 pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return Some(message);
     }
     with_raw_blocks(message, |blocks| {
-        let advisor_ids: HashSet<PythonKey> = blocks
+        let advisor_ids: HashSet<&str> = blocks
             .iter()
             .filter(|block| is_raw_advisor_use(block))
-            .filter_map(|block| block.get("id"))
-            .filter(|id| json_truthy(id))
-            .map(PythonKey::of)
+            .filter_map(|block| block.get("id").and_then(Value::as_str))
+            .filter(|id| !id.is_empty())
             .collect();
-        let answers_advisor =
-            |id: Option<&Value>| id.is_some_and(|id| advisor_ids.contains(&PythonKey::of(id)));
+        let answers_advisor = |id: Option<&Value>| {
+            id.and_then(Value::as_str)
+                .is_some_and(|id| advisor_ids.contains(id))
+        };
         let kept = blocks
             .iter()
             .filter(|block| {
@@ -1909,7 +1883,6 @@ mod tests {
 
     #[rstest]
     #[case::string_id(json!("srvtoolu_1"))]
-    #[case::numeric_id(json!(7))]
     fn strip_raw_advisor_blocks_drops_the_exchange_from_an_assistant_turn(#[case] id: Value) {
         assert_eq!(
             strip_raw_advisor_blocks(turn(advisor_exchange(id))),
@@ -1922,6 +1895,9 @@ mod tests {
     #[rstest]
     #[case::user_turn(json!({"role": "user", "content": advisor_exchange(json!("srvtoolu_1"))}))]
     #[case::empty_id(turn(advisor_exchange(json!(""))))]
+    #[case::numeric_id(turn(advisor_exchange(json!(7))))]
+    #[case::list_id(turn(advisor_exchange(json!(["srvtoolu_1"]))))]
+    #[case::object_id(turn(advisor_exchange(json!({"id": "srvtoolu_1"}))))]
     fn strip_raw_advisor_blocks_leaves_other_turns(#[case] message: Value) {
         assert_eq!(strip_raw_advisor_blocks(message.clone()), Some(message));
     }
@@ -1935,29 +1911,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::int_answered_by_float(
-        json!([advisor_use(json!(1)), advisor_result(json!(1.0)), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::float_answered_by_int(
-        json!([advisor_use(json!(2.0)), advisor_result(json!(2)), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::true_answered_by_one(
-        json!([advisor_use(json!(true)), advisor_result(json!(1)), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::one_answered_by_true(
-        json!([advisor_use(json!(1)), advisor_result(json!(true)), unparsed_block()]),
-        json!([unparsed_block()])
+    #[case::list_answering_a_string_id(
+        json!([advisor_use(json!("srvtoolu_1")), advisor_result(json!(["srvtoolu_1"])), unparsed_block()]),
+        json!([advisor_result(json!(["srvtoolu_1"])), unparsed_block()])
     )]
     #[case::string_not_answered_by_int(
         json!([advisor_use(json!("1")), advisor_result(json!(1)), unparsed_block()]),
         json!([advisor_result(json!(1)), unparsed_block()])
-    )]
-    #[case::int_beyond_float_precision(
-        json!([advisor_use(json!(9_007_199_254_740_993_u64)), advisor_result(json!(9_007_199_254_740_992.0)), unparsed_block()]),
-        json!([advisor_result(json!(9_007_199_254_740_992.0)), unparsed_block()])
     )]
     #[case::falsy_ids_are_kept(
         json!([
@@ -1995,14 +1955,6 @@ mod tests {
             {"type": "tool_use", "id": "a", "name": "advisor", "input": {}},
             {"type": "tool_result", "tool_use_id": "a", "content": "ok"}
         ])
-    )]
-    #[case::object_ids_compare_regardless_of_key_order(
-        json!([advisor_use(json!({"a": 1, "b": 2})), advisor_result(json!({"b": 2, "a": 1})), unparsed_block()]),
-        json!([unparsed_block()])
-    )]
-    #[case::nested_numbers_compare_as_json(
-        json!([advisor_use(json!([1])), advisor_result(json!([1.0])), unparsed_block()]),
-        json!([advisor_result(json!([1.0])), unparsed_block()])
     )]
     fn strip_raw_advisor_blocks_matches_ids_as_python_does(
         #[case] blocks: Value,

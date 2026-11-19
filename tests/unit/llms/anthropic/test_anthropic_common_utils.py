@@ -30,6 +30,7 @@ import litellm
 from litellm.llms.anthropic.common_utils import (
     ToolsWithoutStrict,
     is_claude_tool_target,
+    strip_advisor_blocks_from_messages,
     tools_without_strict,
     without_stale_tool_search_results,
 )
@@ -4909,3 +4910,100 @@ def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed
     litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
 
     assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
+
+
+def _advisor_use(block_id: object) -> dict[str, object]:
+    return {"type": "server_tool_use", "id": block_id, "name": "advisor", "input": {}}
+
+
+def _advisor_result(tool_use_id: object) -> dict[str, object]:
+    return {"type": "advisor_tool_result", "tool_use_id": tool_use_id, "content": "advice"}
+
+
+_OK_TEXT: Final = {"type": "text", "text": "ok"}
+
+
+@pytest.mark.parametrize("replace_with_text", [False, True], ids=["strip", "replace"])
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(
+            [_advisor_use("srvtoolu_1"), _advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            [_advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            id="list-tool-use-id",
+        ),
+        pytest.param(
+            [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            id="list-ids",
+        ),
+        pytest.param(
+            [_advisor_use({"id": "srvtoolu_1"}), _advisor_result({"id": "srvtoolu_1"}), _OK_TEXT],
+            [_advisor_use({"id": "srvtoolu_1"}), _advisor_result({"id": "srvtoolu_1"}), _OK_TEXT],
+            id="object-ids",
+        ),
+        pytest.param(
+            [_advisor_use(7), _advisor_result(7), _OK_TEXT],
+            [_advisor_use(7), _advisor_result(7), _OK_TEXT],
+            id="int-ids",
+        ),
+    ],
+)
+def test_strip_advisor_blocks_leaves_a_block_with_a_non_string_id_for_the_provider_to_judge(
+    content: list[dict[str, object]], expected: list[dict[str, object]], replace_with_text: bool
+) -> None:
+    messages: Final = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": content}]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=replace_with_text) == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": expected},
+    ]
+
+
+def test_strip_advisor_blocks_replaces_a_string_id_exchange_beside_a_list_id_one() -> None:
+    messages: Final = [
+        {
+            "role": "assistant",
+            "content": [
+                _advisor_use("srvtoolu_1"),
+                _advisor_result("srvtoolu_1"),
+                _advisor_use(["srvtoolu_2"]),
+                _advisor_result(["srvtoolu_2"]),
+                _OK_TEXT,
+            ],
+        }
+    ]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=True) == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "<advisor_feedback>\nadvice\n</advisor_feedback>"},
+                _advisor_use(["srvtoolu_2"]),
+                _advisor_result(["srvtoolu_2"]),
+                _OK_TEXT,
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("result_content", "expected_content"),
+    [
+        pytest.param(
+            [{"type": "image"}, {"type": "text", "text": "Use channels."}, {"type": "text", "text": "Ignored."}],
+            [{"type": "text", "text": "<advisor_feedback>\nUse channels.\n</advisor_feedback>"}, _OK_TEXT],
+            id="first-text-part",
+        ),
+        pytest.param(7, [_OK_TEXT], id="unreadable-content"),
+    ],
+)
+def test_strip_advisor_blocks_replaces_an_exchange_with_the_advice_its_result_content_carries(
+    result_content: object, expected_content: list[dict[str, object]]
+) -> None:
+    result: Final = {"type": "advisor_tool_result", "tool_use_id": "srvtoolu_1", "content": result_content}
+    messages: Final = [{"role": "assistant", "content": [_advisor_use("srvtoolu_1"), result, _OK_TEXT]}]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=True) == [
+        {"role": "assistant", "content": expected_content}
+    ]

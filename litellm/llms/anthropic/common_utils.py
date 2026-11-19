@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     find_anthropic_server_tool_result,
     message_field,
     parts_of,
+    string_field,
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     is_encrypted_reasoning_block,
@@ -1858,68 +1859,60 @@ def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_t
         content = message.get("content")
         if not isinstance(content, list):
             continue
-
-        # Collect advisor server_tool_use ids and their advice text (for replace mode).
-        advisor_id_to_text: dict = {}
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "server_tool_use" and block.get("name") == "advisor":
-                bid = block.get("id")
-                if bid:
-                    advisor_id_to_text[bid] = None  # text filled in below
-
-        if not advisor_id_to_text:
-            continue
-
-        # If replacing, collect the advisor response text from advisor_tool_result blocks.
-        if replace_with_text:
-            for block in content:
-                if (
-                    isinstance(block, dict)
-                    and block.get("type") == "advisor_tool_result"
-                    and block.get("tool_use_id") in advisor_id_to_text
-                ):
-                    raw = block.get("content") or ""
-                    text = (
-                        raw
-                        if isinstance(raw, str)
-                        else next(
-                            (b.get("text", "") for b in raw if isinstance(b, dict) and b.get("type") == "text"),
-                            "",
-                        )
-                    )
-                    advisor_id_to_text[block["tool_use_id"]] = text
-
-        new_content = []
-        for block in content:
-            if not isinstance(block, dict):
-                new_content.append(block)
-                continue
-            is_advisor_use = (
-                block.get("type") == "server_tool_use"
-                and block.get("name") == "advisor"
-                and block.get("id") in advisor_id_to_text
-            )
-            is_advisor_result = (
-                block.get("type") == "advisor_tool_result" and block.get("tool_use_id") in advisor_id_to_text
-            )
-            if is_advisor_use:
-                if replace_with_text:
-                    advice = advisor_id_to_text.get(block.get("id")) or ""
-                    if advice:
-                        new_content.append(
-                            {
-                                "type": "text",
-                                "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>",
-                            }
-                        )
-                # else: drop silently
-            elif is_advisor_result:
-                pass  # always drop — replaced above (or stripped)
-            else:
-                new_content.append(block)
-
-        message["content"] = new_content
+        new_content = _without_advisor_exchanges(content, replace_with_text)
+        if new_content is not None:
+            message["content"] = new_content
     return messages
+
+
+def _without_advisor_exchanges(blocks: Sequence[object], replace_with_text: bool) -> list[object] | None:
+    advisor_ids: Final = frozenset(filter(None, map(_advisor_use_id, blocks)))
+    if not advisor_ids:
+        return None
+    advice_by_id: Final[Mapping[str, str]] = (
+        MappingProxyType(
+            {
+                result_id: _advisor_result_text(block)
+                for block in blocks
+                if (result_id := _advisor_result_id(block)) in advisor_ids
+            }
+        )
+        if replace_with_text
+        else MappingProxyType({})
+    )
+    return list(chain.from_iterable(_without_advisor_exchange(block, advisor_ids, advice_by_id) for block in blocks))
+
+
+def _advisor_use_id(block: object) -> str | None:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None or mapping.get("type") != "server_tool_use" or mapping.get("name") != "advisor":
+        return None
+    return string_field(mapping, "id")
+
+
+def _advisor_result_id(block: object) -> str | None:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None or mapping.get("type") != "advisor_tool_result":
+        return None
+    return string_field(mapping, "tool_use_id")
+
+
+def _advisor_result_text(block: object) -> str:
+    raw: Final = message_field(block, "content") or ""
+    if isinstance(raw, str):
+        return raw
+    text_parts: Final = (as_str_mapping(part) for part in parts_of(raw))
+    return next((string_field(part, "text") or "" for part in text_parts if part and part.get("type") == "text"), "")
+
+
+def _without_advisor_exchange(
+    block: object, advisor_ids: frozenset[str], advice_by_id: Mapping[str, str]
+) -> tuple[object, ...]:
+    use_id: Final = _advisor_use_id(block)
+    if use_id in advisor_ids:
+        advice: Final = advice_by_id.get(use_id, "")
+        return ({"type": "text", "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>"},) if advice else ()
+    return () if _advisor_result_id(block) in advisor_ids else (block,)
 
 
 def _assistant_blocks(message: AllAnthropicPassThroughMessageValues) -> tuple[object, ...]:
