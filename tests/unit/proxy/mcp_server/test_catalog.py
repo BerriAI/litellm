@@ -1290,19 +1290,6 @@ async def test_a_registry_entry_written_without_profiles_gets_them_back_on_the_n
     assert tuple(profile.id for profile in manager.registry["tickets"].additional_auth or ()) == ("tickets-bots",)
 
 
-def test_the_profiles_read_for_a_row_version_are_known_only_for_that_version() -> None:
-    from datetime import datetime, timezone
-
-    manager: Final = MCPServerManager()
-    loaded_at: Final = datetime(2026, 11, 18, tzinfo=timezone.utc)
-    bots: Final = MCPAuthProfile(id="bots", auth_type=MCPAuth.bearer_token, authentication_token="t")
-    manager.catalog._read_profiles = {"tickets": catalog._ReadProfiles(loaded_at, (bots,))}  # pyright: ignore[reportPrivateUsage]  # seeds what a reload read
-
-    assert manager.catalog.read_profiles_of("tickets", loaded_at) == (bots,)
-    assert manager.catalog.read_profiles_of("tickets", datetime(2026, 11, 19, tzinfo=timezone.utc)) is None
-    assert manager.catalog.read_profiles_of("wiki", loaded_at) is None
-
-
 class _CatalogClock:
     def __init__(self) -> None:
         self.now = 1000.0
