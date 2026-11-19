@@ -16722,6 +16722,7 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/pricing"
     },
     "claude-sonnet-5": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -16767,6 +16768,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-5-5": {
+        "supports_low_reasoning_effort": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -16815,6 +16817,7 @@
         "alias_of": "claude-sonnet-5-5"
     },
     "claude-sonnet-4-6": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -16891,6 +16894,7 @@
         "token_count_model": {"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","litellm_provider":"bedrock"}
     },
     "claude-opus-4-5-20251101": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -16959,6 +16963,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -17043,6 +17048,7 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-opus-4-7": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -17127,6 +17133,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "claude-fable-5": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -17171,6 +17178,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -17219,6 +17227,7 @@
         "alias_of": "claude-fable-5-2"
     },
     "claude-opus-5-5": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 5e-06,
@@ -17267,6 +17276,7 @@
         "alias_of": "claude-opus-5-5"
     },
     "claude-opus-5": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -17315,6 +17325,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-8": {
+        "supports_low_reasoning_effort": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31977,7 +31988,7 @@
         },
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
-        "supports_reasoning": false
+        "supports_reasoning": true
     },
     "gemini/gemini-3.1-flash-image-preview": {
         "deprecation_date": "2026-06-25",
@@ -32012,7 +32023,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": false,
+        "supports_reasoning": true,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -32117,6 +32128,7 @@
         "tpm": 10000000
     },
     "gemini/deep-research-preview-04-2026": {
+        "supports_reasoning": true,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "gemini",
@@ -32153,6 +32165,7 @@
         }
     },
     "gemini/deep-research-max-preview-04-2026": {
+        "supports_reasoning": true,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "gemini",
@@ -32401,7 +32414,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
-        "supports_reasoning": false,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -32500,6 +32513,7 @@
         "tpm": 4000000
     },
     "gemini/deep-research-pro-preview-12-2025": {
+        "supports_reasoning": true,
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "successor_model": "gemini/deep-research-preview-04-2026",
@@ -32816,6 +32830,7 @@
         "output_cost_per_token_above_200k_tokens_flex": 7.5e-06
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
+        "supports_reasoning": true,
         "deprecation_date": "2026-07-28",
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "successor_model": "gemini/gemini-3.8-flash",
@@ -44604,6 +44619,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-ocr-latest": {
+        "supports_vision": true,
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.004,
         "ocr_cost_per_page_batches": 0.002,
@@ -44633,6 +44649,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4-1": {
+        "supports_vision": true,
         "annotation_cost_per_page": 0.005,
         "annotation_cost_per_page_batches": 0.0025,
         "litellm_provider": "mistral",
@@ -44646,6 +44663,7 @@
         ]
     },
     "mistral/mistral-ocr-2512": {
+        "supports_vision": true,
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.002,
         "ocr_cost_per_page_batches": 0.001,
@@ -48738,6 +48756,22 @@
         "supports_reasoning": false,
         "supports_function_calling": true
     },
+    "perplexity/pplx-embed-v2-context-0.6b": {
+        "input_cost_per_token": 2e-8,
+        "input_cost_per_image_token": 4e-7,
+        "litellm_provider": "perplexity",
+        "mode": "embedding",
+        "output_vector_size": 1024,
+        "source": "https://docs.perplexity.ai/docs/getting-started/pricing"
+    },
+    "perplexity/pplx-embed-v2-context-9b": {
+        "input_cost_per_token": 1.2e-7,
+        "input_cost_per_image_token": 4.2e-7,
+        "litellm_provider": "perplexity",
+        "mode": "embedding",
+        "output_vector_size": 2048,
+        "source": "https://docs.perplexity.ai/docs/getting-started/pricing"
+    },
     "perplexity/pplx-embed-v1-0.6b": {
         "input_cost_per_token": 4e-09,
         "litellm_provider": "perplexity",
@@ -51269,6 +51303,138 @@
         "litellm_provider": "together_ai",
         "mode": "embedding",
         "output_cost_per_token": 0.0
+    },
+    "together_ai/black-forest-labs/FLUX.2-dev": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0154,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/openai/gpt-image-1.5": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.034,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/ByteDance-Seed/Seedream-3.0": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/ByteDance-Seed/Seedream-4.0": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/Rundiffusion/Juggernaut-Lightning-Flux": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0017,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/ideogram/ideogram-3.0": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/google/gemini-3-pro-image": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.134,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/stabilityai/stable-diffusion-xl-base-1.0": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0019,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/google/flash-image-2.5": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/RunDiffusion/Juggernaut-pro-flux": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0049,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/Qwen/Qwen-Image": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0058,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/google/flash-image-3.1": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04657,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/ideogram/ideogram-4.0": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/openai/gpt-image-2": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.053,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/prunaai/p-image-ideogram": {
+        "litellm_provider": "together_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00225,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/hexgrad/Kokoro-82M": {
+        "input_cost_per_character": 0.000004,
+        "litellm_provider": "together_ai",
+        "mode": "audio_speech",
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/canopylabs/orpheus-3b-0.1-ft": {
+        "input_cost_per_character": 0.000015,
+        "litellm_provider": "together_ai",
+        "mode": "audio_speech",
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/cartesia/sonic": {
+        "input_cost_per_character": 0.000065,
+        "litellm_provider": "together_ai",
+        "mode": "audio_speech",
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/cartesia/sonic-3": {
+        "input_cost_per_character": 0.000065,
+        "litellm_provider": "together_ai",
+        "mode": "audio_speech",
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/Qwen/Qwen3-TTS-12Hz-1.7B": {
+        "input_cost_per_character": 0.00002,
+        "litellm_provider": "together_ai",
+        "mode": "audio_speech",
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/nvidia/nemotron-3.5-asr-streaming-0.6b": {
+        "litellm_provider": "together_ai",
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.000025,
+        "source": "https://www.together.ai/pricing"
+    },
+    "together_ai/nvidia/nemotron-3-asr-streaming-0.6b": {
+        "litellm_provider": "together_ai",
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.000025,
+        "source": "https://www.together.ai/pricing"
     },
     "together_ai/ByteDance/Seedream-5.0-lite": {
         "litellm_provider": "together_ai",
@@ -57457,6 +57623,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "xai/grok-4.20-multi-agent-beta-0309": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -57481,6 +57648,7 @@
         ]
     },
     "xai/grok-4.20-beta-0309-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -57502,6 +57670,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-0309-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -57529,6 +57698,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta-0309-non-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -57549,6 +57719,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.3": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "cache_read_input_token_cost_above_200k_tokens_batches": 3.2e-07,
@@ -57578,6 +57749,7 @@
         "supports_web_search": true
     },
     "xai/grok-4.3-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "cache_read_input_token_cost_above_200k_tokens_batches": 3.2e-07,
@@ -57605,6 +57777,7 @@
         "supports_web_search": true
     },
     "xai/grok-4.5": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 3e-07,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "input_cost_per_image_token": 2e-06,
@@ -57626,6 +57799,7 @@
         "supports_web_search": true
     },
     "xai/grok-4.5-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 3e-07,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "input_cost_per_image_token": 2e-06,
@@ -57647,6 +57821,7 @@
         "supports_web_search": true
     },
     "xai/grok-build-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 3e-07,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "input_cost_per_image_token": 2e-06,
@@ -57668,6 +57843,7 @@
         "supports_web_search": true
     },
     "xai/grok-4.6": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_200k_tokens": 1e-06,
         "input_cost_per_image_token": 2e-06,
@@ -57689,6 +57865,7 @@
         "supports_web_search": true
     },
     "xai/grok-4.7": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_200k_tokens": 1e-06,
         "cache_read_input_token_cost_above_200k_tokens_batches": 8e-07,
@@ -62372,6 +62549,7 @@
         "supports_response_schema": false
     },
     "gemini/gemini-2.5-flash-native-audio-latest": {
+        "supports_reasoning": true,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -62399,10 +62577,11 @@
         "gemini_native_audio": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-09-2025": {
+        "supports_reasoning": true,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 131072,
         "max_output_tokens": 8192,
         "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
@@ -66132,6 +66311,8 @@
         "supports_web_search": true
     },
     "deepseek/deepseek-flash": {
+        "supported_output_modalities": ["text"],
+        "supported_modalities": ["text", "image"],
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 6e-09,
         "input_cost_per_token": 3e-07,
@@ -66299,6 +66480,8 @@
         "supports_web_search": true
     },
     "deepseek/deepseek-v4-pro": {
+        "supported_output_modalities": ["text"],
+        "supported_modalities": ["text"],
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 4.4e-08,
         "input_cost_per_token": 1.32e-06,
@@ -66922,6 +67105,7 @@
         "supports_tool_choice": true
     },
     "xai/grok-4.20-0309-non-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -66948,6 +67132,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-multi-agent-0309": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -66978,6 +67163,7 @@
         ]
     },
     "xai/grok-build-0.1": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "xai",
@@ -70550,6 +70736,7 @@
         "tpm": 800000
     },
     "xai/grok-4.20": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -70577,6 +70764,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -70604,6 +70792,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-reasoning-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -70747,7 +70936,7 @@
         ]
     },
     "xai/grok-imagine-image-2.0": {
-        "input_cost_per_image": 0.06,
+        "input_cost_per_image": 0.01,
         "litellm_provider": "xai",
         "mode": "image_generation",
         "output_cost_per_image_1K": 0.04,
@@ -70900,6 +71089,7 @@
         ]
     },
     "xai/grok-4.20-non-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -70926,6 +71116,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-non-reasoning-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -70952,6 +71143,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-multi-agent": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -70982,6 +71174,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-multi-agent-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -71153,6 +71346,7 @@
         "supports_tool_choice": true
     },
     "mistral/mistral-ocr-3": {
+        "supports_vision": true,
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.002,
         "ocr_cost_per_page_batches": 0.001,
@@ -71166,6 +71360,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-3-0": {
+        "supports_vision": true,
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.002,
         "ocr_cost_per_page_batches": 0.001,
@@ -71179,6 +71374,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4": {
+        "supports_vision": true,
         "annotation_cost_per_page": 0.005,
         "annotation_cost_per_page_batches": 0.0025,
         "litellm_provider": "mistral",
@@ -78377,6 +78573,7 @@
         "supports_vision": true
     },
     "xai/grok-4.20-0309": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1.6e-07,
         "input_cost_per_token": 1.25e-06,
@@ -78404,6 +78601,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78425,6 +78623,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta-0309": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78446,6 +78645,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78467,6 +78667,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta-latest-non-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78487,6 +78688,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta-latest-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78508,6 +78710,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta-non-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78528,6 +78731,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-beta-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78549,6 +78753,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-experimental-beta-0304": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78570,6 +78775,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-experimental-beta-0304-non-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78590,6 +78796,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-experimental-beta-0304-reasoning": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78611,6 +78818,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-experimental-beta-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78632,6 +78840,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-experimental-beta-non-reasoning-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78652,6 +78861,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-experimental-beta-reasoning-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78673,6 +78883,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-multi-agent-beta-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78697,6 +78908,7 @@
         ]
     },
     "xai/grok-4.20-multi-agent-experimental-beta-0304": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78721,6 +78933,7 @@
         ]
     },
     "xai/grok-4.20-multi-agent-experimental-beta-latest": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78745,6 +78958,7 @@
         ]
     },
     "xai/grok-4.20-non-reasoning-gv2": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -78765,6 +78979,7 @@
         "supports_response_schema": true
     },
     "xai/grok-4.20-reasoning-gv2": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "xai",
@@ -79014,6 +79229,7 @@
         "supports_vision": true
     },
     "xai/grok-code-fast": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "input_cost_per_image_token": 1e-06,
@@ -79034,6 +79250,7 @@
         "supports_vision": true
     },
     "xai/grok-code-fast-1": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "deprecation_date": "2026-05-15",
@@ -79057,6 +79274,7 @@
         "supports_vision": true
     },
     "xai/grok-code-fast-1-0825": {
+        "supported_modalities": ["text", "image"],
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
         "input_cost_per_image_token": 1e-06,
@@ -80242,6 +80460,45 @@
         "cache_read_input_token_cost": 2e-07,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
+    "perplexity/openai/gpt-6.1-terra": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "cache_read_input_token_cost": 5e-8,
+        "cache_creation_input_token_cost": 0.00000125,
+        "input_cost_per_token_above_272k_tokens": 0.000002,
+        "output_cost_per_token_above_272k_tokens": 0.0000075,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-7,
+        "cache_creation_input_token_cost_above_272k_tokens": 0.0000025,
+        "source": "https://docs.perplexity.ai/docs/orchestrator/models"
+    },
+    "perplexity/openai/gpt-6.2-astra": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.00004,
+        "cache_read_input_token_cost": 4e-7,
+        "cache_creation_input_token_cost": 0.00001,
+        "input_cost_per_token_above_272k_tokens": 0.000016,
+        "output_cost_per_token_above_272k_tokens": 0.00006,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-7,
+        "cache_creation_input_token_cost_above_272k_tokens": 0.00002,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models"
+    },
+    "perplexity/openai/gpt-6.2-sol": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 0.0000025,
+        "input_cost_per_token_above_272k_tokens": 0.000004,
+        "output_cost_per_token_above_272k_tokens": 0.000015,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-7,
+        "cache_creation_input_token_cost_above_272k_tokens": 0.000005,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models"
+    },
     "perplexity/openai/gpt-6.1-sol": {
         "litellm_provider": "perplexity",
         "mode": "responses",
@@ -81258,6 +81515,7 @@
         "supports_vision": true
     },
 "claude-haiku-5-5": {
+        "supports_low_reasoning_effort": true,
         "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
         "output_cost_per_token_above_100k_tokens_batches": 1.25e-06,
         "cache_creation_input_token_cost_above_100k_tokens_batches": 3.125e-07,
@@ -91588,6 +91846,7 @@
         "thinking_always_on": true
     },
     "claude-fable-5-2": {
+        "supports_low_reasoning_effort": true,
         "cache_creation_input_token_cost": 1e-05,
         "cache_creation_input_token_cost_above_1hr": 1.6e-05,
         "cache_creation_input_token_cost_batches": 5e-06,
