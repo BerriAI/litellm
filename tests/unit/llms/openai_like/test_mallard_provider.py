@@ -203,9 +203,9 @@ def test_mallard_model_prices_and_limits():
     assert info["litellm_provider"] == "mallard"
     assert info["max_input_tokens"] == 262_144
     assert info["max_output_tokens"] == 235_929
-    assert info["input_cost_per_token"] == pytest.approx(1.06944e-07)
-    assert info["cache_read_input_token_cost"] == pytest.approx(8.0208e-08)
-    assert info["output_cost_per_token"] == pytest.approx(1.0026e-06)
+    assert info["input_cost_per_token"] == pytest.approx(3.9681e-08)
+    assert info["cache_read_input_token_cost"] == pytest.approx(1.3227e-08)
+    assert info["output_cost_per_token"] == pytest.approx(2.90994e-07)
     assert info["supports_function_calling"] is True
     assert info["supports_vision"] is True
     assert info["supports_reasoning"] is True
