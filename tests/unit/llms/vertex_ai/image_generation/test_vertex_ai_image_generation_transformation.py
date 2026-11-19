@@ -90,7 +90,7 @@ def test_vertex_generation_preserves_legacy_size_fallback(
     size: str,
     config_type: type[VertexAIGeminiImageGenerationConfig] | type[VertexAIImagenImageGenerationConfig],
     model: str,
-        config_key: str,
+    config_key: str,
     expected: dict[str, object],
     drop_params: bool,
 ) -> None:
