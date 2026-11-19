@@ -99,7 +99,7 @@ def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, o
     return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
-_DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info"})
+_DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info", "use_litellm_proxy"})
 
 
 async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:

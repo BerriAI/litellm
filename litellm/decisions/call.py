@@ -443,6 +443,16 @@ def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> 
         logging_obj.update_messages([_logged_request_message(caller_request)])
 
 
+def _config_for_shape(provider_config: BaseDecisionsConfig, fields: RequestFields) -> BaseDecisionsConfig:
+    match fields:
+        case SystemOneRequestFields():
+            return provider_config.systemone_config()
+        case OpenAIDecisionRequestFields():
+            return provider_config
+        case _:
+            assert_never(fields)
+
+
 def prepare_call(
     *,
     model: str,
@@ -462,7 +472,7 @@ def prepare_call(
         api_key=api_key,
         litellm_params=GenericLiteLLMParams(use_litellm_proxy=kwargs.get("use_litellm_proxy") is True),
     )
-    provider_config: Final = _provider_config(upstream_model, provider)
+    provider_config: Final = _config_for_shape(_provider_config(upstream_model, provider), fields)
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -501,7 +511,7 @@ def prepare_call(
     resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
-            message=f"Missing API key for Decisions provider '{provider}'",
+            message=provider_config.missing_api_key_message(provider),
             model=model,
             llm_provider=provider,
         )

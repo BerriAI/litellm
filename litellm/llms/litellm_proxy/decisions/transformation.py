@@ -1,10 +1,26 @@
+import math
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 
+import httpx
+from pydantic import TypeAdapter, ValidationError
+
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-from litellm.llms.openai.decisions.transformation import OpenAIDecisionsConfig, ir_to_openai_request
-from litellm.types.decisions import DecisionsAudio, DecisionsIRRequest, DecisionsVideo, UnsupportedDecisionsRequest
+from litellm.llms.openai.decisions.transformation import (
+    OpenAIDecisionsConfig,
+    ir_to_openai_request,
+)
+from litellm.types.decisions import (
+    DecisionsAudio,
+    DecisionsIRRequest,
+    DecisionsIRResponse,
+    DecisionsVideo,
+    UnsupportedDecisionsRequest,
+)
+
+_COST_ADAPTER: Final[TypeAdapter[float]] = TypeAdapter(float)
+_COST_HEADER: Final = "x-litellm-response-cost"
 
 
 def _wire_clip(clip: DecisionsAudio | DecisionsVideo) -> str | Mapping[str, str]:
@@ -18,9 +34,17 @@ def _media_fields(request: DecisionsIRRequest) -> Mapping[str, object]:
     }
 
 
-class LiteLLMProxyDecisionsConfig(OpenAIDecisionsConfig):
-    """A LiteLLM proxy serves /v1/decisions in the OpenAI format, with its own base URL and key."""
+def _response_cost(raw_response: httpx.Response) -> float | None:
+    if _COST_HEADER not in raw_response.headers:
+        return None
+    try:
+        cost: Final = _COST_ADAPTER.validate_python(raw_response.headers[_COST_HEADER])
+    except ValidationError:
+        return None
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
+
+class _LiteLLMProxyHop(BaseDecisionsConfig):
     api_base_env = ("LITELLM_PROXY_API_BASE",)
     api_key_env = ("LITELLM_PROXY_API_KEY",)
 
@@ -29,6 +53,9 @@ class LiteLLMProxyDecisionsConfig(OpenAIDecisionsConfig):
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return "api_base is required for the LiteLLM proxy, set api_base or LITELLM_PROXY_API_BASE"
+
+    def missing_api_key_message(self, custom_llm_provider: str) -> str:
+        return "Missing API key for the LiteLLM proxy, set api_key or LITELLM_PROXY_API_KEY"
 
     def resolve_api_base(self, api_base: str | None) -> str | None:
         return BaseDecisionsConfig.resolve_api_base(self, api_base)
@@ -51,6 +78,31 @@ class LiteLLMProxyDecisionsConfig(OpenAIDecisionsConfig):
 
     def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
         return True
+
+    def transform_decisions_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        raw_response: httpx.Response,
+        request: DecisionsIRRequest,
+    ) -> DecisionsIRResponse:
+        response: Final = super().transform_decisions_response(model, custom_llm_provider, raw_response, request)
+        return replace(response, reported_cost=_response_cost(raw_response))
+
+    def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
+        return response.reported_cost
+
+
+class LiteLLMProxySystemOneConfig(_LiteLLMProxyHop):
+    supports_images = True
+
+    def supports_assets(self, headers: Mapping[str, str]) -> bool:
+        return True
+
+
+class LiteLLMProxyDecisionsConfig(_LiteLLMProxyHop, OpenAIDecisionsConfig):
+    def systemone_config(self) -> BaseDecisionsConfig:
+        return LiteLLMProxySystemOneConfig()
 
     def transform_decisions_request(
         self,

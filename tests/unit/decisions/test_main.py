@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import copy
 import json
 import re
@@ -463,14 +462,63 @@ async def test_litellm_proxy_decisions_never_send_the_openai_key_to_the_proxy(
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
-    with contextlib.suppress(litellm.AuthenticationError):
+    with pytest.raises(litellm.AuthenticationError, match="set api_key or LITELLM_PROXY_API_KEY"):
         await litellm.adecisions(
             model=model,
             input="The package arrived broken.",
             questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
         )
 
-    assert "Bearer openai-key" not in {call.request.headers.get("authorization") for call in proxy_route.calls}
+    assert not proxy_route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("header", "billed"), [("0.00042", 0.00042), ("not-a-cost", None)])
+async def test_litellm_proxy_decisions_bill_the_cost_the_proxy_reports(
+    respx_mock: respx.MockRouter,
+    header: str,
+    billed: float | None,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE, headers={"x-litellm-response-cost": header}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert get_response_cost_from_hidden_params(response.hidden_params) == billed
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unchanged(
+    respx_mock: respx.MockRouter,
+) -> None:
+    decisions_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE
+    )
+    systemone_route: Final = respx_mock.post("https://proxy.example/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        state="review photo-1",
+        questions=_QUESTIONS,
+        assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert not decisions_route.called
+    sent: Final = json.loads(systemone_route.calls.last.request.content)
+    assert sent["model"] == "gemini/gemini-decision-1"
+    assert sent["questions"] == _QUESTIONS
+    assert sent["assets"] == {"photo-1": {"format": "png", "data_base64": "AA=="}}
+    assert systemone_route.calls.last.request.headers["authorization"] == "Bearer proxy-key"
+    assert response.answers["sentiment"].confidence == 0.8
 
 
 @pytest.mark.asyncio
