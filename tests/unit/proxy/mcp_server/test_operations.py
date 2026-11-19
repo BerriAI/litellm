@@ -1245,6 +1245,8 @@ async def test_tool_operation_raises_upstream_url_elicitation_required_with_data
 
 @pytest.mark.asyncio
 async def test_url_elicitation_output_guardrail_rewrites_only_message_strings_and_keeps_each_in_its_own_entry() -> None:
+    from datetime import datetime
+
     from mcp import MCPError
     from mcp.types import URL_ELICITATION_REQUIRED, CallToolResult, TextContent
 
@@ -1281,7 +1283,12 @@ async def test_url_elicitation_output_guardrail_rewrites_only_message_strings_an
 
     with patch.object(operations, "_run_post_mcp_call_guardrails", shout), pytest.raises(MCPError) as raised:
         await operations._relay_guarded_url_elicitation(
-            refuse(), logging_obj=None, original_auth=None, guardrail_auth=None, request_data={}
+            refuse(),
+            logging_obj=None,
+            original_auth=None,
+            guardrail_auth=None,
+            request_data={},
+            start_time=datetime.now(),
         )
     assert "consent for a" not in "".join(traceback.format_exception(raised.value))
     assert raised.value.error.model_dump(exclude_none=True) == {

@@ -2532,6 +2532,7 @@ async def _execute_mcp_tool(
             original_auth=user_api_key_auth,
             guardrail_auth=effective_guardrail_auth,
             request_data=kwargs,
+            start_time=start_time,
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2643,6 +2644,7 @@ async def _relay_guarded_url_elicitation(
     original_auth: UserAPIKeyAuth | None,
     guardrail_auth: UserAPIKeyAuth | None,
     request_data: Mapping[str, object],
+    start_time: datetime,
 ) -> CallToolResult | InputRequiredResult:
     try:
         return await execution
@@ -2655,7 +2657,7 @@ async def _relay_guarded_url_elicitation(
         entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
         messages: Final = tuple(_elicitation_message(entry) for entry in entries)
         guarded: Final = tuple(index for index, message in enumerate(messages) if message is not None)
-        checked: Final = await _run_post_mcp_call_guardrails(
+        guarded_result: Final = await _run_post_mcp_call_guardrails(
             CallToolResult(
                 content=[
                     TextContent(type="text", text=error.error.message),
@@ -2666,6 +2668,16 @@ async def _relay_guarded_url_elicitation(
             original_auth=original_auth,
             guardrail_auth=guardrail_auth,
             request_data=request_data,
+        )
+        checked: Final = (
+            await logging_obj.async_post_mcp_tool_call_hook(  # pyright: ignore[reportUnknownMemberType]  # hook takes the logger's untyped call details
+                kwargs=logging_obj.model_call_details,
+                response_obj=guarded_result,
+                start_time=start_time,
+                end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
+            )
+            if logging_obj is not None
+            else guarded_result
         )
         texts: Final = tuple(TextContent.model_validate(block).text for block in checked.content)
         replaced: Final = dict(zip(guarded, texts[1:], strict=True))

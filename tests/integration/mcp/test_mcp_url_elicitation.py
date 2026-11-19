@@ -13,7 +13,8 @@ from typing import Final, Literal
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, eventually
+import yaml
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
     INITIALIZE,
@@ -32,8 +33,8 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.oauth_server import oauth_server
-from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
-from integration._support.wire import Reply
+from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy, owned_proxy_process
+from integration._support.wire import Reply, Wire, wire_server
 from mcp import ClientSession, MCPError
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
@@ -798,3 +799,110 @@ def test_failure_log_of_a_masked_elicitation_never_stores_the_unmasked_message(g
             return_last_on_timeout=True,
         )
         assert [(REDACTED in str(row["logged"]), email in str(row["logged"])) for row in rows] == [(True, False)], rows
+
+
+BLOCKED_NONCE: Final = "refuse-this-call"
+REWRITTEN: Final = "[REWRITTEN]"
+_HOOKS_CODE: Final = """\
+import asyncio
+
+import httpx
+from fastapi import HTTPException
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
+from mcp.types import TextContent
+
+
+class SlowRefusal(CustomGuardrail):
+    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+        await asyncio.sleep(0.3)
+        if "{blocked}" in str(data.get("mcp_arguments")):
+            raise HTTPException(status_code=400, detail="refused by the during-call guardrail")
+
+
+class Rewriter(CustomLogger):
+    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
+        texts = [block.text for block in response_obj.mcp_tool_call_response]
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post("{sink}", json={{"texts": texts}})
+        response_obj.mcp_tool_call_response = [
+            TextContent(type="text", text=text.replace("{rewrite}", "{rewritten}")) for text in texts
+        ]
+        return response_obj
+
+
+rewriter = Rewriter()
+"""
+REWRITE: Final = "rewrite.me@example.com"
+
+
+@pytest.fixture(scope="module")
+def hooked(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Wire]]:
+    directory: Final = tmp_path_factory.mktemp("elicitation-hooks")
+    with wire_server(lambda _: Reply()) as sink:
+        (directory / "elicitation_hooks.py").write_text(
+            _HOOKS_CODE.format(blocked=BLOCKED_NONCE, sink=sink.url, rewrite=REWRITE, rewritten=REWRITTEN)
+        )
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        path: Final = directory / "config.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    **config,
+                    "guardrails": [
+                        {
+                            "guardrail_name": "slow-refusal",
+                            "litellm_params": {
+                                "guardrail": "elicitation_hooks.SlowRefusal",
+                                "mode": "during_mcp_call",
+                                "default_on": True,
+                            },
+                        }
+                    ],
+                    "litellm_settings": {**config["litellm_settings"], "callbacks": ["elicitation_hooks.rewriter"]},
+                }
+            )
+        )
+        with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path) as candidate:
+            yield candidate, sink
+
+
+def _sunk_texts(sink: Wire, marker: str) -> list[list[str]]:
+    seen: Final = [json.loads(request.body)["texts"] for request in sink.drain()]
+    return [texts for texts in seen if marker in "".join(texts)]
+
+
+def test_blocking_during_call_guardrail_slower_than_the_elicitation_still_blocks_the_caller(
+    hooked: tuple[Gateway, Wire],
+) -> None:
+    gateway: Final = hooked[0]
+    with _granted(gateway, _consent_tool()) as (upstream, alias, _, key):
+        caller: Final = McpCaller(gateway, key, "mcp", alias)
+        blocked: Final = caller.call(f"{alias}-consent", {"nonce": BLOCKED_NONCE})
+        assert (blocked.status, blocked.text, blocked.error) == (
+            200,
+            "Error: refused by the during-call guardrail",
+            "Error: refused by the during-call guardrail",
+        ), blocked.raw
+        assert "consent.example.invalid" not in blocked.raw, blocked.raw
+        nonce: Final = uuid.uuid4().hex
+        relayed: Final = caller.call(f"{alias}-consent", {"nonce": nonce})
+        assert relayed.error is not None and json.loads(relayed.error) == _elicitation(nonce), relayed.raw
+        assert _upstream_nonces(upstream) == sorted([BLOCKED_NONCE, nonce])
+
+
+def test_post_tool_call_logger_hook_rewrites_the_relayed_elicitation_messages_once_and_not_the_url(
+    hooked: tuple[Gateway, Wire],
+) -> None:
+    gateway, sink = hooked
+    with _granted(gateway, *_addressed_tools(REWRITE)) as (_, alias, _identity, key):
+        caller: Final = McpCaller(gateway, key, "mcp", alias)
+        nonce: Final = uuid.uuid4().hex
+        sink.drain()
+        outcome: Final = caller.call(f"{alias}-consent", {"nonce": nonce})
+        assert outcome.error is not None and json.loads(outcome.error) == _addressed_elicitation(
+            nonce, REWRITTEN, REWRITE
+        ), outcome.raw
+        assert _sunk_texts(sink, "Authorize to continue") == [
+            [f"Authorize to continue for {REWRITE}.", f"Sign in as {REWRITE}."]
+        ]
