@@ -23,6 +23,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -41,6 +42,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1243,22 +1245,31 @@ async def test_tool_operation_raises_upstream_url_elicitation_required_with_data
     assert raised.value.error.data == data
 
 
+class _ShoutingOutputGuardrail(CustomGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return {**inputs, "texts": [text.upper() for text in inputs.get("texts", [])]}
+
+
+@pytest.fixture
+def shouting_output_guardrail(monkeypatch: pytest.MonkeyPatch):
+    shout: Final = _ShoutingOutputGuardrail(
+        guardrail_name="shout", event_hook=GuardrailEventHooks.post_mcp_call, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [shout])
+    yield
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
 @pytest.mark.asyncio
-async def test_url_elicitation_output_guardrail_rewrites_only_message_strings_and_keeps_each_in_its_own_entry() -> None:
+async def test_url_elicitation_output_guardrail_rewrites_only_message_strings_and_keeps_each_in_its_own_entry(
+    shouting_output_guardrail: None,
+) -> None:
     from datetime import datetime
 
     from mcp import MCPError
-    from mcp.types import URL_ELICITATION_REQUIRED, CallToolResult, TextContent
+    from mcp.types import URL_ELICITATION_REQUIRED, CallToolResult
 
     from litellm.proxy.mcp_server import operations
-
-    async def shout(result: CallToolResult, **_: object) -> CallToolResult:
-        return CallToolResult(
-            content=[
-                TextContent(type="text", text=TextContent.model_validate(block).text.upper())
-                for block in result.content
-            ]
-        )
 
     async def refuse() -> CallToolResult:
         raise MCPError(
@@ -1281,14 +1292,14 @@ async def test_url_elicitation_output_guardrail_rewrites_only_message_strings_an
             },
         )
 
-    with patch.object(operations, "_run_post_mcp_call_guardrails", shout), pytest.raises(MCPError) as raised:
+    with pytest.raises(MCPError) as raised:
         await operations._relay_guarded_url_elicitation(
             refuse(),
             logging_obj=None,
             original_auth=None,
             guardrail_auth=None,
             request_data={},
-            start_time=datetime.now(),
+            start_time=datetime(2026, 1, 1),
         )
     assert "consent for a" not in "".join(traceback.format_exception(raised.value))
     assert raised.value.error.model_dump(exclude_none=True) == {
