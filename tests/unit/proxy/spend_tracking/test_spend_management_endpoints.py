@@ -258,7 +258,7 @@ def make_ui_spend_logs_mock_prisma(
     """
 
     class MockDB:
-        async def find_many(self, *, where, **kwargs):
+        async def find_many(self, *, where: dict[str, object], **kwargs: object) -> list[dict[str, object]]:
             return filter_fn(where)
 
         async def count(self, *args, **kwargs):
@@ -277,8 +277,51 @@ def make_ui_spend_logs_mock_prisma(
         async def query_raw(self, sql_query, *params):
             if query_observer is not None:
                 query_observer(sql_query, params)
+            if "rows_read" in sql_query:
+                filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
+                return _session_read_rows(
+                    [
+                        {
+                            "session_key": row["session_id"],
+                            "api_key": row["api_key"],
+                            "last_activity": "2024-06-01 00:00:00",
+                        }
+                        for row in filtered
+                    ],
+                    len(filtered),
+                )
             if "mcp_tool_call_count" in sql_query:
-                return []
+
+                def scoped_rows(query: str) -> list[dict[str, object]]:
+                    organization = re.search(r"organization_id = ANY\(\$(\d+)::text\[\]\)", query)
+                    return [
+                        row
+                        for row in mock_spend_logs
+                        if row.get("session_id") in params[0]
+                        and row.get("api_key") in params[1]
+                        and (
+                            organization is None or row.get("organization_id") in params[int(organization.group(1)) - 1]
+                        )
+                    ]
+
+                totals_sql, models_sql = sql_query.split("LEFT JOIN LATERAL", 1)
+                return [
+                    {
+                        "session_id": session_id,
+                        "api_key": api_key,
+                        "session_total_count": len(group),
+                        "session_total_spend": sum(row.get("spend", 0) for row in group),
+                        "session_models": sorted({row["model"] for row in scoped_rows(models_sql) if row.get("model")}),
+                    }
+                    for session_id, api_key in {(row["session_id"], row["api_key"]) for row in scoped_rows(totals_sql)}
+                    for group in [
+                        [
+                            row
+                            for row in scoped_rows(totals_sql)
+                            if (row["session_id"], row["api_key"]) == (session_id, api_key)
+                        ]
+                    ]
+                ]
             if 'SELECT DISTINCT "user", team_id' in sql_query:
                 return _emulate_spend_log_owner_lookup(mock_spend_logs, sql_query, params)
             if 'FROM "LiteLLM_DailyUserSpend"' in sql_query or 'FROM "LiteLLM_DailyTeamSpend"' in sql_query:
@@ -290,6 +333,13 @@ def make_ui_spend_logs_mock_prisma(
             if "COUNT(*)" in sql_query:
                 cap_plus_one = params[-1]
                 return [{"total_count": min(total, cap_plus_one)}]
+            if "unnest(" in sql_query:
+                return [
+                    row
+                    for row in filtered
+                    if (row.get("session_id") or row.get("request_id"), row.get("api_key"))
+                    in tuple(zip(params[-2], params[-1]))
+                ]
             page_size = params[-2] if len(params) >= 2 else 50
             skip = params[-1] if len(params) >= 1 else 0
             exact_first = re.search(r"ORDER BY \(request_id = \$(\d+)\) DESC", sql_query)
@@ -5202,9 +5252,10 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
 
     def filter_by_error_code_and_key_alias(where):
         metadata_filter = where.get("metadata", {})
-        if metadata_filter.get("path") == ["error_information", "error_code"] and str(
-            metadata_filter.get("equals", "")
-        ).strip('"') == "500":
+        if (
+            metadata_filter.get("path") == ["error_information", "error_code"]
+            and str(metadata_filter.get("equals", "")).strip('"') == "500"
+        ):
             return [mock_spend_logs[2]]
         return mock_spend_logs
 
@@ -6143,8 +6194,27 @@ def test_view_spend_logs_deleted_key_filter_preserves_user_scope(
 def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    mock_client: Final = _CapturePrismaClient(
-        organization_memberships=(SimpleNamespace(organization_id="org-a", user_role=LitellmUserRoles.ORG_ADMIN.value),)
+    rows: Final = [
+        {"request_id": request_id, "organization_id": org, "user": user, "api_key": "hashed-key", "spend": 1}
+        for request_id, org, user in (
+            ("own", "org-a", "member-1"),
+            ("other-org", "org-b", "member-1"),
+            ("other-user", "org-a", "member-2"),
+        )
+    ]
+
+    def filtered(where: Mapping[str, object]) -> list[dict[str, object]]:
+        organizations: Final = TypeAdapter(dict[str, tuple[str, ...]]).validate_python(where.get("organization_id"))
+        return [
+            row for row in rows if row["organization_id"] in organizations["in"] and row["user"] == where.get("user")
+        ]
+
+    mock_client: Final = make_ui_spend_logs_mock_prisma(
+        rows,
+        filtered,
+        organization_memberships=(
+            SimpleNamespace(organization_id="org-a", user_role=LitellmUserRoles.ORG_ADMIN.value),
+        ),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -6158,8 +6228,110 @@ def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(
             headers={"Authorization": "Bearer sk-test"},
         )
         assert response.status_code == 200, response.text
-        assert mock_client.db.captured_where["user"] == "member-1"
-        assert mock_client.db.captured_where["organization_id"] == {"in": ["org-a"]}
+        assert [row["request_id"] for row in response.json()] == ["own"], response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2", "/spend/logs/ui"])
+def test_org_admin_key_scoped_reads_keep_unassigned_and_other_organization_rows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    rows: Final = [
+        {"request_id": request_id, "organization_id": organization, "api_key": api_key, "user": "admin-1", "spend": 1}
+        for request_id, organization, api_key in (
+            ("unassigned", None, "hashed-key"),
+            ("other-org", "org-b", "hashed-key"),
+            ("other-key", None, "different-key"),
+        )
+    ]
+
+    def filtered(where: Mapping[str, object]) -> list[dict[str, object]]:
+        organizations: Final = TypeAdapter(dict[str, tuple[str, ...]] | None).validate_python(
+            where.get("organization_id")
+        )
+        return [
+            row
+            for row in rows
+            if row["api_key"] == where.get("api_key")
+            and (organizations is None or row["organization_id"] in organizations["in"])
+        ]
+
+    monkeypatch.setattr(ps, "prisma_client", make_ui_spend_logs_mock_prisma(rows, filtered))
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.ORG_ADMIN,
+        user_id="admin-1",
+        token="hashed-key",
+        allowed_routes=["/chat/completions"],
+    )
+    try:
+        response: Final = client.get(
+            route,
+            params={
+                "start_date": "2024-01-01 00:00:00" if route.endswith("/ui") else "2024-01-01",
+                "end_date": "2024-12-31 00:00:00" if route.endswith("/ui") else "2024-12-31",
+                "summarize": "false",
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        data: Final = body if route == "/spend/logs" else body["data"]
+        assert {row["request_id"] for row in data} == {"unassigned", "other-org"}, response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize("group_by_session", [False, True])
+def test_org_admin_session_totals_and_models_follow_stored_organizations(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, group_by_session: bool
+) -> None:
+    rows: Final = [
+        {
+            "request_id": request_id,
+            "organization_id": organization,
+            "api_key": "hashed-key",
+            "session_id": "shared-session",
+            "model": model,
+            "spend": spend,
+        }
+        for request_id, organization, model, spend in (
+            ("own", "org-a", "own-model", 1),
+            ("other", "org-b", "other-model", 10),
+            ("unassigned", None, "unassigned-model", 100),
+        )
+    ]
+
+    def filtered(where: Mapping[str, object]) -> list[dict[str, object]]:
+        organizations: Final = TypeAdapter(dict[str, tuple[str, ...]]).validate_python(where.get("organization_id"))
+        return [row for row in rows if row["organization_id"] in organizations["in"]]
+
+    monkeypatch.setattr(
+        ps,
+        "prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            rows,
+            filtered,
+            organization_memberships=(SimpleNamespace(organization_id="org-a", user_role="org_admin"),),
+        ),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.ORG_ADMIN, user_id="admin-1"
+    )
+    try:
+        response: Final = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-01-01 00:00:00",
+                "end_date": "2024-12-31 00:00:00",
+                "group_by_session": str(group_by_session).lower(),
+            },
+        )
+        assert response.status_code == 200, response.text
+        data: Final = response.json()["data"]
+        assert [
+            (row["request_id"], row["session_total_count"], row["session_total_spend"], row["session_models"])
+            for row in data
+        ] == [("own", 1, 1, ["own-model"])], response.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
