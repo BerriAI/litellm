@@ -497,6 +497,7 @@ class WildcardProbeScope:
     probe_one: ProbeOne = _probe_one
     order: ProbeOrder = _shuffled
     wait_for_deadline: WaitForDeadline = _wait_for_deadline
+    clock: Callable[[], float] = time.monotonic
 
 
 async def _bounded_probe(
@@ -526,7 +527,7 @@ def _probe_outcome(
 
 
 async def _probe_outcomes_by_deadline(
-    scope: WildcardProbeScope, probes: Sequence[Mapping[str, object]]
+    scope: WildcardProbeScope, probes: Sequence[Mapping[str, object]], timeout_seconds: float
 ) -> tuple[tuple[Mapping[str, object], tuple[_Endpoints, _Endpoints]], ...]:
     """Each probe's endpoints; one that started but was still running at the deadline is reported unhealthy.
 
@@ -542,7 +543,7 @@ async def _probe_outcomes_by_deadline(
     tasks: Final = tuple(
         asyncio.create_task(_bounded_probe(scope, probe, limit, event)) for probe, event in zip(ordered, started)
     )
-    _, pending = await scope.wait_for_deadline(tasks, scope.deadline_seconds)
+    _, pending = await scope.wait_for_deadline(tasks, timeout_seconds)
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
@@ -560,25 +561,53 @@ async def _probe_outcomes_by_deadline(
     )
 
 
-async def _save_wildcard_probes(prisma_client: "PrismaClient", checked_by: str, scope: WildcardProbeScope) -> None:
+def _probe_copy(probe: Mapping[str, object]) -> Mapping[str, object]:
+    params: Final = probe.get("litellm_params")
+    return {**probe, "litellm_params": dict(params) if isinstance(params, Mapping) else {}}
+
+
+def _one_probe_per_served_model(
+    probes: Sequence[Mapping[str, object]],
+) -> tuple[tuple[str | None, Mapping[str, object]], ...]:
+    """Published names that resolve to the same upstream model share one probe, run on a copy left free to change."""
+    first_by_model: Final = {_deployment_model(probe): probe for probe in reversed(probes)}
+    models: Final = dict.fromkeys(_deployment_model(probe) for probe in probes)
+    return tuple((model, _probe_copy(first_by_model[model])) for model in models)
+
+
+def _served_model_of(
+    probe: Mapping[str, object], by_model: Sequence[tuple[str | None, Mapping[str, object]]]
+) -> str | None:
+    return next(model for model, copy in by_model if copy is probe)
+
+
+def _as_served_model(endpoints: _Endpoints, served_model: str | None) -> _Endpoints:
+    return tuple({**endpoint, "model": served_model} for endpoint in endpoints)
+
+
+async def _save_wildcard_probes(
+    prisma_client: "PrismaClient", checked_by: str, scope: WildcardProbeScope, timeout_seconds: float
+) -> None:
     from litellm.proxy.health_endpoints._health_endpoints import save_background_health_checks_to_db
 
     try:
         probes: Final = public_wildcard_probe_deployments(scope.public_names, scope.router, scope.model_groups)
         if not probes:
             return
+        by_model: Final = _one_probe_per_served_model(probes)
         probe_start: Final = time.time()
-        outcomes: Final = await _probe_outcomes_by_deadline(scope, probes)
+        outcomes: Final = await _probe_outcomes_by_deadline(scope, tuple(c for _, c in by_model), timeout_seconds)
     except Exception as e:
         logger.warning("background_health_check_wildcard_probe_failed error=%r", e)
         return
     if not outcomes:
         return
+    served: Final = tuple((_served_model_of(probe, by_model), outcome) for probe, outcome in outcomes)
     await save_background_health_checks_to_db(
         prisma_client,
-        [probe for probe, _ in outcomes],
-        list(chain.from_iterable(healthy for _, (healthy, _) in outcomes)),
-        list(chain.from_iterable(unhealthy for _, (_, unhealthy) in outcomes)),
+        list(probes),
+        list(chain.from_iterable(_as_served_model(healthy, model) for model, (healthy, _) in served)),
+        list(chain.from_iterable(_as_served_model(unhealthy, model) for model, (_, unhealthy) in served)),
         probe_start,
         checked_by=checked_by,
     )
@@ -590,10 +619,21 @@ async def save_then_probe_public_wildcards(
     checked_by: str,
     scope: WildcardProbeScope | None,
 ) -> bool:
-    """Save the cycle's rows, then probe and save public wildcard models only if those rows were persisted."""
+    """Save the cycle's rows, then probe public wildcard models in what is left of the interval.
+
+    Probes run only when those rows were persisted, and only the cycle's save decides the result.
+    """
+    started: Final = scope.clock() if scope is not None else 0.0
     persisted: Final = await save_regular_rows()
-    if persisted and scope is not None:
-        await _save_wildcard_probes(prisma_client, checked_by, scope)
+    if not persisted or scope is None:
+        return persisted
+    remaining: Final = scope.deadline_seconds - (scope.clock() - started)
+    if remaining <= 0:
+        logger.warning(
+            "background_health_check_wildcard_probes_skipped no time left in the %ss interval", scope.deadline_seconds
+        )
+        return persisted
+    await _save_wildcard_probes(prisma_client, checked_by, scope, remaining)
     return persisted
 
 
