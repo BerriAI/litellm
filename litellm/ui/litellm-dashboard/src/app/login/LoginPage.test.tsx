@@ -114,6 +114,9 @@ describe("LoginPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
     });
+    expect(screen.getAllByAltText("LiteLLM")).toHaveLength(2);
+    expect(screen.getAllByAltText("LiteLLM")[0]).toHaveAttribute("src", "/ui/assets/logos/litellm_logo.png");
+    expect(screen.getAllByAltText("LiteLLM")[1]).toHaveAttribute("src", "/ui/assets/logos/litellm_logo_dark.png");
   });
 
   it("loads a fresh dashboard document when jwt is valid", async () => {
