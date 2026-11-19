@@ -165,3 +165,36 @@ def test_apistore_supported_endpoints_match_their_backup():
     assert root["chat_completions"] is True
     assert root["image_generations"] is False
     assert root["video_generations"] is False
+
+
+@pytest.mark.parametrize("text_completion", (False, True))
+def test_apistore_missing_key_rejects_before_openai_fallback(monkeypatch: pytest.MonkeyPatch, text_completion: bool):
+    monkeypatch.delenv("APISTORE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__regex=r"https://api\.apistore\.cloud/v1/.*").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.AuthenticationError, match="APISTORE_API_KEY"):
+            if text_completion:
+                litellm.text_completion(model="apistore/deepseek-v4-1-flash", prompt="Say hello")
+            else:
+                litellm.completion(
+                    model="apistore/deepseek-v4-1-flash", messages=[{"role": "user", "content": "Say hello"}]
+                )
+    assert route.call_count == 0
+
+
+def test_apistore_chat_completion_uses_authenticated_client(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("APISTORE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="apistore-client-key", base_url=_DEFAULT_API_BASE) as client:
+        with respx.mock() as upstream:
+            route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+            response: Final = litellm.completion(
+                model="apistore/deepseek-v4-1-flash", messages=[{"role": "user", "content": "Say hello"}], client=client
+            )
+    assert route.calls.last.request.headers["authorization"] == "Bearer apistore-client-key"
+    assert response.choices[0].message.content == "Hello from API Store"
