@@ -4447,6 +4447,85 @@ class _MistralCountTokensPeer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("prefix", ["ordinary", "single", "adjacent", "empty_first", "literal", "header_only", "style"])
+async def test_mistral_count_system_matches_the_generation_http_payload(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, prefix: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    before, after = {
+        "ordinary": (["answer=OK"], ["answer=OK"]),
+        "single": ([billing_a, "Be concise."], ["Be concise."]),
+        "adjacent": ([billing_a, billing_b, "answer=OK"], [billing_b, "answer=OK"]),
+        "empty_first": (["", billing_b, "Be concise."], ["", billing_b, "Be concise."]),
+        "literal": (
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+        ),
+        "header_only": ([billing_a], []),
+        "style": ([billing_a, "style=concise"], ["style=concise"]),
+    }[prefix]
+    system: Final = [{"type": "text", "text": text} for text in before] if as_blocks else "\n".join(before)
+    expected: Final = ("" if as_blocks else "\n").join(after)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        counted: Final = respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 57})
+        )
+        generated: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "mistral-large-4",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 57, "completion_tokens": 1, "total_tokens": 58},
+                },
+            )
+        )
+        assert (
+            await _input_tokens(
+                router, {"model": "mistral-agent", "messages": [{"role": "user", "content": "Hello"}], "system": system}
+            )
+            == 57
+        )
+        await litellm.anthropic.messages.acreate(
+            model="mistral/mistral-large-4",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "Hello"}],
+            system=system,
+            max_tokens=32,
+        )
+    sent: Final = json.loads(generated.calls.last.request.content)
+    assert sent["messages"] == ([{"role": "system", "content": expected}] if expected else []) + [
+        {"role": "user", "content": "Hello"}
+    ]
+    count_body: Final = json.loads(counted.calls.last.request.content)
+    assert count_body == {
+        "model": "mistral-large-4",
+        "input": (
+            [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": expected}]}]
+            if expected
+            else []
+        )
+        + [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_messages_count_tokens_sends_mistral_the_messages_the_inference_polyfill_edits() -> None:
     router: Final = Router(
         model_list=[
