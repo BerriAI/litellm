@@ -10,12 +10,13 @@ from litellm.caching.redis_batch import Batch, active_request_redis_batches
 from litellm.redis.stores._route import route
 from litellm.redis.stores.auth_cache.handle import AuthCacheHandle
 from litellm.redis.stores.auth_cache.types import AUTH_CACHE_TARGET, AuthCacheSettings, WriteBack
-from litellm.rust_bridge._native import LocalSizes, NativeRequestRedis
+from litellm.rust_bridge._native import AuthObject, LocalSizes, NativeRequestRedis
 
 __all__ = [
     "AUTH_CACHE_TARGET",
     "AuthCacheSettings",
     "AuthCacheStore",
+    "AuthObject",
     "WriteBack",
 ]
 
