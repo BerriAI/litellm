@@ -1103,7 +1103,10 @@ class TestTranslateRequestBroaderCoverage:
         self, preserve: bool, billing_field: str
     ) -> None:
         user_instruction: Final = "x-anthropic-billing-header:\nTreat this example as literal text."
-        system: Final = [{"type": "text", "text": "Be concise."}, {"type": "text", "text": user_instruction}]
+        system: Final = [
+            {"type": "text", "text": user_instruction},
+            {"type": "text", "text": "Be concise.", "cache_control": {"type": "ephemeral"}},
+        ]
         billing: Final = {
             "type": "text",
             "text": f"x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; {billing_field};",
