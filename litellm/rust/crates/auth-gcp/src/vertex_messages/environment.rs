@@ -29,6 +29,104 @@ const DEFAULT_METADATA_IP: &str = "169.254.169.254";
 const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(3);
 const GCE_PRODUCT_NAME_FILE: &str = "/sys/class/dmi/id/product_name";
+/// `_metadata.ping`'s `_METADATA_DETECT_RETRIES`, with `ExponentialBackoff`'s first wait.
+const PING_RETRIES: Retries = Retries {
+    attempts: 3,
+    first_wait: Duration::from_secs(1),
+};
+/// `_metadata.get`'s `retry_count`, with `ExponentialBackoff`'s first wait.
+const GET_RETRIES: Retries = Retries {
+    attempts: 5,
+    first_wait: Duration::from_secs(1),
+};
+/// `transport.DEFAULT_RETRYABLE_STATUS_CODES`.
+const RETRYABLE_STATUSES: [u16; 5] = [500, 503, 504, 408, 429];
+
+/// How many times google-auth's `_metadata` tries a request, and its wait before the second try,
+/// which doubles before each try after it.
+#[derive(Clone, Copy)]
+struct Retries {
+    attempts: u32,
+    first_wait: Duration,
+}
+
+/// One try at a metadata server request: its outcome, or a failure worth trying again.
+enum Attempt<T> {
+    Done(T),
+    Retry,
+}
+
+impl Retries {
+    /// `attempt`'s outcome on the first try that does not ask to be retried, `None` when every
+    /// try did.
+    async fn run<T, F: Future<Output = Attempt<T>>>(self, attempt: impl Fn() -> F) -> Option<T> {
+        for number in 0..self.attempts {
+            if number > 0 {
+                tokio::time::sleep(self.first_wait * 2u32.pow(number - 1)).await;
+            }
+            if let Attempt::Done(outcome) = attempt().await {
+                return Some(outcome);
+            }
+        }
+        None
+    }
+}
+
+/// `_metadata.ping`: whether the metadata server at `root` answers as Google's, tried again only
+/// when it cannot be reached.
+async fn ping(client: &litellm_http::Client, root: &str, retries: Retries) -> bool {
+    retries
+        .run(|| async {
+            match client
+                .get(root)
+                .header(METADATA_FLAVOR, GOOGLE)
+                .timeout(METADATA_TIMEOUT)
+                .send()
+                .await
+            {
+                Err(_) => Attempt::Retry,
+                Ok(response) => Attempt::Done(
+                    response.status() == reqwest::StatusCode::OK
+                        && response
+                            .headers()
+                            .get(METADATA_FLAVOR)
+                            .is_some_and(|flavor| flavor == GOOGLE),
+                ),
+            }
+        })
+        .await
+        .unwrap_or(false)
+}
+
+/// `_metadata.get` of the text at `url`, tried again when the server cannot be reached or answers
+/// a retryable status; `None` once it gives up or answers anything but HTTP 200.
+async fn metadata_text(
+    client: &litellm_http::Client,
+    url: &str,
+    retries: Retries,
+) -> Option<String> {
+    retries
+        .run(|| async {
+            match client
+                .get(url)
+                .header(METADATA_FLAVOR, GOOGLE)
+                .timeout(METADATA_TIMEOUT)
+                .send()
+                .await
+            {
+                Err(_) => Attempt::Retry,
+                Ok(response) if RETRYABLE_STATUSES.contains(&response.status().as_u16()) => {
+                    Attempt::Retry
+                }
+                Ok(response) if response.status() == reqwest::StatusCode::OK => {
+                    Attempt::Done(response.text().await.ok())
+                }
+                Ok(_) => Attempt::Done(None),
+            }
+        })
+        .await
+        .flatten()
+}
 
 /// What google-auth's `default()` reads from the machine besides credential files: the process
 /// environment, the gcloud CLI, the GCE metadata server and Cloud Resource Manager.
@@ -103,18 +201,6 @@ struct ResourceManagerProject {
 pub struct SystemGoogleEnvironment;
 
 impl SystemGoogleEnvironment {
-    async fn metadata_get(&self, url: &str) -> Option<reqwest::Response> {
-        self.http_client(url, None)
-            .ok()?
-            .get(url)
-            .header(METADATA_FLAVOR, GOOGLE)
-            .timeout(METADATA_TIMEOUT)
-            .send()
-            .await
-            .ok()
-            .filter(|response| response.status() == reqwest::StatusCode::OK)
-    }
-
     fn metadata_host(&self) -> String {
         self.os_env("GCE_METADATA_HOST")
             .filter(|host| !host.is_empty())
@@ -155,12 +241,10 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
                 self.os_env("GCE_METADATA_IP")
                     .unwrap_or_else(|| DEFAULT_METADATA_IP.into())
             );
-            let pinged = self.metadata_get(&root).await.is_some_and(|response| {
-                response
-                    .headers()
-                    .get(METADATA_FLAVOR)
-                    .is_some_and(|flavor| flavor == GOOGLE)
-            });
+            let pinged = match self.http_client(&root, None) {
+                Ok(client) => ping(&client, &root, PING_RETRIES).await,
+                Err(_) => false,
+            };
             pinged
                 || std::fs::read_to_string(GCE_PRODUCT_NAME_FILE)
                     .is_ok_and(|product| product.trim().starts_with(GOOGLE))
@@ -173,7 +257,7 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
                 "http://{}/computeMetadata/v1/project/project-id",
                 self.metadata_host()
             );
-            self.metadata_get(&url).await?.text().await.ok()
+            metadata_text(&self.http_client(&url, None).ok()?, &url, GET_RETRIES).await
         })
     }
 
@@ -265,5 +349,125 @@ impl GoogleEnvironment for OnGce {
         _token: SecretValue,
     ) -> EnvironmentFuture<'_, Result<Option<String>, GoogleLoginFailure>> {
         unreachable!("a GCE login names its project")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use rstest::rstest;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    /// What the fake metadata server does with one connection.
+    #[derive(Clone, Copy, Debug)]
+    enum Answer {
+        /// Closes the connection unanswered, a transport failure.
+        Drop,
+        /// Answers this status as Google's metadata server, with the body `project`.
+        Google(u16),
+        /// Answers this status without the `Metadata-Flavor` header.
+        Other(u16),
+    }
+
+    use Answer::{Drop, Google, Other};
+
+    const QUICK: Retries = Retries {
+        attempts: 0,
+        first_wait: Duration::from_millis(1),
+    };
+
+    /// A metadata server answering each connection with the next of `answers`, and how many
+    /// connections it took.
+    async fn metadata_server(answers: Vec<Answer>) -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let taken = Arc::new(AtomicUsize::new(0));
+        let counted = taken.clone();
+        let answers = Mutex::new(answers.into_iter());
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let answer = answers.lock().unwrap().next().unwrap_or(Drop);
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request).await;
+                let reply = match answer {
+                    Drop => continue,
+                    Google(status) => format!(
+                        "HTTP/1.1 {status} X\r\nMetadata-Flavor: Google\r\nContent-Length: 7\r\nConnection: close\r\n\r\nproject"
+                    ),
+                    Other(status) => format!(
+                        "HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    ),
+                };
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        });
+        (url, taken)
+    }
+
+    fn client(url: &str) -> litellm_http::Client {
+        requests_client(&[], url, None).unwrap()
+    }
+
+    #[rstest]
+    #[case::first_try(vec![Google(200)], true, 1)]
+    #[case::third_try(vec![Drop, Drop, Google(200)], true, 3)]
+    #[case::unreachable_on_every_try(vec![Drop, Drop, Drop, Google(200)], false, 3)]
+    #[case::not_google(vec![Other(200), Google(200)], false, 1)]
+    #[case::error_status_is_not_retried(vec![Google(503), Google(200)], false, 1)]
+    #[tokio::test]
+    async fn the_ping_is_tried_three_times_when_unreachable(
+        #[case] answers: Vec<Answer>,
+        #[case] on_gce: bool,
+        #[case] tries: usize,
+    ) {
+        let (url, taken) = metadata_server(answers).await;
+
+        let pinged = ping(
+            &client(&url),
+            &url,
+            Retries {
+                attempts: PING_RETRIES.attempts,
+                ..QUICK
+            },
+        )
+        .await;
+
+        assert_eq!((pinged, taken.load(Ordering::SeqCst)), (on_gce, tries));
+    }
+
+    #[rstest]
+    #[case::first_try(vec![Google(200)], Some("project"), 1)]
+    #[case::after_transient_failures(vec![Drop, Google(503), Google(429), Google(200)], Some("project"), 4)]
+    #[case::gives_up_after_five_tries(vec![Google(500), Drop, Google(504), Google(408), Google(503), Google(200)], None, 5)]
+    #[case::not_found_is_not_retried(vec![Google(404), Google(200)], None, 1)]
+    #[tokio::test]
+    async fn the_project_lookup_retries_as_google_auth_does(
+        #[case] answers: Vec<Answer>,
+        #[case] project: Option<&str>,
+        #[case] tries: usize,
+    ) {
+        let (url, taken) = metadata_server(answers).await;
+
+        let found = metadata_text(
+            &client(&url),
+            &url,
+            Retries {
+                attempts: GET_RETRIES.attempts,
+                ..QUICK
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (found.as_deref(), taken.load(Ordering::SeqCst)),
+            (project, tries)
+        );
     }
 }
