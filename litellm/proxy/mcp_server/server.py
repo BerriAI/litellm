@@ -2639,11 +2639,15 @@ if MCP_AVAILABLE:
                 send = MCPDebug.wrap_send_with_debug_headers(
                     send, _debug_headers, diagnostics.headers, request_method=scope.get("method")
                 )
+            import litellm
+            from litellm.integrations.custom_logger_v2.enums import Hook
+            from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
             from litellm.proxy.utils import ProxyLogging
 
             callback_capabilities: Final = ProxyLogging.callback_capabilities()
             if is_tool_call_request(body) and (
-                callback_capabilities.has_post_call_response_headers or callback_capabilities.has_v2
+                callback_capabilities.has_post_call_response_headers
+                or hook_subscribers(Hook.response_headers, litellm.callbacks, admit=Admit.every_entry).has_v2
             ):
                 callback_headers: Final = MCPCallbackResponseHeaders()
                 scope[MCP_CALLBACK_RESPONSE_HEADERS_SCOPE_KEY] = callback_headers  # rebind-ok: the tool call reads it

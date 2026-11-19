@@ -280,6 +280,7 @@ class HookRecorder(CustomLogger):
                 "model": data.get("model"),
                 "user_api_key": (data.get("metadata") or {{}}).get("user_api_key"),
                 "caller": user_api_key_dict.api_key,
+                "trace": (request_headers or {{}}).get("x-integration-trace"),
                 "response": None if response is None else response.model_dump(mode="json"),
             }}
         )
@@ -708,9 +709,42 @@ def test_an_adapter_returning_the_wrong_number_of_texts_fails_closed_before_the_
         assert _tool_metadata(rows[1])["arguments"] == {"record": COUNT_MISMATCH}, rows[1]
 
 
+_V2_HEADERS_CODE: Final = """\
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CustomLoggerV2, Field, Hook, Patch, on
+
+
+class ResponseHeaders(CustomLoggerV2):
+    @on(Hook.response_headers, writes={Field.response_headers})
+    async def headers(self, view, ctx):
+        return Patch().merge(Field.response_headers, {"x-v2-header": "v2-value"})
+
+
+litellm.callbacks.append(ResponseHeaders())
+loaded = CustomLogger()
+"""
+
+
+@pytest.fixture(scope="module")
+def v2_headers_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("v2-response-headers")
+    (directory / "v2_headers.py").write_text(_V2_HEADERS_CODE)
+    config: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config["litellm_settings"] = {
+        **object_value(config["litellm_settings"]),
+        "callbacks": ["v2_headers.loaded"],
+    }
+    path: Final = directory / "config.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path) as proxy:
+        yield proxy
+
+
 @dataclass(frozen=True, slots=True)
 class NativeCall:
     key: str
+    alias: str
     name: str
     result: dict[str, JsonValue]
     headers: Mapping[str, httpx.Headers]
@@ -728,7 +762,7 @@ def _native_lookup(gateway: Gateway, scenario: Scenario, peer: McpPeer, record: 
 
     async def run() -> NativeCall:
         client: Final = httpx.AsyncClient(
-            headers={"x-litellm-api-key": key, "x-mcp-servers": alias},
+            headers={"x-litellm-api-key": key, "x-mcp-servers": alias, "x-integration-trace": alias},
             timeout=30,
             trust_env=False,
             event_hooks={"response": [remember]},
@@ -739,7 +773,7 @@ def _native_lookup(gateway: Gateway, scenario: Scenario, peer: McpPeer, record: 
                 await session.initialize()
                 name: Final = next(tool.name for tool in (await session.list_tools()).tools if "lookup" in tool.name)
                 result: Final = await session.call_tool(name, {"record": record})
-                return NativeCall(key, name, JSON_OBJECT.validate_python(result.model_dump(mode="json")), seen)
+                return NativeCall(key, alias, name, JSON_OBJECT.validate_python(result.model_dump(mode="json")), seen)
 
     return asyncio.run(run())
 
@@ -778,6 +812,7 @@ def test_native_tool_call_carries_callback_response_headers_and_the_result_a_gat
     saw: Final = _only(_native(sunk, "response_headers"))
     assert saw["model"] == f"MCP: {with_callback.name}", saw
     assert saw["user_api_key"] == saw["caller"] == _digest(with_callback.key), saw
+    assert saw["trace"] == with_callback.alias, saw
     assert saw["response"] == with_callback.result, saw
 
 
@@ -795,3 +830,11 @@ def test_native_tool_call_the_gateway_rejects_carries_callback_response_headers_
     saw: Final = _only(_native(sunk, "response_headers"))
     assert (saw["model"], saw["response"]) == (f"MCP: {blocked.name}", None), saw
     assert saw["user_api_key"] == saw["caller"] == _digest(blocked.key), saw
+
+
+def test_native_tool_call_carries_the_response_headers_a_v2_callback_merges(v2_headers_gateway: Gateway) -> None:
+    with scripted_peer(_lookup_tool()) as peer, v2_headers_gateway.scenario() as scenario:
+        called: Final = _native_lookup(v2_headers_gateway, scenario, peer, "r-1")
+    assert _texts(called.result["content"]) == ["found"], called.result
+    assert called.headers["tools/call"].get("x-v2-header") == "v2-value", called.headers
+    assert "x-v2-header" not in called.headers["tools/list"], called.headers
