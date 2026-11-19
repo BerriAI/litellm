@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Callable, Iterator, Mapping
 from itertools import chain
-from typing import Final
+from typing import Final, Literal, TypeAlias
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -5593,6 +5593,86 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
     assert [tool["toolSpec"]["name"] for tool in tool_request["toolConfig"]["tools"]] == ["json_tool_call"]
     assert "toolChoice" not in tool_request["toolConfig"]
     assert tool_params.get("fake_stream", False) is stream
+
+
+_CALLER_TEXT: Final = {"verbosity": "low", "format": {"type": "json_schema", "strict": False}}
+_SetNativeStructuredOutput: TypeAlias = Callable[[str, Literal["legacy", "bedrock", "default"] | None], None]
+
+
+def _gpt_params_from_response_format(model: str) -> Mapping[str, object]:
+    return AmazonConverseConfig().map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+def _gpt_params_from_caller_output_config(model: str) -> Mapping[str, object]:
+    return {
+        "outputConfig": AmazonConverseConfig()._create_output_config_for_response_format(
+            json_schema=CAPITAL_JSON_SCHEMA["schema"], name="capital"
+        )
+    }
+
+
+@pytest.mark.parametrize("native_params", [_gpt_params_from_response_format, _gpt_params_from_caller_output_config])
+def test_openai_gpt_native_json_schema_sets_text_format_strict(
+    set_native_structured_output: _SetNativeStructuredOutput,
+    native_params: Callable[[str], Mapping[str, object]],
+) -> None:
+    model: Final = "global.openai.gpt-6-luna"
+    set_native_structured_output(model, "legacy")
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params={**native_params(model), "text": _CALLER_TEXT},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert request["additionalModelRequestFields"]["text"] == {
+        "verbosity": "low",
+        "format": {"type": "json_schema", "strict": True},
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model", "expected_text"),
+    [
+        ("team-model", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("openai-team-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("amazon-prod-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("team-model", "bedrock/us.anthropic.claude-sonnet-4-6", None),
+        ("us.amazon.nova-2-lite-v1:0", "bedrock/global.openai.gpt-6-luna", None),
+    ],
+)
+def test_custom_named_deployment_takes_text_format_strict_from_base_model(
+    model: str, base_model: str, expected_text: Mapping[str, object] | None
+) -> None:
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=dict(_gpt_params_from_caller_output_config(model)),
+        litellm_params={"base_model": base_model},
+        headers={},
+    )
+
+    assert request.get("additionalModelRequestFields", {}).get("text") == expected_text
+
+
+def test_anthropic_native_json_schema_sends_no_text_field(
+    set_native_structured_output: _SetNativeStructuredOutput,
+) -> None:
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "bedrock")
+
+    _, request = _converse_request_for_json_schema(model, False, {"thinking": ADAPTIVE_THINKING})
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert "text" not in request.get("additionalModelRequestFields", {})
 
 
 _JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}

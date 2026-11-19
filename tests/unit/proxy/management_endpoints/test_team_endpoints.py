@@ -19855,3 +19855,39 @@ async def test_team_reset_window_change_reaches_only_members_resetting_on_the_te
         data={"budget_duration": None, "budget_reset_at": None},
         where={"budget_id": {"in": ["on-team-window"]}},
     )
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_current_spend_per_budget_window():
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-window",
+        budget_limits=[{"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2026-08-16T00:00:00+00:00"}],
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+    get_current_spend = AsyncMock(return_value=6.5)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.get_current_spend", get_current_spend),
+        patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-window",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert json.loads(response["team_info"].model_dump_json())["budget_limits_usage"] == {"1d": {"current_spend": 6.5}}
+    get_current_spend.assert_awaited_once_with(
+        counter_key="spend:team:team-window:window:1d",
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Team",
+        window_entity_id="team-window",
+        window_duration="1d",
+        window_start=datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc),
+    )
