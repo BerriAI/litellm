@@ -2574,6 +2574,7 @@ class _FailedStep(_Step):
         "routing_plugins_left_nothing",
         "routing_plugins_need_async",
         "multiple_teams",
+        "multiple_model_groups",
         "reserved",
         "invalid_router_weights",
         "non_numeric_weight",

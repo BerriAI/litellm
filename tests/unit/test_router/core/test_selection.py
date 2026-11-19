@@ -24,6 +24,7 @@ from tests.unit.test_router.core.scripted_host import (
     server_error,
     timeout,
 )
+from tests.unit.test_router.core.selection_helpers import ids_of
 
 MESSAGES: Final = [{"role": "user", "content": "hello there, router"}]
 PICKS: Final = 60  # a shuffle misses a deployment in 20 picks about once in a thousand runs
@@ -659,3 +660,107 @@ async def test_a_registered_strategy_picks_every_deployment_an_endpoint_call_rea
     # The strategy picks from the whole group: no other core narrowed the pick before it.
     assert len(seen) == PICKS
     assert not any("_retry_skipped_deployment_ids" in request for request in seen)
+
+
+# --- a litellm model string several model groups share ------------------------------------------
+
+COLLISION_CHECK_ENV: Final = "LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK"
+SHARED_LITELLM_MODEL_LIST: Final = [
+    deployment("chain-a", "a", model="openai/shared"),
+    deployment("chain-b", "b", model="openai/shared"),
+    deployment("solo", "s1", model="openai/solo"),
+    deployment("solo", "s2", model="openai/solo"),
+]
+
+
+def _collision_core(
+    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch, env: str | None, flag: bool | None
+) -> RouterCore:
+    if env is None:
+        monkeypatch.delenv(COLLISION_CHECK_ENV, raising=False)
+    else:
+        monkeypatch.setenv(COLLISION_CHECK_ENV, env)
+    flag_argument: Final = {} if flag is None else {"enable_cross_model_group_collision_check": flag}
+    return make_core(model_list=SHARED_LITELLM_MODEL_LIST, model_group_alias={"alias-a": "chain-a"}, **flag_argument)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("specific_deployment", [False, True])
+@pytest.mark.parametrize(
+    ("env", "flag"),
+    [(None, None), (None, False), ("false", None), ("not-a-flag", None), ("true", False)],
+)
+async def test_a_litellm_model_shared_across_groups_spans_them_while_the_check_is_off(
+    make_core: MakeCore,
+    monkeypatch: pytest.MonkeyPatch,
+    env: str | None,
+    flag: bool | None,
+    specific_deployment: bool,
+) -> None:
+    core: Final = _collision_core(make_core, monkeypatch, env, flag)
+    healthy: Final = await core.select("openai/shared", kind="healthy", specific_deployment=specific_deployment)  # pyright: ignore[reportCallIssue]  # PythonCore's select takes keyword options
+    assert ids_of(healthy) == ["a", "b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("specific_deployment", [False, True])
+@pytest.mark.parametrize(("env", "flag"), [(None, True), ("true", None), ("TRUE", None), ("false", True)])
+async def test_a_litellm_model_shared_across_groups_is_refused_while_the_check_is_on(
+    make_core: MakeCore,
+    monkeypatch: pytest.MonkeyPatch,
+    env: str | None,
+    flag: bool | None,
+    specific_deployment: bool,
+) -> None:
+    core: Final = _collision_core(make_core, monkeypatch, env, flag)
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await core.select("openai/shared", specific_deployment=specific_deployment)  # pyright: ignore[reportCallIssue]  # PythonCore's select takes keyword options
+    assert raised.value.status_code == 400
+    assert raised.value.model == "openai/shared"
+    assert "multiple model groups" in str(raised.value)
+    assert "chain-" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "specific_deployment", "expected"),
+    [
+        ("openai/solo", False, ["s1", "s2"]),
+        ("openai/solo", True, ["s1", "s2"]),
+        ("chain-a", False, ["a"]),
+        ("b", False, ["b"]),
+        ("alias-a", False, ["a"]),
+    ],
+)
+async def test_the_collision_check_keeps_unambiguous_requests(
+    make_core: MakeCore,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    specific_deployment: bool,
+    expected: list[str],
+) -> None:
+    core: Final = _collision_core(make_core, monkeypatch, None, True)
+    healthy: Final = await core.select(name, kind="healthy", specific_deployment=specific_deployment)  # pyright: ignore[reportCallIssue]  # PythonCore's select takes keyword options
+    assert ids_of(healthy) == expected
+
+
+@pytest.mark.asyncio
+async def test_the_collision_check_leaves_an_unknown_model_unknown(
+    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core: Final = _collision_core(make_core, monkeypatch, None, True)
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await core.select("openai/none")
+    assert "There are no healthy deployments for this model" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_a_completion_naming_a_shared_litellm_model_reaches_no_deployment_while_the_check_is_on(
+    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch, host: ScriptedHost
+) -> None:
+    core: Final = _collision_core(make_core, monkeypatch, None, True)
+    with pytest.raises(litellm.BadRequestError):
+        await core.acompletion(model="openai/shared", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert host.calls == []
+    await core.acompletion(model="chain-a", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert host.deployments_called("acompletion") == ["a"]
