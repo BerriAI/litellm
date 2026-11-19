@@ -151,6 +151,17 @@ def test_whitespace_in_a_name_is_still_scanned(tmp_path: Path, name: str) -> Non
     assert result.stdout == f"VIOLATION {bundled} [BoringSSL] bundled crypto with no waiver\n" + FAIL_ONE
 
 
+def test_cryptography_wheel_with_its_own_openssl_fails(tmp_path: Path) -> None:
+    wheel: Final = _elf(
+        tmp_path / "root" / "site-packages/cryptography/hazmat/bindings/_rust.abi3.so", b"OpenSSL 4.0.1 9 Jun 2026"
+    )
+
+    result, _ = _scan(tmp_path, [tmp_path / "root"], inventory=[str(wheel)])
+
+    assert result.returncode == 1
+    assert result.stdout == f"VIOLATION {wheel} [bundled-OpenSSL] bundled crypto with no waiver\n" + FAIL_ONE
+
+
 @pytest.mark.parametrize("emit", [False, True], ids=["scan", "emit"])
 @pytest.mark.parametrize("folder", [False, True], ids=["file", "folder"])
 def test_newline_in_a_path_fails_before_scanning(tmp_path: Path, emit: bool, folder: bool) -> None:
