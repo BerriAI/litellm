@@ -58,7 +58,8 @@ export default function InternalAccess() {
   const { t } = useTranslation();
   const { accessToken, userRole, isViewOnly } = useAuthorized();
   const [teamId, setTeamId] = useState<string | null>(null);
-  if (!accessToken || !readsEveryApp(userRole, isViewOnly)) return <AdminOnlyNotice pageTitle={t("apps.internalAccess.title")} />;
+  if (!accessToken || !readsEveryApp(userRole, isViewOnly))
+    return <AdminOnlyNotice pageTitle={t("apps.internalAccess.title")} />;
   return (
     <main className="max-w-2xl space-y-5 px-6 py-5">
       <h1 className="text-lg font-semibold">{t("apps.internalAccess.title")}</h1>
