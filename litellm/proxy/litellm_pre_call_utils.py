@@ -1697,14 +1697,14 @@ def litellm_auth_header_name(headers: Headers) -> str:
 
 
 def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
-    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header
 
     forwarded: Final = clean_headers(headers, authenticated_with_header=litellm_auth_header_name(headers))
     return next(
         (
-            value.removeprefix("Bearer ")
+            token
             for header, value in forwarded.items()
-            if header.lower() == "authorization" and is_anthropic_oauth_key(value)
+            if header.lower() == "authorization" and (token := anthropic_oauth_token_from_header(value)) is not None
         ),
         None,
     )

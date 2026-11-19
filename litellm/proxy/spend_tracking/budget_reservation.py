@@ -343,7 +343,11 @@ async def _forwards_subscription_oauth(
     if request is None or not request.scope.get("headers"):
         return False
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
-    from litellm.proxy.litellm_pre_call_utils import forwarded_anthropic_oauth_token
+    from litellm.proxy.litellm_pre_call_utils import (
+        caller_alias_target,
+        forwarded_anthropic_oauth_token,
+        pre_call_served_model,
+    )
 
     if not any(is_anthropic_oauth_key(request.headers.get(name)) for name in ("authorization", "x-api-key")):
         return False
@@ -357,7 +361,14 @@ async def _forwards_subscription_oauth(
         return False
     if request_body.get("user_config") is not None:
         return False
-    from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+    from litellm.proxy.proxy_server import (
+        general_settings_view,
+        prisma_client,
+        proxy_config,
+        proxy_logging_obj,
+        user_model_view,
+    )
     from litellm.proxy.route_llm_request import router_settings_override_updates
 
     hierarchical_settings: Final = await proxy_config.get_hierarchical_router_settings(
@@ -384,11 +395,21 @@ async def _forwards_subscription_oauth(
             return False
     if forwarded_anthropic_oauth_token(request.headers) is None:
         return False
+    prepared_model: Final = resolve_inference_model(
+        caller_alias_target(model, valid_token, llm_router), general_settings_view(), user_model_view()
+    )
+    if not isinstance(prepared_model, str):
+        return False
+    served_model: Final = pre_call_served_model(
+        prepared_model,
+        valid_token,
+        hierarchical_settings.get("model_group_alias") if hierarchical_settings is not None else None,
+    )
     if llm_router is not None:
-        upstreams: Final = llm_router.registry().resolve(model, kind="upstreams", team_id=valid_token.team_id)
+        upstreams: Final = llm_router.registry().resolve(served_model, kind="upstreams", team_id=valid_token.team_id)
         return bool(upstreams) and all(provider == "anthropic" for _, provider in upstreams)
     try:
-        return litellm.get_llm_provider(model=model)[1] == "anthropic"
+        return litellm.get_llm_provider(model=served_model)[1] == "anthropic"
     except litellm.BadRequestError:
         return False
 

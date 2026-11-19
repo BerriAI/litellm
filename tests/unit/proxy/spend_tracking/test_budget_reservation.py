@@ -172,6 +172,79 @@ async def test_only_forwarded_subscription_oauth_skips_budget_hold(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions"])
+@pytest.mark.parametrize("source", ["bare", "bearer", "key", "team", "global", "group", "cli", "completion"])
+async def test_subscription_hold_uses_consumed_credential_and_prepared_model(
+    route: str,
+    source: str,
+    spend_counter_store: SpendCounterStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+            {
+                "model_name": "paid",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+        ]
+    )
+    identity: Final = _budgeted_token().model_copy(
+        update={
+            **({"aliases": {"claude": "paid"}} if source == "key" else {}),
+            **({"team_model_aliases": {"claude": "paid"}} if source == "team" else {}),
+            **({"router_settings": {"model_group_alias": {"claude": "paid"}}} if source == "group" else {}),
+        }
+    )
+    monkeypatch.setattr(litellm, "model_alias_map", {"claude": "paid"} if source == "global" else {})
+    monkeypatch.setattr(proxy_server, "user_model", "paid" if source == "cli" else None)
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"completion_model": "paid"} if source == "completion" else {}
+    )
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "operator-bearer")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    credential: Final = "sk-ant-oat-test" if source == "bare" else "Bearer sk-ant-oat-test"
+    result = await reserve_budget_for_request(
+        request_body={"model": "claude", "messages": ANTHROPIC_MESSAGES, "max_tokens": 1},
+        route=route,
+        llm_router=router,
+        valid_token=identity,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        request=Request(
+            {
+                "type": "http",
+                "path": route,
+                "headers": [
+                    (b"authorization", credential.encode()),
+                    (b"x-litellm-api-key", b"sk-test"),
+                ],
+            }
+        ),
+    )
+    if source == "bearer":
+        assert result is None
+        return
+    assert result is not None
+    assert result["reserved_cost"] > 0
+    await reconcile_budget_reservation(result, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("team, apply, expected", [(False, False, 2), (True, False, 0), (True, True, 2)])
 async def test_user_reservation_includes_each_window_only_when_user_budget_applies(
     team: bool, apply: bool, expected: int
