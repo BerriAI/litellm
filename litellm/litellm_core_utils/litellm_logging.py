@@ -1488,7 +1488,7 @@ class Logging(LiteLLMLoggingBaseClass):
         litellm_params: dict,
         optional_params: dict,
         model: str | None = None,
-        user: str | None = None,
+        user: object = None,
         **additional_params,
     ):
         self.optional_params = optional_params

@@ -19,7 +19,7 @@ import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -30,6 +30,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
@@ -953,21 +954,20 @@ _SCIM_DIRECTORY_METADATA_KEYS: Final = frozenset(
 )
 
 
-def _redact_scim_enterprise_metadata(
-    metadata: dict[str, object] | None,
-) -> dict[str, object] | None:
+def _redact_scim_enterprise_metadata(metadata: object) -> object:
     """SCIM enterprise attributes, entitlements, and roles are persisted in user
     metadata so reporting can group on them, but they are directory-only fields
     that generic user-info endpoints must not surface; SCIM clients read them
     through the SCIM endpoints."""
-    if not isinstance(metadata, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(metadata):
+    mapping: Final = as_str_mapping(metadata)
+    if not isinstance(mapping, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(mapping):
         return metadata
-    return {k: v for k, v in metadata.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
+    return {k: v for k, v in mapping.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
 
 
 def _build_user_info_response(
     user_id: str | None,
-    user_info: Any | None,
+    user_info: object,
     keys: Sequence[LiteLLM_VerificationToken] | None,
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
@@ -982,17 +982,15 @@ def _build_user_info_response(
     team_list.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     _user_info: Final = user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
-    if isinstance(_user_info, dict):
-        _user_info.pop("password", None)
-        _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
+    info_fields: Final = as_str_mapping(_user_info)
+    if isinstance(info_fields, dict):
+        info_fields.pop("password", None)
+        info_fields["metadata"] = _redact_scim_enterprise_metadata(info_fields.get("metadata"))
         if model_max_budget_usage is not None:
-            _user_info["model_max_budget_usage"] = model_max_budget_usage
+            info_fields["model_max_budget_usage"] = model_max_budget_usage
 
-    return UserInfoResponse(
-        user_id=user_id,
-        user_info=_user_info,
-        keys=returned_keys,
-        teams=team_list,
+    return UserInfoResponse.model_validate(
+        {"user_id": user_id, "user_info": _user_info, "keys": returned_keys, "teams": team_list}
     )
 
 
@@ -1263,34 +1261,38 @@ async def user_info_v2(
                 detail=f"User not found: {user_id}",
             )
 
-        user_data: Final = user_row.model_dump()
+        user_dump: Final = user_row.model_dump()
+        user_data: Final = decoded_json_object(user_dump)
+        row_user_id: Final = user_data.get("user_id", user_id)
 
-        return UserInfoV2Response(
-            user_id=user_data.get("user_id", user_id),
-            user_email=user_data.get("user_email"),
-            user_alias=user_data.get("user_alias"),
-            user_role=user_data.get("user_role"),
-            spend=user_data.get("spend", 0.0),
-            max_budget=user_data.get("max_budget"),
-            tpm_limit=user_data.get("tpm_limit"),
-            rpm_limit=user_data.get("rpm_limit"),
-            models=user_data.get("models") or [],
-            budget_duration=user_data.get("budget_duration"),
-            budget_limits=user_data.get("budget_limits"),
-            budget_reset_at=user_data.get("budget_reset_at"),
-            metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
-            created_at=user_data.get("created_at"),
-            updated_at=user_data.get("updated_at"),
-            sso_user_id=user_data.get("sso_user_id"),
-            teams=user_data.get("teams") or [],
-            object_permission=user_data.get("object_permission"),
-            model_max_budget=user_data.get("model_max_budget"),
-            model_max_budget_usage=await build_model_max_budget_usage(
-                entity_type=Litellm_EntityType.USER,
-                entity_id=user_data.get("user_id", user_id),
-                model_max_budget=user_data.get("model_max_budget"),
-                cache=model_max_budget_limiter.dual_cache,
-            ),
+        return UserInfoV2Response.model_validate(
+            {
+                "user_id": row_user_id,
+                "user_email": user_data.get("user_email"),
+                "user_alias": user_data.get("user_alias"),
+                "user_role": user_data.get("user_role"),
+                "spend": user_data.get("spend", 0.0),
+                "max_budget": user_data.get("max_budget"),
+                "tpm_limit": user_data.get("tpm_limit"),
+                "rpm_limit": user_data.get("rpm_limit"),
+                "models": user_data.get("models") or [],
+                "budget_duration": user_data.get("budget_duration"),
+                "budget_limits": user_data.get("budget_limits"),
+                "budget_reset_at": user_data.get("budget_reset_at"),
+                "metadata": _redact_scim_enterprise_metadata(user_data.get("metadata")),
+                "created_at": user_data.get("created_at"),
+                "updated_at": user_data.get("updated_at"),
+                "sso_user_id": user_data.get("sso_user_id"),
+                "teams": user_data.get("teams") or [],
+                "object_permission": user_data.get("object_permission"),
+                "model_max_budget": user_data.get("model_max_budget"),
+                "model_max_budget_usage": await build_model_max_budget_usage(
+                    entity_type=Litellm_EntityType.USER,
+                    entity_id=None if row_user_id is None else f"{row_user_id}",
+                    model_max_budget=user_dump.get("model_max_budget"),
+                    cache=model_max_budget_limiter.dual_cache,
+                ),
+            }
         )
     except Exception as e:
         if isinstance(e, HTTPException) and e.status_code < 500:
@@ -1607,7 +1609,7 @@ async def _update_single_user_helper(
     litellm_changed_by: str | None = None,
     password_prevalidated: bool = False,
     hibp_client: AsyncHTTPHandler | None = None,
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """
     Helper function to update a single user.
     Used by both user_update and bulk_user_update endpoints.
@@ -1723,7 +1725,7 @@ async def _update_single_user_helper(
         non_default_values["object_permission_id"] = None
 
     # Perform the update
-    response: dict[str, Any] | None = None
+    response: Mapping[str, object] | None = None
 
     if user_request.user_id and len(user_request.user_id) > 0:
         non_default_values["user_id"] = user_request.user_id
@@ -1950,11 +1952,13 @@ async def bulk_update_processed_users(
                 )
                 # Record success
                 results.append(
-                    UserUpdateResult(
-                        user_id=(response.get("user_id") if response else user_request.user_id),
-                        user_email=user_request.user_email,
-                        success=True,
-                        updated_user=response,
+                    UserUpdateResult.model_validate(
+                        {
+                            "user_id": (response.get("user_id") if response else user_request.user_id),
+                            "user_email": user_request.user_email,
+                            "success": True,
+                            "updated_user": response,
+                        }
                     )
                 )
                 successful_updates += 1

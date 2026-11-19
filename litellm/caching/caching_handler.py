@@ -322,7 +322,7 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
     return task
 
 
-def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+def _request_cache_key(request_kwargs: Mapping[str, object]) -> object:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
 
@@ -383,7 +383,7 @@ class LLMCachingHandler:
         self.async_streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
         self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
-        self.preset_cache_key: str | None = None
+        self.preset_cache_key: object = None
         self.original_function = original_function
         self.start_time = start_time
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
@@ -1494,7 +1494,7 @@ class LLMCachingHandler:
         self,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, object],
         cached_result: object,
         is_async: bool,
         is_embedding: bool = False,

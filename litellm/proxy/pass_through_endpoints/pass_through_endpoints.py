@@ -79,6 +79,8 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
+    has_attributes,
+    iter_items,
     require_attributes,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
@@ -4817,8 +4819,28 @@ def _get_pass_through_endpoints_from_config() -> list[PassThroughGenericEndpoint
     return returned_endpoints
 
 
-def _config_field_endpoints(response: ConfigFieldInfo) -> list[object] | None:
-    return response.field_value
+class _IdentifiedEndpoint(Protocol):
+    @property
+    def id(self) -> object: ...
+
+
+class _IndexAssignable(Protocol):
+    def __setitem__(self, index: int, value: object, /) -> None: ...
+
+
+class _PopsIndex(Protocol):
+    def pop(self, index: int, /) -> object: ...
+
+
+def _stored_endpoint_id(endpoint: object) -> object:
+    stored: Final = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
+    return require_attributes(stored, _IdentifiedEndpoint, "id").id
+
+
+def _index_assignable(endpoints: object) -> _IndexAssignable:
+    if has_attributes(endpoints, _IndexAssignable, "__setitem__"):
+        return endpoints
+    raise TypeError(f"'{type(endpoints).__name__}' object does not support item assignment")
 
 
 def _request_app(request: Request) -> FastAPI:
@@ -4841,14 +4863,14 @@ async def _get_pass_through_endpoints_from_db(
     except Exception:
         return []
 
-    pass_through_endpoint_data: Final = _config_field_endpoints(response)
+    pass_through_endpoint_data: Final = response.field_value
     if pass_through_endpoint_data is None:
         return []
 
     returned_endpoints: Final[list[PassThroughGenericEndpoint]] = []
     if endpoint_id is None:
         # Return all endpoints from DB, mark as not from config
-        for endpoint in pass_through_endpoint_data:
+        for endpoint in iter_items(pass_through_endpoint_data):
             if isinstance(endpoint, dict):
                 endpoint_dict = dict(endpoint)
                 endpoint_dict["is_from_config"] = False
@@ -5010,7 +5032,7 @@ async def update_pass_through_endpoints(
             detail={"error": "No pass-through endpoints found"},
         )
 
-    pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
+    pass_through_endpoint_data: Final = response.field_value
     if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=404,
@@ -5028,9 +5050,8 @@ async def update_pass_through_endpoints(
 
     # Find the index for updating the list
     endpoint_index = None
-    for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
-        if _endpoint.id == endpoint_id:
+    for idx, endpoint in enumerate(iter_items(pass_through_endpoint_data)):
+        if _stored_endpoint_id(endpoint) == endpoint_id:
             endpoint_index = idx
             break
 
@@ -5063,7 +5084,7 @@ async def update_pass_through_endpoints(
     updated_endpoint: Final = PassThroughGenericEndpoint.model_validate(endpoint_dict)
 
     # Update the list
-    pass_through_endpoint_data[endpoint_index] = endpoint_dict
+    _index_assignable(pass_through_endpoint_data)[endpoint_index] = endpoint_dict
     replaced_llm_api_routes: Final = InitPassThroughEndpointHelpers.llm_api_routes_of_endpoint(endpoint_id)
 
     ## Update db
@@ -5154,7 +5175,7 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    stored_endpoints: Final = _DECODED_JSON.validate_python(_config_field_endpoints(response))
+    stored_endpoints: Final = response.field_value
     endpoints_to_store: Final = [data_dict] if stored_endpoints is None else stored_endpoints
     if stored_endpoints is None:
         response.field_value = endpoints_to_store
@@ -5245,7 +5266,7 @@ async def delete_pass_through_endpoints(
         response = ConfigFieldInfo(field_name="pass_through_endpoints", field_value=None)
 
     ## Update field by removing endpoint
-    pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
+    pass_through_endpoint_data: Final = response.field_value
     if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,
@@ -5263,9 +5284,8 @@ async def delete_pass_through_endpoints(
 
     # Find the index for deleting from the list
     endpoint_index = None
-    for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
-        if _endpoint.id == endpoint_id:
+    for idx, endpoint in enumerate(iter_items(pass_through_endpoint_data)):
+        if _stored_endpoint_id(endpoint) == endpoint_id:
             endpoint_index = idx
             break
 
@@ -5276,7 +5296,7 @@ async def delete_pass_through_endpoints(
         )
 
     # Remove the endpoint
-    pass_through_endpoint_data.pop(endpoint_index)
+    require_attributes(pass_through_endpoint_data, _PopsIndex, "pop").pop(endpoint_index)
     response_obj: Final = found_endpoint
 
     # Remove routes from registry
@@ -5296,7 +5316,7 @@ async def delete_pass_through_endpoints(
 
 
 def _find_endpoint_by_id(
-    endpoints_data: list,
+    endpoints_data: object,
     endpoint_id: str,
 ) -> PassThroughGenericEndpoint | None:
     """
@@ -5309,7 +5329,7 @@ def _find_endpoint_by_id(
     Returns:
         Found endpoint or None if not found
     """
-    for endpoint in endpoints_data:
+    for endpoint in iter_items(endpoints_data):
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
             _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)

@@ -2059,13 +2059,14 @@ async def list_files(
         elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(data=data, credentials=credentials)
-            response = await litellm.afile_list(
+            routed_listing: Final = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
                 **data,
             )
 
             verbose_proxy_logger.debug("Listed files using model: %s", model_used)
+            response = _as_file_list_page(routed_listing)
 
         elif target_model_names and isinstance(target_model_names, str):
             target_model_name: Final = _single_target_model_name(target_model_names)
@@ -2083,10 +2084,12 @@ async def list_files(
                 operation_context="file list",
             )
             prepare_data_with_credentials(data=data, credentials=credentials)
-            response = await litellm.afile_list(
-                custom_llm_provider=credentials["custom_llm_provider"],
-                purpose=purpose,
-                **data,
+            response = _as_file_list_page(
+                await litellm.afile_list(
+                    custom_llm_provider=credentials["custom_llm_provider"],
+                    purpose=purpose,
+                    **data,
+                )
             )
         else:
             custom_llm_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)
@@ -2110,10 +2113,12 @@ async def list_files(
                     custom_llm_provider=resolved_custom_llm_provider,
                 )
 
-                response = await litellm.afile_list(
-                    custom_llm_provider=resolved_custom_llm_provider,
-                    purpose=purpose,
-                    **data,
+                response = _as_file_list_page(
+                    await litellm.afile_list(
+                        custom_llm_provider=resolved_custom_llm_provider,
+                        purpose=purpose,
+                        **data,
+                    )
                 )
 
         if response is None:
@@ -2121,7 +2126,6 @@ async def list_files(
                 status_code=500,
                 detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
             )
-        response = _as_file_list_page(response)  # rebind-ok: each dispatch branch above binds response
 
         ## POST CALL HOOKS ###
         _response: Final = await proxy_logging_obj.post_call_success_hook(

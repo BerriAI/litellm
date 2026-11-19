@@ -205,7 +205,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         request_data: MutableRequest,
         response: "LLMResponseTypes",
         call_type: "CallTypes | None",
-    ) -> "LLMResponseTypes | None":
+    ) -> object:
         """Restores the reply here only when the deployment pre-call hook redacted it.
 
         LiteLLM caches what this hook returns. Inside the proxy the request was redacted by

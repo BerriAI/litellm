@@ -5316,7 +5316,11 @@ def filter_out_litellm_params(
     return {key: value for key, value in kwargs.items() if key not in excluding and not is_litellm_owned_kwarg(key)}
 
 
-def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
+class _SupportsStartswith(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+def _provider_supports_vertex_params(custom_llm_provider: object) -> bool:
     if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
         return True
     try:
@@ -5332,8 +5336,8 @@ class PreProcessNonDefaultParams:
     def base_pre_process_non_default_params(
         passed_params: dict,
         special_params: Mapping[str, object],
-        custom_llm_provider: str,
-        additional_drop_params: list[str] | None,
+        custom_llm_provider: object,
+        additional_drop_params: object,
         default_param_values: dict,
         additional_endpoint_specific_params: list[str],
     ) -> dict:
@@ -5344,7 +5348,12 @@ class PreProcessNonDefaultParams:
                 continue
             if (
                 k.startswith("aws_")
-                and (custom_llm_provider != "bedrock" and not custom_llm_provider.startswith("sagemaker"))
+                and (
+                    custom_llm_provider != "bedrock"
+                    and not require_attributes(custom_llm_provider, _SupportsStartswith, "startswith").startswith(
+                        "sagemaker"
+                    )
+                )
                 or k == "hf_model_name"
                 and custom_llm_provider != "sagemaker"
                 or k.startswith("vertex_")

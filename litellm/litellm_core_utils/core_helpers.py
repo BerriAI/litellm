@@ -8,7 +8,7 @@ import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, overload, runtime_checkable
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -978,7 +978,7 @@ def independent_snapshot(
     return {key: _copied_value(key, value) for key, value in sanitized.items()}
 
 
-def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
+def filter_exceptions_from_params(data: object, max_depth: int = 20) -> object:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
 
@@ -1049,10 +1049,18 @@ def filter_internal_params(data: Mapping[str, _Value]) -> dict[str, _Value]:
     return {k: v for k, v in data.items() if k not in MCP_HANDLER_KWARG_NAMES}
 
 
+@overload
 def redact_nested_match_and_regex_keys(
     payload: dict | list[dict[str, object]] | str | None,
     keys: Collection[str] = ("match", "regex"),
-) -> dict | list[dict[str, object]] | str | None:
+) -> dict | list[dict[str, object]] | str | None: ...
+
+
+@overload
+def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = ("match", "regex")) -> object: ...
+
+
+def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = ("match", "regex")) -> object:
     """
     Deep-copy `payload` and replace every configured string field with "[REDACTED]"
     anywhere in nested dict/list structures.
@@ -1062,7 +1070,7 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[dict[str, object]] | str | None] = copy.deepcopy(payload)
+        redacted: Final = copy.deepcopy(payload)
     except Exception:
         return payload
 

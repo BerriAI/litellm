@@ -7173,7 +7173,7 @@ class PrismaClient:
                     include=include_object_permission,
                 )
                 verbose_proxy_logger.debug("\033[91m" + f"DB Token Table update succeeded {response}" + "\033[0m")
-                _data: dict = {}
+                _data: Mapping[str, object] = {}
                 if response is not None:
                     try:
                         _data = response.model_dump()

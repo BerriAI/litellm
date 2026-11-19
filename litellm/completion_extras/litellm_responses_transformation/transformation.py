@@ -1039,7 +1039,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return _flat_responses_tool_choice(choice_type, nested_name)
         return tool_choice
 
-    def _handle_raw_dict_response_item(self, item: dict[str, Any], index: int) -> tuple["Choices | None", int]:
+    def _handle_raw_dict_response_item(self, item: Mapping[str, object], index: int) -> tuple["Choices | None", int]:
         """
         Handle raw dict response items from Responses API (e.g., GPT-5 Codex format).
 
@@ -1050,7 +1050,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         Returns:
             Tuple of (Choice object or None, updated index)
         """
-        from litellm.types.utils import Choices, Message
+        from litellm.types.utils import Choices
 
         item_type: Final = item.get("type")
 
@@ -1070,12 +1070,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                             content_item.get("annotations", None)
                         )
-                        msg = Message(
-                            role=item.get("role", "assistant"),
-                            content=response_text if response_text else "",
-                            annotations=annotations,
+                        choice = Choices(
+                            message={
+                                "role": item.get("role", "assistant"),
+                                "content": response_text if response_text else "",
+                                "annotations": annotations,
+                            },
+                            finish_reason="stop",
+                            index=index,
                         )
-                        choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
 
         # function_call / custom_tool_call dicts are intercepted and accumulated by

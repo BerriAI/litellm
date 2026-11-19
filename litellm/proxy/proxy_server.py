@@ -7296,7 +7296,7 @@ class ProxyConfig:
                     litellm.priority_reservation_settings = PriorityReservationSettings.model_validate(value)
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
-                        value=value,
+                        value=_UNTYPED_VALUE.validate_python(value),
                         premium_user=premium_user,
                         config_file_path=config_file_path,
                         litellm_settings=litellm_settings,

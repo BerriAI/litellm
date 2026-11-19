@@ -104,7 +104,7 @@ class InMemoryCache(BaseCache):
     def _cache_keys(self) -> tuple[str, ...]:
         return tuple(self.cache_dict)  # pyright: ignore[reportUnknownVariableType]  # cache_dict is untyped legacy state
 
-    def _remove_key(self, key: str) -> None:
+    def _remove_key(self, key: object) -> None:
         """
         Remove a key from both cache_dict and ttl_dict
         """
@@ -290,7 +290,7 @@ class InMemoryCache(BaseCache):
     async def disconnect(self):
         pass
 
-    def delete_cache(self, key: str) -> None:
+    def delete_cache(self, key: object) -> None:
         self._remove_key(key)
 
     async def async_get_ttl(self, key: str) -> int | None:

@@ -3726,7 +3726,7 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
-    field_value: Any
+    field_value: object
     source: Literal["config", "db", "env", "default", "unset"] = "unset"
     editable: bool = True
 
