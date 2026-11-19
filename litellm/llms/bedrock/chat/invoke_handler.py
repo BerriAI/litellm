@@ -51,6 +51,8 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 from ..common_utils import (
     BedrockError,
     BedrockEventStreamResponseDict,
+    bedrock_answered_json,
+    bedrock_error_in_success_body,
     bedrock_event_chunk_text,
     bedrock_event_stream_header,
     bedrock_event_stream_response,
@@ -274,6 +276,12 @@ async def make_call(
                 response=response,
             )
 
+        if bedrock_answered_json(response):
+            await response.aread()
+            success_body_error: Final = bedrock_error_in_success_body(response)
+            if success_body_error is not None:
+                raise success_body_error
+
         if fake_stream:
             model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
                 model=model,
@@ -369,6 +377,12 @@ def make_sync_call(
                 headers=response.headers,
                 response=response,
             )
+
+        if bedrock_answered_json(response):
+            response.read()
+            success_body_error: Final = bedrock_error_in_success_body(response)
+            if success_body_error is not None:
+                raise success_body_error
 
         if fake_stream:
             model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(

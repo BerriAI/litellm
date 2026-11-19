@@ -153,6 +153,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_strict_tools_fallback,
     deployment_model_info,
     for_bedrock_json_tool_retry,
+    invoke_model_with_base_model_provider,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -4701,10 +4702,11 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             client=client,
         )
     else:
+        invoke_model: Final = invoke_model_with_base_model_provider(model, litellm_params.get("base_model"))
 
         def invoke_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
             return base_llm_http_handler.completion(
-                model=model,
+                model=invoke_model,
                 stream=stream,
                 messages=messages,
                 acompletion=acompletion,
@@ -4724,13 +4726,13 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
         invoke_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
         invoke_uses_native_output: Final = isinstance(
             provider_config, AmazonAnthropicClaudeConfig
-        ) and provider_config.uses_native_output(model, invoke_params, litellm_params)
+        ) and provider_config.uses_native_output(invoke_model, invoke_params, litellm_params)
         response = call_with_native_output_fallback(
             invoke_attempt,
             partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
             if invoke_uses_native_output
             else None,
-            model,
+            invoke_model,
             buffered_stream_fallback=(
                 partial(_buffered_stream_fallback, invoke_params, dict(litellm_params))
                 if invoke_uses_native_output

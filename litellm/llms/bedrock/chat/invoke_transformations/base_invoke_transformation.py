@@ -22,7 +22,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BEDROCK_SERVICE_TIER_HEADER, BedrockError
+from litellm.llms.bedrock.common_utils import (
+    BEDROCK_SERVICE_TIER_HEADER,
+    BedrockError,
+    bedrock_capability_model,
+    bedrock_error_in_success_body,
+)
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -72,9 +77,15 @@ class _InvokeServiceTierParams(TypedDict):
     serviceTier: NotRequired[ReadOnly[object]]
 
 
+class _InvokePromptParams(TypedDict):
+    hf_model_name: NotRequired[ReadOnly[object]]
+    base_model: NotRequired[ReadOnly[object]]
+
+
 _COHERE_INVOKE_RESPONSE: Final = TypeAdapter(_CohereInvokeResponse)
 _LLAMA_INVOKE_RESPONSE: Final = TypeAdapter(_LlamaInvokeResponse)
 _INVOKE_SERVICE_TIER_PARAMS: Final = TypeAdapter(_InvokeServiceTierParams)
+_INVOKE_PROMPT_PARAMS: Final = TypeAdapter(_InvokePromptParams)
 
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
@@ -217,12 +228,16 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
         custom_prompt_dict: Final[dict] = litellm_params.pop("custom_prompt_dict", None) or {}
-        hf_model_name: Final = litellm_params.get("hf_model_name", None)
+        prompt_params: Final = _INVOKE_PROMPT_PARAMS.validate_python(litellm_params)
+        hf_model_name: Final = prompt_params.get("hf_model_name")
 
         provider: Final = self.get_bedrock_invoke_provider(model)
+        prompt_model: Final = hf_model_name if isinstance(hf_model_name, str) and hf_model_name else model
 
         prompt, chat_history = self.convert_messages_to_prompt(
-            model=hf_model_name or model,
+            model=prompt_model
+            if prompt_model in custom_prompt_dict
+            else bedrock_capability_model(prompt_model, prompt_params.get("base_model")),
             messages=messages,
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
@@ -403,7 +418,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
-            raise BedrockError(
+            raise bedrock_error_in_success_body(raw_response) or BedrockError(
                 message=f"Error processing={raw_response.text}, Received error={e}",
                 status_code=422,
                 headers=raw_response.headers,
@@ -425,7 +440,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             else:
                 raise Exception()
         except Exception as e:
-            raise BedrockError(
+            raise bedrock_error_in_success_body(raw_response) or BedrockError(
                 message=f"Error parsing received text={outputText}.\nError-{e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,

@@ -22,7 +22,13 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
-from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
+from ..common_utils import (
+    BedrockError,
+    bedrock_answered_json,
+    bedrock_error_in_success_body,
+    error_response_text,
+    get_all_bedrock_regions,
+)
 from .invoke_handler import AWSEventStreamDecoder, make_call
 
 
@@ -67,6 +73,12 @@ def make_sync_call(
             headers=response.headers,
             response=response,
         )
+
+    if bedrock_answered_json(response):
+        response.read()
+        success_body_error: Final = bedrock_error_in_success_body(response)
+        if success_body_error is not None:
+            raise success_body_error
 
     if fake_stream:
         model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
@@ -326,7 +338,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if _stripped.startswith(_nova_prefix):
                     _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
                     break
-            modelId = self.encode_model_id(model_id=_model_for_id)
+            modelId = self.encode_model_id(model_id=self.without_provider_spec(_model_for_id))
             # Inject region extracted from model path so _get_aws_region_name picks it up
             if _region_from_model is not None and "aws_region_name" not in optional_params:
                 optional_params["aws_region_name"] = _region_from_model

@@ -151,6 +151,8 @@ from ..common_utils import (
     bedrock_model_known_to_accept_cache_points,
     bedrock_reasoning_effort_disabled,
     bedrock_rejects_stop_sequences,
+    bedrock_service_error,
+    bedrock_service_error_type,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
@@ -3359,6 +3361,9 @@ class AmazonConverseConfig(BaseConfig):
                 status_code=422,
                 headers=response.headers,
             )
+        service_error_type: Final = bedrock_service_error_type(completion_response)
+        if service_error_type is not None:
+            raise bedrock_service_error(service_error_type, response.headers)
 
         """
         Bedrock Response Object has optional message block

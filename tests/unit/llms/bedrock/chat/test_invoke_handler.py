@@ -6,6 +6,7 @@ import itertools
 import json
 import re
 import struct
+import urllib.parse
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -2189,6 +2190,482 @@ def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_c
     assert (plain.provider_specific_fields or {}).get("amazon-bedrock-trace") is None
     assert traced.provider_specific_fields is not None
     assert traced.provider_specific_fields["amazon-bedrock-trace"] == trace
+
+
+_ARN_ACCOUNT: Final = "arn:aws:bedrock:us-east-1:123456789012"
+_APPLICATION_PROFILE_ARN: Final = f"{_ARN_ACCOUNT}:application-inference-profile/a1b2c3d4e5f6"
+_NOVA_LOOKING_PROFILE_ARN: Final = f"{_ARN_ACCOUNT}:application-inference-profile/nova1meta2ab"
+_CLAUDE_INVOKE_ANSWER: Final = json.dumps(
+    {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+).encode()
+_CLAUDE_INVOKE_STREAM: Final = b"".join(
+    _bedrock_event_stream_frame(chunk)
+    for chunk in (
+        {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1, "output_tokens": 0}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    )
+)
+_UNKNOWN_OPERATION_BODY: Final = (
+    b'{"Output":{"__type":"com.amazon.coral.service#UnknownOperationException"},"Version":"1.0"}'
+)
+
+
+def _claude_invoke_upstream(arn: str, stream: bool) -> httpx.MockTransport:
+    operation: Final = "invoke-with-response-stream" if stream else "invoke"
+    expected_path: Final = f"/model/{urllib.parse.quote(arn, safe='')}/{operation}"
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        path: Final = request.url.raw_path.decode()
+        body: Final = json.loads(request.content)
+        if path != expected_path or "anthropic_version" not in body or body.get("stop_sequences") != ["END"]:
+            return httpx.Response(404, json={"message": f"unexpected request {path} {body}"}, request=request)
+        if stream:
+            return httpx.Response(
+                200,
+                content=_CLAUDE_INVOKE_STREAM,
+                headers={"content-type": "application/vnd.amazon.eventstream"},
+                request=request,
+            )
+        return httpx.Response(
+            200, content=_CLAUDE_INVOKE_ANSWER, headers={"content-type": "application/json"}, request=request
+        )
+
+    return httpx.MockTransport(answer)
+
+
+def _answer_text(response: object) -> str:
+    if isinstance(response, litellm.ModelResponse):
+        return response.choices[0].message.content or ""
+    assert isinstance(response, CustomStreamWrapper)
+    return "".join(chunk.choices[0].delta.content or "" for chunk in response)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.parametrize(
+    ("model", "arn", "deployment"),
+    [
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {},
+            id="application-profile",
+        ),
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_ARN_ACCOUNT}:provisioned-model/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:provisioned-model/a1b2c3d4e5f6",
+            {},
+            id="provisioned",
+        ),
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            {},
+            id="custom-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {"base_model": "bedrock/us.anthropic.claude-haiku-5-5"},
+            id="base-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {"model_info": {"base_model": "us.anthropic.claude-haiku-5-5"}},
+            id="model-info-base-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+            _APPLICATION_PROFILE_ARN,
+            {"base_model": "claude-haiku-5-5"},
+            id="claude-base-model-without-a-bedrock-prefix",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            {"base_model": "bedrock/meta.llama3-70b-instruct-v1:0"},
+            id="custom-model-arn-over-other-base-model",
+        ),
+        pytest.param(
+            f"bedrock/invoke/claude/{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            f"{_ARN_ACCOUNT}:custom-model/anthropic.claude-haiku-5-5/a1b2c3d4e5f6",
+            {},
+            id="custom-model-under-unlisted-spec",
+        ),
+        pytest.param(
+            f"bedrock/invoke/anthropic/{_NOVA_LOOKING_PROFILE_ARN}",
+            _NOVA_LOOKING_PROFILE_ARN,
+            {},
+            id="spec-over-provider-name-in-profile-id",
+        ),
+        pytest.param(
+            f"bedrock/invoke/{_NOVA_LOOKING_PROFILE_ARN}",
+            _NOVA_LOOKING_PROFILE_ARN,
+            {"base_model": "bedrock/us.anthropic.claude-haiku-5-5"},
+            id="base-model-over-provider-name-in-profile-id",
+        ),
+    ],
+)
+def test_an_arn_in_the_invoke_model_string_reaches_bedrock_as_the_encoded_model_id(
+    _aws_test_credentials: None, model: str, arn: str, deployment: Mapping[str, object], stream: bool
+) -> None:
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        stop=["END"],
+        stream=stream,
+        client=HTTPHandler(client=httpx.Client(transport=_claude_invoke_upstream(arn, stream))),
+        **deployment,
+    )
+
+    assert _answer_text(response) == "hi"
+
+
+def _no_upstream_call() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(500, json={"message": f"unexpected call to {request.url}"}, request=request)
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "deployment"),
+    [
+        pytest.param(f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}", {}, id="arn-without-base-model"),
+        pytest.param(
+            "bedrock/invoke/my-imported-model",
+            {"base_model": "bedrock/us.anthropic.claude-haiku-5-5"},
+            id="non-arn-with-base-model",
+        ),
+    ],
+)
+def test_an_invoke_model_with_no_provider_to_route_by_keeps_the_unknown_provider_error(
+    _aws_test_credentials: None, model: str, deployment: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.NotFoundError, match="Unknown provider=None"):
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=10,
+            client=HTTPHandler(client=httpx.Client(transport=_no_upstream_call())),
+            **deployment,
+        )
+
+
+def _unknown_operation_upstream() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=_UNKNOWN_OPERATION_BODY, headers={"content-type": "application/json"}, request=request
+        )
+    )
+
+
+def _assert_unknown_operation_is_a_bad_gateway(error: litellm.BadGatewayError) -> None:
+    assert error.status_code == 502
+    assert "com.amazon.coral.service#UnknownOperationException" in error.message
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/invoke/anthropic.claude-haiku-5-5",
+        "bedrock/invoke/mistral.mistral-large-2407-v1:0",
+        "bedrock/invoke/cohere.command-r-plus-v1:0",
+        "bedrock/invoke/us.amazon.nova-pro-v1:0",
+        "bedrock/converse/us.anthropic.claude-haiku-5-5",
+    ],
+)
+def test_a_200_unknown_operation_body_is_a_bad_gateway_error(
+    _aws_test_credentials: None, model: str, stream: bool
+) -> None:
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
+        _answer_text(
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10,
+                stream=stream,
+                client=HTTPHandler(client=httpx.Client(transport=_unknown_operation_upstream())),
+            )
+        )
+
+    _assert_unknown_operation_is_a_bad_gateway(exc_info.value)
+
+
+async def _drain_async_unknown_operation_stream() -> None:
+    stream: Final = await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-haiku-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        stream=True,
+        client=AsyncHTTPHandler(transport=_unknown_operation_upstream()),
+    )
+    _ = [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+async def test_a_200_unknown_operation_body_is_a_bad_gateway_error_on_an_async_stream(
+    _aws_test_credentials: None,
+) -> None:
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
+        await _drain_async_unknown_operation_stream()
+
+    _assert_unknown_operation_is_a_bad_gateway(exc_info.value)
+
+
+def test_the_router_retries_a_200_unknown_operation_body(_aws_test_credentials: None) -> None:
+    calls: Final = itertools.count()
+    replies: Final = (_UNKNOWN_OPERATION_BODY, _CLAUDE_INVOKE_ANSWER)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=replies[min(next(calls), 1)], headers={"content-type": "application/json"}, request=request
+        )
+
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "claude", "litellm_params": {"model": "bedrock/invoke/anthropic.claude-haiku-5-5"}}],
+        num_retries=1,
+        retry_after=0,
+    )
+    response: Final = router.completion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+    )
+
+    assert _answer_text(response) == "hi"
+    assert next(calls) == 2
+
+
+def test_a_tool_call_whose_arguments_carry_a_type_key_is_not_read_as_a_bedrock_error(
+    _aws_test_credentials: None,
+) -> None:
+    arguments: Final = {"__type": "Document", "title": "notes"}
+    tool_call_answer: Final = json.dumps(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "save", "input": arguments}],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    ).encode()
+    upstream: Final = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=tool_call_answer, headers={"content-type": "application/json"}, request=request
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/invoke/anthropic.claude-haiku-5-5",
+        messages=[{"role": "user", "content": "save my notes"}],
+        max_tokens=10,
+        client=HTTPHandler(client=httpx.Client(transport=upstream)),
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    tool_calls: Final = response.choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert json.loads(tool_calls[0].function.arguments) == arguments
+
+
+def _sent_invoke_body(model: str, deployment: Mapping[str, object]) -> object:
+    sent: Final[list[object]] = []  # mutable-ok: the scripted upstream records each body it receives
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200, content=_CLAUDE_INVOKE_ANSWER, headers={"content-type": "application/json"}, request=request
+        )
+
+    _ = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=3000,
+        reasoning_effort="low",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+        **deployment,
+    )
+    (body,) = sent
+    return body
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model",
+    [
+        f"bedrock/invoke/{_APPLICATION_PROFILE_ARN}",
+        f"bedrock/invoke/anthropic/{_APPLICATION_PROFILE_ARN}",
+        f"bedrock/invoke/{_ARN_ACCOUNT}:provisioned-model/nova1meta2ab",
+        f"bedrock/{_ARN_ACCOUNT}:provisioned-model/nova1meta2ab",
+    ],
+    ids=["arn", "arn-under-spec", "provisioned-arn", "provisioned-arn-without-a-route"],
+)
+def test_an_arn_with_base_model_sends_the_body_the_base_model_would_send(
+    _aws_test_credentials: None, model: str
+) -> None:
+    base_model: Final = "us.anthropic.claude-haiku-5-5"
+
+    arn_body: Final = _sent_invoke_body(model, {"base_model": f"bedrock/{base_model}"})
+
+    assert arn_body == _sent_invoke_body(f"bedrock/invoke/{base_model}", {})
+
+
+_CONVERSE_ANSWER: Final = json.dumps(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        "metrics": {"latencyMs": 1},
+    }
+).encode()
+
+
+def test_a_provider_spec_before_an_arn_on_converse_is_left_out_of_the_model_id(_aws_test_credentials: None) -> None:
+    expected_path: Final = f"/model/{urllib.parse.quote(_APPLICATION_PROFILE_ARN, safe='')}/converse"
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.raw_path.decode() != expected_path:
+            return httpx.Response(404, json={"message": f"unexpected path {request.url.raw_path}"}, request=request)
+        return httpx.Response(
+            200, content=_CONVERSE_ANSWER, headers={"content-type": "application/json"}, request=request
+        )
+
+    response: Final = litellm.completion(
+        model=f"bedrock/anthropic/{_APPLICATION_PROFILE_ARN}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+    )
+
+    assert _answer_text(response) == "hi"
+
+
+def _sent_body_before_a_refusal(model: str, deployment: Mapping[str, object], request: Mapping[str, object]) -> object:
+    sent: Final[list[object]] = []  # mutable-ok: the scripted upstream records each body it receives
+
+    def refuse(upstream_request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(upstream_request.content))
+        return httpx.Response(400, json={"message": "recorded"}, request=upstream_request)
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model=model,
+            max_tokens=10,
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(refuse))),
+            **{"messages": [{"role": "user", "content": "hi"}], **deployment, **request},
+        )
+    (body,) = sent
+    return body
+
+
+_STRICT_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+    },
+}
+_STRICT_JSON_SCHEMA: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "answer",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "required": ["a"],
+            "additionalProperties": False,
+        },
+    },
+}
+_HOUR_CACHED_SYSTEM_PROMPT: Final = [
+    {
+        "role": "system",
+        "content": [{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+    },
+    {"role": "user", "content": "hi"},
+]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "resource",
+    ["provisioned-model/abc123", "imported-model/abc123", "custom-model-deployment/abc123"],
+    ids=["provisioned", "imported", "custom-deployment"],
+)
+@pytest.mark.parametrize(
+    "request_params",
+    [{"tools": [_STRICT_TOOL]}, {"response_format": _STRICT_JSON_SCHEMA}, {"messages": _HOUR_CACHED_SYSTEM_PROMPT}],
+    ids=["strict-tools", "json-schema", "hour-cache"],
+)
+def test_a_converse_arn_that_names_no_model_sends_the_same_body_with_or_without_base_model(
+    _aws_test_credentials: None, resource: str, request_params: Mapping[str, object]
+) -> None:
+    model: Final = f"bedrock/converse/{_ARN_ACCOUNT}:{resource}"
+
+    with_base_model: Final = _sent_body_before_a_refusal(
+        model, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}, request_params
+    )
+
+    assert with_base_model == _sent_body_before_a_refusal(model, {}, request_params)
+
+
+@pytest.mark.parametrize(
+    ("spec", "base_model"),
+    [("openai", "bedrock/meta.llama3-70b-instruct-v1:0"), ("nova", "bedrock/us.anthropic.claude-haiku-5-5")],
+)
+def test_a_provider_written_before_an_arn_wins_over_base_model(
+    _aws_test_credentials: None, spec: str, base_model: str
+) -> None:
+    model: Final = f"bedrock/invoke/{spec}/{_ARN_ACCOUNT}:imported-model/abc123"
+
+    with_base_model: Final = _sent_body_before_a_refusal(model, {"base_model": base_model}, {})
+
+    assert with_base_model == _sent_body_before_a_refusal(model, {}, {})
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "reasoning",
+    [{"reasoning_effort": "low"}, {"thinking": {"type": "enabled", "budget_tokens": 1024}}],
+    ids=["reasoning-effort", "thinking"],
+)
+def test_a_param_an_arn_without_base_model_cannot_map_names_base_model_in_the_error(
+    _aws_test_credentials: None, reasoning: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="set `base_model` on the deployment"):
+        litellm.completion(
+            model=f"bedrock/invoke/anthropic/{_APPLICATION_PROFILE_ARN}",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=2048,
+            client=HTTPHandler(client=httpx.Client(transport=_no_upstream_call())),
+            **reasoning,
+        )
 
 
 NOVA_INVOKE_STREAM_EVENTS: Final = (

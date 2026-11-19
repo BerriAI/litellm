@@ -5862,6 +5862,14 @@ def _dropped_reasoning_warning(model: str, custom_llm_provider: str | None) -> s
     )
 
 
+def _unsupported_params_base_model_hint(model: str, base_model: str | None, custom_llm_provider: str | None) -> str:
+    from litellm.llms.bedrock.common_utils import bedrock_arn_names_no_model
+
+    if custom_llm_provider != "bedrock" or base_model or not bedrock_arn_names_no_model(model):
+        return ""
+    return " This ARN does not name its model, so set `base_model` on the deployment to the model it runs."
+
+
 def _warns_on_dropped_reasoning(value: object, model: str, custom_llm_provider: str | None) -> bool:
     return not (_turns_reasoning_off(value) and is_known_non_reasoning_model(model, custom_llm_provider))
 
@@ -5986,7 +5994,7 @@ def get_optional_params(
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
-                    message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
+                    message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}.{_unsupported_params_base_model_hint(model, base_model, custom_llm_provider)} To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
     bedrock_route: Final = (
@@ -6162,13 +6170,18 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        from litellm.llms.bedrock.common_utils import bedrock_capability_model, invoke_model_with_base_model_provider
+
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
+        routed_model: Final = (
+            invoke_model_with_base_model_provider(model, base_model) if bedrock_route == "invoke" else model
+        )
+        capability_model: Final = bedrock_capability_model(routed_model, base_model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
-            from litellm.llms.bedrock.common_utils import bedrock_capability_model
-
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                model=bedrock_capability_model(model, base_model),
+                model=capability_model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 drop_params=bool(drop_params),
@@ -6181,7 +6194,7 @@ def get_optional_params(
                 optional_params=optional_params,
                 drop_params=bool(drop_params),
             )
-        elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
+        elif bedrock_route == "invoke" and BaseAWSLLM.get_bedrock_invoke_provider(routed_model) == "anthropic":
             if bedrock_base_model in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names():
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
@@ -6193,14 +6206,14 @@ def get_optional_params(
                 optional_params = litellm.AmazonAnthropicClaudeConfig(model_info=model_info).map_openai_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
-                    model=model,
+                    model=capability_model,
                     drop_params=bool(drop_params),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=capability_model,
                 drop_params=bool(drop_params),
             )
             if bedrock_route == "claude_platform":
@@ -10098,7 +10111,7 @@ class ProviderConfigManager:
             # Format: (factory_function, needs_model_parameter: bool)
             LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
             LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
-            # AZURE is handled as a special case in get_provider_chat_config()
+            # AZURE and BEDROCK are handled as special cases in get_provider_chat_config()
             # so that base_model can be threaded through for model-type detection.
             LlmProviders.AZURE_AI: (
                 lambda model: ProviderConfigManager._get_azure_ai_config(model),
@@ -10106,10 +10119,6 @@ class ProviderConfigManager:
             ),
             LlmProviders.VERTEX_AI: (
                 lambda model: ProviderConfigManager._get_vertex_ai_config(model),
-                True,
-            ),
-            LlmProviders.BEDROCK: (
-                lambda model: ProviderConfigManager._get_bedrock_config(model),
                 True,
             ),
             LlmProviders.COHERE: (
@@ -10318,11 +10327,11 @@ class ProviderConfigManager:
             return litellm.VertexAILlama3Config()
 
     @staticmethod
-    def _get_bedrock_config(model: str) -> BaseConfig:
+    def _get_bedrock_config(model: str, base_model: str | None) -> BaseConfig:
         """Get Bedrock config based on model."""
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
-        return get_bedrock_chat_config(model=model)
+        return get_bedrock_chat_config(model=model, deployment_base_model=base_model)
 
     @staticmethod
     def _get_bigmodel_chat_config() -> BaseConfig:
@@ -10414,9 +10423,11 @@ class ProviderConfigManager:
             if not OpenAIGPTConfig.is_openai_catalog_model(model):
                 return OpenAIUnknownModelConfig()
 
-        # Handle Azure before the generic map so base_model can be threaded through
+        # Handle Azure and Bedrock before the generic map so base_model can be threaded through
         if provider == LlmProviders.AZURE:
             return ProviderConfigManager._get_azure_config(model=model, base_model=base_model)
+        if provider == LlmProviders.BEDROCK:
+            return ProviderConfigManager._get_bedrock_config(model=model, base_model=base_model)
 
         # Initialize provider config map lazily (avoids circular imports)
         if ProviderConfigManager._PROVIDER_CONFIG_MAP is None:
