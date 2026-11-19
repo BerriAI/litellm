@@ -55,6 +55,26 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
         logging_obj.record_bridged_responses_api_response(result)
 
 
+SYSTEM_PLACEMENT_PARAMS: Final = (
+    "additional_drop_params",
+    "store",
+    "extra_body",
+    "previous_response_id",
+    "conversation",
+    "truncation",
+)
+
+
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
+    dropped: Final = drop_policy(request_params).additional_drop_params
+    top_level: Final = {key: request_params.get(key) for key in SYSTEM_PLACEMENT_PARAMS if key not in dropped}
+    effective: Final = {**top_level, **extra_body}
+    return effective.get("store") is not False or bool(
+        effective.get("previous_response_id") or effective.get("conversation") or effective.get("truncation") == "auto"
+    )
+
+
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
     return extra_kwargs or {}
@@ -230,7 +250,9 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
+    system_instructions: Final = responses_kwargs.get("instructions")
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
@@ -273,6 +295,16 @@ def _build_responses_kwargs(
             responses_kwargs[key] = _without_background(extra_body)
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
+
+    caller_extra_body: Final = as_str_mapping(responses_kwargs.get("extra_body")) or {}
+    caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
+    if isinstance(system_instructions, str) and isinstance(caller_instructions, str):
+        combined_instructions: Final = (
+            f"{system_instructions}\n{caller_instructions}" if caller_instructions else system_instructions
+        )
+        responses_kwargs["instructions"] = combined_instructions
+        if "instructions" in caller_extra_body:
+            responses_kwargs["extra_body"] = {**caller_extra_body, "instructions": combined_instructions}
 
     explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
     if explicit_prompt_cache_key is not None:
