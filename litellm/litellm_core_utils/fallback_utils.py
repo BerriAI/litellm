@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.clientside_credential_handler import UPSTREAM_BOUND_PARAMS
+from litellm.litellm_core_utils.clientside_credential_handler import PROVIDER_BOUND_PARAMS
 from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
@@ -32,12 +32,6 @@ _FALLBACK_CHAIN: Final = TypeAdapter(FallbackChain)
 _REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
 _NO_OVERRIDES: Final[Mapping[str, object]] = MappingProxyType({})
 _RUNNER_PARAMS: Final = frozenset({"kwargs", "fallbacks", "acompletion", "model", "litellm_logging_obj"})
-_PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
-    "custom_llm_provider",
-    "client",
-    "headers",
-    "litellm_credential_name",
-}
 _MODEL_BOUND_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields) | {"base_model"}
 _GLOBAL_FALLBACKS_OFF: Final[ContextVar[bool]] = ContextVar("litellm_global_model_fallbacks_off", default=False)
 _P = ParamSpec("_P")
@@ -142,7 +136,7 @@ def _inherited_kwargs(
     model_bound: Final = (
         _MODEL_BOUND_PARAMS | {"custom_llm_provider"} if routes_through_a_prompt_manager(model) else _MODEL_BOUND_PARAMS
     )
-    dropped: Final = (model_bound | _PROVIDER_BOUND_PARAMS) if switches_provider else model_bound
+    dropped: Final = (model_bound | PROVIDER_BOUND_PARAMS) if switches_provider else model_bound
     return {key: value for key, value in base_kwargs.items() if key not in dropped}
 
 

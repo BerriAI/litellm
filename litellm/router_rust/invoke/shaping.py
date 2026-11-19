@@ -24,6 +24,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.clientside_credential_handler import (
+    PROVIDER_BOUND_PARAMS,
     clientside_credential_keys,
     get_dynamic_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     is_clientside_credential,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
@@ -428,17 +429,29 @@ def _clientside_deployment(
 # --- the deployment --------------------------------------------------------------------------
 
 
+def provider_of_deployment(deployment_params: Mapping[str, object]) -> str | None:
+    declared_provider: Final = deployment_params.get("custom_llm_provider")
+    if isinstance(declared_provider, str):
+        return declared_provider
+    declared_model: Final = deployment_params.get("model")
+    return inferred_provider(declared_model if isinstance(declared_model, str) else None)
+
+
+def request_for_provider(
+    kwargs: Mapping[str, object], provider: str | None, credentials_sent_for: frozenset[str]
+) -> Mapping[str, object]:
+    """The request a deployment of ``provider`` is sent: without the caller's provider-bound credentials and
+    config unless the caller sent them for that provider."""
+    if provider is not None and provider in credentials_sent_for:
+        return kwargs
+    return without(kwargs, *PROVIDER_BOUND_PARAMS)
+
+
 def forwarded_caller_authorization(kwargs: Mapping[str, object], deployment_params: Mapping[str, object]) -> str | None:
     """The caller's ``Authorization`` a credential-isolating provider sends instead of the deployment's key."""
     from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 
-    declared_provider: Final = deployment_params.get("custom_llm_provider")
-    declared_model: Final = deployment_params.get("model")
-    deployment_provider: Final = (
-        declared_provider
-        if isinstance(declared_provider, str)
-        else inferred_provider(declared_model if isinstance(declared_model, str) else None)
-    )
+    deployment_provider: Final = provider_of_deployment(deployment_params)
     if deployment_provider not in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS:
         return None
     header: Final = kwargs.get("provider_specific_header")

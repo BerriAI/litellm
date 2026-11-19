@@ -25,7 +25,7 @@ import json
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import date, datetime, time
-from functools import partial
+from functools import cached_property, partial
 from time import perf_counter
 from time import time as unix_time
 from types import MappingProxyType
@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.attempt_settlement import (
     routed_attempt,
 )
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.clientside_credential_handler import PROVIDER_BOUND_PARAMS
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
@@ -116,7 +117,13 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout, serves_caller_credentials
+from litellm.router_rust.invoke.shaping import (
+    Shaping,
+    non_stream_timeout,
+    provider_of_deployment,
+    request_for_provider,
+    serves_caller_credentials,
+)
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -5023,7 +5030,7 @@ class _Driver:
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step),
+            self._attempt_request(step, deployment),
             deployment,
             group=requested,
             requested=requested,
@@ -5350,7 +5357,7 @@ class _Driver:
             return None
         if self._plan.sync or self._plan.kind != "chat" or call.kwargs.get("stream"):
             return None
-        if not self._core.queues_on(self._attempt_request(step))(deployment):
+        if not self._core.queues_on(self._attempt_request(step, deployment))(deployment):
             return None
         own_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
         admitted: Final = await request_queue.admit(capacity, call.model_name, partial(self._cooldown_left_s, own_id))
@@ -5362,10 +5369,30 @@ class _Driver:
             )
         return None
 
-    def _attempt_request(self, step: Mapping[str, object]) -> Mapping[str, object]:
+    def _attempt_request(self, step: Mapping[str, object], deployment: Mapping[str, object]) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
         params: Final = as_str_mapping(step.get("params"))
-        return self._request if params is None else {**self._request, **params}
+        request: Final = self._request_for_hop(step, deployment)
+        return request if params is None else {**request, **params}
+
+    def _request_for_hop(self, step: Mapping[str, object], deployment: Mapping[str, object]) -> Mapping[str, object]:
+        """A fallback hop sends the caller's credentials only to a provider the requested group serves them to."""
+        level: Final = step.get("fallback_level")
+        if not isinstance(level, int) or level == 0 or self._request.keys().isdisjoint(PROVIDER_BOUND_PARAMS):
+            return self._request
+        provider: Final = provider_of_deployment(as_str_mapping(deployment.get("litellm_params")) or {})
+        return request_for_provider(self._request, provider, self._credentials_sent_for)
+
+    @cached_property
+    def _credentials_sent_for(self) -> frozenset[str]:
+        model: Final = _routed_model(self._request)
+        deployments: Final = (
+            self._core._hosted._core_get_model_list(model_name=model) if isinstance(model, str) else None  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        )
+        providers: Final = (
+            provider_of_deployment(as_str_mapping(row.get("litellm_params")) or {}) for row in deployments or ()
+        )
+        return frozenset(provider for provider in providers if provider is not None)
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None

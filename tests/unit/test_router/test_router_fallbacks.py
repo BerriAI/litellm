@@ -1360,3 +1360,102 @@ async def test_ordered_fallback_failures_preserve_the_original_context_error(
     assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "ordered", "generic")
     assert raised.value.status_code == (400 if context_error else backup_status)
     assert (original_message if context_error else "generic deployment unavailable") in str(raised.value)
+
+
+_CALLER_ANTHROPIC_KEY: Final = "sk-ant-caller-forwarded-key"
+
+
+def _anthropic_overloaded_response() -> httpx.Response:
+    return httpx.Response(529, json={"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})
+
+
+def _anthropic_message_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_fallback",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "served by the anthropic backup"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _bedrock_converse_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "served by bedrock"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        },
+    )
+
+
+def _anthropic_router(backup_params: dict[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-admin-key"},
+            },
+            {"model_name": "claude-backup", "litellm_params": backup_params},
+        ],
+        fallbacks=[{"claude": ["claude-backup"]}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_to_bedrock_signs_with_its_own_credentials_not_the_callers_anthropic_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _anthropic_router(
+        {
+            "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+            "aws_access_key_id": "AKIAFALLBACKTEST",
+            "aws_secret_access_key": "fallback-test-secret",
+            "aws_region_name": "us-east-1",
+        }
+    )
+    anthropic: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_overloaded_response()
+    )
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_bedrock_converse_response()
+    )
+
+    response: Final = await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert anthropic.calls.last.request.headers["x-api-key"] == _CALLER_ANTHROPIC_KEY
+    sent: Final = bedrock.calls.last.request
+    assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFALLBACKTEST/")
+    assert all(_CALLER_ANTHROPIC_KEY not in value for value in sent.headers.values())
+    assert response.choices[0].message.content == "served by bedrock"
+
+
+@pytest.mark.asyncio
+async def test_fallback_to_another_anthropic_group_keeps_the_callers_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _anthropic_router({"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-backup-admin-key"})
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=(_anthropic_overloaded_response(), _anthropic_message_response())
+    )
+
+    response: Final = await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert tuple(call.request.headers["x-api-key"] for call in route.calls) == (
+        _CALLER_ANTHROPIC_KEY,
+        _CALLER_ANTHROPIC_KEY,
+    )
+    assert response.choices[0].message.content == "served by the anthropic backup"
