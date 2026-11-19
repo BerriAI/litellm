@@ -196,6 +196,7 @@
     "user_tpm_limit": 42,
     "team_rpm_limit": 42,
     "team_tpm_limit": 42,
+    "team_max_parallel_requests": 42,
     "team_member_rpm_limit": 42,
     "team_member_tpm_limit": 42,
     "end_user_rpm_limit": 42,

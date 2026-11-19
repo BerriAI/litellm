@@ -1029,6 +1029,41 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
     )
 
 
+@pytest.mark.asyncio
+async def test_team_max_parallel_requests_is_shared_across_the_team_keys_v3():
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    first_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-team-a-1"), team_id="team-a", team_max_parallel_requests=1)
+    second_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-a-2"), team_id="team-a", team_max_parallel_requests=1
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=first_key, cache=local_cache, data={"model": "gpt-3.5-turbo"}, call_type=""
+    )
+    first_acquisition: Final = get_request_stash().parallel_slot
+    assert first_acquisition is not None
+    assert first_acquisition["gauges"] == (RateLimitScope("team", "team-a"),)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=second_key, cache=local_cache, data={"model": "gpt-3.5-turbo"}, call_type=""
+        )
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["rate_limit_type"] == "max_parallel_requests"
+
+    await handler.async_log_failure_event(
+        kwargs={"standard_logging_object": {"metadata": {"user_api_key_hash": first_key.api_key}}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=second_key, cache=local_cache, data={"model": "gpt-3.5-turbo"}, call_type=""
+    )
+
+
 # Redis Cluster Compatibility Tests
 
 
