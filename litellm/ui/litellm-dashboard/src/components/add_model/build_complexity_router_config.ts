@@ -516,6 +516,9 @@ export const customTierWireFields = (
         classifier_llm_config: {
           model: classifierLlmConfig.model,
           timeout_ms: classifierLlmConfig.timeout_ms,
+          ...(classifierLlmConfig.max_output_tokens !== undefined && {
+            max_output_tokens: classifierLlmConfig.max_output_tokens,
+          }),
           ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
             circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
           }),

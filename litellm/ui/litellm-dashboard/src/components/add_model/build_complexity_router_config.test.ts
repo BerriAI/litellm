@@ -1337,6 +1337,15 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     ]);
   });
 
+  it.each([undefined, 1, 64, 8192])("preserves classifier output cap %s when saving edited tiers", (cap) => {
+    const classifierLlmConfig = {
+      model: "classifier",
+      timeout_ms: 3000,
+      ...(cap !== undefined && { max_output_tokens: cap }),
+    };
+    expect(build({ classifierLlmConfig }).classifier_llm_config).toEqual(classifierLlmConfig);
+  });
+
   it("forces the LLM classifier even when the form still holds heuristic, which the backend rejects", () => {
     expect(build({ classifierType: "heuristic" }).classifier_type).toBe("llm");
   });
