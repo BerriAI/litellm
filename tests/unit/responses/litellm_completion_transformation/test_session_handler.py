@@ -1659,8 +1659,14 @@ _STORED_REFERENCES: Final = [{"type": "tool_reference", "tool_name": "get_weathe
         ({"model": "claude-opus-5-5", "custom_llm_provider": "anthropic"}, _STORED_REFERENCES),
         ({"model": "gpt-5.6", "custom_llm_provider": "openai"}, json.dumps(_STORED_REFERENCES)),
         ({"model": "gemini-3.1-pro-preview", "custom_llm_provider": "vertex_ai"}, json.dumps(_STORED_REFERENCES)),
+        ({"model": "my-batch-alias"}, json.dumps(_STORED_REFERENCES)),
     ),
-    ids=("anthropic_follow_up_replays_references", "openai_follow_up_replays_json", "vertex_follow_up_replays_json"),
+    ids=(
+        "anthropic_follow_up_replays_references",
+        "openai_follow_up_replays_json",
+        "vertex_follow_up_replays_json",
+        "unresolved_alias_follow_up_replays_json",
+    ),
 )
 @pytest.mark.asyncio
 async def test_a_stored_tool_reference_output_replays_in_the_shape_the_follow_up_route_takes(

@@ -1469,7 +1469,9 @@ class LiteLLMCompletionResponsesConfig:
             route_fills_empty_user_turns=partial(
                 target_fills_empty_user_turns, model, custom_llm_provider, _routed_base_model(request_kwargs)
             ),
-            keep_tool_references=provider_builds_anthropic_request(model, custom_llm_provider),
+            keep_tool_references=chat_config_builds_anthropic_request(
+                _resolved_chat_config(model, custom_llm_provider)
+            ),
         )
         malformed_field_error: Final = (
             _first_invalid_input_type(
@@ -1721,7 +1723,7 @@ class LiteLLMCompletionResponsesConfig:
                 if request_input is None or not target_refuses_blank_text(model, provider)
                 else empty_user_turn_replay_text(request_kwargs.get("user_continue_message"))
             ),
-            keep_tool_references=provider_builds_anthropic_request(model, provider),
+            keep_tool_references=chat_config_builds_anthropic_request(_resolved_chat_config(model, provider)),
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)

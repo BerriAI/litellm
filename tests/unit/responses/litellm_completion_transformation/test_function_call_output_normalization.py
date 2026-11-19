@@ -280,6 +280,8 @@ _TEXT_THEN_REFERENCE: Final = [
         ("gpt-5.6", "openai", _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
         ("gemini-3.1-pro-preview", "vertex_ai", _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
         ("gpt-5.6", "openai", _TEXT_THEN_REFERENCE, "Loaded "),
+        ("my-batch-alias", None, _REFERENCE_ONLY, json.dumps(_REFERENCE_ONLY)),
+        ("my-batch-alias", None, _TEXT_THEN_REFERENCE, "Loaded "),
     ],
     ids=[
         "anthropic-reference-only",
@@ -287,10 +289,12 @@ _TEXT_THEN_REFERENCE: Final = [
         "openai-keeps-json",
         "vertex-gemini-keeps-json",
         "openai-keeps-text",
+        "unresolved-alias-keeps-json",
+        "unresolved-alias-keeps-text",
     ],
 )
 def test_only_anthropic_routes_receive_tool_references(
-    model: str, custom_llm_provider: str, output: list[dict[str, str]], expected_content: object
+    model: str, custom_llm_provider: str | None, output: list[dict[str, str]], expected_content: object
 ) -> None:
     request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model=model,
