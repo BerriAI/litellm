@@ -1,5 +1,6 @@
 use std::error::Error as StdError;
 
+use litellm_auth::gcp::google::GoogleLoginFailure;
 use litellm_error::{Report, Source};
 use litellm_inference::Error;
 use pyo3::{
@@ -26,6 +27,9 @@ const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
 /// The rejection is a parameter the model does not support, which Python raises as
 /// `UnsupportedParamsError`.
 const MESSAGES_UNSUPPORTED_PARAM: &str = "messages_unsupported_param";
+/// The model a provider config names on its `UnsupportedParamsError`, which Python then also
+/// attributes to the request's provider.
+const MESSAGES_UNSUPPORTED_PARAM_MODEL: &str = "messages_unsupported_param_model";
 /// The phase label (`Connection` or `Read`) of a timed-out call, for Python's timeout text, or
 /// `Body` for a streamed body read that timed out after the head arrived.
 const MESSAGES_TIMEOUT: &str = "messages_timeout";
@@ -54,6 +58,9 @@ const MESSAGES_REFUSED_REPLY: &str = "messages_refused_reply";
 /// when the Bedrock invoke host runs Python's signing again for its exception. The Mantle routes
 /// turn `replay` into `unavailable`, which maps from a fixed class list.
 const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
+/// `(class, text)` of the exception Python's Vertex AI login raises for a login Rust could not
+/// complete, which the route raises in its place.
+const MESSAGES_GOOGLE_LOGIN_FAILURE: &str = "messages_google_login_failure";
 /// The AWS profile no config or credentials file defines, for the `profile_not_found` credential
 /// failure that botocore raises as `ProfileNotFound`.
 const MESSAGES_MISSING_PROFILE: &str = "messages_missing_profile";
@@ -78,6 +85,10 @@ fn credential_failure(error: &Error) -> Option<&'static str> {
         | litellm_auth::Error::MissingApiBase { .. }
         | litellm_auth::Error::InvalidHeader => None,
     }
+}
+
+fn google_login_failure(failure: &GoogleLoginFailure) -> (&'static str, &str) {
+    (failure.exception.into(), failure.message.as_str())
 }
 
 fn innermost_aws_error<'a>(
@@ -280,20 +291,34 @@ pub(crate) fn route_failure(
             let native = PyValueError::new_err(Report::new(rejection).to_string());
             let value = native.value(py);
             value.setattr(MESSAGES_REQUEST_ERROR, true)?;
+            let detail = rejection.downcast_ref::<litellm_llms::ErrorDetail>();
             if matches!(
-                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                detail,
                 Some(
                     litellm_llms::ErrorDetail::UnsupportedParameter { .. }
                         | litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
+                        | litellm_llms::ErrorDetail::NonObjectVertexOutputFormat { .. }
                 )
             ) {
                 value.setattr(MESSAGES_UNSUPPORTED_PARAM, true)?;
             }
             if matches!(
-                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
-                Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
+                detail,
+                Some(
+                    litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. }
+                        | litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion { .. }
+                        | litellm_llms::ErrorDetail::NonObjectVertexOutputFormat { .. }
+                )
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if let Some(litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion {
+                model,
+                ..
+            }) = detail
+            {
+                value.setattr(MESSAGES_UNSUPPORTED_PARAM_MODEL, model.as_str())?;
             }
             if let Some(provider) = provider_rejection(rejection) {
                 value.setattr(MESSAGES_PROVIDER_REJECTION, provider.text)?;
@@ -332,6 +357,9 @@ pub(crate) fn route_failure(
             if let Some(failure) = credential_failure(&error) {
                 value.setattr(MESSAGES_CREDENTIAL_FAILURE, failure)?;
             }
+            if let Some(failure) = litellm_error::find::<GoogleLoginFailure>(&error) {
+                value.setattr(MESSAGES_GOOGLE_LOGIN_FAILURE, google_login_failure(failure))?;
+            }
             if let Some(failure) = sts_failure(&error) {
                 value.setattr(MESSAGES_STS_FAILURE, failure)?;
             }
@@ -353,6 +381,7 @@ pub(crate) fn route_error_to_pyerr(error: Error) -> PyErr {
 
 #[cfg(test)]
 mod tests {
+    use litellm_auth::gcp::google::PythonException;
     use litellm_core_utils::decline::Decline;
     use reqwest::header::{HeaderValue, RETRY_AFTER};
 
@@ -720,6 +749,39 @@ mod tests {
         });
     }
 
+    type Marker = (String, String);
+
+    #[rstest::rstest]
+    #[case::plain(
+        GoogleLoginFailure::new(PythonException::Refresh, "invalid_grant"),
+        ("google.auth.exceptions.RefreshError".into(), "invalid_grant".into())
+    )]
+    #[case::file_failure(
+        GoogleLoginFailure::new(PythonException::Value, "file failure"),
+        ("ValueError".into(), "file failure".into())
+    )]
+    fn a_google_login_failure_names_python_s_exception(
+        #[case] failure: GoogleLoginFailure,
+        #[case] expected: Marker,
+        #[values(false, true)] through_llm: bool,
+    ) {
+        let error = match through_llm {
+            true => Error::Llm(litellm_llms::Error::Auth(failure.into())),
+            false => Error::Auth(failure.into()),
+        };
+        Python::initialize();
+        Python::attach(|py| {
+            let raised = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let named: Marker = raised
+                .value(py)
+                .getattr(MESSAGES_GOOGLE_LOGIN_FAILURE)
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(named, expected);
+        });
+    }
+
     #[test]
     fn a_wrapped_credential_failure_keeps_the_native_mapping() {
         let error = Error::post_call(Error::Auth(litellm_auth::Error::from(
@@ -842,6 +904,67 @@ mod tests {
                 assert!(native.is_instance_of::<PyValueError>(py));
                 assert_eq!(native.value(py).to_string(), rejection);
             }
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::vertex_version(
+        litellm_llms::ErrorDetail::UnsupportedVertexAnthropicVersion {
+            model: "claude-sonnet-4-5".into(),
+            value: "latest".into(),
+        },
+        Some("claude-sonnet-4-5")
+    )]
+    #[case::vertex_output_format(
+        litellm_llms::ErrorDetail::NonObjectVertexOutputFormat {
+            model: "claude-sonnet-4-5".into(),
+            actual: "str",
+        },
+        None
+    )]
+    #[case::shared_gate(
+        litellm_llms::ErrorDetail::UnsupportedParameter {
+            model: "claude-sonnet-4-5".into(),
+            param: "top_k".into(),
+            value: "5".into(),
+            hint: String::new(),
+        },
+        None
+    )]
+    fn vertex_transform_refusals_are_late_unsupported_params(
+        #[case] detail: litellm_llms::ErrorDetail,
+        #[case] attributed_model: Option<&str>,
+    ) {
+        let late = !matches!(
+            detail,
+            litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+        );
+        Python::initialize();
+        Python::attach(|py| {
+            let raised = route_failure(
+                py,
+                Error::invalid_request(detail),
+                RequestMarker::Messages,
+                Ok,
+            )
+            .unwrap();
+            let value = raised.value(py);
+            let flag = |name: &str| {
+                value
+                    .getattr_opt(name)
+                    .unwrap()
+                    .is_some_and(|flag| flag.extract::<bool>().unwrap())
+            };
+            assert!(flag(MESSAGES_UNSUPPORTED_PARAM));
+            assert_eq!(flag(MESSAGES_LATE_REJECTION), late);
+            assert_eq!(
+                value
+                    .getattr_opt(MESSAGES_UNSUPPORTED_PARAM_MODEL)
+                    .unwrap()
+                    .map(|model| model.extract::<String>().unwrap())
+                    .as_deref(),
+                attributed_model
+            );
         });
     }
 
