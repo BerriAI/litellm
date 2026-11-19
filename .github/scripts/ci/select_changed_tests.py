@@ -25,7 +25,7 @@ SOURCE_ROOT: Final = PurePosixPath("litellm")
 
 def _shard_paths(shard: Mapping[str, object]) -> tuple[PurePosixPath, ...]:
     tokens: Final = str(shard.get("test-path", "")).split()
-    return tuple(PurePosixPath(token) for token in tokens if not token.startswith("-"))
+    return tuple(PurePosixPath(token.split("::", 1)[0]) for token in tokens if not token.startswith("-"))
 
 
 def _shards(workflow: Mapping[str, object], job: str) -> tuple[Mapping[str, object], ...]:
@@ -41,8 +41,8 @@ def _incompatible(shard: Mapping[str, object], python: str) -> bool:
     return str(shard.get("workers")) == "0" or str(shard.get("python-version")) != python
 
 
-def exclusions(workflow: Mapping[str, object], python: str) -> tuple[PurePosixPath, ...]:
-    core: Final = _shards(workflow, "unit-core")
+def exclusions(workflow: Mapping[str, object], python: str, include_core: bool = False) -> tuple[PurePosixPath, ...]:
+    core: Final = () if include_core else _shards(workflow, "unit-core")
     special: Final = (shard for shard in _shards(workflow, "unit") if _incompatible(shard, python))
     return tuple(itertools.chain.from_iterable(_shard_paths(shard) for shard in itertools.chain(core, special)))
 
@@ -82,9 +82,10 @@ def main() -> None:
     parser.add_argument("--workflow", type=Path, default=Path(".github/workflows/test-unit.yml"))
     parser.add_argument("--python", default="3.12")
     parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--include-core", action="store_true", help="Select tests normally run by unit-core too")
     args: Final = parser.parse_args()
     workflow: Final = yaml.safe_load(args.workflow.read_text(encoding="utf-8"))
-    selected: Final = select(sys.stdin, exclusions(workflow, args.python), args.root)
+    selected: Final = select(sys.stdin, exclusions(workflow, args.python, args.include_core), args.root)
     sys.stdout.write("".join(f"{path}\n" for path in selected))
 
 

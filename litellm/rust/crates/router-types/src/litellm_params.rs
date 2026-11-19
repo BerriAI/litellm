@@ -51,6 +51,8 @@ pub struct LitellmParams {
     pub use_chat_completions_api: Option<bool>,
     pub litellm_credential_name: Option<String>,
     pub provider_affinity_header: Option<String>,
+    /// The Bedrock Mantle workspace a call is billed to, sent as `anthropic-workspace-id`.
+    pub aws_bedrock_project_id: Option<String>,
     #[serde(flatten)]
     pub extra: ExtraParams,
 }
@@ -66,10 +68,16 @@ impl LitellmParams {
     /// and each credential family. The routing and limit fields are a deployment's
     /// settings, which only a config spells.
     pub fn fields() -> impl Iterator<Item = &'static str> {
-        ["model", "api_key", "api_base", "api_version"]
-            .into_iter()
-            .chain(AwsParams::fields())
-            .chain(VertexParams::fields())
+        [
+            "model",
+            "api_key",
+            "api_base",
+            "api_version",
+            "aws_bedrock_project_id",
+        ]
+        .into_iter()
+        .chain(AwsParams::fields())
+        .chain(VertexParams::fields())
     }
 }
 

@@ -1076,6 +1076,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def _model_call_details_view(self) -> Mapping[str, object]:
         return self.model_call_details
 
+    @property
+    def _litellm_params_view(self) -> Mapping[str, object]:
+        params: Final[object] = self.litellm_params
+        return params if is_str_keyed_dict(params) else {}
+
     def __init__(
         self,
         model: str,
@@ -1532,7 +1537,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         candidates: Final = (
             (self.model_call_details or {}).get("model") if hasattr(self, "model_call_details") else None,
-            self.litellm_params.get("model") if hasattr(self, "litellm_params") else None,
+            self._litellm_params_view.get("model") if hasattr(self, "litellm_params") else None,
             self.model,
         )
         return next((candidate for candidate in candidates if isinstance(candidate, str) and candidate), None)
@@ -1552,6 +1557,8 @@ class Logging(LiteLLMLoggingBaseClass):
         user: str | None = None,
         **additional_params,
     ):
+        logged_provider: Final = _text(self.model_call_details.get("custom_llm_provider"))
+        params_provider: Final = _text(self._litellm_params_view.get("custom_llm_provider"))
         self.optional_params = optional_params
         if model is not None:
             self.model = model
@@ -1560,6 +1567,8 @@ class Logging(LiteLLMLoggingBaseClass):
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
         }
+        if params_provider is not None and _text(self._litellm_params_view.get("custom_llm_provider")) is None:
+            self.litellm_params["custom_llm_provider"] = params_provider
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
         self.model_call_details.update(
@@ -1579,6 +1588,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 **additional_params,
             }
         )
+        self._copy_logged_provider_to_litellm_params(logged_provider)
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
@@ -1589,6 +1599,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def _copy_logged_provider_to_litellm_params(self, previous_provider: str | None = None) -> None:
+        provider: Final = _text(self.model_call_details.get("custom_llm_provider")) or previous_provider
+        if provider is None:
+            return
+        self.model_call_details["custom_llm_provider"] = provider
+        logged_params: Final[object] = self.model_call_details.get("litellm_params")
+        if not is_str_keyed_dict(logged_params):
+            return
+        self.litellm_params["custom_llm_provider"] = provider
+        if logged_params is not self.litellm_params:
+            self.model_call_details["litellm_params"] = {**logged_params, "custom_llm_provider": provider}
 
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
         self.model_call_details["agentic_loop_params"] = params
@@ -2157,7 +2179,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     model=model,
                     messages=messages,
                     end_user=self._model_call_details_view.get("user", "default"),
-                    litellm_call_id=self.litellm_params["litellm_call_id"],
+                    litellm_call_id=self._litellm_params_view["litellm_call_id"],
                     print_verbose=print_verbose,
                 )
             elif callback == "sentry" and add_breadcrumb:
@@ -2666,7 +2688,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "pricing_provider": self.get_router_pricing_provider(),
                 "litellm_logging_obj": self,
                 "data_residency": (
-                    self.litellm_params.get("data_residency")
+                    self._litellm_params_view.get("data_residency")
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
                 ),
@@ -3985,6 +4007,7 @@ class Logging(LiteLLMLoggingBaseClass):
         publish_logging_payload: bool,
     ) -> tuple[datetime.datetime, datetime.datetime, object, StandardLoggingPayload | None]:
         try:
+            self._copy_logged_provider_to_litellm_params()
             if start_time is None:
                 start_time = self.start_time
             if end_time is None:
@@ -5392,6 +5415,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # on some exceptions, model_call_details is not always initialized, this ensures that we still log those exceptions
         if not hasattr(self, "model_call_details"):
             self.model_call_details = {}
+        self._copy_logged_provider_to_litellm_params()
 
         previous_exception: Final[object] = (
             self._failure_exception_ref()

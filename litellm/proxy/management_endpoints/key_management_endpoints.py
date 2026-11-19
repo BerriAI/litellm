@@ -64,6 +64,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
@@ -6041,13 +6042,14 @@ async def rotate_master_key(
         - ModelTable
             - [{"model_name": "str", "litellm_params": {}}]
         - ConfigTable
-    3. Encrypt the values with the new master key
+    3. Encrypt the values with LITELLM_SALT_KEY when set, otherwise the new master key
     4. Update the values in the DB
     """
     import prisma
 
     from litellm.proxy.proxy_server import proxy_config
 
+    encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR, new_master_key)
     try:
         models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
             "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
@@ -6067,7 +6069,7 @@ async def rotate_master_key(
                         model_params=Deployment(**model),
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
-                        new_encryption_key=new_master_key,
+                        new_encryption_key=encryption_key,
                         should_create_model_in_db=False,
                     )
                 )
@@ -6100,7 +6102,7 @@ async def rotate_master_key(
             )
             encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
                 environment_variables=decrypted_env_vars,
-                new_encryption_key=new_master_key,
+                new_encryption_key=encryption_key,
             )
 
             if encrypted_env_vars:
@@ -6113,7 +6115,7 @@ async def rotate_master_key(
         from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 
         await GuardrailRegistry.rotate_guardrail_params_master_key(
-            prisma_client=prisma_client, new_master_key=new_master_key
+            prisma_client=prisma_client, new_master_key=encryption_key
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate guardrail params: %s", str(e))
@@ -6123,7 +6125,7 @@ async def rotate_master_key(
         await rotate_mcp_server_credentials_master_key(
             prisma_client=prisma_client,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP server credentials: %s", str(e))
@@ -6132,7 +6134,7 @@ async def rotate_master_key(
     try:
         await rotate_mcp_user_credentials_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user credentials: %s", str(e))
@@ -6141,7 +6143,7 @@ async def rotate_master_key(
     try:
         await rotate_mcp_user_env_vars_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user env vars: %s", str(e))
@@ -6150,13 +6152,13 @@ async def rotate_master_key(
     try:
         await rotate_sso_identity_assertions_master_key(
             prisma_client=prisma_client,
-            new_master_key=new_master_key,
+            new_master_key=encryption_key,
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
 
     try:
-        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
+        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=encryption_key)
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate search tool credentials: %s", str(e))
 
@@ -6174,7 +6176,7 @@ async def rotate_master_key(
                 encrypted_cred = update_db_credential(
                     db_credential=cred,
                     updated_patch=decrypted_cred,
-                    new_encryption_key=new_master_key,
+                    new_encryption_key=encryption_key,
                 )
                 _cred_data = dict[str, object](_as_object_dict(encrypted_cred.model_dump(exclude_none=True)))
                 if "credential_values" in _cred_data:

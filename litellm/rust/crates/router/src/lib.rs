@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
-use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
+use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
 use litellm_model_catalog::Catalog;
 use litellm_python_compat::flags::lax_bool;
 use litellm_router_types::ExtraParams;
@@ -39,7 +39,7 @@ fn string_list(extra: &ExtraParams, key: &str) -> Vec<String> {
 
 impl Router {
     pub fn from_config(config: &Config, catalog: &Catalog) -> Self {
-        let drops_params_globally = is_on(config.litellm_settings.drop_params.as_ref());
+        let drops_params_globally = config.litellm_settings.drop_params == Some(true);
         config
             .model_list
             .iter()
@@ -73,7 +73,7 @@ impl Router {
                                     .map(str::to_owned),
                                 ..MessagesSettings::default()
                             },
-                            capabilities: anthropic_model_capabilities(
+                            capabilities: messages_route_capabilities(
                                 catalog,
                                 &model.litellm_params.model,
                                 model.litellm_params.custom_llm_provider.as_deref(),

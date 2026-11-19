@@ -83,7 +83,7 @@ def _tpm_media_leaf(value: object) -> _TPMMediaProjection:
         image: Final = as_str_mapping(part.get("image_url"))
         source: Final = as_str_mapping(part.get("source"))
         canonical: Final = _tpm_image_part(
-            _image_part_url({**part, "type": "input_image"} if kind == "computer_screenshot" else part) or "",
+            image_part_url({**part, "type": "input_image"} if kind == "computer_screenshot" else part) or "",
             (image or part).get("detail", part.get("detail", "auto")),
         )
         projected: Final = (
@@ -247,7 +247,7 @@ def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> 
     return None
 
 
-def _image_part_url(part: Mapping[str, object]) -> str | None:
+def image_part_url(part: Mapping[str, object]) -> str | None:
     """The image URL carried by one content part, whichever of the three dialects wrote it."""
     part_type: Final = part.get("type")
     if part_type in ("image_url", "input_image"):
