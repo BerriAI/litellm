@@ -91,7 +91,11 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Budget template names must be unique within the organization.",
         ),
         ErrorCode.TEMPLATE_IN_USE: (409, "Template in use", "A default or referenced template cannot be deleted."),
-        ErrorCode.BUDGET_REQUIRED: (422, "Budget required", "A member requires a template or a budget override."),
+        ErrorCode.BUDGET_REQUIRED: (
+            422,
+            "Budget required",
+            "A member requires a preset, a custom budget, or a budget override.",
+        ),
         ErrorCode.INCREASE_NOT_ALLOWED: (
             422,
             "Increase not allowed",
@@ -482,7 +486,7 @@ async def create_customer_member(
         "Create or update a customer member by customer_member_id within a customer org identified by "
         "customer_org_id or customer_org_alias. If both are supplied they must match. "
         "A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. "
-        "Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. "
+        "Alias, budget_id, budget, budget_override and budget_override_expires_at follow the customer member models. "
         "Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. "
         "Moving between customer orgs or selecting another customer org's customer team returns 409. "
         "Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. "

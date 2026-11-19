@@ -61,6 +61,8 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
     reject_ambiguous_mcp_tool_permission_keys,
+    reject_app_grant_change,
+    reject_clearing_app_grants,
 )
 from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
 from litellm.proxy.management_helpers.utils import (
@@ -540,6 +542,7 @@ async def new_organization(
     object_permission_id: Final = await _set_object_permission(
         data=data,
         prisma_client=prisma_client,
+        can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
 
     """
@@ -698,6 +701,7 @@ async def resolve_organization_daily_activity_scope(
 async def _set_object_permission(
     data: NewOrganizationRequest,
     prisma_client: PrismaClient | None,
+    can_grant_apps: bool = False,
 ) -> str | None:
     """
     Creates the LiteLLM_ObjectPermissionTable record for the organization.
@@ -709,6 +713,7 @@ async def _set_object_permission(
         return None
 
     if data.object_permission is not None:
+        reject_app_grant_change(data.object_permission.apps, None, can_grant_apps)
         await reject_ambiguous_mcp_tool_permission_keys(
             new_mcp_tool_permissions=data.object_permission.mcp_tool_permissions,
             existing_mcp_tool_permissions=None,
@@ -817,6 +822,7 @@ async def update_organization(
         updated_organization_row = await handle_update_object_permission(
             data_json=updated_organization_row,
             existing_organization_row=existing_organization_row,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
 
     budget_fields: Final = {
@@ -854,6 +860,7 @@ async def update_organization(
 async def handle_update_object_permission(
     data_json: dict[str, object],
     existing_organization_row: _ObjectPermissionRow,
+    can_grant_apps: bool = False,
 ) -> dict[str, object]:
     """
     Handle the update of object permission for an organization.
@@ -869,6 +876,7 @@ async def handle_update_object_permission(
         data_json=data_json,
         existing_object_permission_id=existing_organization_row.object_permission_id,
         prisma_client=prisma_client,
+        can_grant_apps=can_grant_apps,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
@@ -988,11 +996,20 @@ async def update_organization_v2(
     }
 
     object_permission_cleared: Final = "object_permission" in present_fields and data.object_permission is None
+    can_grant_apps: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    await reject_clearing_app_grants(
+        existing_object_permission_id=(
+            existing_organization_row.object_permission_id if object_permission_cleared else None
+        ),
+        can_grant_apps=can_grant_apps,
+        prisma_client=prisma_client,
+    )
     object_permission_upsert: Final = (
         await prepare_object_permission_upsert(
             new_object_permission=data.object_permission.model_dump(exclude_none=True),
             existing_object_permission_id=existing_organization_row.object_permission_id,
             prisma_client=prisma_client,
+            can_grant_apps=can_grant_apps,
         )
         if data.object_permission is not None
         else None

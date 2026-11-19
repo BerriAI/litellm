@@ -127,6 +127,10 @@ class Database:
     )
     litellm_deletedverificationtoken: Table = Table()
     litellm_usertable: Table = Table()
+    litellm_teamtable: Table = Table()
+    litellm_organizationtable: Table = Table()
+    litellm_organizationmembership: Table = Table()
+    litellm_objectpermissiontable: Table = Table()
 
 
 @dataclass(frozen=True, slots=True)
@@ -455,3 +459,71 @@ def test_aggregated_customer_usage_rejects_empty_or_unknown_apps(app_id: str, ex
         params={**RANGE, "customer_org_id": "org-a", "app_id": app_id},
     )
     assert response.status_code == expected_status
+
+
+GRANTEE_PATHS: Final = (
+    "/management/v1/customer_organizations/daily/activity/aggregated",
+    "/management/v1/customer_organizations/daily/activity",
+    "/management/v1/customer_teams/daily/activity",
+    "/management/v1/customer_members/daily/activity",
+)
+
+
+def granted(route: str) -> Database:
+    """User "admin" holds the chat app through their own, their team's or their organization's object permission."""
+    return Database(
+        Table(
+            (
+                usage_row(app_id="chat", spend=2),
+                usage_row(id="search", app_id="search", spend=5, customer_org_id="org-b", api_key="hash-b"),
+                usage_row(id="legacy", spend=3),
+            )
+        ),
+        litellm_usertable=Table(
+            (
+                Record(
+                    user_id="admin",
+                    teams=["owners"] if route == "team" else [],
+                    object_permission_id="grant" if route == "user" else None,
+                ),
+            )
+        ),
+        litellm_teamtable=Table(
+            (Record(team_id="owners", object_permission_id="grant" if route == "team" else None),)
+        ),
+        litellm_organizationtable=Table(
+            (Record(organization_id="division", object_permission_id="grant" if route == "organization" else None),)
+        ),
+        litellm_organizationmembership=Table(
+            (Record(organization_id="division", user_id="admin"),) if route == "organization" else ()
+        ),
+        litellm_objectpermissiontable=Table((Record(object_permission_id="grant", apps=["chat"]),)),
+    )
+
+
+@pytest.mark.parametrize("route", ("user", "team", "organization"))
+@pytest.mark.parametrize("path", GRANTEE_PATHS[1:])
+def test_a_grantee_reads_usage_for_a_granted_app_only(path: str, route: str) -> None:
+    http: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted(route))
+    own: Final = http.get(path, params={**DATES, "app_id": "chat"})
+    assert own.status_code == 200, own.text
+    assert own.json()["metadata"]["total_spend"] == 2
+    assert http.get(path, params={**DATES, "app_id": "search"}).status_code == 403
+    assert http.get(path, params=DATES).status_code == 403
+
+
+@pytest.mark.parametrize("route", ("user", "team", "organization"))
+def test_a_grantee_cannot_aggregate_usage_outside_a_granted_app(route: str) -> None:
+    http: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted(route))
+    path: Final = GRANTEE_PATHS[0]
+    scope: Final = {**DATES, "customer_org_id": "org-b"}
+    assert http.get(path, params={**scope, "app_id": "search"}).status_code == 403
+    assert http.get(path, params=scope).status_code == 403
+
+
+@pytest.mark.parametrize("path", GRANTEE_PATHS[1:])
+def test_a_grantee_cannot_reach_another_apps_usage_by_naming_its_key(path: str) -> None:
+    http: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted("user"))
+    response: Final = http.get(path, params={**DATES, "app_id": "chat", "api_key": "hash-b"})
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["total_spend"] == 0

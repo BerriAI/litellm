@@ -94,6 +94,7 @@ from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_fro
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
+    reject_clearing_app_grants,
     set_object_permission,
 )
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
@@ -662,7 +663,9 @@ async def new_user(
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
         data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
-            data_json=data_json, prisma_client=prisma_client
+            data_json=data_json,
+            prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         data_json.pop("password", None)
         teams = data.teams
@@ -1743,10 +1746,16 @@ async def _update_single_user_helper(
             data_json=non_default_values,
             existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
             prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         if object_permission_id is not None:
             non_default_values["object_permission_id"] = object_permission_id
     elif _clears_object_permission(user_request):
+        await reject_clearing_app_grants(
+            existing_object_permission_id=getattr(existing_user_row, "object_permission_id", None),
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            prisma_client=prisma_client,
+        )
         # An explicit `{}` or null means "no object permission", which the merge-based upsert cannot
         # express: merging an empty grant set over the existing row leaves every grant in place. So
         # the link is dropped instead, which is what makes the documented clear actually clear.
