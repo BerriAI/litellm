@@ -5295,12 +5295,13 @@ class Logging(LiteLLMLoggingBaseClass):
         ## get original model group ##
 
         model_group: Final = metadata.get("model_group") or None
+        callback_kwargs: Final = {**self._model_call_details_view, "exception": exception}
         for callback in litellm._async_failure_callback:
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.log_model_group_rate_limit_error(
                     exception=exception,
                     original_model_group=model_group,
-                    kwargs=self.model_call_details,
+                    kwargs=callback_kwargs,
                 )
 
     def _is_pass_through_call(self) -> bool:
