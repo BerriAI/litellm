@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mappin
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
