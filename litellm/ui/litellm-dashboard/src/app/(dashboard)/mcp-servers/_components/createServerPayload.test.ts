@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { PROFILE_KIND, newProfileDraft } from "./additionalAuthProfiles";
 import {
   BuildCreatePayloadResult,
   CreateServerUiState,
@@ -308,5 +309,27 @@ describe("buildCreateServerPayload mcp_info", () => {
     const payload = payloadOf(build({ auth_type: "none", stdio_config: "{}" }, { logoUrl: "https://cdn/logo.png" }));
     expect((payload.mcp_info as Record<string, unknown>).logo_url).toBe("https://cdn/logo.png");
     expect(payload.stdio_config).toBeUndefined();
+  });
+});
+
+describe("buildCreateServerPayload additional_auth", () => {
+  const values = { server_name: "srv", url: "https://mcp.example.com", transport: "http", auth_type: "api_key" };
+  const profile = { ...newProfileDraft(), id: "wiki-bots", kind: PROFILE_KIND.TOKEN, authentication_token: "tok" };
+
+  it("produces the same payload, byte for byte, when no profiles are set", () => {
+    const today = JSON.stringify(payloadOf(build(values)));
+    expect(JSON.stringify(payloadOf(build(values, { additionalAuth: [] })))).toBe(today);
+    expect(Object.hasOwn(payloadOf(build(values)), "additional_auth")).toBe(false);
+  });
+
+  it("includes the profiles next to the default auth fields when set", () => {
+    const payload = payloadOf(build(values, { additionalAuth: [profile] }));
+    expect(payload.additional_auth).toEqual([{ id: "wiki-bots", auth_type: "token", authentication_token: "tok" }]);
+    expect(payload.auth_type).toBe("api_key");
+  });
+
+  it("refuses a profile with a bad id instead of posting it", () => {
+    const result = build(values, { additionalAuth: [{ ...profile, id: "default" }] });
+    expect(result).toEqual({ kind: "invalid_additional_auth", profileId: "default" });
   });
 });

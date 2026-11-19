@@ -2,6 +2,7 @@ import type { TFunction } from "i18next";
 import type { McpDcrCredentials } from "@/hooks/useMcpOAuthFlow";
 import {
   ADMIN_CONFIG_CREDENTIAL_KEYS,
+  type AdditionalAuthProfile,
   AUTH_TYPE,
   MCPEnvVar,
   MCPInfo,
@@ -14,6 +15,7 @@ import {
   isClientForwardedTokenMode,
   preservedAdminCredentials,
 } from "@/components/mcp_tools/types";
+import { type AdditionalAuthDraft, additionalAuthEntry, firstInvalidProfileId } from "./additionalAuthProfiles";
 import { AUTH_TYPES_REQUIRING_CREDENTIALS, reduceStaticHeaders } from "./createServerPayload";
 import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
 
@@ -71,6 +73,7 @@ export interface EditServerPayload {
   readonly oauth2_flow?: string;
   readonly token_validation?: unknown;
   readonly credentials?: Readonly<Record<string, unknown>>;
+  readonly additional_auth?: readonly AdditionalAuthProfile[];
   readonly [key: string]: unknown;
 }
 
@@ -85,6 +88,7 @@ export interface EditServerUiState {
   readonly toolNameToDisplayName: Readonly<Record<string, string>>;
   readonly toolNameToDescription: Readonly<Record<string, string>>;
   readonly removeStoredApp: boolean;
+  readonly additionalAuth?: readonly AdditionalAuthDraft[] | null;
 }
 
 export type BuildEditPayloadResult =
@@ -94,7 +98,8 @@ export type BuildEditPayloadResult =
   | { readonly kind: "invalid_stdio_json" }
   | { readonly kind: "invalid_stdio_env_json" }
   | { readonly kind: "stdio_command_required" }
-  | { readonly kind: "invalid_token_validation_json" };
+  | { readonly kind: "invalid_token_validation_json" }
+  | { readonly kind: "invalid_additional_auth"; readonly profileId: string };
 
 interface StdioFields {
   readonly command: string;
@@ -132,6 +137,8 @@ export const editPayloadErrorMessage = (
       return t("mcpServers.editServerPayload.errors.stdioCommandRequired");
     case "invalid_token_validation_json":
       return t("mcpServers.editServerPayload.errors.invalidTokenValidationJson");
+    case "invalid_additional_auth":
+      return t("mcpServers.additionalAuth.errors.invalidProfile", { id: result.profileId });
     default:
       return assertNever(result);
   }
@@ -286,6 +293,11 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     return { kind: "invalid_tool_display_name", displayName: String(invalidDisplayName[1]) };
   }
 
+  const invalidProfileId = firstInvalidProfileId(ui.additionalAuth ?? []);
+  if (invalidProfileId !== undefined) {
+    return { kind: "invalid_additional_auth", profileId: invalidProfileId };
+  }
+
   const {
     static_headers: staticHeadersList,
     env_vars: envVarsList,
@@ -429,6 +441,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
       ? { token_validation: tokenValidation.value }
       : {}),
     ...credentialsEntry,
+    ...additionalAuthEntry(ui.additionalAuth, { omitWhenEmpty: false }),
   };
 
   return { kind: "ok", payload };

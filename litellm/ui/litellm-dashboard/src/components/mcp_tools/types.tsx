@@ -1,5 +1,7 @@
 import type { ParseKeys } from "i18next";
 
+import type { components } from "@/lib/http/schema";
+
 /** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
 export interface MCPEvent {
   type: string;
@@ -505,7 +507,11 @@ export interface MCPServer {
    * Stored as a list so the UI can preserve admin-entered ordering.
    */
   env_vars?: MCPEnvVar[] | null;
+
+  additional_auth?: AdditionalAuthProfile[] | null;
 }
+
+export type AdditionalAuthProfile = components["schemas"]["MCPAuthProfile"];
 
 /** One environment variable entry on an MCP server. */
 export type MCPEnvVarScope = "global" | "user";

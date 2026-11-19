@@ -96,6 +96,8 @@ const payloadErrorMessage = (result: Exclude<BuildCreatePayloadResult, { kind: "
       return t("mcpServers.createMcpServer.payloadErrors.invalidStdioJson");
     case "invalid_token_validation_json":
       return t("mcpServers.createMcpServer.payloadErrors.invalidTokenValidationJson");
+    case "invalid_additional_auth":
+      return t("mcpServers.additionalAuth.errors.invalidProfile", { id: result.profileId });
   }
 };
 
