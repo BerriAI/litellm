@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import datetime
 import json
@@ -5989,6 +5990,42 @@ async def test_follow_up_with_truncation_auto_keeps_instructions_without_reading
         sent: Final = await awithout_stored_instructions(request)
     assert not chain.called
     assert sent == request
+
+
+def _litellm_response_id(provider: str, upstream_id: str) -> str:
+    return "resp_" + base64.b64encode(
+        f"litellm:custom_llm_provider:{provider};model_id:deployment-1;response_id:{upstream_id}".encode()
+    ).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("previous_response_id", "lookups", "sent_instructions"),
+    [
+        (_litellm_response_id("openai", "resp_prior"), 1, None),
+        (_litellm_response_id("openrouter", "resp_prior"), 0, "Stable prefix"),
+        (_litellm_response_id("openai", _litellm_response_id("openrouter", "resp_prior")), 0, "Stable prefix"),
+    ],
+)
+async def test_follow_up_reads_the_stored_chain_only_from_the_provider_of_the_request(
+    previous_response_id: str, lookups: int, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as router:
+        own_provider: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        anywhere_else: Final = router.route().mock(return_value=httpx.Response(200, json=_stored_chain()))
+        sent: Final = await awithout_stored_instructions(
+            {
+                "instructions": "Stable prefix",
+                "previous_response_id": previous_response_id,
+                "custom_llm_provider": "openai",
+                "api_key": "sk-test",
+            }
+        )
+    assert (len(own_provider.calls), len(anywhere_else.calls)) == (lookups, 0)
+    assert sent.get("instructions") == sent_instructions
 
 
 @pytest.mark.asyncio
