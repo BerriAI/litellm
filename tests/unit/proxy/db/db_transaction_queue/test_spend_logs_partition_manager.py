@@ -4,6 +4,7 @@ selection, the non-partitioned no-op safety path, and the drop/ensure SQL flow.
 """
 
 from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +19,7 @@ from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     select_partitions_to_drop,
     upcoming_partitions,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 DDL_TIMEOUT_MS = 30000
 
@@ -411,3 +413,15 @@ async def test_drop_partitions_continues_when_one_drop_fails():
 
     # both were eligible; the first drop failed so only the second is reported
     assert dropped == ["LiteLLM_SpendLogs_p20260602"]
+
+
+@pytest.mark.asyncio
+async def test_the_partitioning_probe_renders_a_postgres_select_span(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    client = MagicMock()
+    client.db.query_raw = engine_call([{"partitioned": True}])
+    _wire_tx(client.db)
+
+    assert await SpendLogsPartitionManager().is_partitioned(client, _budget()) is True
+    assert await postgres_span_names() == ("postgres.select LiteLLM_SpendLogs",)

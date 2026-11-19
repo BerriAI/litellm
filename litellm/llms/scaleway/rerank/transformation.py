@@ -9,6 +9,7 @@ API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -25,8 +26,8 @@ class ScalewayRerankConfig(JinaAIRerankConfig):
         model: str,
         optional_params: Mapping[str, object] | None = None,
     ) -> str:
-        base: Final = SCALEWAY_API_BASE if api_base is None else api_base.rstrip("/")
-        return f"{base}/rerank"
+        base: Final = SCALEWAY_API_BASE if api_base is None else api_base
+        return join_api_base(base, "rerank")
 
     def validate_environment(
         self,
@@ -46,6 +47,5 @@ class ScalewayRerankConfig(JinaAIRerankConfig):
             "content-type": "application/json",
             "authorization": f"Bearer {key}",
         }
-        # Header names are case-insensitive, so match on the lowercase name.
         caller_headers: Final = {name: value for name, value in headers.items() if name.lower() not in provider_headers}
         return {**caller_headers, **provider_headers}

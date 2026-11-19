@@ -8,14 +8,14 @@
 - async_streaming
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,
     Union,
 )
 
 import httpx
+from openai.types.audio.transcription_create_params import FileTypes
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import GenericStreamingChunk
@@ -26,6 +26,8 @@ from .base import BaseLLM
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.google_genai.main import GenerateContentResponse
+    from litellm.types.router import GenericLiteLLMParams
 
 
 class CustomLLMError(Exception):  # use this for all your exceptions
@@ -42,6 +44,36 @@ class CustomLLMError(Exception):  # use this for all your exceptions
 class CustomLLM(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
+
+    def generate_content(
+        self,
+        model: str,
+        contents: object,
+        config: Mapping[str, object] | None,
+        tools: object | None,
+        litellm_params: "GenericLiteLLMParams",
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> "GenerateContentResponse | Mapping[str, object]":
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def agenerate_content(
+        self,
+        model: str,
+        contents: object,
+        config: Mapping[str, object] | None,
+        tools: object | None,
+        litellm_params: "GenericLiteLLMParams",
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> "GenerateContentResponse | Mapping[str, object]":
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     def completion(
         self,
@@ -103,7 +135,9 @@ class CustomLLM(BaseLLM):
         headers={},
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
-    ) -> Coroutine[Any, Any, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]:
+    ) -> (
+        Coroutine[None, None, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]
+    ):
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def astreaming(
@@ -188,7 +222,7 @@ class CustomLLM(BaseLLM):
     def image_edit(
         self,
         model: str,
-        image: Any,
+        image: Sequence[FileTypes],
         prompt: str | None,
         model_response: ImageResponse,
         api_key: str | None,
@@ -203,7 +237,7 @@ class CustomLLM(BaseLLM):
     async def aimage_edit(
         self,
         model: str,
-        image: Any,
+        image: Sequence[FileTypes],
         prompt: str | None,
         model_response: ImageResponse,
         api_key: str | None,

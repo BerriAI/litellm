@@ -41,14 +41,18 @@ Response format:
 """
 
 import base64
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.openrouter.common_utils import OpenRouterException
@@ -69,6 +73,54 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _ImageUrl(TypedDict):
+    url: ReadOnly[NotRequired[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _Image(TypedDict):
+    image_url: ReadOnly[NotRequired[_ImageUrl]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _Message(TypedDict):
+    images: ReadOnly[NotRequired[Sequence[_Image]]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _Choice(TypedDict):
+    message: ReadOnly[NotRequired[_Message]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _TokensDetails(TypedDict):
+    image_tokens: ReadOnly[NotRequired[int | float]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _Usage(TypedDict):
+    prompt_tokens: ReadOnly[NotRequired[int | float]]
+    total_tokens: ReadOnly[NotRequired[int | float]]
+    completion_tokens_details: ReadOnly[NotRequired[_TokensDetails]]
+    prompt_tokens_details: ReadOnly[NotRequired[_TokensDetails | None]]
+    cost: ReadOnly[NotRequired[int | float | str | None]]
+    cost_details: ReadOnly[NotRequired[Mapping[str, object] | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _OpenRouterImageEditResponse(TypedDict):
+    choices: ReadOnly[NotRequired[Sequence[_Choice]]]
+    usage: ReadOnly[NotRequired[_Usage | None]]
+    model: ReadOnly[NotRequired[object]]
+
+
+class _OpenRouterImageEditResponseRoot(RootModel[_OpenRouterImageEditResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
 class OpenRouterImageEditConfig(BaseImageEditConfig):
@@ -138,11 +190,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
-        base_url = base_url.rstrip("/")
-        if not base_url.endswith("/chat/completions"):
-            return f"{base_url}/chat/completions"
-        return base_url
+        base_url: Final = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+        return ensure_api_route(base_url, "chat/completions")
 
     def transform_image_edit_request(
         self,
@@ -201,7 +250,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error parsing OpenRouter response: {e}",
@@ -213,7 +262,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         model_response.data = []
 
         try:
-            choices: Final = response_json.get("choices", [])
+            payload: Final = _OpenRouterImageEditResponseRoot.model_validate(response_json).root
+            choices: Final = payload.get("choices", [])
 
             for choice in choices:
                 message = choice.get("message", {})
@@ -252,7 +302,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 headers={},
             )
 
-        self._set_usage_and_cost(model_response, response_json, model)
+        self._set_usage_and_cost(model_response, payload, model)
         return model_response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -303,11 +353,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
     def _set_usage_and_cost(
         self,
         model_response: ImageResponse,
-        response_json: dict,
+        payload: _OpenRouterImageEditResponse,
         model: str,
     ) -> None:
         """Extract and set usage and cost information from OpenRouter response."""
-        usage_data: Final = response_json.get("usage", {})
+        usage_data: Final = payload.get("usage", {})
         if usage_data:
             prompt_tokens: Final = usage_data.get("prompt_tokens", 0)
             total_tokens: Final = usage_data.get("total_tokens", 0)
@@ -334,20 +384,20 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             cost: Final = usage_data.get("cost")
             if cost is not None:
                 if not hasattr(model_response, "_hidden_params"):
-                    model_response._hidden_params = {}
-                if "additional_headers" not in model_response._hidden_params:
-                    model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                    cost
+                    model_response.hidden_params = {}
+                additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+                    dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
                 )
+                additional_headers["llm_provider-x-litellm-response-cost"] = float(cost)
 
             cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
-                if "response_cost_details" not in model_response._hidden_params:
-                    model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
+                response_cost_details: Final = cast(  # cast-ok: provider cost details are stored as a mutable mapping
+                    dict[str, object], model_response.hidden_params.setdefault("response_cost_details", {})
+                )
+                response_cost_details.update(cost_details)
 
-        model_response._hidden_params["model"] = response_json.get("model", model)
+        model_response.hidden_params["model"] = payload.get("model", model)
 
     def _read_image_bytes(self, image: FileTypes) -> bytes:
         """Read raw bytes from various image input types."""

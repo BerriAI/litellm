@@ -1,7 +1,10 @@
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 import unittest.mock as mock
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +22,12 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 )
 
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
-from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
+from litellm.proxy._types import (
+    CallInfo,
+    LiteLLM_UserTable,
+    Litellm_EntityType,
+    WebhookEvent,
+)
 from litellm.constants import EMAIL_BUDGET_ALERT_TTL
 
 
@@ -1417,3 +1425,106 @@ async def test_budget_alert_release_failure_does_not_propagate(base_email_logger
             )
 
     mock_cache.async_delete_cache.assert_awaited_once()
+
+
+class _RecordingEmailLogger(BaseEmailLogger):
+    def __init__(self):
+        super().__init__()
+        self.recipients = []
+
+    async def send_email(self, from_email, to_email, subject, html_body):
+        self.recipients.append(to_email)
+
+
+class _UserTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def find_unique(self, where):
+        return self._rows.get(where["user_id"])
+
+
+def _prisma_client_with_users(*rows):
+    table: Final = _UserTable({row.user_id: row for row in rows})
+    return SimpleNamespace(db=SimpleNamespace(litellm_usertable=table))
+
+
+def _key_created_event(user_id):
+    return SendKeyCreatedEmailEvent(
+        user_id=user_id,
+        user_email=None,
+        virtual_key="sk-test",
+        max_budget=None,
+        spend=0.0,
+        event_group=Litellm_EntityType.USER,
+        event="key_created",
+        event_message="Key Created",
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_created_email_goes_to_the_address_stored_for_the_user(monkeypatch):
+    stored_user: Final = LiteLLM_UserTable(
+        user_id="user-1", user_email="stored@example.com"
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _prisma_client_with_users(stored_user),
+    )
+    email_logger: Final = _RecordingEmailLogger()
+
+    await email_logger.send_key_created_email(_key_created_event("user-1"))
+
+    assert email_logger.recipients == [["stored@example.com"]]
+
+
+@pytest.mark.asyncio
+async def test_key_created_email_is_refused_for_a_user_the_database_does_not_know(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", _prisma_client_with_users()
+    )
+    email_logger: Final = _RecordingEmailLogger()
+
+    with pytest.raises(ValueError, match="User email not found for user_id: user-2"):
+        await email_logger.send_key_created_email(_key_created_event("user-2"))
+
+    assert email_logger.recipients == []
+
+
+class _ExpiryEmailTransport(BaseEmailLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.deliveries: tuple[tuple[tuple[str, ...], str, str], ...] = ()
+
+    async def send_email(self, from_email: str, to_email: list[str], subject: str, html_body: str) -> None:
+        self.deliveries = (*self.deliveries, (tuple(to_email), subject, html_body))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("days_remaining, remaining_text", [(1, "1 day remaining"), (7, "7 days remaining")])
+async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without_key(
+    days_remaining: int, remaining_text: str
+) -> None:
+    logger: Final = _ExpiryEmailTransport()
+    await logger.send_key_expiring_email(
+        user_id="owner", user_email="owner@example.com", key_display="build <key>",
+        expires=datetime(2026, 1, 8, 12, tzinfo=timezone.utc), days_remaining=days_remaining,
+    )
+    assert len(logger.deliveries) == 1
+    recipients, subject, body = logger.deliveries[0]
+    assert recipients == ("owner@example.com",)
+    assert subject == "LiteLLM: Virtual Key Expiring"
+    assert "build &lt;key&gt;" in body
+    assert "2026-01-08 12:00:00 UTC" in body
+    assert remaining_text in body
+    assert "1 days remaining" not in body
+    assert 'alt="LiteLLM Logo"' in body
+    assert "Hi owner@example.com," in body
+    assert "If you need assistance, please contact us at" in body
+    assert EMAIL_FOOTER in body
+    assert "Regenerate your key in the dashboard" in body
+    assert 'href="' in body
+    assert "secret-token-hash" not in body
+    assert "sk-raw-secret" not in body

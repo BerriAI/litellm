@@ -6,11 +6,13 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -28,6 +30,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class StabilityImageEditConfig(BaseImageEditConfig):
@@ -259,7 +263,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",
@@ -268,14 +272,15 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check for errors in response
-        if "errors" in response_data:
+        if json_contains(response_json, "errors"):
             raise self.get_error_class(
-                error_message=f"Stability AI error: {response_data['errors']}",
+                error_message=f"Stability AI error: {subscript(response_json, 'errors')}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Check finish_reason
+        response_data: Final = decoded_json_object(response_json)
         finish_reason: Final = response_data.get("finish_reason", "")
         if finish_reason == "CONTENT_FILTERED":
             raise self.get_error_class(
@@ -300,16 +305,15 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             )
 
         if not hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = {}
-        if "additional_headers" not in model_response._hidden_params:
-            model_response._hidden_params["additional_headers"] = {}
+            model_response.hidden_params = {}
+        additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+            dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
+        )
         # Override: fetch model-cost from model_cost map based on the provided model name
         model_info: Final = get_model_info(model, custom_llm_provider="stability")
         cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                cost_per_image
-            )
+            additional_headers["llm_provider-x-litellm-response-cost"] = float(cost_per_image)
         return model_response
 
     def use_multipart_form_data(self) -> bool:

@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -32,10 +31,13 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from pydantic import JsonValue, TypeAdapter
 
-_MODEL_ID: Final = "anthropic.claude-3-haiku-20240307-v1:0"
+pytestmark: Final = pytest.mark.shares_worker_state
+
+_MODEL_ID: Final = "anthropic.claude-haiku-5-5"
 _CONVERSE_MODEL: Final = f"bedrock/converse/{_MODEL_ID}"
 _INVOKE_MODEL: Final = f"bedrock/invoke/{_MODEL_ID}"
 _CONVERSE_TARGET: Final = f"/model/{_MODEL_ID}/converse"
@@ -97,6 +99,7 @@ _TOOLS: Final[tuple[dict[str, JsonValue], ...]] = (
 _CONVERSE_QUESTION: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"text": _QUESTION}]}
 _CONVERSE_ANSWERED: Final[dict[str, JsonValue]] = {"role": "assistant", "content": [{"text": _ANSWERED}]}
 _CONVERSE_FOLLOW_UP: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"text": _FOLLOW_UP}]}
+_CONVERSE_PLACEHOLDER: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
 _CONVERSE_TOOL_USE: Final[dict[str, JsonValue]] = {
     "role": "assistant",
     "content": [{"toolUse": {"toolUseId": "call_1", "name": "get_weather", "input": {"city": "Boston"}}}],
@@ -329,7 +332,7 @@ def test_r01_openai_sync_lone_user_without_content_sends_no_converse_block(gatew
         assert _spend_row(completion.id)["status"] == "success"
 
 
-async def test_r02_openai_async_user_with_null_content_after_an_assistant_turn_keeps_the_earlier_turns(
+async def test_r02_openai_async_user_with_null_content_after_an_assistant_turn_ends_on_the_placeholder_turn(
     gateway: Gateway,
 ) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
@@ -346,11 +349,13 @@ async def test_r02_openai_async_user_with_null_content_after_an_assistant_turn_k
         assert completion.choices[0].message.content == _ANSWER, completion
         target, received = _only_received(wire)
         assert target == _CONVERSE_TARGET, target
-        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED], received
+        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED, _CONVERSE_PLACEHOLDER], received
         assert _spend_row(completion.id)["status"] == "success"
 
 
-def test_r03_httpx_raw_sse_user_without_content_after_an_assistant_turn_streams_to_done(gateway: Gateway) -> None:
+def test_r03_httpx_raw_sse_user_without_content_after_an_assistant_turn_streams_the_placeholder_turn(
+    gateway: Gateway,
+) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire)
         lines: Final = _stream_lines(
@@ -364,7 +369,7 @@ def test_r03_httpx_raw_sse_user_without_content_after_an_assistant_turn_streams_
         (identity,) = {chunk["id"] for chunk in chunks}
         target, received = _only_received(wire)
         assert target == _STREAM_TARGET, target
-        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED], received
+        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED, _CONVERSE_PLACEHOLDER], received
         assert _spend_row(identity)["status"] == "success"
 
 
@@ -521,7 +526,7 @@ def test_r20_responses_lone_input_item_without_content_is_rejected_before_any_pe
         assert wire.drain() == ()
 
 
-def test_r21_responses_stream_input_item_without_content_after_an_assistant_item_keeps_the_earlier_turns(
+def test_r21_responses_stream_input_item_without_content_after_an_assistant_item_ends_on_the_placeholder_turn(
     gateway: Gateway,
 ) -> None:
     marker: Final = f"call-{uuid.uuid4().hex}"
@@ -543,10 +548,10 @@ def test_r21_responses_stream_input_item_without_content_after_an_assistant_item
         assert completed["response"]["output"][0]["content"][0]["text"] == _ANSWER, lines
         target, received = _only_received(wire)
         assert target == _STREAM_TARGET, target
-        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED], received
+        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_ANSWERED, _CONVERSE_PLACEHOLDER], received
         (row,) = _success_rows(marker, 1)
         assert row["call_type"] == "aresponses" and row["end_user"] == marker, row
-        assert row["request_id"] == _inner_response_id(str(completed["response"]["id"])), (row, completed)
+        assert row["request_id"] == str(completed["response"]["id"]), (row, completed)
 
 
 def test_r22_passthrough_converse_forwards_a_message_without_content_verbatim(gateway: Gateway) -> None:
@@ -904,13 +909,14 @@ async def test_c02_worker_sigkill_mid_burst_leaves_the_sibling_serving_content_l
             held_by: Final = MappingProxyType({pid: _open_peer_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            psutil.Process(victim_pid).send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                assert item.status == 200 and _ANSWER in item.text, (item.call, item.status, item.text)
+            with owned.replacing_worker(victim_pid) as kill:
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    assert item.status == 200 and _ANSWER in item.text, (item.call, item.status, item.text)
             eventually(
                 lambda: len(_STARTED_WORKER.findall(owned.log.read_text())), lambda count: count == 3, seconds=60
             )
@@ -947,7 +953,7 @@ async def test_c03_proxy_terminated_mid_burst_lands_every_answered_content_less_
                 _burst(_proxy_url(candidate), candidate.key, _PLAIN, calls, tolerate_transport_errors=True)
             )
             await asyncio.to_thread(eventually, held_indexes.qsize, lambda size: size == 12, 60)
-            owned.process.terminate()
+            owned.begin_shutdown()
             release.set()
             served: Final = await burst
             eventually(owned.process.poll, lambda code: code is not None, seconds=60)

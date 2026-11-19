@@ -15,9 +15,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from litellm.proxy.utils import (
-    _check_and_merge_model_level_guardrails,
+    check_and_merge_model_level_guardrails,
     _merge_guardrails_with_existing,
 )
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 # ---------------------------------------------------------------------------
 # Unit tests for _check_and_merge_model_level_guardrails
@@ -33,12 +34,12 @@ class TestCheckAndMergeModelLevelGuardrails:
             "model": "gpt-4",
             "metadata": {"model_info": {"id": "model-uuid-123"}},
         }
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "openai-moderation" in result["metadata"]["guardrails"]
         mock_router.get_deployment.assert_called_once_with(model_id="model-uuid-123")
@@ -52,12 +53,12 @@ class TestCheckAndMergeModelLevelGuardrails:
                 "guardrails": ["existing-guardrail"],
             },
         }
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.get.return_value = ["model-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "existing-guardrail" in result["metadata"]["guardrails"]
         assert "model-guardrail" in result["metadata"]["guardrails"]
@@ -71,31 +72,31 @@ class TestCheckAndMergeModelLevelGuardrails:
                 "guardrails": ["openai-moderation"],
             },
         }
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result["metadata"]["guardrails"].count("openai-moderation") == 1
 
     def test_returns_data_unchanged_when_no_router(self):
         """Returns data unchanged when llm_router is None."""
         data = {"model": "gpt-4", "metadata": {}}
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=None)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=None)
         assert result is data
 
     def test_returns_data_unchanged_when_no_model_info(self):
         """Returns data unchanged when metadata has no model_info AND the
         model alias does not resolve to a deployment."""
         data = {"model": "gpt-4", "metadata": {}}
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         # Neither the model_id lookup nor the alias-fallback lookup
         # finds a deployment.
         mock_router.get_deployment.return_value = None
         mock_router.get_deployment_by_model_group_name.return_value = None
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
         assert result is data
 
     def test_returns_data_unchanged_when_deployment_has_no_guardrails(self):
@@ -104,12 +105,12 @@ class TestCheckAndMergeModelLevelGuardrails:
             "model": "gpt-4",
             "metadata": {"model_info": {"id": "model-uuid-123"}},
         }
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.get.return_value = None
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -119,10 +120,10 @@ class TestCheckAndMergeModelLevelGuardrails:
             "model": "gpt-4",
             "metadata": {"model_info": {"id": "nonexistent-id"}},
         }
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.get_deployment.return_value = None
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -135,12 +136,12 @@ class TestCheckAndMergeModelLevelGuardrails:
                 "guardrails": ["existing"],
             },
         }
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_deployment = MagicMock()
         mock_deployment.litellm_params.get.return_value = ["new-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         # Result is a different top-level dict
         assert result is not data
@@ -333,7 +334,7 @@ async def test_post_call_success_hook_runs_model_level_guardrail():
     guardrail = TestGuardrail()
 
     # Mock router that returns a deployment with guardrails configured
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_deployment = MagicMock()
     mock_deployment.litellm_params.get.return_value = ["test-model-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
@@ -399,7 +400,7 @@ async def test_post_call_success_hook_skips_guardrail_not_on_model():
     guardrail = TestGuardrail()
 
     # Deployment has a DIFFERENT guardrail configured
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_deployment = MagicMock()
     mock_deployment.litellm_params.get.return_value = ["some-other-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
@@ -470,7 +471,7 @@ async def test_streaming_iterator_hook_runs_model_level_guardrail():
 
     guardrail = TestStreamingGuardrail()
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_deployment = MagicMock()
     mock_deployment.litellm_params.get.return_value = ["test-model-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
@@ -532,7 +533,7 @@ async def test_streaming_iterator_hook_skips_guardrail_not_on_model():
     guardrail = TestStreamingGuardrail()
 
     # Deployment has a DIFFERENT guardrail configured
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_deployment = MagicMock()
     mock_deployment.litellm_params.get.return_value = ["some-other-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
@@ -587,7 +588,7 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
     # veria-ai review on PR #29654) and route_request hasn't yet populated
     # model_info.id — so the resolver has to fall back to the model alias
     # and union guardrails across all deployments in the group.
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_deployment.return_value = None
     mock_router.get_model_list.return_value = [{"litellm_params": {"guardrails": ["my-pre-call-guardrail"]}}]
 

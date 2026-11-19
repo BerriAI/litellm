@@ -354,19 +354,14 @@ def test_model_id_application_inference_profile_keeps_converse_at_the_profile_ur
         )
 
 
-def test_stop_sequences_keep_converse(gateway: Gateway) -> None:
+def test_stop_sequences_are_dropped_and_the_request_stays_native(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
         response: Final = _chat(gateway, model, marker, stop=["END"])
-        payload: Final = _payload(response)
-        assert payload["choices"] == [
-            {"finish_reason": "stop", "index": 0, "message": {"content": answer(marker), "role": "assistant"}}
-        ], response.text
-        body: Final = _body(_converse_request(wire))
-        assert body["messages"] == _converse_messages(marker), body
-        assert body["inferenceConfig"] == {"stopSequences": ["END"]}, body
-        assert _spend_row(str(payload["id"])) == _success_row(model, f"{wire.url}{CONVERSE_TARGET}")
+        assert _payload(response)["id"] == f"chatcmpl-{marker}", response.text
+        assert _body(_native_request(wire)) == _native_body(GPT, marker)
+        assert _spend_row(f"chatcmpl-{marker}") == _success_row(model, f"{wire.url}{NATIVE_TARGET}")
 
 
 def test_json_object_response_format_keeps_converse(gateway: Gateway) -> None:

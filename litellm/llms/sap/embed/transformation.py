@@ -6,44 +6,46 @@ from functools import cached_property
 from typing import Final, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
     LiteLLMLoggingObj,
 )
 from litellm.llms.sap.chat.models import MaskingModuleConfig
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..chat.handler import GenAIHubOrchestrationError
-from ..credentials import get_token_creator
+from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
 
 
-class Usage(BaseModel):
+class Usage(LiteLLMBaseModel):
     prompt_tokens: int
     total_tokens: int
 
 
-class EmbeddingItem(BaseModel):
+class EmbeddingItem(LiteLLMBaseModel):
     object: Literal["embedding"]
     embedding: list[float] = Field(..., description="Vector of floats (length varies by model).")
     index: int
 
 
-class FinalResult(BaseModel):
+class FinalResult(LiteLLMBaseModel):
     object: Literal["list"]
     data: list[EmbeddingItem]
     model: str
     usage: Usage
 
 
-class EmbeddingsResponse(BaseModel):
+class EmbeddingsResponse(LiteLLMBaseModel):
     request_id: str
     final_result: FinalResult
 
 
-class EmbeddingModel(BaseModel):
+class EmbeddingModel(LiteLLMBaseModel):
     name: str
     version: str = "latest"
     params: dict = Field(default_factory=dict)
@@ -51,25 +53,25 @@ class EmbeddingModel(BaseModel):
     max_retries: int | None = Field(default=None, ge=0, le=5)
 
 
-class EmbeddingsModelConfig(BaseModel):
+class EmbeddingsModelConfig(LiteLLMBaseModel):
     model: EmbeddingModel
 
 
-class EmbeddingsModules(BaseModel):
+class EmbeddingsModules(LiteLLMBaseModel):
     embeddings: EmbeddingsModelConfig
     masking: MaskingModuleConfig | None = None
 
 
-class EmbeddingInput(BaseModel):
+class EmbeddingInput(LiteLLMBaseModel):
     text: str | list[str]
     type: Literal["text", "document", "query"] | None = None
 
 
-class EmbeddingConfig(BaseModel):
+class EmbeddingConfig(LiteLLMBaseModel):
     modules: EmbeddingsModules
 
 
-class EmbeddingRequest(BaseModel):
+class EmbeddingRequest(LiteLLMBaseModel):
     config: EmbeddingConfig
     input: EmbeddingInput
 
@@ -100,11 +102,13 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments: Final = []
-            deployments: Final = client.get(self.base_url + "/lm/deployments", headers=self.headers).json()
+            deployments: Final[AICoreDeploymentList] = client.get(
+                join_api_base(self.base_url, "lm/deployments"), headers=self.headers
+            ).json()
             for deployment in deployments.get("resources", []):
                 if deployment["scenarioId"] == "orchestration":
-                    config_details = client.get(
-                        self.base_url + f"/lm/configurations/{deployment['configurationId']}",
+                    config_details: AICoreConfiguration = client.get(
+                        join_api_base(self.base_url, f"lm/configurations/{deployment['configurationId']}"),
                         headers=self.headers,
                     ).json()
                     if config_details["executableId"] == "orchestration":
@@ -143,7 +147,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        url: Final = self.deployment_url.rstrip("/") + "/v2/embeddings"
+        url: Final = join_api_base(self.deployment_url, "v2/embeddings")
         return url
 
     def transform_embedding_request(

@@ -4,12 +4,13 @@ Fetches .prompt files from BitBucket repositories and provides team-based access
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -26,6 +27,10 @@ from litellm.types.utils import StandardCallbackDynamicParams
 from .bitbucket_client import BitBucketClient
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 class BitBucketPromptTemplate:
     """
     Represents a prompt template loaded from BitBucket.
@@ -35,7 +40,7 @@ class BitBucketPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Mapping[str, object],
         model: str | None = None,
     ):
         self.template_id = template_id
@@ -44,7 +49,9 @@ class BitBucketPromptTemplate:
         self.model = model or metadata.get("model")
         self.temperature = metadata.get("temperature")
         self.max_tokens = metadata.get("max_tokens")
-        self.input_schema = metadata.get("input", {}).get("schema", {})
+        self.input_schema = require_attributes(metadata.get("input", {}), _SupportsGetWithDefault, "get").get(
+            "schema", {}
+        )
         self.optional_params = {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
 
     def __repr__(self):
@@ -94,9 +101,9 @@ class BitBucketTemplateManager:
 
         # Load prompts from BitBucket if prompt_id is provided
         if self.prompt_id:
-            self._load_prompt_from_bitbucket(self.prompt_id)
+            self.load_prompt_from_bitbucket(self.prompt_id)
 
-    def _load_prompt_from_bitbucket(self, prompt_id: str) -> None:
+    def load_prompt_from_bitbucket(self, prompt_id: str) -> None:
         """Load a specific .prompt file from BitBucket."""
         try:
             # Fetch the .prompt file from BitBucket
@@ -107,6 +114,8 @@ class BitBucketTemplateManager:
                 self.prompts[prompt_id] = template
         except Exception as e:
             raise Exception(f"Failed to load prompt '{prompt_id}' from BitBucket: {e}")
+
+    _load_prompt_from_bitbucket = load_prompt_from_bitbucket
 
     def _parse_prompt_file(self, content: str, prompt_id: str) -> BitBucketPromptTemplate:
         """Parse a .prompt file content and extract metadata and template."""
@@ -446,7 +455,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         try:
             # Load the prompt from BitBucket if not already loaded
             if prompt_id not in self.prompt_manager.prompts:
-                self.prompt_manager._load_prompt_from_bitbucket(prompt_id)
+                self.prompt_manager.load_prompt_from_bitbucket(prompt_id)
 
             # Get the rendered prompt and metadata
             rendered_prompt, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)

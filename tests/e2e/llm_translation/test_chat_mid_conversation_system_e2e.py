@@ -37,6 +37,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import CacheControl, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
 from passthrough_client import PassthroughClient
@@ -281,6 +282,16 @@ class TestAnthropicChatMidConversationSystem:
         "llm.chat_completions.anthropic.mid_conversation_system.nonstream.cache_hit",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(FLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_flagged_model_keeps_prompt_cache_across_system_reminder(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -289,6 +300,16 @@ class TestAnthropicChatMidConversationSystem:
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.mid_conversation_system.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(UNFLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_unflagged_model_converts_system_reminder_and_succeeds(
         self, client: PassthroughClient, resources: ResourceManager
@@ -305,6 +326,16 @@ class TestBedrockInvokeChatMidConversationSystem:
         "llm.chat_completions.bedrock_invoke.mid_conversation_system.nonstream.cache_hit",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(FLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_flagged_model_keeps_prompt_cache_across_system_reminder(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -313,6 +344,16 @@ class TestBedrockInvokeChatMidConversationSystem:
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_invoke.mid_conversation_system.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(UNFLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_unflagged_model_converts_system_reminder_and_succeeds(
         self, client: PassthroughClient, resources: ResourceManager

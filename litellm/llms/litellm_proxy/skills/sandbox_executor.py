@@ -7,7 +7,8 @@ Supports Docker, Podman, and Kubernetes backends.
 
 import base64
 import os
-from typing import Any, Final, Protocol, TypedDict
+from collections.abc import Sequence
+from typing import Final, Protocol, TypedDict
 
 from typing_extensions import ReadOnly
 
@@ -39,6 +40,13 @@ class _GeneratedFile(TypedDict):
     path: ReadOnly[str]
     content_base64: ReadOnly[str]
     mime_type: ReadOnly[str]
+
+
+class _SandboxExecution(TypedDict):
+    success: ReadOnly[bool]
+    output: ReadOnly[str]
+    error: ReadOnly[str]
+    files: ReadOnly[Sequence[_GeneratedFile]]
 
 
 class SkillsSandboxExecutor:
@@ -76,7 +84,7 @@ class SkillsSandboxExecutor:
         code: str,
         skill_files: dict[str, bytes],
         requirements: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> _SandboxExecution:
         """
         Execute code with skill files in sandbox.
 

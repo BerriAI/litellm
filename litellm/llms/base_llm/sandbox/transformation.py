@@ -6,11 +6,13 @@ returns whatever the sandbox produced. The lifecycle is create container ->
 run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
-from typing import Any, Final
+import builtins
+from typing import Final
 
 import httpx
 from pydantic import Field, PrivateAttr
 
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 SANDBOX_MAX_OUTPUT_BYTES: Final = 10 * 1024 * 1024
@@ -27,20 +29,36 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class CodeExecutionResult(LiteLLMPydanticObjectBase):
     """Passthrough of the sandbox's own execution output."""
 
     stdout: str = ""
     stderr: str = ""
-    results: list[dict[str, Any]] = Field(default_factory=list)
-    error: dict[str, Any] | None = None
+    results: list[dict[str, object]] = Field(default_factory=list)
+    error: dict[str, object] | None = None
     execution_count: int | None = None
     object: str = "code_execution"
 
     model_config = {"extra": "allow"}
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class BaseSandboxConfig:
@@ -82,7 +100,7 @@ class BaseSandboxConfig:
     async def _read_capped_lines(self, response: httpx.Response) -> list[str]:
         lines: Final[list[str]] = []
         total = 0
-        async for line in response.aiter_lines():
+        async for line in aiter_sse_lines(response.aiter_text()):
             total += len(line.encode("utf-8"))
             if total > SANDBOX_MAX_OUTPUT_BYTES:
                 raise ValueError(

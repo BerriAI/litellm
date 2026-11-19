@@ -21,6 +21,7 @@ from typing import Final
 
 from e2e_config import INHERITED_ENV_PREFIXES, available_port
 from e2e_http import NoBody
+from e2e_metadata import step
 from idp import Keycloak, stop_process_group
 from proxy_client import ProxyClient, build_proxy_client
 
@@ -36,6 +37,7 @@ class OwnedJwtGateway:
     _log_path: Path
     _child: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
+    @step("Start the dedicated JWT proxy and wait for /health/liveliness")
     def start(self) -> None:
         with self._log_path.open("ab") as log:
             self._child = subprocess.Popen(
@@ -54,12 +56,14 @@ class OwnedJwtGateway:
             time.sleep(0.5)
         raise AssertionError("owned JWT gateway did not become ready")
 
+    @step("Stop the dedicated JWT proxy")
     def stop(self) -> None:
         if self._child is not None:
             stop_process_group(self._child)
             assert self._child.poll() is not None, "old gateway process is still alive"
 
 
+@step("Boot a dedicated proxy {name} with its own litellm_jwtauth config")
 def owned_jwt_gateway(
     idp: Keycloak, directory: Path, cleanup: ExitStack, *, litellm_jwtauth: str, name: str
 ) -> OwnedJwtGateway:
@@ -86,7 +90,6 @@ def owned_jwt_gateway(
         "JWT_PUBLIC_KEY_URL": idp.jwks_url,
         "JWT_ISSUER": idp.issuer,
         "JWT_AUDIENCE": "litellm-e2e",
-        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true",
         "DISABLE_SCHEMA_UPDATE": "true",
         "STORE_MODEL_IN_DB": "True",
         "PYTHONPATH": str(Path(__file__).resolve().parents[3]),
