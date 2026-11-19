@@ -737,7 +737,6 @@ from litellm.proxy.health_check import (
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
-    public_wildcard_probe_deployments,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -5101,13 +5100,16 @@ def _schedule_background_health_check_db_save(
     unhealthy_endpoints: list,
     pod_lock_manager: PodLockManager | None = None,
     lock_ttl: int | None = None,
-    wildcard_probes: Sequence[Mapping[str, object]] = (),
+    public_names: Sequence[str] = (),
+    probe_router: Router | None = None,
+    model_groups: AbstractSet[str] | None = None,
     details: bool | None = True,
     max_concurrency: int | None = None,
 ) -> None:
     """Fire-and-forget: persist health check results to DB if prisma is available.
 
-    ``wildcard_probes`` are probed here, inside the window-gated save, so their results reach only the DB.
+    Public names a wildcard alone serves are probed here, inside the window-gated save, so their
+    results reach only the DB and a failure there never reaches the background loop.
     """
     if prisma_client is None:
         return
@@ -5128,11 +5130,9 @@ def _schedule_background_health_check_db_save(
             unhealthy_endpoints,
             start_time,
             checked_by,
-            wildcard_probes,
-            details,
-            max_concurrency,
+            _WildcardProbeScope(public_names, probe_router, model_groups, details, max_concurrency),
         )
-        if wildcard_probes
+        if public_names and probe_router is not None
         else partial(
             save_background_health_checks_to_db,
             prisma_client,
@@ -5146,29 +5146,64 @@ def _schedule_background_health_check_db_save(
     asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
 
 
+@dataclass(frozen=True, slots=True)
+class _WildcardProbeScope:
+    public_names: Sequence[str]
+    router: Router
+    model_groups: AbstractSet[str] | None
+    details: bool | None
+    max_concurrency: int | None
+
+
+_Endpoints: TypeAlias = Sequence[Mapping[str, object]]
+
+
+async def _wildcard_probe_results(scope: _WildcardProbeScope) -> tuple[_Endpoints, _Endpoints, _Endpoints] | None:
+    """The probes and their healthy and unhealthy endpoints, or None when there is nothing to save for them."""
+    from litellm.proxy.health_check import probe_public_wildcard_deployments, public_wildcard_probe_deployments
+
+    try:
+        probes: Final = public_wildcard_probe_deployments(scope.public_names, scope.router, scope.model_groups)
+        if not probes:
+            return None
+        healthy, unhealthy = await probe_public_wildcard_deployments(probes, scope.details, scope.max_concurrency)
+        return probes, healthy, unhealthy
+    except Exception as e:
+        verbose_proxy_logger.warning("background_health_check_wildcard_probe_failed error=%s", str(e))
+        return None
+
+
 async def _probe_wildcards_and_save(
     prisma_client: PrismaClient,
-    model_list: Sequence[Mapping[str, object]],
-    healthy_endpoints: Sequence[Mapping[str, object]],
-    unhealthy_endpoints: Sequence[Mapping[str, object]],
+    model_list: _Endpoints,
+    healthy_endpoints: _Endpoints,
+    unhealthy_endpoints: _Endpoints,
     start_time: float,
     checked_by: str,
-    wildcard_probes: Sequence[Mapping[str, object]],
-    details: bool | None,
-    max_concurrency: int | None,
+    scope: _WildcardProbeScope,
 ) -> bool:
-    from litellm.proxy.health_check import probe_public_wildcard_deployments
     from litellm.proxy.health_endpoints._health_endpoints import (
         save_background_health_checks_to_db,
     )
 
-    probe_healthy, probe_unhealthy = await probe_public_wildcard_deployments(wildcard_probes, details, max_concurrency)
+    probing_started: Final = time.time()
+    results: Final = await _wildcard_probe_results(scope)
+    if results is None:
+        return await save_background_health_checks_to_db(
+            prisma_client,
+            list(model_list),
+            list(healthy_endpoints),
+            list(unhealthy_endpoints),
+            start_time,
+            checked_by=checked_by,
+        )
+    probes, probe_healthy, probe_unhealthy = results
     return await save_background_health_checks_to_db(
         prisma_client,
-        [*model_list, *wildcard_probes],
+        [*model_list, *probes],
         [*healthy_endpoints, *probe_healthy],
         [*unhealthy_endpoints, *probe_unhealthy],
-        start_time,
+        start_time + (time.time() - probing_started),
         checked_by=checked_by,
     )
 
@@ -5359,11 +5394,6 @@ async def _run_background_health_check():
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
         _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
-        wildcard_probes = (
-            public_wildcard_probe_deployments(litellm.public_model_groups or (), llm_router, scoped_model_groups)
-            if llm_router is not None
-            else ()
-        )
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
                 "background_health_check_model_groups matched no deployments; groups=%s",
@@ -5472,7 +5502,9 @@ async def _run_background_health_check():
             unhealthy_endpoints,
             pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             lock_ttl=health_check_interval,
-            wildcard_probes=wildcard_probes,
+            public_names=tuple(litellm.public_model_groups or ()),
+            probe_router=llm_router,
+            model_groups=scoped_model_groups,
             details=details_bool,
             max_concurrency=health_check_concurrency,
         )
