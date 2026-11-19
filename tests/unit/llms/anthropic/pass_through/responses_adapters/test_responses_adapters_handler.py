@@ -36,7 +36,7 @@ RESPONSES_SSE_BODY = (
 @pytest.mark.parametrize(
     ("system", "params", "expected_instructions", "expected_role"),
     [
-        ("System prefix", {"instructions": "Caller prompt"}, "System prefix\nCaller prompt", "user"),
+        ("System prefix", {"instructions": "Caller prompt"}, "Caller prompt", "developer"),
         (
             "System prefix",
             {"store": False, "extra_body": {"truncation": "auto", "instructions": "Caller prompt"}},

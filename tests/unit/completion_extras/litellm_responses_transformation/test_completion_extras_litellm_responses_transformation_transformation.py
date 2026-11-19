@@ -38,18 +38,18 @@ if TYPE_CHECKING:
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
     [
-        ({}, {}, True),
+        ({}, {}, False),
         ({"store": False, "drop_params": True}, {"store": False}, False),
         ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, True),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, True),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, True),
-        ({"extra_body": {"store": None}}, {}, True),
-        ({"store": True}, {"store": True}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, False),
+        ({"extra_body": {"store": None}}, {}, False),
+        ({"store": True}, {"store": True}, False),
         ({"store": False}, {"store": False}, False),
         ({"extra_body": {"store": False}}, {"store": False}, False),
-        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
         (
             {"store": False, "previous_response_id": "resp_prior"},
@@ -57,9 +57,11 @@ if TYPE_CHECKING:
             True,
         ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+        ({"previous_response_id": "resp_prior"}, {"previous_response_id": "resp_prior"}, True),
+        ({"store": True, "truncation": "auto"}, {"store": True, "truncation": "auto"}, True),
     ],
 )
-async def test_acompletion_system_input_requires_forwarded_store_false(
+async def test_acompletion_system_goes_in_input_unless_the_request_continues_a_chain(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
@@ -4768,7 +4770,7 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str], store
         {"instructions": "Caller instructions", **({"store": store} if store is not None else {}), **continuation},
     )
 
-    system_in_input: Final = store is False and not continuation
+    system_in_input: Final = not continuation
     assert request["instructions"] == ("Caller instructions" if system_in_input else "Be brief.\nCaller instructions")
     assert request["input"] == [*([_system_input_item("Be brief.")] if system_in_input else []), _HI_USER_ITEM]
 
@@ -4776,7 +4778,7 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str], store
 @pytest.mark.parametrize("store", [None, True, False])
 @pytest.mark.parametrize("extra_body", [False, True])
 @pytest.mark.parametrize("continuation", [{}, {"previous_response_id": "resp_prior"}])
-def test_system_input_requires_explicit_store_false(
+def test_system_goes_in_input_unless_the_request_continues_a_chain(
     store: bool | None, extra_body: bool, continuation: dict[str, str]
 ) -> None:
     store_params: Final = {"store": store} if store is not None else {}
@@ -4787,7 +4789,7 @@ def test_system_input_requires_explicit_store_false(
         {**({"extra_body": store_params} if extra_body else store_params), **continuation},
     )
 
-    system_in_input: Final = store is False and not continuation
+    system_in_input: Final = not continuation
     assert request.get("instructions") == (None if system_in_input else "Be brief.")
     assert request["input"] == [*([_system_input_item("Be brief.")] if system_in_input else []), _HI_USER_ITEM]
 
@@ -4802,8 +4804,8 @@ def test_extra_body_store_overrides_top_level_store(top_level_store: bool) -> No
     )
 
     assert request["store"] is not top_level_store
-    assert request.get("instructions") == (None if top_level_store else "Be brief.")
-    assert request["input"] == [*([_system_input_item("Be brief.")] if top_level_store else []), _HI_USER_ITEM]
+    assert request.get("instructions") is None
+    assert request["input"] == [_system_input_item("Be brief."), _HI_USER_ITEM]
 
 
 def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_identical_input_items():

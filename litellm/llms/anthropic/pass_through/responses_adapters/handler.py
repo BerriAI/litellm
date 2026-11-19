@@ -43,16 +43,9 @@ SYSTEM_PLACEMENT_PARAMS: Final = (
 
 def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
     extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
-    dropped: Final = request_params.get("additional_drop_params")
-    top_level_store: Final = None if isinstance(dropped, list) and "store" in dropped else request_params.get("store")
-    placement_fields: Final = ("store", "previous_response_id", "conversation", "truncation")
-    top_level: Final = {key: top_level_store if key == "store" else request_params.get(key) for key in placement_fields}
-    sent: Final = {key: extra_body.get(key, top_level[key]) for key in placement_fields}
-    return (
-        sent["store"] is not False
-        or bool(sent["previous_response_id"] or sent["conversation"])
-        or sent["truncation"] == "auto"
-    )
+    placement_fields: Final = ("previous_response_id", "conversation", "truncation")
+    sent: Final = {key: extra_body.get(key, request_params.get(key)) for key in placement_fields}
+    return bool(sent["previous_response_id"] or sent["conversation"]) or sent["truncation"] == "auto"
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
