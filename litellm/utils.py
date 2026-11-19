@@ -2487,6 +2487,7 @@ def client(original_function):
                         result.chunks
                         if isinstance(result, CustomStreamWrapper)
                         and result.custom_llm_provider == LlmProviders.BEDROCK.value
+                        and any(chunk.choices for chunk in result.chunks)
                         else chunks
                     )
                     return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
@@ -2815,10 +2816,14 @@ def client(original_function):
                         and result.custom_llm_provider == LlmProviders.BEDROCK.value
                         else None
                     )
-                    if bedrock_stream is not None:
-                        async for _ in bedrock_stream:
-                            pass
-                    assembly_chunks: Final = bedrock_stream.chunks if bedrock_stream is not None else list(result)
+                    streamed_chunks: Final = (
+                        [chunk async for chunk in bedrock_stream] if bedrock_stream is not None else list(result)
+                    )
+                    assembly_chunks: Final = (
+                        bedrock_stream.chunks
+                        if bedrock_stream is not None and any(chunk.choices for chunk in bedrock_stream.chunks)
+                        else streamed_chunks
+                    )
                     return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
                 else:
                     if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
