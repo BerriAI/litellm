@@ -209,3 +209,52 @@ def test_mallard_model_prices_and_limits():
     assert info["supports_function_calling"] is True
     assert info["supports_vision"] is True
     assert info["supports_reasoning"] is True
+
+
+@pytest.mark.parametrize(
+    "route_kwargs",
+    (
+        {"model": "mallard/qwen/qwen3.6-35b-a3b"},
+        {"model": "qwen/qwen3.6-35b-a3b", "api_base": "https://api.mallardai.co.uk/v1"},
+    ),
+    ids=("prefixed-model", "api-base-autodetection"),
+)
+def test_mallard_missing_key_rejects_before_openai_fallback(monkeypatch: pytest.MonkeyPatch, route_kwargs: dict):
+    monkeypatch.delenv("MALLARD_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__regex=r"https://api\.mallardai\.co\.uk/v1/.*").respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="MALLARD_API_KEY"):
+            litellm.completion(messages=[{"role": "user", "content": "Hello"}], **route_kwargs)
+    assert route.call_count == 0
+
+
+def test_mallard_chat_completion_uses_authenticated_client(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("MALLARD_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    with OpenAI(api_key="mallard-client-key", base_url="https://api.mallardai.co.uk/v1") as client:
+        with respx.mock() as upstream:
+            route: Final = upstream.post("https://api.mallardai.co.uk/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+            response: Final = litellm.completion(
+                model="mallard/qwen/qwen3.6-35b-a3b", messages=[{"role": "user", "content": "Hello"}], client=client
+            )
+    assert route.calls.last.request.headers["authorization"] == "Bearer mallard-client-key"
+    assert response.choices[0].message.content == "Hello from Mallard AI"
+
+
+def test_mallard_http_transport_rejects_unused_sdk_credentials(monkeypatch: pytest.MonkeyPatch):
+    from openai import OpenAI
+
+    monkeypatch.delenv("MALLARD_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-provider-key")
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    with OpenAI(api_key="mallard-client-key", base_url="https://api.mallardai.co.uk/v1") as client:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://api.mallardai.co.uk/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+            with pytest.raises(litellm.AuthenticationError, match="MALLARD_API_KEY"):
+                litellm.completion(
+                    model="mallard/qwen/qwen3.6-35b-a3b", messages=[{"role": "user", "content": "Hello"}], client=client
+                )
+    assert route.call_count == 0
