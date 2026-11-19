@@ -401,6 +401,8 @@ _BUDGET_REFERENCE_FIELDS: Final = (
     "app_default_tiers",
     "app_default_members",
     "app_org_tiers",
+    "app_org_budgets",
+    "app_member_budgets",
     "app_org_overrides",
     "app_org_members",
     "app_member_overrides",
@@ -445,8 +447,16 @@ def team_response(row: PrismaRecord, now: datetime) -> Team:
     )
 
 
+class BudgetOverrideState(Protocol):
+    @property
+    def budget_override_id(self) -> str | None: ...
+
+    @property
+    def budget_override_expires_at(self) -> datetime | None: ...
+
+
 def override_expiry(
-    row: Team | CustomerMember | None, payload: TeamPatch | MemberFields, override_id: str | None
+    row: BudgetOverrideState | None, payload: TeamPatch | MemberFields, override_id: str | None
 ) -> datetime | None:
     if override_id is None:
         return None
@@ -951,22 +961,7 @@ class CustomerHierarchyStore:
             return Failure(ErrorCode.PARENT_NOT_FOUND)
         templates: Final = frozenset(template.budget_id for template in organization.default_budgets)
         if "budget" in payload.model_fields_set and payload.budget_id is None:
-            owned_id: Final = None if current_id in templates else current_id
-            template: Final = next(
-                (template for template in organization.default_budgets if template.budget_id == current_id), None
-            )
-            if template is None or payload.budget is None:
-                return await self.overall_budget_patch(owned_id, payload, actor)
-            custom: Final = Budget.model_validate(
-                {**budget_values(template), **payload.budget.model_dump(exclude_unset=True)}
-            )
-            budget_id: Final = await self.create_budget(custom, actor)
-            if custom.budget_duration is not None and custom.budget_duration == template.budget_duration:
-                original: Final = await self.budgets.find_unique(where={"budget_id": template.budget_id})
-                reset_at: Final = window_reset_at(original.model_dump() if original is not None else None)
-                if reset_at is not None:
-                    await update_budget_row(self.budgets, budget_id, {"budget_reset_at": reset_at}, actor)
-            return budget_id
+            return await self.private_budget_patch(current_id, payload, actor, shared_ids=templates)
         selected: Final = (
             payload.budget_id or organization.default_budget_template_id if inherit_default else payload.budget_id
         )
@@ -1223,6 +1218,37 @@ class CustomerHierarchyStore:
         await self.delete_released_budget(member.budget_id, selected)
         await self.delete_released_budget(member.budget_override_id, override_id)
         return await self.get_member(member_id)
+
+    async def private_budget_patch(
+        self,
+        current_id: str | None,
+        payload: MemberFields,
+        actor: str,
+        *,
+        source_id: str | None = None,
+        shared_ids: Collection[str] = (),
+    ) -> str | None:
+        if "budget" not in payload.model_fields_set:
+            return current_id
+        owned_id: Final = None if current_id in shared_ids else current_id
+        if payload.budget is None:
+            return await self.overall_budget_patch(owned_id, payload, actor)
+        if current_id in shared_ids or (current_id is None and source_id is not None):
+            return await self.fork_budget(current_id or source_id, payload.budget, actor)
+        return await self.overall_budget_patch(owned_id, payload, actor)
+
+    async def fork_budget(self, source_id: str | None, patch: Budget, actor: str) -> str:
+        original: Final = await self.budgets.find_unique(where={"budget_id": source_id}) if source_id else None
+        source: Final = related_budget(original.model_dump()) if original is not None else None
+        custom: Final = Budget.model_validate(
+            {**(budget_values(source) if source is not None else {}), **patch.model_dump(exclude_unset=True)}
+        )
+        budget_id: Final = await self.create_budget(custom, actor)
+        if original is not None and source is not None and custom.budget_duration == source.budget_duration:
+            reset_at: Final = window_reset_at(original.model_dump())
+            if reset_at is not None:
+                await update_budget_row(self.budgets, budget_id, {"budget_reset_at": reset_at}, actor)
+        return budget_id
 
     async def preserve_member_custom_budget(self, member: CustomerMember, actor: str) -> CustomerMember | Failure:
         if member.budget_override_id is None or member.budget_override_expires_at is not None:

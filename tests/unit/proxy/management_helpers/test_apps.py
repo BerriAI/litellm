@@ -146,6 +146,8 @@ class AppDatabase(Database):
                 "default_customer_member_budget_id",
             ),
             "app_org_tiers": (self.litellm_appcustomerorgtable, "tier_budget_id"),
+            "app_org_budgets": (self.litellm_appcustomerorgtable, "budget_id"),
+            "app_member_budgets": (self.litellm_appcustomermembertable, "budget_id"),
             "app_org_overrides": (
                 self.litellm_appcustomerorgtable,
                 "budget_override_id",
@@ -448,7 +450,7 @@ async def test_member_override_is_scoped_and_can_return_to_the_org_default(
     )
     assert isinstance(override, AppMember) and override.effective_budget == Budget(max_budget=1, allowed_models=())
     assert override.budget_source == AppMemberBudgetSource.MEMBER_OVERRIDE
-    restored: Final = await store.put_member(app.app_id, "member", AppMemberPut(), "admin")
+    restored: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget_override=None), "admin")
     assert isinstance(restored, AppMember) and restored.effective_budget == Budget(max_budget=5, allowed_models=())
 
 
@@ -458,6 +460,10 @@ async def test_app_member_permanent_budget_keeps_temporary_increase_and_patches_
 ) -> None:
     database, store, app = app_store
     preset: Final = await store.customers.create_budget(Budget(max_budget=10, rpm_limit=4), "admin")
+    configured: Final = await store.patch(
+        app.app_id, AppPatch(default_customer_member_budget=Budget(max_budget=10, rpm_limit=4)), "admin"
+    )
+    assert isinstance(configured, App)
     await database.litellm_customerorganizationtable.update(
         where={"customer_org_id": "org"}, data={"budget_template_ids": [preset]}
     )
@@ -470,23 +476,99 @@ async def test_app_member_permanent_budget_keeps_temporary_increase_and_patches_
         "admin",
     )
     assert not isinstance(increased, Failure)
+    temporary: Final = await store.put_member(
+        app.app_id,
+        "member",
+        AppMemberPut(budget_override=Budget(max_budget=30), budget_override_expires_at=NOW.replace(year=2027)),
+        "admin",
+    )
+    assert isinstance(temporary, AppMember)
     changed: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget=Budget(max_budget=12)), "admin")
     assert isinstance(changed, AppMember)
     assert changed.budget is not None and changed.budget.max_budget == 12 and changed.budget.rpm_limit == 4
     customer: Final = await store.customers.get_member("member")
     assert not isinstance(customer, Failure)
-    assert customer.budget_id != preset
-    assert customer.budget_override_id == increased.budget_override_id
-    assert customer.budget_override_expires_at == increased.budget_override_expires_at
+    assert customer == increased
+    assert changed.budget_id != configured.default_customer_member_budget_id
+    assert changed.effective_budget == Budget(max_budget=30, rpm_limit=4, allowed_models=())
+    assert changed.budget_override_id == temporary.budget_override_id
+    expired: Final = await AppStore(database, NOW.replace(year=2028)).get_member(app.app_id, "member")
+    assert isinstance(expired, AppMember) and expired.effective_budget == changed.budget
+    assert expired.budget_source == AppMemberBudgetSource.MEMBER_BUDGET
     edited: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget=Budget(rpm_limit=None)), "admin")
     assert isinstance(edited, AppMember) and edited.budget is not None
     assert edited.budget.max_budget == 12 and edited.budget.rpm_limit is None
     latest: Final = await store.customers.get_member("member")
-    assert not isinstance(latest, Failure) and latest.budget_id == customer.budget_id
+    assert latest == increased
+    assert edited.budget_id == changed.budget_id
     assert (await store.budget(preset)) == Budget(max_budget=10, rpm_limit=4, allowed_models=())
     cleared: Final = await store.put_member(app.app_id, "member", AppMemberPut(budget=None), "admin")
     assert isinstance(cleared, AppMember) and cleared.budget is None
-    assert await store.budget(customer.budget_id) is None
+    assert await store.budget(changed.budget_id) is None
+    assert await store.budget(configured.default_customer_member_budget_id) == Budget(
+        max_budget=10, rpm_limit=4, allowed_models=()
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_org_custom_forks_shared_profile_and_expiry_restores_private_budget(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    tier: Final = await profile(store, "Standard", 10)
+    await store.customers.update_budget(tier, Budget(rpm_limit=4, budget_duration="1mo"), "admin")
+    selected: Final = await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_id=tier), "admin")
+    assert isinstance(selected, AppOrganization) and selected.budget_id == tier and selected.budget is None
+    forked: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget=Budget(max_budget=12)), "admin"
+    )
+    assert isinstance(forked, AppOrganization) and forked.budget is not None
+    assert forked.budget_id != tier and forked.budget.rpm_limit == 4 and forked.budget.max_budget == 12
+    original_row: Final = await store.customers.budgets.find_unique(where={"budget_id": tier})
+    private_row: Final = await store.customers.budgets.find_unique(where={"budget_id": forked.budget_id})
+    assert original_row is not None and private_row is not None
+    assert private_row.model_dump()["budget_reset_at"] == original_row.model_dump()["budget_reset_at"]
+    patched: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget=Budget(rpm_limit=None)), "admin"
+    )
+    assert isinstance(patched, AppOrganization) and patched.budget is not None
+    assert (
+        patched.budget_id == forked.budget_id and patched.budget.rpm_limit is None and patched.budget.max_budget == 12
+    )
+    increased: Final = await store.put_organization(
+        app.app_id,
+        "org",
+        AppOrganizationPut(budget_override=Budget(max_budget=20), budget_override_expires_at=NOW.replace(year=2027)),
+        "admin",
+    )
+    assert isinstance(increased, AppOrganization) and increased.effective_budget == Budget(
+        max_budget=20, budget_duration="1mo", allowed_models=()
+    )
+    expired: Final = await AppStore(database, NOW.replace(year=2028)).organization(app, "org")
+    assert expired.effective_budget == await store.budget(forked.budget_id)
+    restored: Final = await store.put_organization(
+        app.app_id, "org", AppOrganizationPut(budget_id=tier, budget_override=None), "admin"
+    )
+    assert isinstance(restored, AppOrganization) and restored.budget_id == tier
+    assert await store.budget(forked.budget_id) is None
+    assert await store.budget(tier) is not None
+
+
+@pytest.mark.asyncio
+async def test_app_org_legacy_tier_and_nonexpiring_override_still_resolve(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    tier: Final = await profile(store, "Standard", 10)
+    override: Final = await store.customers.create_budget(Budget(max_budget=15), "admin")
+    await database.litellm_appcustomerorgtable.create(
+        {"app_id": app.app_id, "customer_org_id": "org", "tier_budget_id": tier, "budget_override_id": override}
+    )
+    legacy: Final = await store.organization(app, "org")
+    assert legacy.effective_budget == Budget(max_budget=15, allowed_models=())
+    restored: Final = await store.put_organization(app.app_id, "org", AppOrganizationPut(budget_override=None), "admin")
+    assert isinstance(restored, AppOrganization) and restored.budget_id == tier
+    assert restored.effective_budget == Budget(max_budget=10, allowed_models=())
 
 
 @pytest.mark.asyncio

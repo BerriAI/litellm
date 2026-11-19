@@ -36,7 +36,10 @@ def client(
 
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
     http, store = client()
-    assert http.get("/management/v1/apps/definition").json() == {"resource_type": None, "auto_create_customers_without_app": True}
+    assert http.get("/management/v1/apps/definition").json() == {
+        "resource_type": None,
+        "auto_create_customers_without_app": True,
+    }
     assert http.get("/management/v1/apps/resources").json() == []
     preview: Final = http.get("/management/v1/apps/resources", params={"resource_type": "team"})
     assert preview.status_code == 200 and len(preview.json()) == 2
@@ -119,7 +122,6 @@ def test_virtual_key_discovery_never_returns_credentials_or_hashes() -> None:
     assert "token-a" not in response.text
 
 
-
 def test_list_and_get_apps_return_saved_budgets_and_period_usage() -> None:
     http, _ = client()
     assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
@@ -140,8 +142,12 @@ def test_list_and_get_apps_return_saved_budgets_and_period_usage() -> None:
 
 def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     http, store = client()
-    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-a", "created_by": "admin", "updated_by": "admin"}))
-    asyncio.run(store.customers.organizations.create({"customer_org_id": "org-b", "created_by": "admin", "updated_by": "admin"}))
+    asyncio.run(
+        store.customers.organizations.create({"customer_org_id": "org-a", "created_by": "admin", "updated_by": "admin"})
+    )
+    asyncio.run(
+        store.customers.organizations.create({"customer_org_id": "org-b", "created_by": "admin", "updated_by": "admin"})
+    )
     asyncio.run(
         store.customers.members.create(
             {
@@ -191,14 +197,18 @@ def test_customer_and_member_budget_endpoints_keep_apps_independent() -> None:
     assert override.json()["budget_source"] == "member_override"
     assert http.get(search_member).json() == override.json()
     assert http.get(chat_member).json() == inherited.json()
-    restored: Final = http.put(search_member, json={})
+    restored: Final = http.put(search_member, json={"budget_override": None})
     assert restored.status_code == 200
     assert restored.json()["effective_budget"] == Budget(max_budget=20, allowed_models=()).model_dump(mode="json")
     assert restored.json()["budget_source"] == "app_default"
     permanent: Final = http.put(chat_member, json={"budget": {"max_budget": 7}})
     assert permanent.status_code == 200, permanent.text
     assert permanent.json()["budget"] == Budget(max_budget=7, allowed_models=()).model_dump(mode="json")
-    assert http.get(search_member).json()["budget"] == permanent.json()["budget"]
+    assert http.get(search_member).json()["budget"] is None
+    assert permanent.json()["budget_source"] == "member_budget"
+    rejected: Final = http.put(chat_org, json={"budget_id": "unknown", "budget": {"max_budget": 7}})
+    assert rejected.status_code == 422
+    assert http.put(chat_org, json={"budget_id": "unknown"}).status_code == 422
     invalid: Final = http.put(chat_member, json={"budget": {"max_budget": -1}})
     assert invalid.status_code == 422
     assert http.get(chat_member).json()["budget"] == permanent.json()["budget"]

@@ -15,6 +15,8 @@ model LiteLLM_BudgetTable {
   app_default_tiers LiteLLM_AppTable[] @relation("AppDefaultTier")
   app_default_members LiteLLM_AppTable[] @relation("AppDefaultMember")
   app_org_tiers LiteLLM_AppCustomerOrgTable[] @relation("AppOrgTier")
+  app_org_budgets LiteLLM_AppCustomerOrgTable[] @relation("AppOrgBudget")
+  app_member_budgets LiteLLM_AppCustomerMemberTable[] @relation("AppMemberBudget")
   app_org_overrides LiteLLM_AppCustomerOrgTable[] @relation("AppOrgOverride")
   app_org_members LiteLLM_AppCustomerOrgTable[] @relation("AppOrgMember")
   app_member_overrides LiteLLM_AppCustomerMemberTable[] @relation("AppMemberOverride")
@@ -87,7 +89,10 @@ model LiteLLM_AppCustomerOrgTable {
   spend Float @default(0.0)
   spend_reset_window String?
   tier_budget_id String?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppOrgBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
   budget_override_id String?
+  budget_override_expires_at DateTime?
   customer_member_budget_id String?
   app LiteLLM_AppTable @relation(fields: [app_id], references: [app_id], onDelete: Cascade)
   customer_org LiteLLM_CustomerOrganizationTable @relation(fields: [customer_org_id], references: [customer_org_id], onDelete: Cascade)
@@ -103,6 +108,9 @@ model LiteLLM_AppCustomerMemberTable {
   spend Float @default(0.0)
   spend_reset_window String?
   budget_override_id String?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  budget_override_expires_at DateTime?
   app LiteLLM_AppTable @relation(fields: [app_id], references: [app_id], onDelete: Cascade)
   customer_member LiteLLM_CustomerMemberTable @relation(fields: [customer_member_id], references: [customer_member_id], onDelete: Cascade)
   budget_override LiteLLM_BudgetTable? @relation("AppMemberOverride", fields: [budget_override_id], references: [budget_id])

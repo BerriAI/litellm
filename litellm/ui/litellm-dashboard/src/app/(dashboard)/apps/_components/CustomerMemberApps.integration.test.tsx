@@ -152,9 +152,11 @@ describe("customer member apps", () => {
     expect(await requests.find((row) => row.method === "PUT")?.json()).toEqual({ budget: null, budget_override: null });
   });
 
-  it.each([false, true])(
+  it.each(["custom", "legacy", "temporary"])(
     "should initialize and save a permanent budget while an increase is present %s",
-    async (legacy) => {
+    async (source) => {
+      const legacy = source === "legacy";
+      const temporary = source === "temporary";
       const requests: Request[] = [];
       fetchMock.mockImplementation(async (input) => {
         const request = input as Request;
@@ -167,7 +169,8 @@ describe("customer member apps", () => {
                 customer_member_id: "member-1",
                 spend: 0,
                 budget: legacy ? null : { max_budget: 5 },
-                budget_override: legacy ? { max_budget: 5 } : null,
+                budget_override: legacy || temporary ? { max_budget: legacy ? 5 : 20 } : null,
+                budget_override_expires_at: temporary ? "2027-01-01T00:00:00Z" : null,
                 effective_budget: { max_budget: 20 },
               },
         );
