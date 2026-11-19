@@ -18,8 +18,8 @@ use litellm_callbacks::{
     LoggedKeyIdentity, Manifest, MetadataKind, OptOutBy, PayloadRef, RenderOptions, Scalar,
     Selection, Subscription, typed,
 };
+use litellm_config::Written;
 use litellm_tracing::Logger;
-use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::{
@@ -79,7 +79,7 @@ pub struct S3Log {
     host: Arc<dyn Host>,
     cold_storage_is_s3_v2: bool,
     logger: Logger,
-    granularity: Mutex<Option<(Option<Value>, Granularity)>>,
+    granularity: Mutex<Option<(Option<Written<Granularity>>, Granularity)>>,
     queue: Mutex<Queue>,
     flush_lock: tokio::sync::Mutex<()>,
     held: Arc<AtomicUsize>,
@@ -187,7 +187,7 @@ impl S3Log {
     pub fn partition_granularity(&self) -> Granularity {
         let raw = self
             .settings()
-            .partition_granularity_raw(self.uploader.environment.as_ref());
+            .partition_granularity_written(self.uploader.environment.as_ref());
         let mut cached = self
             .granularity
             .lock()

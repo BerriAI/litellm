@@ -1,27 +1,13 @@
 use std::time::Duration;
 
 use litellm_auth_aws::AwsAuthConfig;
-use litellm_secret_value::SecretValue;
+pub use litellm_config::S3PartitionGranularity as Granularity;
+use litellm_config::{
+    S3CallbackParams, S3Region, Written, WrittenCount, WrittenText, log_prompts_only,
+    partition_granularity,
+};
 use serde::Deserialize;
-use serde_json::{Map, Value};
-
-use litellm_python_compat::{BigInt, json::from_json, pydantic, repr};
-
-fn python(value: &Value) -> litellm_python_compat::Value {
-    from_json(value.clone())
-}
-
-fn py_repr(value: &Value) -> String {
-    repr::repr(&python(value))
-}
-
-pub fn py_str(value: &Value) -> String {
-    repr::to_str(&python(value))
-}
-
-pub fn truthy(value: &Value) -> bool {
-    litellm_python_compat::truthy::truthy(&python(value))
-}
+use serde_json::Value;
 
 fn py_optional(value: Option<u64>) -> String {
     value.map_or_else(|| "None".to_owned(), |value| value.to_string())
@@ -58,36 +44,19 @@ impl Default for Constants {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Granularity {
-    #[default]
-    Day,
-    Hour,
-}
-
-impl Granularity {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Day => "day",
-            Self::Hour => "hour",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub bucket_name: Option<String>,
-    pub region_name: Option<Value>,
+    pub region_name: Option<S3Region>,
     pub endpoint_url: Option<String>,
     pub path: Option<String>,
-    pub verify: Option<Value>,
     pub auth: AwsAuthConfig,
     pub use_team_prefix: bool,
     pub use_key_prefix: bool,
     pub strip_base64_files: bool,
     pub use_virtual_hosted_style: bool,
-    pub log_prompts_only: Option<Value>,
-    pub partition_granularity: Option<Value>,
+    pub log_prompts_only: Option<Written<bool>>,
+    pub partition_granularity: Option<Written<Granularity>>,
     pub server_side_encryption: Option<String>,
     pub sse_kms_key_id: Option<String>,
     pub max_concurrent_uploads: usize,
@@ -105,103 +74,55 @@ pub struct Settings {
 
 pub type Environment = dyn Fn(&str) -> Option<String> + Send + Sync;
 
-fn text(params: &Map<String, Value>, name: &str) -> Option<String> {
-    params.get(name).filter(|value| truthy(value)).map(py_str)
-}
-
-fn secret(params: &Map<String, Value>, name: &str) -> Option<SecretValue> {
-    text(params, name).map(SecretValue::new)
-}
-
-fn present(params: &Map<String, Value>, name: &str) -> Option<Value> {
-    params.get(name).filter(|value| !value.is_null()).cloned()
-}
-
-fn is_blank(value: &Value) -> bool {
-    matches!(value, Value::String(text) if text.is_empty())
-}
-
-pub fn lax_bool(value: &Value) -> Option<bool> {
-    pydantic::lax_bool(&python(value))
-}
-
-pub fn lax_int(value: &Value) -> Option<i128> {
-    pydantic::lax_int(&python(value)).map(|number| {
-        i128::try_from(&number).unwrap_or(if number < BigInt::from(0) {
-            i128::MIN
-        } else {
-            i128::MAX
-        })
-    })
-}
-
-fn strip_text(value: &Value) -> Value {
-    match value {
-        Value::String(text) => Value::String(text.trim().to_owned()),
-        other => other.clone(),
-    }
-}
-
 fn positive_int(
     setting: &str,
-    configured: Option<&Value>,
+    configured: Option<&WrittenCount>,
     fallback: usize,
     reject_bool: bool,
 ) -> usize {
-    let Some(configured) = configured.filter(|value| !value.is_null() && !is_blank(value)) else {
+    let Some(configured) = configured else {
         return fallback;
     };
-    if reject_bool && configured.is_boolean() {
+    let written = &configured.repr;
+    if reject_bool && configured.boolean {
         tracing::warn!(
-            "s3 logging: {setting}={} is a boolean, not an integer, using {fallback}",
-            py_repr(configured)
+            "s3 logging: {setting}={written} is a boolean, not an integer, using {fallback}"
         );
         return fallback;
     }
-    match lax_int(&strip_text(configured)) {
+    match configured.value {
         None => {
-            tracing::warn!(
-                "s3 logging: {setting}={} is not an integer, using {fallback}",
-                py_repr(configured)
-            );
+            tracing::warn!("s3 logging: {setting}={written} is not an integer, using {fallback}");
             fallback
         }
         Some(bound) if bound < 1 => {
-            tracing::warn!(
-                "s3 logging: {setting}={} must be at least 1, using {fallback}",
-                py_repr(configured)
-            );
+            tracing::warn!("s3 logging: {setting}={written} must be at least 1, using {fallback}");
             fallback
         }
         Some(bound) => usize::try_from(bound).unwrap_or(usize::MAX),
     }
 }
 
-fn retry_age(configured: &Value, fallback: Option<u64>) -> Option<u64> {
-    if configured.is_null() || is_blank(configured) {
-        return None;
-    }
-    if configured.is_boolean() {
+fn retry_age(configured: &WrittenCount, fallback: Option<u64>) -> Option<u64> {
+    let written = &configured.repr;
+    if configured.boolean {
         tracing::warn!(
-            "s3 logging: s3_max_retry_age_seconds={} is a boolean, not an integer, falling back to {}",
-            py_repr(configured),
+            "s3 logging: s3_max_retry_age_seconds={written} is a boolean, not an integer, falling back to {}",
             py_optional(fallback)
         );
         return fallback;
     }
-    match lax_int(&strip_text(configured)) {
+    match configured.value {
         None => {
             tracing::warn!(
-                "s3 logging: s3_max_retry_age_seconds={} is not an integer, falling back to {}",
-                py_repr(configured),
+                "s3 logging: s3_max_retry_age_seconds={written} is not an integer, falling back to {}",
                 py_optional(fallback)
             );
             fallback
         }
         Some(bound) if bound < 0 => {
             tracing::warn!(
-                "s3 logging: s3_max_retry_age_seconds={} must be at least 0, falling back to {}",
-                py_repr(configured),
+                "s3 logging: s3_max_retry_age_seconds={written} must be at least 0, falling back to {}",
                 py_optional(fallback)
             );
             fallback
@@ -213,31 +134,30 @@ fn retry_age(configured: &Value, fallback: Option<u64>) -> Option<u64> {
 
 fn flag(
     setting: &str,
-    configured: Option<&Value>,
+    configured: Option<&Written<bool>>,
     unset: bool,
     invalid: bool,
     consequence: &str,
 ) -> bool {
-    let Some(configured) = configured.filter(|value| !value.is_null() && !is_blank(value)) else {
+    let Some(configured) = configured else {
         return unset;
     };
-    lax_bool(&strip_text(configured)).unwrap_or_else(|| {
+    configured.value.unwrap_or_else(|| {
         tracing::warn!(
             "s3 logging: {setting}={} is not a boolean, {consequence}",
-            py_repr(configured)
+            configured.repr
         );
         invalid
     })
 }
 
-fn sse_value(name: &str, value: Option<&Value>) -> Option<String> {
+fn sse_value(name: &str, value: Option<&WrittenText>) -> Option<String> {
     match value {
         None => None,
-        Some(Value::String(text)) => Some(text.clone()),
-        Some(other) => {
+        Some(WrittenText::Text(text)) => Some(text.clone()),
+        Some(WrittenText::Other { type_name }) => {
             tracing::warn!(
-                "s3 logging: ignoring {name} because it has invalid type {}; expected a string",
-                python(other).type_name()
+                "s3 logging: ignoring {name} because it has invalid type {type_name}; expected a string"
             );
             None
         }
@@ -245,8 +165,8 @@ fn sse_value(name: &str, value: Option<&Value>) -> Option<String> {
 }
 
 pub fn resolve_sse(
-    algorithm: Option<&Value>,
-    key_id: Option<&Value>,
+    algorithm: Option<&WrittenText>,
+    key_id: Option<&WrittenText>,
 ) -> (Option<String>, Option<String>) {
     let valid_sse = sse_value("s3_server_side_encryption", algorithm);
     let valid_key_id = sse_value("s3_sse_kms_key_id", key_id).filter(|key| !key.is_empty());
@@ -265,15 +185,16 @@ pub fn resolve_sse(
     (Some(algorithm), valid_key_id)
 }
 
-pub fn resolve_partition_granularity(raw: Option<&Value>) -> Granularity {
-    match raw {
-        Some(Value::String(text)) if text == "hour" => Granularity::Hour,
+pub fn resolve_partition_granularity(written: Option<&Written<Granularity>>) -> Granularity {
+    match written {
         None => Granularity::Day,
-        Some(Value::String(text)) if text.is_empty() || text == "day" => Granularity::Day,
-        Some(other) => {
+        Some(Written {
+            value: Some(granularity),
+            ..
+        }) => *granularity,
+        Some(Written { repr, value: None }) => {
             tracing::warn!(
-                "s3 logging: s3_partition_granularity={} is not one of day, hour, using day",
-                py_repr(other)
+                "s3 logging: s3_partition_granularity={repr} is not one of day, hour, using day"
             );
             Granularity::Day
         }
@@ -281,98 +202,92 @@ pub fn resolve_partition_granularity(raw: Option<&Value>) -> Granularity {
 }
 
 impl Settings {
-    pub fn from_params(params: &Map<String, Value>, constants: &Constants) -> Self {
-        let truthy_param = |name: &str| params.get(name).is_some_and(truthy);
+    pub fn new(params: &S3CallbackParams, constants: &Constants) -> Self {
         let (server_side_encryption, sse_kms_key_id) = resolve_sse(
-            params
-                .get("s3_server_side_encryption")
-                .filter(|value| truthy(value)),
-            params
-                .get("s3_sse_kms_key_id")
-                .filter(|value| truthy(value)),
+            params.s3_server_side_encryption.as_ref(),
+            params.s3_sse_kms_key_id.as_ref(),
         );
-        let max_concurrent_uploads = positive_int(
-            "s3_max_concurrent_uploads",
-            Some(
-                params
-                    .get("s3_max_concurrent_uploads")
-                    .filter(|value| !value.is_null() && !is_blank(value))
-                    .cloned()
-                    .unwrap_or_else(|| Value::from(constants.max_concurrent_uploads)),
-            )
-            .as_ref(),
-            constants.max_concurrent_uploads,
-            false,
-        );
-        let max_queue_size = positive_int(
-            "s3_max_queue_size",
-            params.get("s3_max_queue_size"),
-            DEFAULT_MAX_QUEUE_SIZE,
-            true,
-        );
-        let max_retry_age = match params.get("s3_max_retry_age_seconds") {
-            Some(value) if !value.is_null() && !is_blank(value) => {
-                retry_age(value, Some(DEFAULT_MAX_RETRY_AGE_SECONDS))
-            }
-            _ => Some(DEFAULT_MAX_RETRY_AGE_SECONDS),
+        let default_concurrent_uploads = WrittenCount {
+            repr: constants.max_concurrent_uploads.to_string(),
+            boolean: false,
+            value: i128::try_from(constants.max_concurrent_uploads).ok(),
         };
+        let region_text = params
+            .s3_region_name
+            .as_ref()
+            .map(|region| region.text().to_owned());
         Self {
-            bucket_name: text(params, "s3_bucket_name"),
-            region_name: params
-                .get("s3_region_name")
-                .filter(|value| truthy(value))
-                .cloned(),
-            endpoint_url: text(params, "s3_endpoint_url"),
-            path: text(params, "s3_path"),
-            verify: present(params, "s3_verify"),
+            bucket_name: params.s3_bucket_name.clone(),
+            region_name: params.s3_region_name.clone(),
+            endpoint_url: params.s3_endpoint_url.clone(),
+            path: params.s3_path.clone(),
             auth: AwsAuthConfig {
-                access_key_id: secret(params, "s3_aws_access_key_id"),
-                secret_access_key: secret(params, "s3_aws_secret_access_key"),
-                session_token: secret(params, "s3_aws_session_token"),
-                region_name: text(params, "s3_region_name"),
-                session_name: text(params, "s3_aws_session_name"),
-                profile_name: text(params, "s3_aws_profile_name"),
-                role_name: text(params, "s3_aws_role_name"),
-                web_identity_token: secret(params, "s3_aws_web_identity_token"),
-                sts_endpoint: text(params, "s3_aws_sts_endpoint"),
+                access_key_id: params.s3_aws_access_key_id.clone(),
+                secret_access_key: params.s3_aws_secret_access_key.clone(),
+                session_token: params.s3_aws_session_token.clone(),
+                region_name: region_text,
+                session_name: params.s3_aws_session_name.clone(),
+                profile_name: params.s3_aws_profile_name.clone(),
+                role_name: params.s3_aws_role_name.clone(),
+                web_identity_token: params.s3_aws_web_identity_token.clone(),
+                sts_endpoint: params.s3_aws_sts_endpoint.clone(),
                 external_id: None,
                 session_tags: None,
                 session_policy: None,
             },
-            use_team_prefix: truthy_param("s3_use_team_prefix"),
-            use_key_prefix: truthy_param("s3_use_key_prefix"),
-            strip_base64_files: truthy_param("s3_strip_base64_files"),
-            use_virtual_hosted_style: truthy_param("s3_use_virtual_hosted_style"),
-            log_prompts_only: present(params, "s3_log_prompts_only"),
-            partition_granularity: present(params, "s3_partition_granularity"),
+            use_team_prefix: params.s3_use_team_prefix,
+            use_key_prefix: params.s3_use_key_prefix,
+            strip_base64_files: params.s3_strip_base64_files,
+            use_virtual_hosted_style: params.s3_use_virtual_hosted_style,
+            log_prompts_only: params.s3_log_prompts_only.clone(),
+            partition_granularity: params.s3_partition_granularity.clone(),
             server_side_encryption,
             sse_kms_key_id,
-            max_concurrent_uploads,
-            max_queue_size,
-            max_retry_age: max_retry_age.map(Duration::from_secs),
+            max_concurrent_uploads: positive_int(
+                "s3_max_concurrent_uploads",
+                Some(
+                    params
+                        .s3_max_concurrent_uploads
+                        .as_ref()
+                        .unwrap_or(&default_concurrent_uploads),
+                ),
+                constants.max_concurrent_uploads,
+                false,
+            ),
+            max_queue_size: positive_int(
+                "s3_max_queue_size",
+                params.s3_max_queue_size.as_ref(),
+                DEFAULT_MAX_QUEUE_SIZE,
+                true,
+            ),
+            max_retry_age: match &params.s3_max_retry_age_seconds {
+                Some(configured) => retry_age(configured, Some(DEFAULT_MAX_RETRY_AGE_SECONDS)),
+                None => Some(DEFAULT_MAX_RETRY_AGE_SECONDS),
+            }
+            .map(Duration::from_secs),
             drop_on_terminal_error: flag(
                 "s3_drop_on_terminal_error",
-                params.get("s3_drop_on_terminal_error"),
+                params.s3_drop_on_terminal_error.as_ref(),
                 true,
                 true,
                 "dropping terminal-failed uploads",
             ),
             adaptive_concurrency: flag(
                 "s3_adaptive_concurrency",
-                params.get("s3_adaptive_concurrency"),
+                params.s3_adaptive_concurrency.as_ref(),
                 false,
                 false,
                 "keeping the fixed upload width",
             ),
             max_adaptive_concurrency: positive_int(
                 "s3_max_adaptive_concurrency",
-                params.get("s3_max_adaptive_concurrency"),
+                params.s3_max_adaptive_concurrency.as_ref(),
                 constants.max_adaptive_concurrency,
                 true,
             ),
             batch_file_upload: flag(
                 "s3_batch_file_upload",
-                params.get("s3_batch_file_upload"),
+                params.s3_batch_file_upload.as_ref(),
                 false,
                 false,
                 "keeping per-request objects",
@@ -389,31 +304,38 @@ impl Settings {
     }
 
     pub fn partition_granularity(&self, environment: &Environment) -> Granularity {
-        resolve_partition_granularity(self.partition_granularity_raw(environment).as_ref())
+        resolve_partition_granularity(self.partition_granularity_written(environment).as_ref())
     }
 
-    pub fn partition_granularity_raw(&self, environment: &Environment) -> Option<Value> {
-        match &self.partition_granularity {
-            Some(value) => Some(value.clone()),
-            None => environment(PARTITION_GRANULARITY_ENV_VAR).map(Value::String),
-        }
+    /// The granularity the params write, else the one `S3_PARTITION_GRANULARITY` does.
+    pub fn partition_granularity_written(
+        &self,
+        environment: &Environment,
+    ) -> Option<Written<Granularity>> {
+        self.partition_granularity.clone().or_else(|| {
+            environment(PARTITION_GRANULARITY_ENV_VAR)
+                .and_then(|text| partition_granularity(&Value::String(text)))
+        })
     }
 
     pub fn log_prompts_only(&self, environment: &Environment) -> bool {
-        let raw = match &self.log_prompts_only {
-            Some(value) => Some(value.clone()),
-            None => environment(LOG_PROMPTS_ONLY_ENV_VAR).map(Value::String),
-        };
-        let Some(raw) = raw.filter(|value| !is_blank(value)) else {
-            return false;
-        };
-        lax_bool(&strip_text(&raw)).unwrap_or_else(|| {
-            tracing::warn!(
-                "s3 logging: s3_log_prompts_only={} is not a boolean, logging prompts only",
-                py_repr(&raw)
-            );
-            true
-        })
+        let written = self.log_prompts_only.clone().or_else(|| {
+            environment(LOG_PROMPTS_ONLY_ENV_VAR)
+                .and_then(|text| log_prompts_only(&Value::String(text)))
+        });
+        match written {
+            None => false,
+            Some(Written {
+                value: Some(prompts_only),
+                ..
+            }) => prompts_only,
+            Some(Written { repr, value: None }) => {
+                tracing::warn!(
+                    "s3 logging: s3_log_prompts_only={repr} is not a boolean, logging prompts only"
+                );
+                true
+            }
+        }
     }
 
     pub fn signing_region(
@@ -421,8 +343,8 @@ impl Settings {
         from_environment: impl FnOnce() -> Result<Option<String>, String>,
     ) -> Result<String, String> {
         let region = match &self.region_name {
-            Some(Value::String(region)) => region.clone(),
-            Some(other) => return Err(invalid_region(&py_str(other))),
+            Some(S3Region::Name(region)) => region.clone(),
+            Some(S3Region::NotText(written)) => return Err(invalid_region(written)),
             None => from_environment()?.unwrap_or_else(|| DEFAULT_REGION.to_owned()),
         };
         if valid_region(&region) {
@@ -432,10 +354,13 @@ impl Settings {
         }
     }
 
+    /// The region as `str()` prints it, `None` for an unset one.
+    pub fn region_text(&self) -> Option<&str> {
+        self.region_name.as_ref().map(S3Region::text)
+    }
+
     pub fn url_region(&self) -> String {
-        self.region_name
-            .as_ref()
-            .map_or_else(|| "None".to_owned(), py_str)
+        self.region_text().unwrap_or("None").to_owned()
     }
 }
 
@@ -460,58 +385,14 @@ mod tests {
     use super::*;
 
     fn settings(params: Value) -> Settings {
-        Settings::from_params(params.as_object().unwrap(), &Constants::default())
+        Settings::new(
+            &serde_json::from_value(params).unwrap(),
+            &Constants::default(),
+        )
     }
 
     fn no_env(_: &str) -> Option<String> {
         None
-    }
-
-    #[rstest]
-    #[case(json!(true), Some(1))]
-    #[case(json!(2.0), Some(2))]
-    #[case(json!(2.5), None)]
-    #[case(json!(" 4 "), Some(4))]
-    #[case(json!("4.0"), Some(4))]
-    #[case(json!("+4"), Some(4))]
-    #[case(json!("1_000"), Some(1000))]
-    #[case(json!("0x10"), None)]
-    #[case(json!("1e3"), None)]
-    #[case(json!("4.5"), None)]
-    #[case(json!("007"), Some(7))]
-    #[case(json!(1e20), None)]
-    fn integers_parse_as_pydantic_parses_them(
-        #[case] value: Value,
-        #[case] expected: Option<i128>,
-    ) {
-        assert_eq!(lax_int(&strip_text(&value)), expected);
-    }
-
-    #[rstest]
-    #[case(json!(0), Some(false))]
-    #[case(json!(2), None)]
-    #[case(json!(1.0), Some(true))]
-    #[case(json!(0.5), None)]
-    #[case(json!(" yes "), Some(true))]
-    #[case(json!("TRUE"), Some(true))]
-    #[case(json!("off"), Some(false))]
-    #[case(json!("1.0"), None)]
-    #[case(json!("2"), None)]
-    fn booleans_parse_as_pydantic_parses_them(
-        #[case] value: Value,
-        #[case] expected: Option<bool>,
-    ) {
-        assert_eq!(lax_bool(&strip_text(&value)), expected);
-    }
-
-    #[rstest]
-    #[case(json!(["us-east-1"]), "['us-east-1']")]
-    #[case(json!({"a": true}), "{'a': True}")]
-    #[case(json!(null), "None")]
-    #[case(json!(1.5), "1.5")]
-    #[case(json!("us-east-1"), "us-east-1")]
-    fn values_print_as_python_str_prints_them(#[case] value: Value, #[case] expected: &str) {
-        assert_eq!(py_str(&value), expected);
     }
 
     #[rstest]

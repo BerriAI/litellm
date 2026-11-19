@@ -13,9 +13,10 @@ use axum::{
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_standard_logging::{Caller, Key, User};
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
+use crate::{Deployment, Error, Gateway, JsonObject, RequestId, logging, request};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
@@ -83,13 +84,79 @@ async fn handle(
         None => route,
     };
 
+    let logged = gateway
+        .call_log
+        .as_ref()
+        .filter(|_| body.get("stream").and_then(Value::as_bool) != Some(true))
+        .map(|log| {
+            let (observers, observed) = logging::observe(log.clone());
+            (
+                observers,
+                observed,
+                logged_request(identity, deployment, &body, headers),
+            )
+        });
+    let observers = logged.as_ref().map(|(observers, ..)| observers.clone());
     let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(
+        call,
+        litellm_inference::CallOptions {
+            cache: Some(cache_options.policy),
+            observers: observers.clone(),
+        },
+    );
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
-    Ok(headers.apply(response))
+    let cache_headers = crate::caching::CacheHeaders::default();
+    let response =
+        litellm_host_http::serve(machine, (), cache_headers.clone(), stream, observers).await?;
+    if let Some((_, observed, request)) = logged {
+        tokio::spawn(observed.record(request));
+    }
+    Ok(cache_headers.apply(response))
+}
+
+fn header(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers.get(name)?.to_str().ok().map(str::to_owned)
+}
+
+fn logged_request(
+    identity: &AuthenticatedRequest,
+    deployment: &Deployment,
+    body: &Map<String, Value>,
+    headers: &HeaderMap,
+) -> logging::Request {
+    let caller = identity.caller();
+    logging::Request {
+        call_id: header(headers, "x-litellm-call-id"),
+        call_type: "anthropic_messages",
+        model_group: body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        model: deployment.model.clone(),
+        api_base: deployment.api_base.clone(),
+        custom_llm_provider: deployment.custom_llm_provider.clone(),
+        messages: body.get("messages").cloned().unwrap_or(Value::Null),
+        model_parameters: body
+            .iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+        user_agent: header(headers, "user-agent"),
+        caller: Caller {
+            key: Key {
+                hash: Some(caller.authentication().credential_id.clone()),
+                ..Key::default()
+            },
+            user: User {
+                id: Some(caller.principal().subject().to_owned()),
+                ..User::default()
+            },
+            ..Caller::default()
+        },
+    }
 }
 
 fn project(

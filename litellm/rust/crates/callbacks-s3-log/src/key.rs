@@ -232,12 +232,10 @@ pub fn object_url(settings: &Settings, key: &str) -> String {
         (Some(endpoint), Some(bucket)) => format!("{endpoint}/{bucket}/{encoded}"),
         _ => {
             let region = settings.url_region();
-            let suffix = dns_suffix(
-                settings
-                    .region_name
-                    .as_ref()
-                    .and_then(serde_json::Value::as_str),
-            );
+            let suffix = dns_suffix(match &settings.region_name {
+                Some(litellm_config::S3Region::Name(name)) => Some(name.as_str()),
+                Some(litellm_config::S3Region::NotText(_)) | None => None,
+            });
             format!(
                 "https://{}.s3.{region}.{suffix}/{encoded}",
                 settings.bucket_name.as_deref().unwrap_or("None")
@@ -327,8 +325,8 @@ mod tests {
     ) {
         let params =
             serde_json::json!({"s3_bucket_name": "audit-bucket", "s3_region_name": region});
-        let settings = Settings::from_params(
-            params.as_object().unwrap(),
+        let settings = Settings::new(
+            &serde_json::from_value(params).unwrap(),
             &crate::settings::Constants::default(),
         );
         assert_eq!(object_url(&settings, "2025-01-01/key.json"), expected);

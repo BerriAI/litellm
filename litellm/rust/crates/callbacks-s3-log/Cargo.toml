@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 litellm-auth-aws.workspace = true
 litellm-callbacks.workspace = true
+litellm-config.workspace = true
 litellm-http.workspace = true
 litellm-python-compat.workspace = true
 litellm-s3.workspace = true
