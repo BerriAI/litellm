@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from litellm._internal_context import with_service_target
+from litellm.constants import AUTH_OBJECTS_TARGET
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
@@ -176,6 +178,7 @@ class AppStore:
             else _DefinitionState.model_validate(value)
         )
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def definition(self) -> AppDefinition:
         if self.cache is not None:
             cached: Final = await self.cache.async_get_cache(key=_DEFINITION_CACHE_KEY, model_type=AppDefinition)
@@ -195,6 +198,7 @@ class AppStore:
             auto_create_customers_without_app=state.auto_create_customers_without_app,
         )
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def invalidate_definition_cache(self) -> None:
         if not self._definition_cache_dirty:
             return
