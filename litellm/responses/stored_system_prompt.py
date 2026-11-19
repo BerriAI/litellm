@@ -33,8 +33,8 @@ def _timeout(value: object) -> float | httpx.Timeout | None:
     return value if isinstance(value, (int, float, httpx.Timeout)) else None
 
 
-def _stored_system_texts(listed: object) -> list[str]:
-    texts: Final[list[str]] = []
+def _stored_system_texts(listed: object) -> list[str]:  # mutable-ok: built here, read once by the caller
+    texts: Final[list[str]] = []  # mutable-ok: built here, read once by the caller
     for listed_item in as_object_list((as_str_mapping(listed) or {}).get("data")) or ():
         item = as_str_mapping(listed_item) or {}
         if item.get("role") not in _SYSTEM_ROLES:
@@ -82,7 +82,7 @@ def without_stored_instructions(request: Mapping[str, object]) -> Mapping[str, o
             api_base=request.get("api_base"),
             api_version=request.get("api_version"),
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001  # a failed chain lookup must never fail the request
         verbose_logger.debug("Keeping instructions, the stored chain could not be read: %s", error)
         return request
     return _without_instructions(request, listed)
@@ -104,7 +104,7 @@ async def awithout_stored_instructions(request: Mapping[str, object]) -> Mapping
             api_base=request.get("api_base"),
             api_version=request.get("api_version"),
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001  # a failed chain lookup must never fail the request
         verbose_logger.debug("Keeping instructions, the stored chain could not be read: %s", error)
         return request
     return _without_instructions(request, listed)
