@@ -7,6 +7,7 @@ allow apparent gaps below one second, estimated with the next window's average."
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -31,6 +32,10 @@ _SOURCE_TIME_RESOLUTION_S: Final = 1.0
 _SUFFIX_CORES: Final = {"n": 1e-9, "u": 1e-6, "m": 1e-3}
 _DURATION_PART: Final = re.compile(r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)")
 _DURATION_UNITS: Final = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0}
+
+
+def _log(event: str, **fields: str | float | bool | None | tuple[str, ...]) -> None:
+    print("gateway_cpu", json.dumps({"event": event, **fields}, sort_keys=True), flush=True)
 
 
 class _Usage(BaseModel):
@@ -134,11 +139,35 @@ class _Coverage:
         return _Coverage(end, (*self.samples, sample))
 
 
+def _coverage(windows: tuple[_Window, ...], start: float, stop: float) -> _Coverage:
+    return reduce(lambda acc, window: acc.extend(window, stop), sorted(windows, key=lambda w: w.end), _Coverage(start))
+
+
 def _integrate(windows: tuple[_Window, ...], start: float, stop: float) -> tuple[CpuSample, ...] | None:
-    coverage: Final = reduce(
-        lambda acc, window: acc.extend(window, stop), sorted(windows, key=lambda w: w.end), _Coverage(start)
-    )
+    coverage: Final = _coverage(windows, start, stop)
     return coverage.samples if coverage.end >= stop else None
+
+
+def _log_uncovered(pod: str, windows: tuple[_Window, ...], start: float, stop: float) -> None:
+    coverage: Final = _coverage(windows, start, stop)
+    if coverage.end >= stop:
+        return
+    following: Final = next(
+        (window for window in sorted(windows, key=lambda w: w.end) if window.end > coverage.end), None
+    )
+    gap_end: Final = stop if following is None else min(stop, following.start)
+    _log(
+        "missing",
+        reason="tail_not_covered" if following is None else "source_gap",
+        pod=pod,
+        started_at=start,
+        stopped_at=stop,
+        uncovered_start=coverage.end,
+        uncovered_end=gap_end,
+        gap_seconds=gap_end - coverage.end,
+        next_window_start=None if following is None else following.start,
+        next_window_end=None if following is None else following.end,
+    )
 
 
 class GatewayCpuSampler:
@@ -186,9 +215,26 @@ class GatewayCpuSampler:
 
     def _finished_samples(self) -> tuple[CpuSample, ...] | None:
         if self._ended_at is None:
+            _log("missing", reason="measurement_not_stopped")
             return None
         self._thread.join()
-        return self._covered_samples()
+        samples: Final = self._covered_samples()
+        if samples is None:
+            self._log_missing()
+        return samples
+
+    def _log_missing(self) -> None:
+        start: Final = self._started_at
+        stop: Final = self._ended_at
+        if start is None or stop is None or stop <= start:
+            _log("missing", reason="invalid_measurement_interval", started_at=start, stopped_at=stop)
+        elif self._population_changed:
+            _log("missing", reason="pod_population_changed", started_at=start, stopped_at=stop)
+        elif not self._pods:
+            _log("missing", reason="no_pod_metrics", started_at=start, stopped_at=stop)
+        else:
+            for pod in sorted(self._pods):
+                _log_uncovered(pod, tuple(window for window in self._windows if window.pod == pod), start, stop)
 
     def _read_metrics(self) -> PodMetricsList | None:
         result: Final = get_external(
@@ -198,12 +244,26 @@ class GatewayCpuSampler:
 
     def _sample(self) -> None:
         metrics: Final = self._read()
-        if metrics is None or not metrics.items:
+        if metrics is None:
+            _log("response", state="read_failed")
             return
+        if not metrics.items:
+            _log("response", state="empty")
+            return
+        for pod in metrics.items:
+            _log(
+                "response",
+                pod=pod.metadata.name,
+                timestamp=pod.timestamp.isoformat(),
+                window=pod.window,
+                cpu=tuple(container.usage.cpu for container in pod.containers),
+                valid=_window(pod) is not None,
+            )
         pods: Final = frozenset(pod.metadata.name for pod in metrics.items)
         if self._pods is None:
             self._pods = pods
         elif pods != self._pods:
+            _log("pod_population_changed", expected=tuple(sorted(self._pods)), observed=tuple(sorted(pods)))
             self._population_changed = True
         windows: Final = tuple(window for pod in metrics.items if (window := _window(pod)) is not None)
         self._windows = tuple(dict.fromkeys((*self._windows, *windows)))
@@ -237,10 +297,12 @@ class GatewayCpuSampler:
 
     def start(self) -> None:
         self._started_at = self._clock()
+        _log("start", started_at=self._started_at)
         self._thread.start()
 
     def stop(self) -> None:
         self._ended_at = self._clock()
+        _log("stop", stopped_at=self._ended_at)
         self._stop.set()
 
 

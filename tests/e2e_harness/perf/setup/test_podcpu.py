@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import threading
 from collections.abc import Iterator
@@ -37,6 +38,83 @@ def _sampler(responses: Iterator[PodMetricsList | None], *, settle_timeout_s: fl
         pause=lambda _: None,
         settle_timeout_s=settle_timeout_s,
     )
+
+
+@pytest.mark.parametrize(
+    ("last_end", "reason", "uncovered_start", "uncovered_end", "next_start", "next_end"),
+    ((20, "source_gap", 1004.0, 1010.0, 1010.0, 1020.0), (10, "tail_not_covered", 1010.0, 1020.0, None, None)),
+)
+def test_cpu_diagnostics_report_source_windows_and_exact_uncovered_interval(
+    capsys: pytest.CaptureFixture[str],
+    last_end: int,
+    reason: str,
+    uncovered_start: float,
+    uncovered_end: float,
+    next_start: float | None,
+    next_end: float | None,
+) -> None:
+    first: Final = _pod("gateway", 4, "4s", "2")
+    sampler: Final = _sampler(iter((_metrics(first), _metrics(_pod("gateway", last_end, "10s", "2")))))
+    sampler.start()
+    sampler.stop()
+    assert sampler.seconds is None
+
+    lines: Final = capsys.readouterr().out.splitlines()
+    assert (
+        "gateway_cpu "
+        + json.dumps(
+            {
+                "event": "response",
+                "pod": "gateway",
+                "timestamp": first.timestamp.isoformat(),
+                "window": "4s",
+                "cpu": ["2"],
+                "valid": True,
+            },
+            sort_keys=True,
+        )
+        in lines
+    )
+    assert (
+        "gateway_cpu "
+        + json.dumps(
+            {
+                "event": "missing",
+                "reason": reason,
+                "pod": "gateway",
+                "started_at": 1000.0,
+                "stopped_at": 1020.0,
+                "uncovered_start": uncovered_start,
+                "uncovered_end": uncovered_end,
+                "gap_seconds": uncovered_end - uncovered_start,
+                "next_window_start": next_start,
+                "next_window_end": next_end,
+            },
+            sort_keys=True,
+        )
+        in lines
+    )
+
+
+def test_cpu_diagnostics_distinguish_population_change_from_unavailable_reads(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    changed: Final = _sampler(iter((_metrics(_pod("gateway", 0, "20s", "2")), _metrics(_pod("new", 20, "20s", "2")))))
+    changed.start()
+    changed.stop()
+    assert changed.seconds is None
+    changed_log: Final = capsys.readouterr().out
+    assert '"reason": "pod_population_changed"' in changed_log
+    assert '"expected": ["gateway"]' in changed_log
+    assert '"observed": ["new"]' in changed_log
+
+    unavailable: Final = _sampler(iter((None, None)))
+    unavailable.start()
+    unavailable.stop()
+    assert unavailable.seconds is None
+    unavailable_log: Final = capsys.readouterr().out
+    assert '"state": "read_failed"' in unavailable_log
+    assert '"reason": "no_pod_metrics"' in unavailable_log
 
 
 def test_stale_start_window_is_not_extrapolated_and_stop_collects_the_final_partial_window() -> None:
