@@ -211,7 +211,11 @@ const memberPatch = (
       },
     };
   }
-  const selection = fields.budgetEnabled ? { budget } : { budget_id: fields.templateId };
+  const permanentBudget = {
+    ...(clearLegacy.budget_override === null ? member.effective_budget : {}),
+    ...budget,
+  };
+  const selection = fields.budgetEnabled ? { budget: permanentBudget } : { budget_id: fields.templateId };
   return { ok: true, patch: { kind: "member", body: { ...alias, ...selection, ...clearLegacy } } };
 };
 

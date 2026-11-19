@@ -280,6 +280,40 @@ describe("customer hierarchy settings payloads", () => {
     },
   );
 
+  it("should retain legacy windows and model policies when editing permanent limits", () => {
+    const legacy = {
+      max_budget: 20,
+      budget_limits: [{ max_budget: 200, budget_duration: "12mo" }],
+      cap_policy: "pause_allow_increase" as const,
+      model_tpm_limit: { "model-a": 100 },
+      model_rpm_limit: { "model-a": 2 },
+    };
+    const entity: CustomerHierarchyEntity = {
+      kind: "member",
+      record: { ...member, budget_override_expires_at: null, budget_override: legacy, effective_budget: legacy },
+    };
+    expect(
+      buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), maxBudget: "30" }),
+    ).toEqual({
+      ok: true,
+      patch: {
+        kind: "member",
+        body: {
+          budget: {
+            ...legacy,
+            max_budget: 30,
+            soft_budget: null,
+            tpm_limit: null,
+            rpm_limit: null,
+            budget_duration: null,
+            allowed_models: null,
+          },
+          budget_override: null,
+        },
+      },
+    });
+  });
+
   it("should initialize a private permanent member budget", () => {
     expect(
       customerHierarchyFields({
