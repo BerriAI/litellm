@@ -39,7 +39,7 @@ class ArmedCooldowns:
 
 def arm_cooldowns(store: RouterCooldowns, model_ids: Sequence[str]) -> None:
     request: Final = active_request_redis_batches()
-    if request is None or not store.has_redis or _COOLDOWNS_SLOT in request.prefetched:
+    if request is None or not model_ids or not store.has_redis or _COOLDOWNS_SLOT in request.prefetched:
         return
     result: Final = store.active(model_ids, batch=Batch.PRE_CALL)
     request.prefetched[_COOLDOWNS_SLOT] = ArmedCooldowns(frozenset(model_ids), result)

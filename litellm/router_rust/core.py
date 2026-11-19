@@ -1765,7 +1765,10 @@ class RustCore(
             usage_selector: Final = self._prefetch_usage_selector(model, request_kwargs)
             deployments: Final = self._hosted._core_get_model_list(model_name=model)  # pyright: ignore[reportPrivateUsage]  # see __init__
             if deployments:
-                RoutingPrefetch.arm(RoutingContext(self), usage_selector, deployments)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the prefetch reads registry() and health(); its deployments list is untyped
+                candidates: Final = self.registry().names(
+                    model, kind="route_candidates", team_id=get_request_team_id(request_kwargs)
+                )
+                RoutingPrefetch.arm(RoutingContext(self), usage_selector, deployments, candidates)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the prefetch reads registry() and health(); its deployments list is untyped
         except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request
             from litellm._logging import verbose_router_logger
 

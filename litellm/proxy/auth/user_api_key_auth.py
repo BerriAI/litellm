@@ -3408,6 +3408,7 @@ async def prefetch_referenced_auth_objects(
     end_user_id: str | None,
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient | None,
+    before_read: Callable[[], None] | None = None,
 ) -> None:
     """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold)."""
     bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
@@ -3416,7 +3417,7 @@ async def prefetch_referenced_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
         user_api_key_cache=user_api_key_cache,
         prisma_client=prisma_client,
-        before_read=arm_routing_cooldowns,
+        before_read=arm_routing_cooldowns if before_read is None else before_read,
     )
 
 

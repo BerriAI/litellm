@@ -724,7 +724,7 @@ impl<H: RouterHost> Call<'_, H> {
             .collect();
         let cooling = self
             .health()
-            .active_cooldowns(&snapshot.registry.ids())
+            .active_cooldowns(&ids)
             .await
             .unwrap_or_default();
         let remaining = ids
