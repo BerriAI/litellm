@@ -99,9 +99,21 @@ class _LiteLLMProxyHop(BaseDecisionsConfig):
 
 class LiteLLMProxySystemOneConfig(_LiteLLMProxyHop):
     supports_images = True
+    supports_safety_identifier = True
 
     def supports_assets(self, headers: Mapping[str, str]) -> bool:
         return True
+
+    def transform_decisions_request(
+        self,
+        model: str,
+        request: DecisionsIRRequest,
+        custom_llm_provider: str,
+    ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+        body: Final = super().transform_decisions_request(model, request, custom_llm_provider)
+        if isinstance(body, UnsupportedDecisionsRequest) or request.safety_identifier is None:
+            return body
+        return {**body, "safety_identifier": request.safety_identifier}
 
 
 class LiteLLMProxyDecisionsConfig(_LiteLLMProxyHop, OpenAIDecisionsConfig):
