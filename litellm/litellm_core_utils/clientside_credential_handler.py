@@ -98,7 +98,7 @@ _TRANSPORT_PARAMS: Final = frozenset(
 )
 CALLER_CREDENTIAL_PARAMS: Final = PROVIDER_BOUND_PARAMS - _TRANSPORT_PARAMS
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names()
-_HEADER_CARRIERS: Final = ("headers", "extra_headers")
+_HEADER_CARRIERS: Final = ("headers", "extra_headers", "default_headers")
 
 
 def _names_a_credential_header(headers: object) -> bool:
