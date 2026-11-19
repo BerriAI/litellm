@@ -70,8 +70,8 @@ def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
     dropped: Final = drop_policy(request_params).additional_drop_params
     top_level: Final = {key: request_params.get(key) for key in SYSTEM_PLACEMENT_PARAMS if key not in dropped}
     effective: Final = {**top_level, **extra_body}
-    return effective.get("store") is not False or bool(
-        effective.get("previous_response_id") or effective.get("conversation") or effective.get("truncation") == "auto"
+    return bool(effective.get("previous_response_id") or effective.get("conversation")) or (
+        effective.get("truncation") == "auto"
     )
 
 

@@ -86,18 +86,18 @@ def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_sea
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
     [
-        ({}, {}, True),
+        ({}, {}, False),
         ({"store": False, "drop_params": True}, {"store": False}, False),
         ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, True),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, True),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, True),
-        ({"extra_body": {"store": None}}, {}, True),
-        ({"store": True}, {"store": True}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, False),
+        ({"extra_body": {"store": None}}, {}, False),
+        ({"store": True}, {"store": True}, False),
         ({"store": False}, {"store": False}, False),
         ({"extra_body": {"store": False}}, {"store": False}, False),
-        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
         ({"store": False, "conversation": "conv_prior"}, {"store": False}, False),
         (
@@ -106,9 +106,11 @@ def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_sea
             True,
         ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+        ({"previous_response_id": "resp_prior"}, {"previous_response_id": "resp_prior"}, True),
+        ({"store": True, "truncation": "auto"}, {"store": True, "truncation": "auto"}, True),
     ],
 )
-async def test_acompletion_system_input_requires_forwarded_store_false(
+async def test_acompletion_system_goes_in_input_unless_the_request_continues_a_chain(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
