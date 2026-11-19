@@ -41,6 +41,7 @@ export default function CustomerHierarchyUsagePage() {
     results,
     totals,
     modelColors,
+    rankingMetric,
     rows,
     drillDown,
     setDateRange,
@@ -53,9 +54,8 @@ export default function CustomerHierarchyUsagePage() {
     setPage,
     setApp,
   } = useCustomerHierarchyUsage();
-  const metricLabel = t(METRIC_LABELS[params.metric]);
+  const metricLabel = t(METRIC_LABELS[rankingMetric]);
   const budgetEntity = data?.member ?? data?.team ?? data?.organization;
-  const budgetSettingsHref = scope ? `${customerHierarchyHref("manage", scope)}&tab=settings` : null;
 
   if (!scope)
     return (
@@ -67,6 +67,9 @@ export default function CustomerHierarchyUsagePage() {
         </a>
       </div>
     );
+
+  const budgetSettingsHref = `${customerHierarchyHref("manage", scope)}&tab=settings`;
+  const isOrganizationScope = !scope.team && !scope.member;
 
   return (
     <main
@@ -104,13 +107,11 @@ export default function CustomerHierarchyUsagePage() {
                   spend={totals.spend}
                   surcharge={data?.metadata.total_customer_margin_spend}
                 />
-                {budgetEntity && budgetSettingsHref && (
-                  <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
-                )}
+                {budgetEntity && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />}
               </>
             }
           />
-          {!scope.team && !scope.member && (
+          {isOrganizationScope && (
             <CustomerOrganizationApps
               key={scope.org}
               organizationId={scope.org}
@@ -144,7 +145,7 @@ export default function CustomerHierarchyUsagePage() {
               <CustomerUsageRankings
                 rows={rows}
                 dimension={params.breakdown}
-                metric={params.metric}
+                metric={rankingMetric}
                 search={params.search}
                 page={params.usagePage}
                 colorByModel={modelColors}

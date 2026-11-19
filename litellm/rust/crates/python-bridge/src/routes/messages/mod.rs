@@ -11,6 +11,7 @@ pub(crate) mod workload_identity;
 
 use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_llms_types::formats::messages::MessagesOptionalParams;
 use modify_params::ModifyParams;
 use pyo3::prelude::*;
 
@@ -145,4 +146,9 @@ pub(crate) fn messages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAn
 #[pyfunction]
 pub(crate) fn amessages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
     run_messages(py, call, true)
+}
+
+#[pyfunction]
+pub(crate) fn messages_optional_params() -> Vec<&'static str> {
+    MessagesOptionalParams::fields().collect()
 }

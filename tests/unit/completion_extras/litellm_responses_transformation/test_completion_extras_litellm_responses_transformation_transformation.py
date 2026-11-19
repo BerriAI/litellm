@@ -561,6 +561,125 @@ async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_ca
     assert logged.payload["hidden_params"]["additional_headers"]["llm_provider-x-request-id"] == "req_upstream"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params,wire_controls,preserve_instructions",
+    [
+        ({}, {}, True),
+        ({"store": False, "drop_params": True}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, True),
+        ({"extra_body": {"store": None}}, {}, True),
+        ({"store": True}, {"store": True}, True),
+        ({"store": False}, {"store": False}, False),
+        ({"extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "conversation": "conv_prior"}, {"store": False}, False),
+        (
+            {"store": False, "previous_response_id": "resp_prior"},
+            {"store": False, "previous_response_id": "resp_prior"},
+            True,
+        ),
+        ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+    ],
+)
+async def test_acompletion_system_input_requires_forwarded_store_false(
+    request_params: dict[str, object],
+    wire_controls: dict[str, object],
+    preserve_instructions: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            **request_params,
+        )
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert {
+        key: request_body[key]
+        for key in ("store", "conversation", "previous_response_id", "truncation")
+        if key in request_body
+    } == wire_controls
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    if preserve_instructions:
+        assert request_body["instructions"] == "Stable prefix"
+        assert request_body["input"] == [user_input]
+    else:
+        assert "instructions" not in request_body
+        assert request_body["input"] == [_system_input_item("Stable prefix"), user_input]
+
+
+@pytest.mark.parametrize("request_shape", ["system_only", "json_object", "midturn_system", "marked_system"])
+def test_default_store_preserves_legacy_system_input_exceptions(request_shape: str) -> None:
+    system_message: Final = {"role": "system", "content": "Reply with json"}
+    user_message: Final = {"role": "user", "content": "hi"}
+    system_input: Final = (
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Reply with json", "prompt_cache_breakpoint": {"mode": "explicit"}}
+            ],
+        }
+        if request_shape == "marked_system"
+        else _system_input_item("Reply with json")
+    )
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    messages: Final = (
+        [system_message]
+        if request_shape == "system_only"
+        else [user_message, system_message]
+        if request_shape == "midturn_system"
+        else [{**system_message, "cache_control": _CACHE_CONTROL}, user_message]
+        if request_shape == "marked_system"
+        else [system_message, user_message]
+    )
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.2-sol",
+        messages=cast(List[AllMessageValues], messages),  # cast-ok: test constructs chat messages as mappings
+        optional_params={"response_format": {"type": "json_object"}} if request_shape == "json_object" else {},
+        litellm_params={"custom_llm_provider": "openai"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    assert request["input"] == (
+        [system_input]
+        if request_shape == "system_only"
+        else [user_input, system_input]
+        if request_shape == "midturn_system"
+        else [system_input, user_input]
+    )
+
+
 def test_convert_chat_completion_messages_to_responses_api_image_input():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -1903,7 +2022,7 @@ def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_c
             {"role": "system", "content": _JSON_SYSTEM_PROMPT},
             {"role": "user", "content": "List three colors."},
         ],
-        optional_params={"response_format": response_format},
+        optional_params={"store": False, "response_format": response_format},
         litellm_params={"custom_llm_provider": "openai"},
         headers={},
         litellm_logging_obj=Mock(),
@@ -6486,7 +6605,7 @@ def _bridged_transform_request(
     return LiteLLMResponsesTransformationHandler().transform_request(
         model=model,
         messages=cast(List[AllMessageValues], messages),  # cast-ok: the test builds chat messages as plain mappings
-        optional_params=dict(optional_params or {}),
+        optional_params={"store": False, **(optional_params or {})},
         litellm_params=litellm_params,
         headers={},
         litellm_logging_obj=Mock(),
@@ -6697,7 +6816,7 @@ def test_transform_request_leaves_cache_control_off_the_wire_for_bedrock_mantle(
     ]
 
 
-@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}])
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
 def test_chained_turn_keeps_leading_system_strings_in_instructions(
     continuation: dict[str, str], location: str

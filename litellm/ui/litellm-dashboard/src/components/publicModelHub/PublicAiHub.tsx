@@ -1,27 +1,20 @@
 "use client";
 
-import localFont from "next/font/local";
 import { useTranslation } from "react-i18next";
 
-import Navbar from "@/components/navbar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 
 import { HubHeader, type HubStatus } from "./HubHeader";
+import { CatalogNavbar } from "./CatalogNavbar";
 import { HubNotEnabled } from "./HubEmpty";
 import { ModelsPane } from "./ModelsPane";
 import { SkillsPane } from "./ResourcePanes";
 import { type HubData, useHubData } from "./useHubData";
 import { type HubTab, useHubUrlState } from "./useHubUrlState";
 import { useRequirePublicHubAuth } from "./useRequirePublicHubAuth";
-import styles from "./catalog.module.css";
-
-const displayFont = localFont({
-  src: "./fonts/barlow-condensed-latin-600.ttf",
-  weight: "600",
-  variable: "--font-catalog-display",
-});
+import { catalogTypography } from "./fonts";
 
 const hubStatus = (hub: HubData): HubStatus => {
   if (hub.models.error && hub.skills.isError) return "unavailable";
@@ -29,7 +22,7 @@ const hubStatus = (hub: HubData): HubStatus => {
   return hub.models.error || hub.skills.isError ? "degraded" : "operational";
 };
 
-function PublicAiHubContent({ accessToken }: { accessToken: string | null }) {
+function PublicAiHubContent() {
   const { t } = useTranslation();
   useRequirePublicHubAuth();
   const hub = useHubData();
@@ -40,19 +33,17 @@ function PublicAiHubContent({ accessToken }: { accessToken: string | null }) {
     <Tabs
       value={tab}
       onValueChange={(next) => setTab(next as HubTab)}
-      className={`${styles.catalog} ${displayFont.variable}`}
+      className={`${catalogTypography} min-h-dvh gap-0 bg-background`}
     >
-      <Navbar
-        accessToken={accessToken}
-        isPublicPage
-        publicNavigation={
-          <TabsList variant="line" className={styles.navigation} aria-label={t("publicModelHub.header.title")}>
-            <TabsTrigger value="models">{t("publicModelHub.catalog.modelHub")}</TabsTrigger>
-            <TabsTrigger value="skills">{t("publicModelHub.catalog.skillsHub")}</TabsTrigger>
-          </TabsList>
-        }
+      <CatalogNavbar
+        title={hub.info.data?.docs_title || t("publicModelHub.header.title")}
+        search={hub.models.searchValue}
+        onSearchChange={(value) => {
+          if (tab !== "models") setTab("models");
+          hub.models.onSearchChange(value);
+        }}
       />
-      <main className={styles.main}>
+      <main className="mx-auto w-full max-w-(--page-width) px-(--page-gutter) pb-12 max-[760px]:pb-7">
         <HubHeader info={hub.info.data} status={status} tab={tab} />
         {status === "unavailable" ? (
           <HubNotEnabled />
@@ -81,7 +72,7 @@ export default function PublicAiHub({ accessToken }: { accessToken: string | nul
   return (
     <ThemeProvider accessToken={accessToken}>
       <TooltipProvider>
-        <PublicAiHubContent accessToken={accessToken} />
+        <PublicAiHubContent />
       </TooltipProvider>
     </ThemeProvider>
   );

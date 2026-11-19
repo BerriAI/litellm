@@ -1370,6 +1370,8 @@ dependencies = [
  "compression-core",
  "flate2",
  "memchr",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -3220,6 +3222,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "windows-link",
 ]
 
 [[package]]
@@ -3848,6 +3851,8 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
+ "envy",
+ "litellm-env",
  "litellm-python-compat",
  "litellm-router-types",
  "litellm-secret-value",
@@ -3858,6 +3863,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml_ng",
+ "struct-field-names-as-array",
  "strum",
  "thiserror 2.0.21",
  "veil",
@@ -4019,8 +4025,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "envy",
+ "flate2",
  "futures-util",
  "http-body-util",
+ "hyper-util",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-config-load",
@@ -4033,6 +4041,7 @@ dependencies = [
  "litellm-gateway-inference",
  "litellm-http",
  "litellm-inference",
+ "litellm-license",
  "litellm-llms",
  "litellm-model-catalog",
  "litellm-python-compat",
@@ -4048,13 +4057,16 @@ dependencies = [
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tower",
+ "tower-http",
  "tracing",
  "uuid",
  "wiremock",
+ "zstd",
 ]
 
 [[package]]
@@ -4116,6 +4128,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tower",
+ "tower-http",
  "tower-service",
  "tracing",
 ]
@@ -4151,6 +4165,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
@@ -4448,6 +4463,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-license"
+version = "0.1.0"
+dependencies = [
+ "backon",
+ "base64 0.22.1",
+ "jiff",
+ "litellm-error",
+ "litellm-http",
+ "rand 0.8.7",
+ "rsa",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -4502,6 +4540,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "struct-field-names-as-array",
  "strum",
 ]
 
@@ -4556,7 +4595,6 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "aws-credential-types",
  "aws-sdk-secretsmanager",
  "azure_core",
@@ -4813,7 +4851,6 @@ name = "litellm-router-core"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
- "async-trait",
  "jiff",
  "litellm-cache",
  "litellm-python-compat",
@@ -5063,6 +5100,15 @@ dependencies = [
  "tokio",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-standard-logging"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6569,6 +6615,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
+ "sha2 0.10.9",
  "signature",
  "spki",
  "subtle",
@@ -7534,6 +7581,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "struct-field-names-as-array"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22ba4bae771f9cc992c4f403636c54d2ef13acde6367583e99d06bb336674dd9"
+dependencies = [
+ "struct-field-names-as-array-derive",
+]
+
+[[package]]
+name = "struct-field-names-as-array-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2dbf8b57f3ce20e4bb171a11822b283bdfab6c4bb0fe64fa729f045f23a0938"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "structmeta"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8114,7 +8181,9 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -9101,4 +9170,32 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zstd"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad5020ab8f27bfc0024ad0a07aed6bf022a16208f479686fbed4fdd0c85eb0b3"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "8.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9ea9cc2576c2fcc104e9cec04f46e3ede564f4fbc206831e4ef7e859a4140d"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.3+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f729a06d0257428fd9d997ac8db7e1407bd0262ab016b085b36bc52957c0052d"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
