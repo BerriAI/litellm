@@ -24,7 +24,6 @@ _CHAT_COMPLETION: Final = {
     ],
     "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
 }
-_MODELS_WITHOUT_TOOLS: Final = frozenset({"bineric/gpt-image-1", "bineric/nano-banana-2", "bineric/sonar-web-search"})
 _MODELS_THAT_TAKE_REASONING_EFFORT: Final = (
     "bineric/claude-haiku-5.5",
     "bineric/claude-opus-4.8",
@@ -124,7 +123,7 @@ def test_bineric_model_cost_and_capabilities(model: str):
     assert model_info["max_tokens"] == entry.get("max_output_tokens")
     assert model_info["max_input_tokens"] == entry.get("max_input_tokens")
     assert model_info["litellm_provider"] == "bineric"
-    assert ("tools" in supported_params) is (model not in _MODELS_WITHOUT_TOOLS)
+    assert ("tools" in supported_params) is entry.get("supports_function_calling", False)
     assert supports_vision(model) is entry.get("supports_vision", False)
 
 
