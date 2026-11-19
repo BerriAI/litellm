@@ -112,7 +112,7 @@ def _anthropic_stream() -> tuple[bytes, ...]:
                 "id": "msg_canary",
                 "type": "message",
                 "role": "assistant",
-                "model": "claude-sonnet-4-5",
+                "model": "claude-sonnet-5-5",
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
@@ -225,7 +225,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
                     api_base=upstream.url + "/v1", api_key="synthetic-openai-key", use_chat_completions_api=True
                 ),
                 anthropic_model=scenario.model(
-                    model="anthropic/claude-sonnet-4-5", api_base=upstream.url, api_key="synthetic-anthropic-key"
+                    model="anthropic/claude-sonnet-5-5", api_base=upstream.url, api_key="synthetic-anthropic-key"
                 ),
                 policy=policy,
                 bedrock_policy=bedrock_policy,

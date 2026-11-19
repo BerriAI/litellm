@@ -1243,13 +1243,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                 "mask_response_content=True, so the stream is held until the end-of-stream scan masks it",
                 masking_guardrail.guardrail_name,
             )
-        if masking_guardrail is not None and buffering_requested and not route_delivers_rewrites:
+        if masking_guardrail is not None and buffering_requested and not holds_masked_stream:
             verbose_proxy_logger.warning(
                 "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s because "
-                "mask_response_content=True and route %s cannot write the masked output back into a buffered "
-                "stream, so buffered replay would release the unredacted original chunks",
+                "mask_response_content=True and route %s with streaming_transform_mode=%s does not write ended-stream "
+                "rewrites back, so buffered replay would release the unredacted original chunks",
                 masking_guardrail.guardrail_name,
                 user_api_key_dict.request_route,
+                streaming_transform_mode,
             )
         buffer_until_moderated: Final = holds_masked_stream or bool(buffering_requested and masking_guardrail is None)
         release_on_scan: Final = release_on_scan_requested and not holds_masked_stream

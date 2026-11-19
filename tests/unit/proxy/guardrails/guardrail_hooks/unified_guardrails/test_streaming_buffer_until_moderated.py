@@ -1128,3 +1128,30 @@ async def test_masking_guardrail_holds_the_whole_stream_and_releases_it_masked(
     assert guardrail.scan_count == 1
     assert _chat_text(collected) == f"call {MASKED_MARKER} now"
     assert _tool_argument_text(collected) == f'{{"cmd": "{MASKED_MARKER}"}}'
+
+
+@pytest.mark.asyncio
+async def test_masking_guardrail_using_incremental_diff_warns_that_buffering_is_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_transform_mode = "incremental_diff"
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await _drain(
+            UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+                response=_replay(_chat_tool_call_items()),
+                request_data=request_data,
+            )
+        )
+
+    assert any(
+        "streaming_buffer_until_moderated is disabled for masker" in record.getMessage() for record in caplog.records
+    )
