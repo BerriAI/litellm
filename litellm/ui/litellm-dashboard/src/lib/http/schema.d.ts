@@ -38492,6 +38492,8 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Image Token Cost Batches */
             cache_read_input_image_token_cost_batches?: number | null;
+            /** Cache Read Input Image Token Cost Priority */
+            cache_read_input_image_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -38610,6 +38612,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Image Token Priority */
+            input_cost_per_image_token_priority?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -55851,6 +55855,8 @@ export interface components {
             cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Image Token Cost Batches */
             cache_read_input_image_token_cost_batches?: number | null;
+            /** Cache Read Input Image Token Cost Priority */
+            cache_read_input_image_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -55969,6 +55975,8 @@ export interface components {
             input_cost_per_image_token?: number | null;
             /** Input Cost Per Image Token Batches */
             input_cost_per_image_token_batches?: number | null;
+            /** Input Cost Per Image Token Priority */
+            input_cost_per_image_token_priority?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
