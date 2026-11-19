@@ -629,7 +629,7 @@ class _ToolClearingGuardrail(_MaskingGuardrail):
         masked = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
         tool_calls = inputs.get("tool_calls")
         if tool_calls is not None:
-            tool_calls.clear()
+            tool_calls.clear()  # rebind-ok: simulates a guardrail that empties the list it was handed
         return {**masked, "tool_calls": tool_calls or []}
 
 
