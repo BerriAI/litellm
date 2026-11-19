@@ -375,12 +375,15 @@ class AppStore:
         )
         return await self.response(row) if row is not None else None
 
-    async def list(self, offset: int, limit: int) -> tuple[App, ...]:
+    async def list(self, offset: int, limit: int, app_ids: frozenset[str] | None = None) -> tuple[App, ...]:
         definition: Final = await self.definition()
         if definition.resource_type is None:
             return ()
         rows: Final = await self.apps.find_many(
-            where={"resource_type": definition.resource_type.value},
+            where={
+                "resource_type": definition.resource_type.value,
+                **({} if app_ids is None else {"app_id": {"in": sorted(app_ids)}}),
+            },
             skip=offset,
             take=limit,
             order={"app_id": "asc"},

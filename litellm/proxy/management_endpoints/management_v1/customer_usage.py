@@ -5,6 +5,9 @@ from functools import partial
 from typing import Annotated, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from pydantic import AfterValidator, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
@@ -22,8 +25,8 @@ from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V
 from litellm.proxy.management_endpoints.management_v1.customers import (
     raise_public,
     reject_duplicate_list_params,
-    require_customer_admin,
 )
+from litellm.proxy.management_helpers.app_access import granted_app_ids
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
 from litellm.proxy.management_helpers.apps import AppRepository
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure, PrismaRecord
@@ -142,11 +145,24 @@ async def customer_activity(
     )
 
 
+async def require_usage_access(
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    prisma_client: Annotated[PrismaClient, Depends(get_customer_usage_prisma)],
+    app_id: Annotated[str | None, Query(include_in_schema=False)] = None,
+) -> None:
+    """Proxy admins read all usage. Anyone else must name an app granted to them through object_permission.apps."""
+    if auth.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    database: Final = require_attributes(prisma_client, DatabaseClient, "db").db
+    if app_id is None or app_id not in await granted_app_ids(database, auth.user_id):
+        raise_public(Failure(ErrorCode.FORBIDDEN))
+
+
 router: Final = APIRouter(
     prefix=MANAGEMENT_V1_PREFIX,
     tags=["customer usage"],
     dependencies=(
-        Depends(require_customer_admin),
+        Depends(require_usage_access),
         Depends(reject_unknown_query_params),
         Depends(reject_duplicate_list_params),
     ),

@@ -24,3 +24,4 @@ class ObjectPermissionDict(TypedDict, total=False):
     search_tools: list[str] | None
     mcp_tool_search_enabled: bool | None
     skills: ReadOnly[list[str] | None]
+    apps: list[str] | None

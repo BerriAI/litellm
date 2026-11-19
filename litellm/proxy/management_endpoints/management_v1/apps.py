@@ -4,11 +4,15 @@ from typing import Annotated, Final, TypeAlias, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_endpoints.management_v1.customers import (
     customer_actor,
     require_customer_admin,
 )
+from litellm.proxy.management_helpers.app_access import ALL_APPS, AppAccess, granted_app_ids
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.types.proxy.management_endpoints.apps import (
     App,
@@ -46,24 +50,42 @@ async def get_app_store() -> AsyncIterator[AppStore]:
 
 Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]
 Actor: TypeAlias = Annotated[str, Depends(customer_actor)]
-router: Final = APIRouter(
-    prefix=MANAGEMENT_V1_PREFIX + "/apps",
-    tags=["apps"],
-    dependencies=(Depends(require_customer_admin),),
-)
+
+
+async def get_app_access(
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    store: Annotated[AppStore, Depends(get_app_store)],
+) -> AppAccess:
+    if auth.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return ALL_APPS
+    access: Final = AppAccess(await granted_app_ids(store.db, auth.user_id))
+    if not access.app_ids:
+        raise HTTPException(403, "Forbidden.")
+    return access
+
+
+def readable(access: AppAccess, app_id: str) -> str:
+    if not access.allows(app_id):
+        raise HTTPException(403, "Forbidden.")
+    return app_id
+
+
+Access: TypeAlias = Annotated[AppAccess, Depends(get_app_access)]
+ADMIN_ONLY: Final = (Depends(require_customer_admin),)
+router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX + "/apps", tags=["apps"])
 
 
 @router.get("/definition", response_model=AppDefinition)
-async def get_app_definition(store: Store) -> AppDefinition:
+async def get_app_definition(store: Store, _access: Access) -> AppDefinition:
     return await store.definition()
 
 
-@router.put("/definition", response_model=AppDefinition)
+@router.put("/definition", response_model=AppDefinition, dependencies=ADMIN_ONLY)
 async def put_app_definition(data: AppDefinition, store: Store) -> AppDefinition:
     return resolve(await store.put_definition(data))
 
 
-@router.get("/resources", response_model=tuple[AppResource, ...])
+@router.get("/resources", response_model=tuple[AppResource, ...], dependencies=ADMIN_ONLY)
 async def list_app_resources(
     store: Store,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -86,23 +108,27 @@ async def create_app(data: AppCreate, store: Store, actor: Actor) -> App:
 @router.get("", response_model=tuple[App, ...])
 async def list_apps(
     store: Store,
+    access: Access,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> tuple[App, ...]:
-    return tuple(await asyncio.gather(*(store.with_budget_usage(app) for app in await store.list(offset, limit))))
+    apps: Final = await store.list(offset, limit, access.app_ids)
+    return tuple(await asyncio.gather(*(store.with_budget_usage(app) for app in apps)))
 
 
 @router.get("/{app_id}", response_model=App)
-async def get_app(app_id: str, store: Store) -> App:
-    return await store.with_budget_usage(resolve(await store.get(app_id)))
+async def get_app(app_id: str, store: Store, access: Access) -> App:
+    return await store.with_budget_usage(resolve(await store.get(readable(access, app_id))))
 
 
-@router.patch("/{app_id}", response_model=App)
+@router.patch("/{app_id}", response_model=App, dependencies=ADMIN_ONLY)
 async def patch_app(app_id: str, data: AppPatch, store: Store, actor: Actor) -> App:
     return await store.with_budget_usage(resolve(await store.patch(app_id, data, actor)))
 
 
-@router.put("/{app_id}/customer_organizations/{customer_org_id}", response_model=AppOrganization)
+@router.put(
+    "/{app_id}/customer_organizations/{customer_org_id}", response_model=AppOrganization, dependencies=ADMIN_ONLY
+)
 async def put_app_organization(
     app_id: str,
     customer_org_id: str,
@@ -114,15 +140,15 @@ async def put_app_organization(
 
 
 @router.get("/{app_id}/customer_organizations/{customer_org_id}", response_model=AppOrganization)
-async def get_app_organization(app_id: str, customer_org_id: str, store: Store) -> AppOrganization:
-    app: Final = resolve(await store.get(app_id))
+async def get_app_organization(app_id: str, customer_org_id: str, store: Store, access: Access) -> AppOrganization:
+    app: Final = resolve(await store.get(readable(access, app_id)))
     organization: Final = await store.find_organization(app, customer_org_id)
     if organization is None:
         return resolve(AppFailure(404, "App customer organization not found."))
     return await store.with_budget_usage(organization)
 
 
-@router.put("/{app_id}/customer_members/{customer_member_id}", response_model=AppMember)
+@router.put("/{app_id}/customer_members/{customer_member_id}", response_model=AppMember, dependencies=ADMIN_ONLY)
 async def put_app_member(
     app_id: str,
     customer_member_id: str,
@@ -134,5 +160,5 @@ async def put_app_member(
 
 
 @router.get("/{app_id}/customer_members/{customer_member_id}", response_model=AppMember)
-async def get_app_member(app_id: str, customer_member_id: str, store: Store) -> AppMember:
-    return await store.with_budget_usage(resolve(await store.get_member(app_id, customer_member_id)))
+async def get_app_member(app_id: str, customer_member_id: str, store: Store, access: Access) -> AppMember:
+    return await store.with_budget_usage(resolve(await store.get_member(readable(access, app_id), customer_member_id)))
