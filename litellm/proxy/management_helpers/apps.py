@@ -411,6 +411,8 @@ class AppStore:
         return budget_id in await self.shared_profile_ids() and await self.budget(budget_id) is not None
 
     async def validate_settings(self, data: AppPatch | AppCreate) -> AppFailure | None:
+        if data.budget_id is not None or data.default_tier_budget_id is not None:
+            await self.customers.lock_customer_identities()
         if not await self.valid_profile(data.default_tier_budget_id):
             return AppFailure(422, "The default profile must be an existing customer budget group.")
         if data.budget_id is not None and (
