@@ -1386,6 +1386,7 @@ _OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
         "input_file": "[file omitted]",
         "document": "[file omitted]",
         "input_audio": "[audio omitted]",
+        "input_json": "[json omitted]",
     }
 )
 

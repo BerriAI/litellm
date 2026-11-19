@@ -20,9 +20,10 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import is_plain_embedding_text
 from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
@@ -619,12 +620,12 @@ def _is_json_input_part(part: object) -> bool:
 def _content_parts(message: object) -> Sequence[object]:
     if isinstance(message, OpenAIDecisionInputMessage):
         return () if isinstance(message.content, str) else message.content
-    return as_object_list((as_str_mapping(message) or {}).get("content")) or ()
+    return parts_of((as_str_mapping(message) or {}).get("content"))
 
 
 def request_carries_json_input(request_input: object) -> bool:
     """A Decisions ``input`` holding an ``input_json`` part, as sent or as validated messages."""
-    messages: Final = as_object_list(request_input) or ()
+    messages: Final = parts_of(request_input)
     return any(map(_is_json_input_part, chain.from_iterable(map(_content_parts, messages))))
 
 

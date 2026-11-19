@@ -256,6 +256,19 @@ def test_a_call_carrying_json_input_skips_the_deployment_refusing_it(
 
 
 @pytest.mark.parametrize("op", ["adecisions", "decisions"])
+def test_a_tuple_input_carrying_json_input_skips_the_deployment_refusing_it(
+    make_core: MakeCore, host: EndpointHost, op: str
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+    message: Final = {"role": "user", "content": (_TICKET, _EVIDENCE)}
+
+    for _ in range(3):
+        _call(core, op, model="j", **{**QUESTION, "input": (message,)})
+
+    assert host.deployments_called(op) == ["json"] * 3
+
+
+@pytest.mark.parametrize("op", ["adecisions", "decisions"])
 def test_a_call_with_only_text_parts_keeps_the_deployment_refusing_json_input(
     make_core: MakeCore, host: EndpointHost, op: str
 ) -> None:

@@ -7909,6 +7909,20 @@ _STATELESS_CASES: Final[tuple[tuple[dict[str, object], dict[str, object]], ...]]
     ),
     (
         {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Is this a duplicate charge?"},
+                        {"type": "input_json", "data": {"charges": [49, 49]}},
+                    ],
+                }
+            ]
+        },
+        {"input": _user_turn("Is this a duplicate charge?\n[json omitted]")},
+    ),
+    (
+        {
             "messages": [
                 {
                     "role": "user",
