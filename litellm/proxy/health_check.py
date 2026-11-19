@@ -443,8 +443,9 @@ def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: 
 def _wildcard_probes_for(
     public_name: str, router: "Router", model_groups: AbstractSet[str] | None
 ) -> tuple[Mapping[str, object], ...]:
-    rows: Final = router.registry().deployments(public_name, source="wildcard")
-    if _resolved_deployment_ids(router, public_name) != frozenset(i for row in rows if (i := _deployment_id(row))):
+    served_name: Final = router.registry().resolve(public_name, kind="alias") or public_name
+    rows: Final = router.registry().deployments(served_name, source="wildcard")
+    if _resolved_deployment_ids(router, served_name) != frozenset(i for row in rows if (i := _deployment_id(row))):
         return ()
     eligible: Final = (row for row in rows if not _skips_health_checks(row))
     return tuple(
@@ -488,13 +489,28 @@ async def _bounded_probe(
         return await scope.probe_one(deployment, scope.details)
 
 
-def _finished(task: "asyncio.Task[tuple[_Endpoints, _Endpoints]]") -> bool:
-    return task.done() and not task.cancelled() and task.exception() is None
+def _timed_out(probe: Mapping[str, object], deadline_seconds: float) -> tuple[_Endpoints, _Endpoints]:
+    error: Final = f"health check did not finish within the health check interval ({deadline_seconds:g}s)"
+    return (), ({"model": _deployment_model(probe), "error": error},)
 
 
-async def _probes_finished_by_deadline(
+def _probe_outcome(
+    probe: Mapping[str, object],
+    task: "asyncio.Task[tuple[_Endpoints, _Endpoints]]",
+    timed_out: bool,
+    deadline_seconds: float,
+) -> tuple[_Endpoints, _Endpoints] | None:
+    if timed_out:
+        return _timed_out(probe, deadline_seconds)
+    if task.cancelled() or task.exception() is not None:
+        return None
+    return task.result()
+
+
+async def _probe_outcomes_by_deadline(
     scope: WildcardProbeScope, probes: Sequence[Mapping[str, object]]
 ) -> tuple[tuple[Mapping[str, object], tuple[_Endpoints, _Endpoints]], ...]:
+    """Each probe's endpoints, with a probe still running at the deadline cancelled and reported unhealthy."""
     limit: Final = (
         asyncio.Semaphore(scope.max_concurrency)
         if scope.max_concurrency is not None and scope.max_concurrency > 0
@@ -505,7 +521,18 @@ async def _probes_finished_by_deadline(
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
-    return tuple((probe, task.result()) for probe, task in zip(probes, tasks) if _finished(task))
+    if pending:
+        logger.warning(
+            "background_health_check_wildcard_probes_timed_out timed_out=%d probed=%d deadline_seconds=%s",
+            len(pending),
+            len(probes),
+            scope.deadline_seconds,
+        )
+    return tuple(
+        (probe, outcome)
+        for probe, task in zip(probes, tasks)
+        if (outcome := _probe_outcome(probe, task, task in pending, scope.deadline_seconds)) is not None
+    )
 
 
 async def _save_wildcard_probes(prisma_client: "PrismaClient", checked_by: str, scope: WildcardProbeScope) -> None:
@@ -516,24 +543,17 @@ async def _save_wildcard_probes(prisma_client: "PrismaClient", checked_by: str, 
         if not probes:
             return
         probe_start: Final = time.time()
-        finished: Final = await _probes_finished_by_deadline(scope, probes)
+        outcomes: Final = await _probe_outcomes_by_deadline(scope, probes)
     except Exception as e:
         logger.warning("background_health_check_wildcard_probe_failed error=%r", e)
         return
-    if len(finished) < len(probes):
-        logger.warning(
-            "background_health_check_wildcard_probes_unfinished finished=%d probed=%d deadline_seconds=%s",
-            len(finished),
-            len(probes),
-            scope.deadline_seconds,
-        )
-    if not finished:
+    if not outcomes:
         return
     await save_background_health_checks_to_db(
         prisma_client,
-        [probe for probe, _ in finished],
-        list(chain.from_iterable(healthy for _, (healthy, _) in finished)),
-        list(chain.from_iterable(unhealthy for _, (_, unhealthy) in finished)),
+        [probe for probe, _ in outcomes],
+        list(chain.from_iterable(healthy for _, (healthy, _) in outcomes)),
+        list(chain.from_iterable(unhealthy for _, (_, unhealthy) in outcomes)),
         probe_start,
         checked_by=checked_by,
     )

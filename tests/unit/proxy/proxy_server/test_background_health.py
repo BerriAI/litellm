@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -747,8 +748,8 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
 async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_model_under_its_own_name():
     from litellm import Router
 
-    served = "bedrock/us.anthropic.claude-opus-4-8"
-    router = Router(
+    served: Final = "bedrock/us.anthropic.claude-opus-4-8"
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "bedrock/*",
@@ -757,8 +758,8 @@ async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_
             }
         ]
     )
-    exact = {"model_name": "opus", "litellm_params": {"model": served}, "model_info": {"id": "exact"}}
-    prisma_client = MagicMock()
+    exact: Final = {"model_name": "opus", "litellm_params": {"model": served}, "model_info": {"id": "exact"}}
+    prisma_client: Final = MagicMock()
     prisma_client.db.query_raw = AsyncMock(return_value=[])
     prisma_client.save_health_check_result = AsyncMock(return_value=object())
 
@@ -779,13 +780,13 @@ async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_
 
 
 class _RegistryUnavailableRouter:
-    def registry(self):
+    def registry(self) -> NoReturn:
         raise RuntimeError("registry unavailable")
 
 
 @pytest.mark.asyncio
 async def test_schedule_background_health_check_db_save_still_saves_regular_rows_when_building_probes_raises():
-    prisma_client = MagicMock()
+    prisma_client: Final = MagicMock()
     prisma_client.db.query_raw = AsyncMock(return_value=[])
     prisma_client.save_health_check_result = AsyncMock(return_value=object())
 
@@ -808,7 +809,7 @@ async def test_schedule_background_health_check_db_save_still_saves_regular_rows
 
 
 @pytest.mark.asyncio
-async def test_run_background_health_check_hands_public_model_groups_to_the_db_save(monkeypatch):
+async def test_run_background_health_check_hands_public_model_groups_to_the_db_save(monkeypatch: pytest.MonkeyPatch):
     import litellm
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 60)
@@ -819,17 +820,17 @@ async def test_run_background_health_check_hands_public_model_groups_to_the_db_s
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
     monkeypatch.setattr(litellm, "public_model_groups", ["bedrock/us.anthropic.claude-opus-4-8"])
-    router = SimpleNamespace(
+    router: Final = SimpleNamespace(
         settings=lambda: RouterSettings(background_health_check_model_groups=frozenset({"bedrock/*"}))
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "bedrock/*", "model_info": {"id": "wc"}}])
     monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
 
-    async def _fake_direct(*_a, **_kw):
+    async def _fake_direct(*_a: object, **_kw: object) -> tuple[list[object], list[object], dict[str, object]]:
         return ([], [], {})
 
-    scheduled = {}
+    scheduled: Final[dict[str, object]] = {}
     monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
     monkeypatch.setattr(
         proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: scheduled.update(kw)
@@ -837,7 +838,7 @@ async def test_run_background_health_check_hands_public_model_groups_to_the_db_s
     monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
     monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
 
-    async def _stop_sleep(_seconds):
+    async def _stop_sleep(_seconds: float) -> NoReturn:
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
@@ -856,7 +857,7 @@ async def test_run_background_health_check_hands_public_model_groups_to_the_db_s
     [(["bedrock/us.anthropic.claude-opus-4-8"], False), (["bedrock/us.anthropic.claude-sonnet-4-6"], True)],
 )
 async def test_run_background_health_check_warns_only_when_model_groups_match_nothing_it_probes(
-    monkeypatch, public_model_groups, warned
+    monkeypatch: pytest.MonkeyPatch, public_model_groups: list[str], warned: bool
 ):
     import litellm
 
@@ -880,17 +881,17 @@ async def test_run_background_health_check_warns_only_when_model_groups_match_no
     monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "bedrock/*", "model_info": {"id": "wc"}}])
     monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
 
-    async def _fake_direct(*_a, **_kw):
+    async def _fake_direct(*_a: object, **_kw: object) -> tuple[list[object], list[object], dict[str, object]]:
         return ([], [], {})
 
-    warnings = []
+    warnings: Final[list[str]] = []
     monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
     monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
     monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
     monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
     monkeypatch.setattr(proxy_server.verbose_proxy_logger, "warning", lambda msg, *a: warnings.append(msg))
 
-    async def _stop_sleep(_seconds):
+    async def _stop_sleep(_seconds: float) -> NoReturn:
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
