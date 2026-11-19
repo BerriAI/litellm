@@ -1019,6 +1019,51 @@ async def test_anthropic_assistant_history_never_reaches_compression_service(gua
     assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
 
 
+@pytest.mark.asyncio
+async def test_claude_code_cached_prefix_is_never_compressed_on_a_model_alias(guardrail: HeadroomGuardrail):
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    tickets: Final = json.dumps([{"id": i, "title": f"Ticket {i}", "status": "open"} for i in range(500)])
+    data: Final = {
+        "model": "best-sonnet",
+        "system": [{"type": "text", "text": "You are a coding agent.", "cache_control": {"type": "ephemeral"}}],
+        "tools": [
+            {
+                "name": "search_tickets",
+                "description": "Search the ticket tracker",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            }
+        ],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "List the open tickets."}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tu_1", "name": "search_tickets", "input": {"query": "status:open"}}
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": tickets}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "There are 500 open tickets."}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Which ones are P1?", "cache_control": {"type": "ephemeral"}}],
+            },
+        ],
+    }
+    client_request: Final = json.loads(json.dumps(data))
+
+    def _compress(**kwargs):
+        return _make_compress_response(
+            [{**row, "content": "[compressed]"} if row["role"] == "tool" else row for row in kwargs["json"]["messages"]]
+        )
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_compress) as mock_post:
+        result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    mock_post.assert_not_awaited()
+    assert result["messages"] == client_request["messages"]
+
+
 def test_has_headroom_retrieve_tool_recognizes_anthropic_native_shape():
     """By the time an Anthropic Messages API response reaches the agentic-loop
     gate, the OpenAI-shaped tool this guardrail injects (type: "function")

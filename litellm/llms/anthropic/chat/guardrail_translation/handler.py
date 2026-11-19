@@ -886,7 +886,6 @@ class AnthropicMessagesHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         *,
         request_data: dict[str, object] | None = None,  # mutable-ok: the request dict guardrails receive
-        keep_cache_control: bool = False,
     ) -> Mapping[str, object]:
         """
         Process input messages by applying guardrails to text content. ``request_data`` is what the guardrail sees as
@@ -911,7 +910,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
         chat_completion_compatible_request: Final = self._translate_to_openai(
-            translation_source, keep_cache_control=keep_cache_control
+            translation_source, keep_cache_control=True
         )
 
         full_structured_messages: Final = cast(
@@ -921,9 +920,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_midturn_system_message: Final = any(
             str(message.get("role") or "").lower() == "system" for message in full_structured_messages
         )
-        hoisted_system_message: Final = (
-            None if skip_system else self._hoisted_top_level_system_message(data, model, keep_cache_control)
-        )
+        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data, model)
         if hoisted_system_message is not None:
             full_structured_messages.insert(0, hoisted_system_message)
         # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
@@ -1063,9 +1060,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(
-        self, data: Mapping[str, object], model: str, keep_cache_control: bool
-    ) -> AllMessageValues | None:
+    def _hoisted_top_level_system_message(self, data: Mapping[str, object], model: str) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
@@ -1076,7 +1071,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 "messages": [],
                 "system": system,
             },
-            keep_cache_control=keep_cache_control,
+            keep_cache_control=True,
         )
         hoisted: Final = probe.get("messages") or []
         return hoisted[0] if hoisted else None

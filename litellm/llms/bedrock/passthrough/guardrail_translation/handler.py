@@ -1395,7 +1395,6 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                     guardrail_to_apply=guardrail_to_apply,
                     litellm_logging_obj=litellm_logging_obj,
                     request_data=_body_level_request_data(passthrough_request),
-                    keep_cache_control=True,
                 )
                 return passthrough_request
             return await _generic_passthrough_handler().process_input_messages(
