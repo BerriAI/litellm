@@ -123,6 +123,8 @@ def _export_row(api_key: str | None) -> dict[str, object]:
         "failed_requests": 0,
         "cache_read_input_tokens": 3,
         "cache_creation_input_tokens": 1,
+        "key_metadata": {},
+        "user_metadata": {},
     }
 
 

@@ -129,8 +129,8 @@ class ExportRow:
     failed_requests: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
-    key_metadata: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
-    user_metadata: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+    key_metadata: Mapping[str, object]
+    user_metadata: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
