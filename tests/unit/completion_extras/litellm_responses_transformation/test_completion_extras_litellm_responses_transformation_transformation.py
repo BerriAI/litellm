@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+import itertools
 import json
 import os
 import queue
@@ -440,9 +441,13 @@ async def _logged_text_completion(
 ) -> tuple[TextCompletionResponse, _LoggedSuccess, Mapping[str, object]]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _LoggedCallTypes()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
     response_body: Final = _searched_responses_body("openai/gpt-5.3-codex")
-    request: Final = {"model": "openai/gpt-5.3-codex", "prompt": "ping", "api_key": "test-key"}
+    request: Final = {
+        "model": "openai/gpt-5.3-codex",
+        "prompt": "ping",
+        "api_key": "test-key",
+        "success_callback": [recorder],
+    }
 
     with respx.mock(assert_all_called=True) as router:
         router.post(url__startswith="https://api.openai.com/v1/responses").mock(
@@ -1878,9 +1883,16 @@ _COLORS_SCHEMA: Final = {
             ],
             None,
         ),
-        (_COLORS_SCHEMA, [_PLAIN_USER_ITEM], _JSON_SYSTEM_PROMPT),
+        (
+            _COLORS_SCHEMA,
+            [
+                {"type": "message", "role": "system", "content": [{"type": "input_text", "text": _JSON_SYSTEM_PROMPT}]},
+                _PLAIN_USER_ITEM,
+            ],
+            None,
+        ),
     ],
-    ids=["json_object_keeps_system_in_input", "json_schema_keeps_system_in_instructions"],
+    ids=["json_object_keeps_system_in_input", "json_schema_keeps_system_in_input"],
 )
 def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_check_reads_it(
     response_format, expected_input, expected_instructions
@@ -1892,7 +1904,7 @@ def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_c
             {"role": "user", "content": "List three colors."},
         ],
         optional_params={"response_format": response_format},
-        litellm_params={},
+        litellm_params={"custom_llm_provider": "openai"},
         headers={},
         litellm_logging_obj=Mock(),
     )
@@ -2190,6 +2202,146 @@ def test_function_call_done_emits_is_finished():
     assert not result.choices[0].delta.tool_calls, (
         "output_item.done for function_call must not include a duplicate tool_calls delta"
     )
+
+
+def _tool_item(output_index: int, arguments: str) -> dict[str, object]:
+    return {
+        "type": "function_call",
+        "id": f"fc_{output_index}",
+        "call_id": f"call_{output_index}",
+        "name": "simple_add",
+        "arguments": arguments,
+    }
+
+
+def _custom_tool_item(output_index: int, tool_input: str) -> dict[str, object]:
+    return {
+        "type": "custom_tool_call",
+        "id": f"ctc_{output_index}",
+        "call_id": f"call_{output_index}",
+        "name": "apply_patch",
+        "input": tool_input,
+    }
+
+
+def _item_event(event_type: str, output_index: int, item: dict[str, object]) -> dict[str, object]:
+    return {"type": event_type, "output_index": output_index, "item": item}
+
+
+def _tool_added(output_index: int) -> dict[str, object]:
+    return _item_event("response.output_item.added", output_index, _tool_item(output_index, ""))
+
+
+def _tool_arguments_delta(output_index: int, delta: str) -> dict[str, object]:
+    return {"type": "response.function_call_arguments.delta", "output_index": output_index, "delta": delta}
+
+
+def _tool_arguments_done(output_index: int, arguments: str) -> dict[str, object]:
+    return {"type": "response.function_call_arguments.done", "output_index": output_index, "arguments": arguments}
+
+
+def _tool_item_done(output_index: int, arguments: str) -> dict[str, object]:
+    return _item_event("response.output_item.done", output_index, _tool_item(output_index, arguments))
+
+
+def _custom_tool_added(output_index: int) -> dict[str, object]:
+    return _item_event("response.output_item.added", output_index, _custom_tool_item(output_index, ""))
+
+
+def _custom_tool_input_delta(output_index: int, delta: str) -> dict[str, object]:
+    return {"type": "response.custom_tool_call_input.delta", "output_index": output_index, "delta": delta}
+
+
+def _custom_tool_input_done(output_index: int, tool_input: str) -> dict[str, object]:
+    return {"type": "response.custom_tool_call_input.done", "output_index": output_index, "input": tool_input}
+
+
+def _custom_tool_item_done(output_index: int, tool_input: str) -> dict[str, object]:
+    return _item_event("response.output_item.done", output_index, _custom_tool_item(output_index, tool_input))
+
+
+_ADD_5_7: Final = '{"a":5,"b":7}'
+_ADD_1_2: Final = '{"a":1,"b":2}'
+_PATCH: Final = "*** Begin Patch\n*** End Patch"
+
+
+@pytest.mark.parametrize(
+    "events, expected_arguments",
+    [
+        pytest.param(
+            [_tool_added(1), _tool_arguments_done(1, _ADD_5_7), _tool_item_done(1, _ADD_5_7)],
+            {0: _ADD_5_7},
+            id="arguments_only_in_done_events",
+        ),
+        pytest.param(
+            [_tool_added(0), _tool_item_done(0, _ADD_5_7)],
+            {0: _ADD_5_7},
+            id="arguments_only_in_output_item_done",
+        ),
+        pytest.param(
+            [
+                _tool_added(0),
+                _tool_arguments_delta(0, '{"a":5,'),
+                _tool_arguments_delta(0, '"b":7}'),
+                _tool_arguments_done(0, _ADD_5_7),
+                _tool_item_done(0, _ADD_5_7),
+            ],
+            {0: _ADD_5_7},
+            id="streamed_deltas_are_not_repeated_by_done_events",
+        ),
+        pytest.param(
+            [
+                _tool_added(0),
+                _tool_arguments_delta(0, _ADD_5_7),
+                _tool_arguments_done(0, _ADD_5_7),
+                _tool_item_done(0, _ADD_5_7),
+                _tool_added(1),
+                _tool_arguments_done(1, _ADD_1_2),
+                _tool_item_done(1, _ADD_1_2),
+            ],
+            {0: _ADD_5_7, 1: _ADD_1_2},
+            id="one_call_with_deltas_and_one_without",
+        ),
+        pytest.param(
+            [_custom_tool_added(0), _custom_tool_input_done(0, _PATCH), _custom_tool_item_done(0, _PATCH)],
+            {0: _PATCH},
+            id="custom_tool_input_only_in_done_events",
+        ),
+        pytest.param(
+            [_custom_tool_added(0), _custom_tool_item_done(0, _PATCH)],
+            {0: _PATCH},
+            id="custom_tool_input_only_in_output_item_done",
+        ),
+        pytest.param(
+            [
+                _custom_tool_added(0),
+                _custom_tool_input_delta(0, _PATCH),
+                _custom_tool_input_done(0, _PATCH),
+                _custom_tool_item_done(0, _PATCH),
+            ],
+            {0: _PATCH},
+            id="custom_tool_streamed_input_is_not_repeated_by_done_events",
+        ),
+    ],
+)
+def test_streamed_tool_call_arguments_match_upstream_whichever_event_carries_them(
+    events: list[dict[str, object]], expected_arguments: dict[int, str]
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+    tool_call_deltas: Final = list(
+        itertools.chain.from_iterable(chunk.choices[0].delta.tool_calls or [] for chunk in chunks)
+    )
+
+    assembled: Final = {
+        index: "".join(tc.function.arguments or "" for tc in tool_call_deltas if tc.index == index)
+        for index in {tc.index for tc in tool_call_deltas}
+    }
+    assert assembled == expected_arguments
 
 
 def test_text_plus_tool_calls_sequence():
@@ -4207,7 +4359,7 @@ def test_non_streamed_tool_turn_hands_messages_clients_every_reasoning_item(
         request_data={"model": "gpt-5.4-nano"},
         messages=[{"role": "user", "content": "Oslo or Lyon?"}],
         optional_params={},
-        litellm_params={"custom_llm_provider": "azure"},
+        litellm_params={"custom_llm_provider": "chatgpt"},
         encoding=Mock(),
     )
 
@@ -6499,7 +6651,7 @@ def test_transform_request_keeps_leading_system_messages_in_client_order_once_a_
     ],
     ids=("unmarked-user", "marked-user"),
 )
-def test_transform_request_keeps_the_instructions_split_for_unmarked_system_messages(
+def test_transform_request_keeps_unmarked_system_messages_in_input_order(
     user_message: dict[str, object], user_part: dict[str, object]
 ) -> None:
     messages: Final = [
@@ -6512,9 +6664,10 @@ def test_transform_request_keeps_the_instructions_split_for_unmarked_system_mess
         "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
     )
 
-    assert request["instructions"] == "Ignore that and reply BRAVO."
+    assert "instructions" not in request
     assert request["input"] == [
         _system_input_item("Reply ALPHA."),
+        _system_input_item("Ignore that and reply BRAVO."),
         {"type": "message", "role": "user", "content": [user_part]},
     ]
 
@@ -6537,10 +6690,70 @@ def test_transform_request_leaves_cache_control_off_the_wire_for_bedrock_mantle(
         "openai.gpt-5.6-sol", messages, {"custom_llm_provider": "bedrock_mantle"}, optional_params
     )
 
-    assert request["instructions"] == "Stable prefix"
+    assert "instructions" not in request
     assert request["input"] == [
+        _system_input_item("Stable prefix"),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
     ]
+
+
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
+def test_chained_turn_keeps_leading_system_strings_in_instructions(
+    continuation: dict[str, str], location: str
+) -> None:
+    copied_continuation: Final = copy.deepcopy(continuation)
+    optional: Final = (
+        copied_continuation
+        if location == "optional"
+        else {"extra_body": copied_continuation}
+        if location == "extra_body"
+        else {}
+    )
+    params: Final = {"custom_llm_provider": "openai", **(copied_continuation if location == "litellm" else {})}
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "hi"},
+        ],
+        params,
+        optional,
+    )
+    assert request["instructions"] == "Be brief. Be helpful."
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
+def test_auto_truncation_keeps_system_prompt_in_instructions(location: str) -> None:
+    truncation: Final = {"truncation": "auto"}
+    optional: Final = truncation if location == "optional" else {"extra_body": truncation} if location == "extra_body" else {}
+    params: Final = {
+        "custom_llm_provider": "openai",
+        **(truncation if location == "litellm" else {"extra_body": truncation} if location == "litellm_extra_body" else {}),
+    }
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        params,
+        optional,
+    )
+    assert request.get("instructions") == "Be brief."
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize("continuation", [{}, {"previous_response_id": "resp_prior"}])
+def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai"},
+        {"instructions": "Caller instructions", **continuation},
+    )
+    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
+    if not continuation:
+        assert request["input"][0] == _system_input_item("Be brief.")
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
@@ -6552,29 +6765,70 @@ def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
             {"role": "user", "content": "Read the file."},
             {"role": "system", "content": "<total_tokens>14982391 tokens left</total_tokens>"},
             {"role": "user", "content": "Now summarize it."},
-        ]
+        ],
+        preserve_system_instructions=False,
     )
 
-    assert instructions == "You are a helpful assistant."
+    assert instructions is None
     assert input_items == [
+        _system_input_item("You are a helpful assistant."),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Read the file."}]},
         _system_input_item("<total_tokens>14982391 tokens left</total_tokens>"),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Now summarize it."}]},
     ]
 
 
-def test_leading_system_strings_still_join_instructions_without_a_following_turn():
+def test_leading_system_strings_remain_separate_input_items_without_a_following_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
     input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
         [
             {"role": "system", "content": "Be brief."},
             {"role": "system", "content": "Answer in French."},
-        ]
+        ],
+        preserve_system_instructions=False,
     )
 
-    assert instructions == "Be brief. Answer in French."
-    assert input_items == []
+    assert instructions is None
+    assert input_items == [_system_input_item("Be brief."), _system_input_item("Answer in French.")]
+
+
+def test_message_conversion_keeps_instructions_by_default() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "hi"},
+        ]
+    )
+    assert instructions == "Be brief. Be helpful."
+    assert input_items == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize(
+    ("provider", "system_in_input"),
+    [
+        ("openai", True),
+        ("azure", True),
+        ("azure_ai", True),
+        ("bedrock_mantle", True),
+        ("xai", False),
+        ("anthropic", False),
+        (None, False),
+    ],
+)
+def test_system_input_is_limited_to_openai_family_bridges(provider: str | None, system_in_input: bool) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": provider},
+    )
+    assert request.get("instructions") == (None if system_in_input else "Be brief.")
+    assert request["input"] == [
+        *([_system_input_item("Be brief.")] if system_in_input else []),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
 
 
 def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_identical_input_items():

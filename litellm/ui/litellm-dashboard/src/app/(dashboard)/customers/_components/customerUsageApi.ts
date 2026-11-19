@@ -2,6 +2,7 @@ import { apiClient } from "@/components/networking";
 import { type DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
+import type { CustomerRateLimits } from "./CustomerRateLimits";
 import {
   resolveCustomerHierarchy,
   type CustomerHierarchyScope as CustomerUsageScope,
@@ -31,6 +32,7 @@ export interface CustomerUsageEntity {
   budgetLimits: components["schemas"]["BudgetLimit"][];
   budgetResetAt: string | null;
   budgetUsage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+  rateLimits?: CustomerRateLimits;
 }
 
 export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerActivityPages> {
@@ -58,6 +60,7 @@ interface CustomerUsageRequest {
   yearStartDate: string;
   yearEndDate: string;
   signal?: AbortSignal;
+  appId?: string | null;
 }
 
 const PREFIX = "/management/v1";
@@ -129,7 +132,7 @@ const descendants = async (scope: ResolvedScope, request: CustomerUsageRequest) 
 const activityPages = async (
   resource: Collection,
   ids: readonly string[],
-  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId">,
 ) => {
   assertIdentifiers(ids);
   const pages: DailyActivityAggregatedResponse[] = [];
@@ -141,6 +144,7 @@ const activityPages = async (
         start_date: request.startDate,
         end_date: request.endDate,
         [ID_FILTER[resource]]: ids.join(","),
+        ...(request.appId ? { app_id: request.appId } : {}),
         page,
         page_size: PAGE_SIZE,
       },
@@ -154,7 +158,7 @@ const activityPages = async (
 
 const organizationActivityTotals = async (
   organizationId: string,
-  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId">,
 ) => {
   const result = await apiClient.get<DailyActivityAggregatedResponse>(
     `${PREFIX}/customer_organizations/daily/activity/aggregated`,
@@ -165,6 +169,7 @@ const organizationActivityTotals = async (
         start_date: request.startDate,
         end_date: request.endDate,
         customer_org_id: organizationId,
+        ...(request.appId ? { app_id: request.appId } : {}),
       },
     },
   );
@@ -231,6 +236,9 @@ export const customerUsageEntity = (id: string, record: Organization | Team | Me
     budgetLimits: budget?.budget_limits ?? [],
     budgetResetAt: record.budget_reset_at ?? null,
     budgetUsage: record.budget_usage,
+    ...(budget?.tpm_limit != null || budget?.rpm_limit != null
+      ? { rateLimits: { tpm_limit: budget.tpm_limit, rpm_limit: budget.rpm_limit } }
+      : {}),
   };
 };
 

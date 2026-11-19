@@ -1,8 +1,12 @@
+mod auth;
+mod budgets;
 mod cache;
 mod callable;
+mod callbacks_model_capacity;
 mod coercion;
 mod credentials;
 mod db;
+mod db_repository;
 mod diagnostics;
 mod errors;
 mod execution;
@@ -11,6 +15,7 @@ mod logger;
 mod marshal;
 mod model_cost;
 mod model_registry;
+mod parallel_request_limiter;
 mod preflight;
 mod python_settings;
 mod redis;
@@ -27,7 +32,33 @@ mod _native {
     use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_export]
-    use crate::db::{NativeDatabase, NativeDatabaseFailure};
+    use crate::auth::{
+        AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
+        KeyContextView, MappedClaimsView, MappingView, PlanView, TeamGrantView, jwt_claims,
+        jwt_is_allowed_domain, jwt_is_jwt, jwt_key_mapping_cache_key, jwt_presents_claims,
+        jwt_unverified_claims,
+    };
+    #[pymodule_export]
+    use crate::auth::{
+        auth_allowed_routes_grant, auth_first_denied_route, auth_jwt_team_routes_grant,
+        auth_managed_agent_route_allowed, auth_managed_route, auth_route_matches_denied,
+        auth_route_matches_prefix, auth_route_matches_wildcard,
+    };
+    #[pymodule_export]
+    use crate::budgets::NativeBudgets;
+    #[pymodule_export]
+    use crate::budgets::budget_check_decision;
+    #[pymodule_export]
+    use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
+    #[pymodule_export]
+    use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
+    #[pymodule_export]
+    use crate::db_repository::{
+        RustAccessGroupRepository, RustBudgetRepository, RustEndUserRepository,
+        RustJwtKeyMappingRepository, RustKeyRepository, RustModelAccessGroupRepository,
+        RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
+        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
+    };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -47,6 +78,10 @@ mod _native {
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::parallel_request_limiter::{
+        NativeParallelRequestLimiter, NativeParallelRequestLimiterState,
+    };
     #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
@@ -109,6 +144,10 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let _ = rustls::crypto::ring::default_provider().install_default();
+        module.add(
+            "JWT_ID_JAG_TYP",
+            litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
+        )?;
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -170,6 +209,8 @@ mod tests {
                 "GuardedReply",
                 "GaugesAcquired",
                 "GaugeOverLimit",
+                "NativeParallelRequestLimiter",
+                "NativeParallelRequestLimiterState",
                 "NativePending",
                 "NativeRouterCooldowns",
                 "NativeRouterUsage",
@@ -183,8 +224,22 @@ mod tests {
                 "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
+                "DatabaseEndpoint",
                 "NativeDatabase",
                 "NativeDatabaseFailure",
+                "RustKeyRepository",
+                "RustJwtKeyMappingRepository",
+                "RustModelAccessGroupRepository",
+                "RustBudgetRepository",
+                "RustEndUserRepository",
+                "RustUserRepository",
+                "RustOrganizationRepository",
+                "RustTeamMembershipRepository",
+                "RustTeamRepository",
+                "RustAccessGroupRepository",
+                "RustObjectPermissionRepository",
+                "RustProjectRepository",
+                "RustTagRepository",
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
@@ -207,7 +262,38 @@ mod tests {
                 "process_state_started",
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
+                "NativeBudgets",
+                "budget_check_decision",
+                "NativeModelCapacity",
+                "NativeModelCapacityState",
                 "NativeS3Log",
+                "auth_allowed_routes_grant",
+                "auth_first_denied_route",
+                "auth_jwt_team_routes_grant",
+                "auth_managed_agent_route_allowed",
+                "auth_managed_route",
+                "auth_route_matches_denied",
+                "auth_route_matches_prefix",
+                "auth_route_matches_wildcard",
+                "JWT_ID_JAG_TYP",
+                "RustAuth",
+                "RustAuthOutcome",
+                "RustAuthSettings",
+                "RustAuthStep",
+                "RustClaimIdentity",
+                "RustDenial",
+                "RustIdentity",
+                "RustJwtMapping",
+                "RustKeyContext",
+                "RustMappedClaims",
+                "RustPlan",
+                "RustTeamGrant",
+                "jwt_claims",
+                "jwt_is_allowed_domain",
+                "jwt_is_jwt",
+                "jwt_key_mapping_cache_key",
+                "jwt_presents_claims",
+                "jwt_unverified_claims",
             ];
             #[cfg(feature = "huggingface")]
             expected.push("HuggingFaceEncoding");

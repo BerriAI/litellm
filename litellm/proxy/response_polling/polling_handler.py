@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
+from redis.exceptions import ResponseError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
 from litellm.caching.redis_cache import RedisCache
+from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
 
 if TYPE_CHECKING:
@@ -21,7 +23,31 @@ if TYPE_CHECKING:
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
+_SCRIPT_REPLY: Final = TypeAdapter(int)
+_WRITTEN: Final = 1
 _CACHED_VALUE: Final = TypeAdapter(object)
+
+
+def _encoded_state(state: Mapping[str, object]) -> str:
+    return json.dumps(json.dumps({"status": state["status"], **state}))
+
+
+_CANCELLED_PREFIX: Final = _encoded_state({"status": "cancelled"}).removesuffix('}"')
+
+_WRITE_UNLESS_CANCELLED_SCRIPT: Final = """
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if redis.call('GETRANGE', KEYS[1], 0, string.len(ARGV[3]) - 1) == ARGV[3] then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+return 1
+"""
+
+
+async def _stored_status_prefix(redis_cache: RedisCache, cache_key: str) -> str:
+    return await redis_cache.async_getrange(cache_key, 0, len(_CANCELLED_PREFIX) - 1)
 
 
 def _json_document(value: object) -> str | bytes | bytearray:
@@ -107,13 +133,13 @@ class ResponsePollingHandler:
         self,
         polling_id: str,
         status: ResponsesAPIStatus | None = None,
-        usage: dict | None = None,
+        usage: Mapping[str, object] | None = None,
         error: Mapping[str, object] | None = None,
-        incomplete_details: dict | None = None,
-        reasoning: dict | None = None,
+        incomplete_details: Mapping[str, object] | None = None,
+        reasoning: Mapping[str, object] | None = None,
         tool_choice: object | None = None,
-        tools: list | None = None,
-        output: list | None = None,
+        tools: Sequence[object] | None = None,
+        output: Sequence[object] | None = None,
         # Additional ResponsesAPIResponse fields
         model: str | None = None,
         instructions: str | None = None,
@@ -121,7 +147,7 @@ class ResponsePollingHandler:
         top_p: float | None = None,
         max_output_tokens: int | None = None,
         previous_response_id: str | None = None,
-        text: dict | None = None,
+        text: Mapping[str, object] | None = None,
         truncation: str | None = None,
         parallel_tool_calls: bool | None = None,
         user: str | None = None,
@@ -165,7 +191,7 @@ class ResponsePollingHandler:
         # Get current state
         cached_state: Final = _CACHED_VALUE.validate_python(await self.redis_cache.async_get_cache(cache_key))
         if not cached_state:
-            verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
+            verbose_proxy_logger.warning("No cached state found for polling_id: %s", sanitize_for_log(polling_id))
             return
 
         # Parse existing ResponsesAPIResponse from cache
@@ -227,12 +253,21 @@ class ResponsePollingHandler:
         if store is not None:
             state["store"] = store
 
-        # Update cache with configured TTL
-        await self.redis_cache.async_set_cache(
-            key=cache_key,
-            value=json.dumps(state),
-            ttl=self.ttl,
-        )
+        try:
+            written: Final = await self._write_unless_cancelled(self.redis_cache, cache_key, state)
+        except Exception as write_error:  # noqa: BLE001  # a Redis fault must not end the background stream
+            verbose_proxy_logger.error(
+                "Failed to write the polling state for %s: %s",
+                sanitize_for_log(polling_id),
+                type(write_error).__name__,
+            )
+            return
+        if written != _WRITTEN:
+            verbose_proxy_logger.debug(
+                "Skipped the polling state write for %s: the response was cancelled or has expired",
+                sanitize_for_log(polling_id),
+            )
+            return
 
         output_count: Final = len(_JSON_LIST.validate_python(state.get("output", [])))
         verbose_proxy_logger.debug(
@@ -252,6 +287,43 @@ class ResponsePollingHandler:
             return _JSON_OBJECT.validate_python(json.loads(_json_document(cached_state)))
 
         return None
+
+    async def _write_unless_cancelled(
+        self, redis_cache: RedisCache, cache_key: str, state: Mapping[str, object]
+    ) -> int:
+        write_unless_cancelled: Final = redis_cache.async_register_script(_WRITE_UNLESS_CANCELLED_SCRIPT)
+        try:
+            return _SCRIPT_REPLY.validate_python(
+                await write_unless_cancelled(
+                    keys=(cache_key,),
+                    args=(_encoded_state(state), redis_cache.get_ttl(ttl=self.ttl), _CANCELLED_PREFIX),
+                )
+            )
+        except ResponseError as script_error:
+            verbose_proxy_logger.debug(
+                "Redis did not run the polling write script, writing with GETRANGE and SET XX GET: %s", script_error
+            )
+        if await _stored_status_prefix(redis_cache, cache_key) in ("", _CANCELLED_PREFIX):
+            return 0
+        return await self._replace_and_restore_a_cancel(redis_cache, cache_key, state)
+
+    async def _replace_and_restore_a_cancel(
+        self, redis_cache: RedisCache, cache_key: str, state: Mapping[str, object]
+    ) -> int:
+        ttl: Final = redis_cache.get_ttl(ttl=self.ttl)
+        previous: Final = await redis_cache.async_set_existing_returning_previous(cache_key, _encoded_state(state), ttl)
+        if previous is None:
+            return 0
+        if not previous.startswith(_CANCELLED_PREFIX):
+            return _WRITTEN
+        await redis_cache.async_set_existing_returning_previous(cache_key, previous, ttl)
+        return 0
+
+    @with_service_target(_RESPONSE_POLLING_TARGET)
+    async def is_cancelled_or_gone(self, polling_id: str) -> bool:
+        if not self.redis_cache:
+            return False
+        return await _stored_status_prefix(self.redis_cache, self.get_cache_key(polling_id)) in ("", _CANCELLED_PREFIX)
 
     async def cancel_polling(self, polling_id: str) -> bool:
         """
@@ -283,7 +355,7 @@ def should_use_polling_for_request(
     redis_cache: RedisCache | None,
     model: str,
     llm_router: "Router | None",
-    native_background_mode: list[str] | None = None,  # List of models that should use native background mode
+    native_background_mode: Sequence[str] | None = None,  # List of models that should use native background mode
 ) -> bool:
     """
     Determine if polling via cache should be used for a request.
