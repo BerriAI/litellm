@@ -232,6 +232,7 @@ import os
 import httpx
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 SINK = "{sink}/native"
 
@@ -274,7 +275,13 @@ class HookRecorder(CustomLogger):
             }}
         )
 
-    async def async_post_call_response_headers_hook(self, data, user_api_key_dict, response, request_headers=None):
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: dict[str, str] | None = None,
+    ) -> dict[str, str] | None:
         await _post(
             {{
                 "stage": "response_headers",
@@ -713,12 +720,12 @@ def test_an_adapter_returning_the_wrong_number_of_texts_fails_closed_before_the_
 _V2_HEADERS_CODE: Final = """\
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.custom_logger_v2 import CustomLoggerV2, Field, Hook, Patch, on
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, Patch, on
 
 
 class ResponseHeaders(CustomLoggerV2):
     @on(Hook.response_headers, writes={Field.response_headers})
-    async def headers(self, view, ctx):
+    async def headers(self, view: object, ctx: CallContext[None]) -> Patch:
         return Patch().merge(Field.response_headers, {"x-v2-header": "v2-value"})
 
 
