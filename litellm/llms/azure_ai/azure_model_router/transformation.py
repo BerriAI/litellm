@@ -110,4 +110,3 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
                 },
             )
         return transformed_response
-
