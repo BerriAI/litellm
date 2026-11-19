@@ -6,7 +6,7 @@ mod boot;
 mod router;
 
 pub use boot::NativeBootHost;
-pub use router::NativeRouterHost;
+pub use router::{NativeRouterHost, answers};
 
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_gateway_inference::routing::{Host, RouteAttempt};
