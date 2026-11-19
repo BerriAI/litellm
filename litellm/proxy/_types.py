@@ -2854,8 +2854,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Seconds each worker serves `/model/info` and `/model_group/info` from memory for the same "
             "caller and query before computing them again. Entries are dropped when the worker's "
             "deployments change, so a model added or removed shows at once on the worker that made the "
-            "change and within the TTL elsewhere. Team membership changes show within the TTL. Unset "
-            "or 0 computes every call."
+            "change and within the TTL elsewhere. Team membership changes show within the TTL. A caller "
+            "without a credential hash, such as a JWT subject, is computed every call. Unset or 0 "
+            "computes every call."
         ),
     )
     model_list_healthy_only: bool | None = Field(

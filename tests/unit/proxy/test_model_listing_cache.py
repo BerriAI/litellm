@@ -3,7 +3,13 @@ from typing import Final
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.model_listing_cache import ModelListingCache, listing_cache_key, listing_cache_ttl
+from litellm.proxy.model_listing_cache import (
+    ListingScope,
+    ModelListingCache,
+    listing_cache_key,
+    listing_cache_scope,
+    listing_cache_ttl,
+)
 
 
 @pytest.mark.parametrize(
@@ -33,6 +39,34 @@ def test_listing_cache_key_separates_callers_routes_and_queries() -> None:
     assert listing_cache_key("model_group_info", admin, {"model_group": "gpt-4o"}) != listing_cache_key(
         "model_group_info", admin, {"model_group": None}
     )
+
+
+@pytest.mark.parametrize(
+    "narrower",
+    (
+        {"agent_id": "agent-b"},
+        {"team_models": ["gpt-4o"]},
+        {"access_group_ids": ["group-b"]},
+        {"aliases": {"fast": "gpt-4o-mini"}},
+        {"team_model_aliases": {"fast": "gpt-4o-mini"}},
+        {"models": ["gpt-4o-mini"]},
+    ),
+)
+def test_listing_cache_key_separates_every_field_the_listing_is_filtered_by(narrower: dict[str, object]) -> None:
+    broad: Final = UserAPIKeyAuth(token="hash-a", team_id="team-1", user_id="user-1")
+    narrow: Final = UserAPIKeyAuth(token="hash-a", team_id="team-1", user_id="user-1", **narrower)
+    assert listing_cache_key("model_info_v1", broad, {}) != listing_cache_key("model_info_v1", narrow, {})
+
+
+def test_listing_cache_scope_skips_a_caller_without_a_credential_hash() -> None:
+    settings: Final = {"model_listing_cache_ttl_seconds": 30}
+    keyed: Final = UserAPIKeyAuth(token="hash-a", user_id="user-1")
+    subject: Final = UserAPIKeyAuth(user_id="user-1")
+    assert listing_cache_scope(settings, "model_info_v1", keyed, {}) == ListingScope(
+        listing_cache_key("model_info_v1", keyed, {}), 30.0
+    )
+    assert listing_cache_scope(settings, "model_info_v1", subject, {}) is None, "told apart only by claims"
+    assert listing_cache_scope({}, "model_info_v1", keyed, {}) is None, "the setting is off"
 
 
 def test_listing_is_served_until_the_ttl_passes_the_registry_moves_or_the_cache_is_cleared() -> None:

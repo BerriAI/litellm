@@ -487,7 +487,7 @@ from litellm.proxy.auth.master_key_boot_check import (
     master_key_boot_verdict,
     with_stored_secrets_counted,
 )
-from litellm.proxy.model_listing_cache import ModelListingCache, listing_cache_key, listing_cache_ttl
+from litellm.proxy.model_listing_cache import ModelListingCache, listing_cache_scope
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
     OtherDeploymentsBill,
@@ -19305,15 +19305,15 @@ async def model_info_v1(
                 )
         return _model_info_json_response(single_model_list)
 
-    listing_ttl: Final = listing_cache_ttl(current_general_settings())
-    listing_key: Final = listing_cache_key(
+    listing_scope: Final = listing_cache_scope(
+        current_general_settings(),
         "model_info_v1",
         user_api_key_dict,
         {"include_team_models": include_team_models, "teamId": teamId, "healthy_only": healthy_only},
     )
     registry_version: Final = llm_router.registry().version
     cached_listing: Final = (
-        model_info_listing_cache.get(listing_key, registry_version) if listing_ttl else None
+        model_info_listing_cache.get(listing_scope.key, registry_version) if listing_scope else None
     )
     if cached_listing is not None:
         return _model_info_json_response(cached_listing)
@@ -19408,8 +19408,8 @@ async def model_info_v1(
     )
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
-    if listing_ttl:
-        model_info_listing_cache.put(listing_key, visible_models, registry_version, listing_ttl)
+    if listing_scope:
+        model_info_listing_cache.put(listing_scope.key, visible_models, registry_version, listing_scope.ttl_seconds)
     return _model_info_json_response(visible_models)
 
 
@@ -19686,11 +19686,12 @@ async def model_group_info(
     if llm_model_list is None or llm_router is None or not llm_model_list:
         return {"data": []}
 
-    listing_ttl: Final = listing_cache_ttl(current_general_settings())
-    listing_key: Final = listing_cache_key("model_group_info", user_api_key_dict, {"model_group": model_group})
+    listing_scope: Final = listing_cache_scope(
+        current_general_settings(), "model_group_info", user_api_key_dict, {"model_group": model_group}
+    )
     registry_version: Final = llm_router.registry().version
     cached_listing: Final = (
-        model_group_listing_cache.get(listing_key, registry_version) if listing_ttl else None
+        model_group_listing_cache.get(listing_scope.key, registry_version) if listing_scope else None
     )
     if cached_listing is not None:
         return cached_listing
@@ -19810,8 +19811,8 @@ async def model_group_info(
             *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
     }
-    if listing_ttl:
-        model_group_listing_cache.put(listing_key, listing, registry_version, listing_ttl)
+    if listing_scope:
+        model_group_listing_cache.put(listing_scope.key, listing, registry_version, listing_scope.ttl_seconds)
     return listing
 
 

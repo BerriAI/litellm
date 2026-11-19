@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Final, Generic, TypeVar
 
 from pydantic import TypeAdapter
@@ -19,9 +20,18 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 MODEL_LISTING_CACHE_TTL_SETTING: Final = "model_listing_cache_ttl_seconds"
 _MAX_ENTRIES: Final = 256
-_KEY_MODELS: Final = TypeAdapter(tuple[str, ...])
+_KEY_NAMES: Final = TypeAdapter(tuple[str, ...])
+_KEY_ALIASES: Final = TypeAdapter(dict[str, object])
 
 _Listing: Final = TypeVar("_Listing")
+
+
+@dataclass(frozen=True)
+class ListingScope:
+    """One cached listing: the caller and query it answers, and how long it is served."""
+
+    key: str
+    ttl_seconds: float
 
 
 def listing_cache_ttl(general_settings: Mapping[str, object]) -> float:
@@ -33,16 +43,48 @@ def listing_cache_ttl(general_settings: Mapping[str, object]) -> float:
 
 
 def listing_cache_key(route: str, user_api_key_dict: UserAPIKeyAuth, params: Mapping[str, object]) -> str:
-    """One entry per caller identity and query; a listing is filtered by who asks and how."""
+    """One entry per caller and query.
+
+    The scope holds every field the listing is filtered by: the credential hash, the
+    team, user, organization, role and agent, the key's and the team's models and access
+    groups, and the aliases the names are read through.
+    """
     scope: Final = (
         user_api_key_dict.token,
         user_api_key_dict.team_id,
         user_api_key_dict.user_id,
         user_api_key_dict.org_id,
+        user_api_key_dict.agent_id,
         str(user_api_key_dict.user_role),
-        _KEY_MODELS.validate_python(user_api_key_dict.models or ()),  # pyright: ignore[reportUnknownMemberType]  # key.models is an untyped String[] column
+        _names(user_api_key_dict.models),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # key.models is an untyped String[] column
+        _names(user_api_key_dict.team_models),
+        _names(user_api_key_dict.access_group_ids),
+        _aliases(user_api_key_dict.aliases),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # key.aliases is an untyped Json column
+        _aliases(user_api_key_dict.team_model_aliases),
     )
     return repr((route, scope, tuple(sorted(params.items()))))
+
+
+def listing_cache_scope(
+    general_settings: Mapping[str, object], route: str, user_api_key_dict: UserAPIKeyAuth, params: Mapping[str, object]
+) -> ListingScope | None:
+    """None when the setting is off, or when the caller has no credential hash.
+
+    A JWT subject or a custom-auth caller is told apart only by its claims, so it is
+    computed every call rather than risk serving it another subject's listing.
+    """
+    ttl_seconds: Final = listing_cache_ttl(general_settings)
+    if not ttl_seconds or user_api_key_dict.token is None:
+        return None
+    return ListingScope(listing_cache_key(route, user_api_key_dict, params), ttl_seconds)
+
+
+def _names(column: object) -> tuple[str, ...]:
+    return _KEY_NAMES.validate_python(column or ())
+
+
+def _aliases(column: object) -> tuple[tuple[str, object], ...]:
+    return tuple(sorted(_KEY_ALIASES.validate_python(column or {}).items(), key=lambda alias: alias[0]))
 
 
 class ModelListingCache(Generic[_Listing]):

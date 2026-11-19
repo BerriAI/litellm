@@ -267,6 +267,42 @@ def test_listing_cache_is_per_caller(
         assert _listed_names(client, "/model/info") == ("alpha",), "the first caller is still served from memory"
 
 
+def test_listing_is_computed_every_call_for_a_caller_without_a_credential_hash(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _serve(monkeypatch, _router_with("alpha"))
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", 60)
+    proxy_server.invalidate_model_listings()
+
+    with auth_as(api_key=None, user_id="jwt-subject"):
+        assert _listed_names(client, "/model/info") == ("alpha",)
+    _serve(monkeypatch, _router_with("beta"))
+    with auth_as(api_key=None, user_id="jwt-subject"):
+        assert _listed_names(client, "/model/info") == ("beta",), "a caller told apart only by claims is never cached"
+
+
+def test_listing_cache_is_per_agent(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _serve(monkeypatch, _router_with("alpha"))
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", 60)
+    proxy_server.invalidate_model_listings()
+
+    with auth_as(agent_id="agent-a"):
+        assert _listed_names(client, "/model/info") == ("alpha",)
+    _serve(monkeypatch, _router_with("beta"))
+    with auth_as(agent_id="agent-b"):
+        assert _listed_names(client, "/model/info") == ("beta",), "an agent under the same key gets its own listing"
+
+
 # ---------------------------------------------------------------------------
 # GET /v2/model/info
 # ---------------------------------------------------------------------------
