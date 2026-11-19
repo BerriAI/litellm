@@ -4279,7 +4279,14 @@ def _user_profile_id_header(
     )
 
 
-_CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY: Final = ("authorization", "x-api-key", "api-key")
+_CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        LlmProviders.ANTHROPIC.value: ("authorization", "x-api-key"),
+        LlmProviders.AZURE_AI.value: ("authorization", "x-api-key", "api-key"),
+        LlmProviders.BEDROCK.value: ("authorization", "x-api-key", "api-key"),
+        LlmProviders.BEDROCK_MANTLE.value: ("authorization", "x-api-key", "api-key"),
+    }
+)
 _CREDENTIAL_HEADERS_CHAT_SENDS_BESIDE_OR_OVER_A_CALLER_KEY: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         LlmProviders.ANTHROPIC.value: ("authorization",),
@@ -4348,11 +4355,14 @@ def add_provider_specific_headers_to_request(
                 yields_to_configured=user_profile_id is None,
             ),
             _user_profile_id_header(caller_credential_providers, caller_profile),
-            _pin_where_a_configured_credential_authenticates(
-                caller_api_key_providers - caller_oauth_providers,
-                user_profile_id,
-                _CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY,
-                native_anthropic_messages_only=True,
+            *(
+                _pin_where_a_configured_credential_authenticates(
+                    frozenset((provider,)) & (caller_api_key_providers - caller_oauth_providers),
+                    user_profile_id,
+                    credential_headers,
+                    native_anthropic_messages_only=True,
+                )
+                for provider, credential_headers in _CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY.items()
             ),
             *(
                 _pin_where_a_configured_credential_authenticates(
