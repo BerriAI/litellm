@@ -1,6 +1,5 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
 from typing import (
     ClassVar,
     Final,
