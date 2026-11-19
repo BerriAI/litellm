@@ -462,14 +462,13 @@ async def test_litellm_proxy_decisions_never_send_the_openai_key_to_the_proxy(
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
-    with pytest.raises(litellm.AuthenticationError, match="set api_key or LITELLM_PROXY_API_KEY"):
-        await litellm.adecisions(
-            model=model,
-            input="The package arrived broken.",
-            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
-        )
+    await litellm.adecisions(
+        model=model,
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
 
-    assert not proxy_route.called
+    assert [call.request.headers.get("authorization") for call in proxy_route.calls] == [None]
 
 
 _PROXY_COST_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
