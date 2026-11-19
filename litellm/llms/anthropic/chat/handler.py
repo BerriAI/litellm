@@ -924,7 +924,7 @@ class ModelResponseIterator:
         thinking_blocks: Final = [
             ChatCompletionRedactedThinkingBlock(
                 type="redacted_thinking",
-                data=cast(Mapping[str, str], content_block_start["content_block"])["data"],
+                data=content_block_start["content_block"]["data"],
                 index=self.thinking_block_index,
             )
         ]

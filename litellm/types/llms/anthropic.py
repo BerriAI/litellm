@@ -572,21 +572,6 @@ class ToolUseBlock(TypedDict):
     caller: ToolCaller | None
 
 
-class ServerToolUseBlock(TypedDict):
-    type: ReadOnly[Literal["server_tool_use"]]
-    id: ReadOnly[str]
-    name: ReadOnly[str]
-    input: ReadOnly[dict[str, object]]
-
-
-class McpToolUseBlock(TypedDict):
-    type: ReadOnly[Literal["mcp_tool_use"]]
-    id: ReadOnly[str]
-    name: ReadOnly[str]
-    input: ReadOnly[dict[str, object]]
-    server_name: ReadOnly[str]
-
-
 class TextBlock(TypedDict):
     text: str
 
@@ -598,7 +583,7 @@ class ContentBlockStartToolUse(TypedDict):
     id: str
     name: str
     input: dict
-    content_block: ToolUseBlock | ServerToolUseBlock | McpToolUseBlock
+    content_block: ToolUseBlock
 
 
 class ContentBlockStartText(TypedDict):
