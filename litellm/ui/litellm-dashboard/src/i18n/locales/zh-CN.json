@@ -6444,7 +6444,6 @@
       "aiGateway": "AI 网关",
       "chatDescription": "用于模型、MCP 和智能体的聊天界面",
       "chatDisabled": "管理员可在设置中启用",
-      "moyaiDescription": "云端编程智能体",
       "trigger": "切换工作区，当前为 {{workspace}}"
     },
     "navDisplayName": {
@@ -6632,10 +6631,6 @@
     "agentControlPlane": {
       "plugin": "插件",
       "configure": "请在设置中配置插件 URL"
-    },
-    "dashboardShell": {
-      "navigation": "导航",
-      "openNavigation": "打开导航"
     },
     "deprecationBanner": {
       "title": "{{featureName}} 已弃用"
@@ -7184,10 +7179,7 @@
       "shareFeedback": "分享反馈",
       "settings": "设置",
       "signOut": "退出登录",
-      "chatNavigation": "聊天导航",
-      "openChatNavigation": "打开聊天导航",
-      "sheetTitle": "LiteLLM 聊天",
-      "sheetDescription": "对话及聊天工作区导航"
+      "chatNavigation": "聊天导航"
     },
     "conversationList": {
       "yesterday": "昨天",
