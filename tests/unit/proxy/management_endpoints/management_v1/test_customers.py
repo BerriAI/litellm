@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
@@ -37,6 +37,7 @@ def client(
     database: Database | None = None,
     premium_user: bool = True,
     actor: str = "admin",
+    now: datetime = NOW,
 ) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
@@ -47,7 +48,7 @@ def client(
 
     auth: Final = UserAPIKeyAuth(user_id=actor, user_role=role)
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", database if database is not None else Database()), premium_user=premium_user, clock=lambda: NOW
+        cast("Prisma", database if database is not None else Database()), premium_user=premium_user, clock=lambda: now
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
@@ -272,6 +273,86 @@ def test_member_budget_id_must_name_one_of_its_organizations_templates() -> None
         },
     )
     assert shared_override.status_code == 422, shared_override.text
+
+
+def test_custom_member_budget_is_owned_and_does_not_change_the_shared_template() -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    organization: Final = family(http)
+    template_id: Final = organization["default_budget_template_id"]
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "custom-member",
+            "parent_team_ids": ["team"],
+            "budget": {"max_budget": 750, "budget_duration": "1mo", "tpm_limit": 1700, "rpm_limit": 17},
+        },
+    )
+    assert created.status_code == 201, created.text
+    member: Final = created.json()
+    assert member["budget_id"] != template_id
+    assert member["budget_override_id"] is None
+    assert member["budget"] == member["effective_budget"]
+    assert member["budget"]["max_budget"] == 750
+    assert member["budget"]["tpm_limit"] == 1700
+    edited: Final = http.patch("/management/v1/customer_members/custom-member", json={"budget": {"max_budget": 900}})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["budget_id"] == member["budget_id"]
+    assert edited.json()["budget"] == {**member["budget"], "max_budget": 900}
+    assert edited.json()["budget_reset_at"] == member["budget_reset_at"]
+    for payload in (
+        {"budget_id": member["budget_id"]},
+        {"budget_id": template_id, "budget": {"max_budget": 100}},
+    ):
+        invalid: Final = http.post("/management/v1/customer_members", json={"parent_team_ids": ["team"], **payload})
+        assert invalid.status_code == 422, invalid.text
+    restored: Final = http.patch("/management/v1/customer_members/custom-member", json={"budget_id": template_id})
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["budget_id"] == template_id
+    assert member["budget_id"] not in database.litellm_budgettable.rows
+    assert (
+        http.get("/management/v1/customer_organizations/org").json()["default_budgets"]
+        == organization["default_budgets"]
+    )
+
+
+def test_member_upsert_keeps_private_budgets_and_updates_only_supplied_base_fields() -> None:
+    http: Final = client()
+    family(http)
+    identity: Final = {"customer_org_id": "org", "customer_member_id": "custom-upsert", "parent_team_id": "team"}
+    created: Final = http.post(
+        "/management/v1/customer_members/upsert",
+        json={**identity, "budget": {"max_budget": 750, "budget_duration": "1mo", "rpm_limit": 17}},
+    )
+    assert created.status_code == 200, created.text
+    member: Final = created.json()
+    assert member["created"] is True
+    for patch in ({}, {"budget": {"max_budget": 750}}):
+        unchanged: Final = http.post("/management/v1/customer_members/upsert", json={**identity, **patch})
+        assert unchanged.status_code == 200, unchanged.text
+        assert unchanged.json() == {**member, "created": False}
+    edited: Final = http.post(
+        "/management/v1/customer_members/upsert", json={**identity, "budget": {"max_budget": 900}}
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["budget_id"] == member["budget_id"]
+    assert edited.json()["budget"] == {**member["budget"], "max_budget": 900}
+
+
+@pytest.mark.parametrize("delete_path", ("customer_members/custom-member", "customer_teams/team?cascade=true"))
+def test_deleting_members_reclaims_private_base_budgets(delete_path: str) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    family(http)
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={"customer_member_id": "custom-member", "parent_team_ids": ["team"], "budget": {"max_budget": 750}},
+    )
+    assert created.status_code == 201, created.text
+    removed: Final = http.delete(f"/management/v1/{delete_path}")
+    assert removed.status_code == 204, removed.text
+    assert created.json()["budget_id"] not in database.litellm_budgettable.rows
+    assert http.get("/management/v1/customer_organizations/org").json()["default_budgets"]
 
 
 @pytest.mark.parametrize("clear_limits", (None, []))

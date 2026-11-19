@@ -1,13 +1,90 @@
+from datetime import timedelta
 from typing import Final
 
+import pytest
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from tests.unit.proxy.management_endpoints.management_v1.test_customers import client
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import NOW, Database
 
 REQUESTS: Final = "/management/v1/customer_budget_increase_requests"
 EXPIRES: Final = "2026-02-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("field", ("budget", "budget_override"))
+def test_temporary_increase_restores_the_members_custom_budget_after_expiry(field: str) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    member_id: Final = _paused_member(http, "pause_allow_increase")
+    custom: Final = http.patch(
+        f"/management/v1/customer_members/{member_id}",
+        json={
+            field: {
+                "max_budget": 750,
+                "budget_duration": "30d",
+                "tpm_limit": 1700,
+                "rpm_limit": 17,
+                "allowed_models": ["test-model"],
+                "cap_policy": "pause_allow_increase",
+            }
+        },
+    )
+    assert custom.status_code == 200, custom.text
+    original: Final = custom.json()["effective_budget"]
+    requested: Final = http.post(
+        REQUESTS,
+        json={"customer_member_id": member_id, "requested_max_budget": 1000, "expires_at": EXPIRES},
+    )
+    assert requested.status_code == 201, requested.text
+    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
+    assert approved.status_code == 200, approved.text
+    active: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
+    assert active["effective_budget"] == {**original, "max_budget": 1000}
+    assert active["budget_id"] != active["budget_override_id"]
+    later: Final = client(database=database, now=NOW + timedelta(days=32))
+    expired: Final = later.get(f"/management/v1/customer_members/{member_id}").json()
+    assert expired["effective_budget"] == original
+    assert expired["budget_reset_at"] == custom.json()["budget_reset_at"]
+
+
+def test_editing_base_limits_preserves_the_active_grant_and_its_expiry() -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    member_id: Final = _paused_member(http, "pause_allow_increase")
+    custom: Final = http.patch(
+        f"/management/v1/customer_members/{member_id}",
+        json={
+            "budget": {
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 750},
+                    {"budget_duration": "12mo", "max_budget": 8000},
+                ],
+                "rpm_limit": 17,
+                "cap_policy": "pause_allow_increase",
+            }
+        },
+    )
+    assert custom.status_code == 200, custom.text
+    requested: Final = http.post(
+        REQUESTS,
+        json={"customer_member_id": member_id, "requested_max_budget": 1000, "expires_at": EXPIRES},
+    )
+    assert requested.status_code == 201, requested.text
+    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
+    assert approved.status_code == 200, approved.text
+    active: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
+    edited: Final = http.patch(f"/management/v1/customer_members/{member_id}", json={"budget": {"rpm_limit": 23}})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["budget_id"] == active["budget_id"]
+    assert edited.json()["budget_override_id"] == active["budget_override_id"]
+    assert edited.json()["budget_override"] == active["budget_override"]
+    assert edited.json()["budget_override_expires_at"] == EXPIRES
+    assert edited.json()["effective_budget"]["max_budget"] == 1000
+    later: Final = client(database=database, now=NOW + timedelta(days=32))
+    expired: Final = later.get(f"/management/v1/customer_members/{member_id}").json()
+    assert expired["effective_budget"] == {**custom.json()["budget"], "rpm_limit": 23}
 
 
 def _as(http: TestClient, caller: UserAPIKeyAuth) -> TestClient:

@@ -131,8 +131,19 @@ class MemberFields(BaseModel):
 
     alias: str | None = None
     budget_id: str | None = None
+    budget: Budget | None = Field(
+        default=None,
+        description="Permanent member-specific budget. Creates a private budget when leaving a preset; "
+        "otherwise patches the existing private budget. Independent of temporary budget_override.",
+    )
     budget_override: Budget | None = None
     budget_override_expires_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "MemberFields":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a budget group or a custom budget")
+        return self
 
 
 class MemberPatch(MemberFields):
@@ -242,6 +253,7 @@ class CustomerMember(AuditFields):
     parent_org_id: str
     parent_team_ids: tuple[str, ...]
     budget_id: str | None = None
+    budget: Budget | None = None
     budget_override_id: str | None = None
     budget_override: Budget | None = None
     budget_override_expires_at: datetime | None = None

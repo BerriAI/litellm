@@ -9969,7 +9969,7 @@ export interface paths {
         put?: never;
         /**
          * Upsert Customer Member
-         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
+         * @description Create or update a customer member by customer_member_id within a customer org identified by customer_org_id or customer_org_alias. If both are supplied they must match. A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. Alias, budget_id, budget, budget_override and budget_override_expires_at follow the customer member models. Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. Moving between customer orgs or selecting another customer org's customer team returns 409. Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. Proxy admins only.
          */
         post: operations["upsert_customer_member_management_v1_customer_members_upsert_post"];
         delete?: never;
@@ -34065,6 +34065,7 @@ export interface components {
         CustomerMember: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41468,6 +41469,8 @@ export interface components {
         MemberCreate: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. Creates a private budget when leaving a preset; otherwise patches the existing private budget. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41490,6 +41493,8 @@ export interface components {
         MemberPatch: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. Creates a private budget when leaving a preset; otherwise patches the existing private budget. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41505,6 +41510,8 @@ export interface components {
         MemberUpsert: {
             /** Alias */
             alias?: string | null;
+            /** @description Permanent member-specific budget. Creates a private budget when leaving a preset; otherwise patches the existing private budget. Independent of temporary budget_override. */
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;
@@ -41523,6 +41530,7 @@ export interface components {
         MemberUpsertResponse: {
             /** Alias */
             alias?: string | null;
+            budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
             budget_override?: components["schemas"]["Budget"] | null;

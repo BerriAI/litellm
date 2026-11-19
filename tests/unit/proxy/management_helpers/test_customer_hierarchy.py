@@ -344,7 +344,7 @@ class Database:
 
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
-            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_id"),
+            "customer_organization_defaults": (self.litellm_customerorganizationtable, "default_budget_template_id"),
             "customer_organizations": (self.litellm_customerorganizationtable, "budget_id"),
             "customer_teams": (self.litellm_customerteamtable, "budget_id"),
             "customer_members": (self.litellm_customermembertable, "budget_id"),
