@@ -1355,9 +1355,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             keep_system_order=marked_a_system_string,
-            preserve_system_instructions=preserve_system_instructions
-            or (as_str_mapping(optional_params) or {}).get("store") is not False
-            or not _sends_system_as_input(provider, model),
+            preserve_system_instructions=preserve_system_instructions or not _sends_system_as_input(provider, model),
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
             replay_openai_history=provider == "openai",

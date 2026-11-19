@@ -6605,9 +6605,11 @@ def test_unforwarded_conversation_still_sends_system_as_cacheable_input(location
         {"store": "false"},
         {"store": False, "extra_body": {"store": True}},
         {"store": False, "extra_body": {"store": None}},
+        {"store": False},
+        {"store": True, "extra_body": {"store": False}},
     ],
 )
-def test_system_prompt_stays_in_instructions_unless_the_sent_store_is_false(store_params: dict[str, object]) -> None:
+def test_system_prompt_goes_in_cacheable_input_whatever_store_is_sent(store_params: dict[str, object]) -> None:
     request: Final = _bridged_transform_request(
         "gpt-6.2-sol",
         [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
@@ -6616,19 +6618,11 @@ def test_system_prompt_stays_in_instructions_unless_the_sent_store_is_false(stor
         if store_params != {"store": None}
         else {"store": None},
     )
-    assert request.get("instructions") == "Be brief.", request
-    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
-
-
-def test_nested_store_false_sends_system_as_cacheable_input() -> None:
-    request: Final = _bridged_transform_request(
-        "gpt-6.2-sol",
-        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
-        {"custom_llm_provider": "openai"},
-        {"store": True, "extra_body": {"store": False}},
-    )
     assert request.get("instructions") is None, request
-    assert request["input"][0] == _system_input_item("Be brief.")
+    assert request["input"] == [
+        _system_input_item("Be brief."),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
 
 
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])

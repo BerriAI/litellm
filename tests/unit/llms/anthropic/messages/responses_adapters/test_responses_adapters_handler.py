@@ -1654,18 +1654,20 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
 @pytest.mark.parametrize(
     ("store_params", "system_in_input"),
     [
-        ({}, False),
-        ({"store": True}, False),
-        ({"store": "false"}, False),
+        ({}, True),
+        ({"store": True}, True),
+        ({"store": "false"}, True),
         ({"store": False}, True),
         ({"store": True, "extra_body": {"store": False}}, True),
-        ({"store": False, "extra_body": {"store": True}}, False),
-        ({"store": False, "extra_body": {"store": None}}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, False),
-        ({"store": False, "additional_drop_params": ["temperature"]}, True),
+        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": False, "extra_body": {"store": None}}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"store": True, "previous_response_id": "resp_prior"}, False),
+        ({"conversation": "conv_prior"}, False),
+        ({"extra_body": {"truncation": "auto"}}, False),
     ],
 )
-def test_messages_system_prompt_moves_to_input_only_when_the_sent_store_is_false(
+def test_messages_system_prompt_goes_in_input_unless_the_request_continues_a_chain(
     store_params: dict[str, object], system_in_input: bool
 ) -> None:
     kwargs: Final = _build_responses_kwargs(
