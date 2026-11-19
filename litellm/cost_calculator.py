@@ -397,6 +397,14 @@ def _per_second_pricing_cost(
         model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
+    return _per_second_pricing_cost_from_info(model_info, response_time_ms, audio_seconds)
+
+
+def _per_second_pricing_cost_from_info(
+    model_info: ModelInfoBase,
+    response_time_ms: float | None,
+    audio_seconds: float = 0.0,
+) -> tuple[float, float] | None:
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
         return None
     cost_per_second: Final = model_info.get("cost_per_second")
@@ -419,7 +427,7 @@ def _per_second_pricing_cost(
     )
     verbose_logger.debug(
         "For model=%s - cost_per_second: %s; response time: %s",
-        model,
+        model_info.get("key"),
         resolved_cost_per_second,
         response_time_ms,
     )
@@ -442,6 +450,7 @@ def cost_per_token(
     ### CUSTOM PRICING ###
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
+    requested_model_info_override: ModelInfo | None = None,
     ### NUMBER OF QUERIES ###
     number_of_queries: int | None = None,
     ### USAGE OBJECT ###
@@ -552,6 +561,20 @@ def cost_per_token(
 
     if response_cost is not None:
         return response_cost[0], response_cost[1]
+
+    if requested_model_info_override is not None:
+        per_second: Final = _per_second_pricing_cost_from_info(
+            requested_model_info_override, response_time_ms, audio_transcription_file_duration
+        )
+        if per_second is not None:
+            return per_second
+        return generic_cost_per_token(
+            model=model,
+            usage=usage_block,
+            custom_llm_provider=custom_llm_provider or "",
+            service_tier=service_tier,
+            model_info=requested_model_info_override,
+        )
 
     model_cost_ref: Final = litellm.model_cost
     # Only callers that explicitly pass `custom_llm_provider` get the
@@ -1572,6 +1595,7 @@ def completion_cost(
     ### CUSTOM PRICING ###
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
+    requested_model_info_override: ModelInfo | None = None,
     optional_params: dict | None = None,
     custom_pricing: bool | None = None,
     base_model: str | None = None,
@@ -1637,6 +1661,7 @@ def completion_cost(
                         quality=quality,
                         n=n,
                         custom_cost_per_token=custom_cost_per_token,
+                        requested_model_info_override=requested_model_info_override,
                         custom_cost_per_second=custom_cost_per_second,
                         optional_params=optional_params,
                         custom_pricing=custom_pricing,
@@ -2081,6 +2106,7 @@ def completion_cost(
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
+                    requested_model_info_override=requested_model_info_override,
                     prompt_characters=prompt_characters,
                     completion_characters=completion_characters,
                     cache_creation_input_tokens=cache_creation_input_tokens,
@@ -2300,6 +2326,7 @@ def response_cost_calculator(
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     region_name: str | None = None,
+    requested_model_info_override: ModelInfo | None = None,
 ) -> float:
     """
     Returns
@@ -2328,6 +2355,7 @@ def response_cost_calculator(
                 optional_params=optional_params,
                 custom_pricing=custom_pricing,
                 base_model=base_model,
+                requested_model_info_override=requested_model_info_override,
                 prompt=prompt,
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,
