@@ -20,6 +20,7 @@ from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
 from litellm.llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.asyncio
@@ -1751,6 +1752,26 @@ async def test_fallback_keeps_a_forwarded_credential_header_off_bedrock(
     await router.acompletion(
         model="claude", messages=[{"role": "user", "content": "hi"}], headers={"Api-Key": _CALLER_KEY}
     )
+
+    sent: Final = bedrock.calls.last.request
+    assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFALLBACKTEST/")
+    assert all(_CALLER_KEY not in value for value in sent.headers.values())
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_a_key_inside_the_callers_client_off_bedrock(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _anthropic_router(_bedrock_iam_params())
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded_response())
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_bedrock_converse_response()
+    )
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(headers={"x-api-key": _CALLER_KEY})
+
+    await router.acompletion(model="claude", messages=[{"role": "user", "content": "hi"}], client=client)
 
     sent: Final = bedrock.calls.last.request
     assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFALLBACKTEST/")

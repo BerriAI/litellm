@@ -15,7 +15,7 @@ from collections.abc import Mapping, MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.utils import server_owned_wif_litellm_params
@@ -106,9 +106,19 @@ def _names_a_credential_header(headers: object) -> bool:
     return named is not None and any(str(name).lower() in _CREDENTIAL_HEADER_NAMES for name in named)
 
 
+def _client_headers(client: object) -> tuple[object, ...]:
+    return (
+        attribute_or_none(client, "default_headers"),
+        attribute_or_none(client, "headers"),
+        attribute_or_none(attribute_or_none(client, "client"), "headers"),
+    )
+
+
 def carries_caller_credentials(kwargs: Mapping[str, object]) -> bool:
-    return any(kwargs[key] is not None for key in kwargs.keys() & CALLER_CREDENTIAL_PARAMS) or any(
-        _names_a_credential_header(kwargs.get(carrier)) for carrier in _HEADER_CARRIERS
+    return (
+        any(kwargs[key] is not None for key in kwargs.keys() & CALLER_CREDENTIAL_PARAMS)
+        or any(_names_a_credential_header(kwargs.get(carrier)) for carrier in _HEADER_CARRIERS)
+        or any(_names_a_credential_header(headers) for headers in _client_headers(kwargs.get("client")))
     )
 
 
