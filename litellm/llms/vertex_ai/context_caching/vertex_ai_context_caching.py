@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 import httpx
-from pydantic import ConfigDict, RootModel, with_config
+from pydantic import ConfigDict, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.openai.openai import AllMessageValues
+from litellm.types.llms.base_model import LiteLLMRootModel
 from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
 
@@ -59,11 +60,11 @@ class _CreatedCachedContent(TypedDict):
     usageMetadata: ReadOnly[NotRequired[_CachedContentUsageMetadata | None]]
 
 
-class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
+class _CachedContentListBodyRoot(LiteLLMRootModel[_CachedContentListBody]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
-class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
+class _CreatedCachedContentRoot(LiteLLMRootModel[_CreatedCachedContent]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 

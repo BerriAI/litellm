@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from itertools import chain
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 from typing_extensions import assert_never
 
 from litellm.llms.base_llm.decisions.transformation import (
@@ -31,15 +31,16 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
     systemone_choice_key,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class _GeminiUsage(BaseModel):
+class _GeminiUsage(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
     total_input_tokens: int = Field(ge=0)
     total_output_tokens: int = Field(default=0, ge=0)
 
 
-class _GeminiResponse(BaseModel):
+class _GeminiResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
     answers: Mapping[str, object]
     usage: _GeminiUsage | None = None

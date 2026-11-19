@@ -43,10 +43,11 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
     {
@@ -190,12 +191,12 @@ class RateLimitFallback:
         return f"rate_limit:{self.descriptor_key}"
 
 
-class _StampedBucket(BaseModel):
+class _StampedBucket(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     rate_limit_fallback: RateLimitFallback | None = None
 
 
-class _StampedRequest(BaseModel):
+class _StampedRequest(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     metadata: _StampedBucket | None = None
     litellm_metadata: _StampedBucket | None = None

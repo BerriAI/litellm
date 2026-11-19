@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import quote, urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, StrictStr, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -24,6 +24,7 @@ from litellm.llms.databricks.agent.responses_output import (
 )
 from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -125,13 +126,13 @@ def _body_model_field(api_base: object, model: str) -> Mapping[str, str]:
     return {"model": _required_endpoint_name(model)}
 
 
-class _InputContentPart(BaseModel):
+class _InputContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str = "unknown"
 
 
-class _InputMessage(BaseModel):
+class _InputMessage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     content: str | tuple[_InputContentPart, ...] | None = None

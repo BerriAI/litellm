@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt, TypeAdapter, ValidationError
+from pydantic import ConfigDict, StrictFloat, StrictInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, finalize_cost
@@ -13,11 +13,12 @@ from litellm.proxy.common_utils.customer_usage import (
     customer_usage_key_fields,
     customer_usage_requested,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.utils import StandardLoggingPayload
 
 
-class _RecordedSurcharge(BaseModel):
+class _RecordedSurcharge(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
 
     customer_margin_amount: StrictFloat | StrictInt
@@ -47,7 +48,7 @@ def customer_cost_margin(has_customer: bool, app_margin: float | None = None) ->
     return float(value) if isinstance(value, (int, float)) and is_valid_customer_margin(value) else None
 
 
-class _AppSurcharge(BaseModel):
+class _AppSurcharge(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
 
     app_customer_margin: StrictFloat | StrictInt | None = None

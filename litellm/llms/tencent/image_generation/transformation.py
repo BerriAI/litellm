@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import override
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
@@ -12,6 +12,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
@@ -42,7 +43,7 @@ TOKENHUB_IMAGE_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-class _TokenHubImage(BaseModel):
+class _TokenHubImage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     url: str | None = None
@@ -51,13 +52,13 @@ class _TokenHubImage(BaseModel):
     output_format: str | None = None
 
 
-class _TokenHubUsage(BaseModel):
+class _TokenHubUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     total_tokens: int
 
 
-class _TokenHubImageResponse(BaseModel):
+class _TokenHubImageResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     created: int

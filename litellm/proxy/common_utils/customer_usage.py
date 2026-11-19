@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.proxy.management_helpers.customer_hierarchy import effective_member_budget
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 CustomerIdentifier: TypeAlias = Annotated[str, Field(strict=True, min_length=1, max_length=256)]
@@ -16,7 +17,7 @@ CUSTOMER_USAGE_METADATA_KEY: Final = "user_api_key_customer_usage"
 _FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
-class CustomerUsageInput(BaseModel):
+class CustomerUsageInput(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     customer_org_id: CustomerIdentifier | None = None
@@ -24,7 +25,7 @@ class CustomerUsageInput(BaseModel):
     customer_member_id: CustomerIdentifier | None = None
 
 
-class CustomerUsageAttribution(BaseModel):
+class CustomerUsageAttribution(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     customer_org_id: CustomerIdentifier
@@ -42,7 +43,7 @@ class _HierarchyBudget(Budget):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
 
-class _Organization(BaseModel):
+class _Organization(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     budget: _HierarchyBudget | None = None
@@ -54,7 +55,7 @@ class _Team(_Organization):
     parent_org_id: str
 
 
-class _Member(BaseModel):
+class _Member(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     parent_team_ids: tuple[str, ...] = ()
@@ -87,7 +88,7 @@ def _model_scopes(
     return tuple(scope for scope in scopes if scope)
 
 
-class _KeyMetadata(BaseModel):
+class _KeyMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     metadata: object = None

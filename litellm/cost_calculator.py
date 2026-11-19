@@ -3793,7 +3793,7 @@ _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_tran
 _TRANSLATION_CLOSED_EVENT_TYPE: Final = "session.closed"
 
 
-class _LiveResponsePayload(BaseModel):
+class _LiveResponsePayload(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str | None = None
@@ -3801,14 +3801,14 @@ class _LiveResponsePayload(BaseModel):
     usage: Mapping[str, object] | None = None
 
 
-class _LiveResponseEvent(BaseModel):
+class _LiveResponseEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str = ""
     response: _LiveResponsePayload | None = None
 
 
-class _LiveResponseEnvelope(BaseModel):
+class _LiveResponseEnvelope(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str = ""

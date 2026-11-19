@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
 from litellm.harness.options import OpenCodeOptions
@@ -63,6 +63,7 @@ from litellm.llms.base_llm.harness.utils import (
     stderr_tail_text,
     turn_prompt,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.harness.context import SessionContext
@@ -182,33 +183,33 @@ class OpenCodeStreamState:
     step_texts: Sequence[str] = ()
 
 
-class ExportedPart(BaseModel):
+class ExportedPart(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
 
 
-class ExportedMessageInfo(BaseModel):
+class ExportedMessageInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
 
 
-class ExportedMessage(BaseModel):
+class ExportedMessage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     info: ExportedMessageInfo
     parts: tuple[ExportedPart, ...]
 
 
-class ExportedSessionInfo(BaseModel):
+class ExportedSessionInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
     directory: str
 
 
-class ExportedSession(BaseModel):
+class ExportedSession(LiteLLMBaseModel):
     """The ids and folder of an `opencode export`; every other field is copied as is."""
 
     model_config = ConfigDict(frozen=True)

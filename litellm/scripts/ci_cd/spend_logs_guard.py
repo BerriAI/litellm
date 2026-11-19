@@ -38,12 +38,12 @@ HUNK: Final = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*\n", re.
 
 
 class Reviewer(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="ignore", defer_build=True)
     login: str
 
 
 class Review(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="ignore", defer_build=True)
     state: str
     user: Reviewer
     commit_id: str | None = None
@@ -184,7 +184,7 @@ def reviewed_hits(base: str, commit: str) -> tuple[str, ...] | None:
 
 
 class Arguments(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, defer_build=True)
     base: str
     head: str
     approver: str

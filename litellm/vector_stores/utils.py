@@ -2,11 +2,12 @@ import copy
 from collections.abc import Container, Mapping
 from typing import Final, cast, get_type_hints
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.constants import ROUTING_REQUEST_TAGS_METADATA_KEY, VECTOR_STORE_CALLER_METADATA_KWARG
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
     VectorStoreSearchOptionalRequestParams,
@@ -51,7 +52,7 @@ def _callers_metadata(metadata: Mapping[object, object]) -> Mapping[object, obje
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
-class VectorStoreWriteBody(BaseModel):
+class VectorStoreWriteBody(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     metadata: object = None

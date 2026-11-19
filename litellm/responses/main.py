@@ -85,6 +85,7 @@ from litellm.responses.mcp.round_billing import (
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     PromptObject,
@@ -612,7 +613,7 @@ async def aresponses_api_with_mcp(
     return response
 
 
-class _DeploymentModelInfo(BaseModel):
+class _DeploymentModelInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     id: object = None
 

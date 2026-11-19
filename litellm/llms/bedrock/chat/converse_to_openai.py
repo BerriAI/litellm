@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from itertools import accumulate, chain, groupby, repeat, takewhile
 from typing import Final, TypeAlias, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -26,7 +27,7 @@ _OBJECT: Final = TypeAdapter(Mapping[str, object])
 _ITEMS: Final = TypeAdapter(Sequence[object])
 
 
-class _ConverseModel(BaseModel):
+class _ConverseModel(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
 

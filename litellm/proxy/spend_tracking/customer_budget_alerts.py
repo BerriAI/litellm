@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, InstanceOf, TypeAdapter
+from pydantic import ConfigDict, InstanceOf, TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -21,6 +21,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     utc_now,
 )
 from litellm.types.integrations.customer_budget import CustomerBudgetEvent, CustomerBudgetEventType, CustomerBudgetScope
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
 class CustomerBudgetClaims(Protocol):
@@ -34,7 +35,7 @@ class _CustomerBudgetTable(Protocol):
     ) -> PrismaRecord | None: ...
 
 
-class _CustomerRow(BaseModel):
+class _CustomerRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     spend: float = 0.0

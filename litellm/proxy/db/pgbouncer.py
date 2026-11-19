@@ -57,6 +57,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.proxy.db.token_auth import (
     DatabaseTokenAuth,
     IAMEndpoint,
@@ -100,7 +101,11 @@ class PgBouncerSettings(BaseSettings):
     """``LITELLM_PGBOUNCER_*`` env vars, read once in the supervisor."""
 
     model_config = SettingsConfigDict(
-        env_prefix=PGBOUNCER_ENV_PREFIX, case_sensitive=False, extra="ignore", frozen=True
+        env_prefix=PGBOUNCER_ENV_PREFIX,
+        case_sensitive=False,
+        extra="ignore",
+        frozen=True,
+        defer_build=DEFER_PYDANTIC_BUILD,
     )
 
     enabled: bool = False

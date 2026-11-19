@@ -1,7 +1,7 @@
 from collections.abc import Callable, Mapping
 from typing import Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import APIConnectionError, BadRequestError, Timeout
@@ -11,31 +11,32 @@ from litellm.proxy.telemetry.blocks import count_blocks
 from litellm.proxy.telemetry.request_context import AttemptObservation, RequestAccumulator, current_request
 from litellm.telemetry.records import AttemptRecord, BlockCounts, StatusClass, TokenCounts
 from litellm.telemetry.sink import TelemetrySink
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import CallTypes
 
 DeploymentHasher: TypeAlias = Callable[[str], str]
 
 
-class _PromptTokensDetails(BaseModel):
+class _PromptTokensDetails(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     cached_tokens: int | None = None
 
 
-class _Usage(BaseModel):
+class _Usage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     prompt_tokens_details: _PromptTokensDetails | None = None
     cache_read_input_tokens: int | None = None
 
 
-class _Metadata(BaseModel):
+class _Metadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     usage_object: _Usage | None = None
 
 
-class _LoggedAttempt(BaseModel):
+class _LoggedAttempt(LiteLLMBaseModel):
     """The slice of ``StandardLoggingPayload`` telemetry reads"""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
@@ -52,25 +53,25 @@ class _LoggedAttempt(BaseModel):
     metadata: _Metadata | None = None
 
 
-class _ModelInfo(BaseModel):
+class _ModelInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str | None = None
 
 
-class _CallMetadata(BaseModel):
+class _CallMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     model_info: _ModelInfo | None = None
 
 
-class _LoggedParams(BaseModel):
+class _LoggedParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     proxy_rejected_before_routing: bool = False
 
 
-class _FailedCall(BaseModel):
+class _FailedCall(LiteLLMBaseModel):
     """The slice of one deployment attempt's own kwargs telemetry reads"""
 
     model_config = ConfigDict(frozen=True, extra="ignore")

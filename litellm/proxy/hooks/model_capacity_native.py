@@ -77,6 +77,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, RateLimitStore
 from litellm.types.integrations.custom_logger_v2 import KeyIdentity
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import PriorityReservationSettings
 
 if TYPE_CHECKING:
@@ -221,7 +222,7 @@ def key_inputs(auth: UserAPIKeyAuth) -> Mapping[str, object]:
     return {"identity": _dumped(key_identity(args)), "gaps": key_gaps(auth)}
 
 
-class _SettlementMetadata(BaseModel):
+class _SettlementMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     user_api_key_auth_metadata: Mapping[str, object] | None = None
@@ -233,7 +234,7 @@ class _SettlementMetadata(BaseModel):
     user_api_key_customer_org_alias: str | None = None
 
 
-class _SettlementLoggingObject(BaseModel):
+class _SettlementLoggingObject(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     metadata: _SettlementMetadata | None = None

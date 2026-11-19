@@ -11,6 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
+
 VERSION_TABLE: Final = "control_plane_alembic_version"
 ADVISORY_LOCK: Final = 714883513942
 MIGRATE_COMMAND: Final = "litellm --control-plane --skip_server_startup"
@@ -47,7 +49,9 @@ def migrate(url: SecretStr, upgrade: Callable[[Config, str], None] = command.upg
 
 
 class MigrationSettings(BaseSettings):
-    model_config = SettingsConfigDict(frozen=True, env_prefix="CONTROL_PLANE_", extra="ignore")
+    model_config = SettingsConfigDict(
+        frozen=True, env_prefix="CONTROL_PLANE_", extra="ignore", defer_build=DEFER_PYDANTIC_BUILD
+    )
 
     database_url: SecretStr | None = None
 

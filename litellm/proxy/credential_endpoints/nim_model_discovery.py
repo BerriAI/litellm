@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from openai import AsyncOpenAI, OpenAIError
-from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, SecretStr, TypeAdapter, ValidationError
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import AuthenticationError, ServiceUnavailableError
@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.credential_hydration import (
     stored_credential_provider,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import credential_api_key_secret_reference
 from litellm.utils import aresolve_api_key_secret_reference
 
@@ -40,39 +41,39 @@ _MODELS: Final = TypeAdapter(tuple[str, ...])
 _DEFAULT_API_BASE: Final = "https://integrate.api.nvidia.com/v1"
 
 
-class _CredentialMetadata(BaseModel):
+class _CredentialMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     credential_info: Mapping[str, object]
 
 
-class _ListedModel(BaseModel):
+class _ListedModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
     id: str
 
 
-class _ModelListing(BaseModel):
+class _ModelListing(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_ListedModel, ...]
 
 
-class NimModelDiscoveryConnection(BaseModel):
+class NimModelDiscoveryConnection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     api_key: SecretStr | None = None
     api_base: str | None = None
 
 
-class NimModelDiscoveryRequest(BaseModel):
+class NimModelDiscoveryRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     credential_name: str | None = None
     credential_values: NimModelDiscoveryConnection | None = None
 
 
-class NimModelDiscoveryResponse(BaseModel):
+class NimModelDiscoveryResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: Literal["success", "unavailable"]

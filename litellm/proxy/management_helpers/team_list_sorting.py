@@ -4,9 +4,10 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 from litellm.proxy.utils import PrismaClient, query_raw_rows
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 COMPUTED_TEAM_SORTS: Final = MappingProxyType(
     {
@@ -77,7 +78,7 @@ def _where_sql(where: Mapping[str, JsonValue]) -> tuple[str, tuple[object, ...]]
     return "".join(fragments), tuple(params)
 
 
-class _TeamId(BaseModel):
+class _TeamId(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     team_id: str
 

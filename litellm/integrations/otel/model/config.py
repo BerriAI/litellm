@@ -10,6 +10,7 @@ from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
@@ -48,7 +49,7 @@ class ExporterOwner(str, Enum):
 
 
 class _OTelV2Flag(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
 
@@ -152,7 +153,7 @@ class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
 
 
 class OpenTelemetryV2Config(BaseSettings):
-    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     @classmethod
     def settings_customise_sources(
@@ -406,7 +407,7 @@ def _normalized_capture_message_content(value: object) -> object:
 
 
 class _CaptureMessageContentSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+    model_config = SettingsConfigDict(extra="ignore", frozen=True, defer_build=DEFER_PYDANTIC_BUILD)
 
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
@@ -429,7 +430,7 @@ def _normalized_span_scope(value: object) -> object:
 
 
 class _LangfuseDestinationSpanScopeSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+    model_config = SettingsConfigDict(extra="ignore", frozen=True, defer_build=DEFER_PYDANTIC_BUILD)
 
     langfuse_destination_span_scope: OtelSpanScope = Field(
         default="full",

@@ -26,18 +26,18 @@ SCHEMAS: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 
 
 class Arguments(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", defer_build=True)
     check: bool
 
 
 class GeneratorConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", defer_build=True)
     version: str
     options: tuple[str, ...]
 
 
 class LensSource(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", defer_build=True)
     repository: str
     revision: str
     schema_groups: Mapping[str, Mapping[str, str]]

@@ -9,7 +9,6 @@ from urllib.parse import urlsplit
 import yaml
 from pydantic import (
     AliasChoices,
-    BaseModel,
     ConfigDict,
     Field,
     SecretStr,
@@ -19,9 +18,11 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.litellm_core_utils.oauth_token_exchange import TokenExchangeProfile
 from litellm.proxy.control_plane.audit.event import CONTROL_PLANE_ID
 from litellm.proxy.control_plane.auth.rbac import ADMIN_ROLE
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
 DEFAULT_SESSION_TTL_SECONDS: Final = 12 * 60 * 60
@@ -113,7 +114,7 @@ class OidcSettings:
     leeway_seconds: int
 
 
-class RoleSpec(BaseModel):
+class RoleSpec(LiteLLMBaseModel):
     """An operator-defined role, e.g. CONTROL_PLANE_ROLES='{"finops": {"scopes": ["usage:read", "audit:read"]}}'."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -122,7 +123,7 @@ class RoleSpec(BaseModel):
     inherits: tuple[str, ...] = ()
 
 
-class OidcExchangeSpec(BaseModel):
+class OidcExchangeSpec(LiteLLMBaseModel):
     """IdP token-exchange client the control plane uses to mint a token for this dataplane's audience."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -135,7 +136,7 @@ class OidcExchangeSpec(BaseModel):
     scope: str | None = None
 
 
-class ServiceTokenSpec(BaseModel):
+class ServiceTokenSpec(LiteLLMBaseModel):
     """A dataplane virtual key holding the `impersonate` permission, the fallback when no IdP exchange is possible."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -143,7 +144,7 @@ class ServiceTokenSpec(BaseModel):
     token: SecretStr
 
 
-class DataplaneSpec(BaseModel):
+class DataplaneSpec(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     url: str = Field(pattern=r"^https?://")
@@ -171,7 +172,11 @@ _YAML_DOCUMENT: Final = TypeAdapter(dict[str, object])
 
 class ControlPlaneSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        frozen=True, env_prefix="CONTROL_PLANE_", extra="ignore", hide_input_in_errors=True
+        frozen=True,
+        env_prefix="CONTROL_PLANE_",
+        extra="ignore",
+        hide_input_in_errors=True,
+        defer_build=DEFER_PYDANTIC_BUILD,
     )
 
     master_key: SecretStr = Field(validation_alias="LITELLM_MASTER_KEY")

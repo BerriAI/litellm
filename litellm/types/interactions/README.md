@@ -31,6 +31,10 @@ uv tool run --from datamodel-code-generator==0.66.0 datamodel-codegen \
     --base-class litellm.types.llms.base.LiteLLMBaseModel
 ```
 
+The generator applies `--base-class` to regular models but keeps its own base for root models. After generation, replace
+each `RootModel[...]` base with `LiteLLMRootModel[...]`, remove `RootModel` from the Pydantic imports, and import
+`LiteLLMRootModel` from `litellm.types.llms.base_model` before adding the LiteLLM-specific types.
+
 The pin is the same `datamodel-code-generator` version `litellm/scripts/generate_trace_types.py` uses. The generator names
 inline enums by order of appearance (`Status`, `Status1`, `Status2`, ...), so a regeneration can rename them. The
 compliance tests resolve each status enum through its model's `status` field, but

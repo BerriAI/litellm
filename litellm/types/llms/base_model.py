@@ -1,12 +1,13 @@
 import threading
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, RootModel
 
 from litellm.constants import DEFER_PYDANTIC_BUILD
 
 _SCHEMA_BUILD_LOCK: Final = threading.RLock()
+_RootModelT: Final = TypeVar("_RootModelT")
 
 
 class LiteLLMBaseModel(BaseModel):
@@ -42,3 +43,18 @@ class LiteLLMBaseModel(BaseModel):
         model = type(self)
         if not model.__pydantic_complete__:
             model.model_rebuild(raise_errors=False)
+
+
+class LiteLLMFrozenBaseModel(
+    LiteLLMBaseModel,
+    frozen=True,  # pyright: ignore[reportGeneralTypeIssues]  # Pydantic enforces frozen inheritance
+):
+    model_config = ConfigDict(defer_build=DEFER_PYDANTIC_BUILD, frozen=True)
+
+
+class LiteLLMRootModel(  # pyright: ignore[reportIncompatibleMethodOverride]  # Pydantic root signatures differ
+    RootModel[_RootModelT],
+    LiteLLMBaseModel,
+    Generic[_RootModelT],
+):
+    model_config = ConfigDict(defer_build=DEFER_PYDANTIC_BUILD)

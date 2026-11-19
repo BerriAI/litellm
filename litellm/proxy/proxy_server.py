@@ -214,6 +214,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.rust_bridge.catalog import NATIVE_MESSAGES_TARGETS, Target
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CallTypes,
@@ -3297,7 +3298,7 @@ native_background_mode: list[str] = []  # Models that should use native provider
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 
 
-class _ResponseBackgroundSettings(BaseModel):
+class _ResponseBackgroundSettings(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     polling_via_cache: Literal["all"] | tuple[str, ...] | bool = False

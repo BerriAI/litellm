@@ -110,7 +110,7 @@ _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str,
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
 
 
-class _DeploymentHost(BaseModel):
+class _DeploymentHost(LiteLLMBaseModel):
     """`responses()` builds the params from raw kwargs, where callers may spell the host `base_url`."""
 
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
@@ -119,7 +119,7 @@ class _DeploymentHost(BaseModel):
     base_url: object = None
 
 
-class _DropParamsSetting(BaseModel):
+class _DropParamsSetting(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
 
     drop_params: object = None
@@ -130,7 +130,7 @@ def drops_params(litellm_params: GenericLiteLLMParams) -> bool:
     return litellm.drop_params is True or normalize_drop_params(setting.drop_params) is True
 
 
-class _ToolDeferral(BaseModel):
+class _ToolDeferral(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     type: str = ""

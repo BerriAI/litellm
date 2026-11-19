@@ -9,7 +9,7 @@ from urllib.parse import quote
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from starlette.responses import JSONResponse
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -26,6 +26,7 @@ from litellm.proxy.lens.buffering import (
     request_body,
 )
 from litellm.tracing.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 PUBLIC_CONTRACT: Final = 1
@@ -33,7 +34,7 @@ _REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempot
 _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
 
 
-class Identity(BaseModel):
+class Identity(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     user_role: LitellmUserRoles
     user_id: str | None
@@ -91,7 +92,7 @@ async def delegated_identity(
     )
 
 
-class ServiceStatus(BaseModel):
+class ServiceStatus(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     storage_ready: bool = False
     credentials_ready: bool = False
@@ -100,7 +101,7 @@ class ServiceStatus(BaseModel):
     public_contract: int = 0
 
 
-class ServiceConnection(BaseModel):
+class ServiceConnection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     url: str
     connected: bool

@@ -52,6 +52,7 @@ from typing import Annotated, Final, Protocol, TypeAlias, cast
 from pydantic import AliasChoices, BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.token_auth import (
     AZURE_POSTGRESQL_AUTH_ENV_VAR,
@@ -382,7 +383,7 @@ class DatabaseURLSettings(BaseSettings):
     ``DATABASE_USERNAME`` for parity with ``construct_database_url_from_env_vars``.
     """
 
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     iam_token_db_auth: IamTokenAuthFlag = Field(default=False, validation_alias=IAM_TOKEN_DB_AUTH_ENV_VAR)
     azure_postgresql_auth: AzureTokenAuthFlag = Field(default=False, validation_alias=AZURE_POSTGRESQL_AUTH_ENV_VAR)

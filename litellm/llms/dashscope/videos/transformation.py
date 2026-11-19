@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr, TypeAdapter, ValidationError
+from pydantic import Field, StrictBool, StrictInt, StrictStr, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -30,6 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # factory stub leaves params untyped
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base_model import LiteLLMFrozenBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelInfo
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -50,7 +51,7 @@ class DashScopeVideoError(BaseLLMException):
     pass
 
 
-class _TaskOutput(BaseModel, frozen=True):
+class _TaskOutput(LiteLLMFrozenBaseModel, frozen=True):
     task_id: str
     task_status: str
     submit_time: str | None = None
@@ -62,7 +63,7 @@ class _TaskOutput(BaseModel, frozen=True):
     message: str | None = None
 
 
-class _TaskUsage(BaseModel, frozen=True):
+class _TaskUsage(LiteLLMFrozenBaseModel, frozen=True):
     video_count: int | None = None
     duration: float | None = None
     input_video_duration: float | None = None
@@ -72,7 +73,7 @@ class _TaskUsage(BaseModel, frozen=True):
     ratio: str | None = None
 
 
-class _TaskResponse(BaseModel, frozen=True):
+class _TaskResponse(LiteLLMFrozenBaseModel, frozen=True):
     output: _TaskOutput | None = None
     usage: _TaskUsage | None = None
     request_id: str | None = None
@@ -172,7 +173,7 @@ _RESOLUTION_HEIGHT_TIERS: Final[tuple[tuple[int, str], ...]] = (
 _SUPPORTED_RATIOS: Final[tuple[tuple[int, int], ...]] = ((16, 9), (9, 16), (1, 1), (4, 3), (3, 4))
 
 
-class _KnownParameters(BaseModel, frozen=True):
+class _KnownParameters(LiteLLMFrozenBaseModel, frozen=True):
     """A malformed value here can fail the task after DashScope created and billed it, so it is caught first."""
 
     duration: StrictInt | None = None
@@ -351,7 +352,7 @@ def _caller_parameters(parameters: Mapping[str, object], extra_body: object) -> 
     )
 
 
-class _MediaEntry(BaseModel, frozen=True):
+class _MediaEntry(LiteLLMFrozenBaseModel, frozen=True):
     type: str | None = None
 
 

@@ -11,7 +11,7 @@ from typing import (
     cast,  # noqa: TID251  # Prisma exposes generated table actions dynamically
 )
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
@@ -30,6 +30,7 @@ from litellm.models.alert import (
     AlertView,
 )
 from litellm.repositories.prisma_protocols import PrismaRecord, TableActions
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -44,7 +45,7 @@ class _HistoryDatabase(Protocol):
     def tx(self, *, timeout: timedelta) -> AbstractAsyncContextManager[_HistoryTransaction]: ...
 
 
-class _HistoryRow(BaseModel):
+class _HistoryRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -73,7 +74,7 @@ _SUMMARIES: Final = TypeAdapter(tuple[AlertSummary, ...])
 _RECIPIENTS: Final = TypeAdapter(tuple[AlertRecipient, ...])
 
 
-class _LatestAlert(BaseModel):
+class _LatestAlert(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: int

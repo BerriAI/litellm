@@ -4,7 +4,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast  # noqa: TID251  # cost helpers type raw frames as a TypedDict list
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import WebsocketUpstreamFrameKind
 from litellm.types.utils import LlmProviders, ModelResponse, Usage
@@ -43,39 +44,39 @@ _FRAME_KINDS: Final[Mapping[str, WebsocketUpstreamFrameKind]] = MappingProxyType
 )
 
 
-class _NamedModel(BaseModel):
+class _NamedModel(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     model: str | None = None
 
 
-class _AudioInput(BaseModel):
+class _AudioInput(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     transcription: _NamedModel | None = None
 
 
-class _SessionAudio(BaseModel):
+class _SessionAudio(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     input: _AudioInput | None = None
 
 
-class _NamedSession(BaseModel):
+class _NamedSession(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     model: str | None = None
     audio: _SessionAudio | None = None
 
 
-class _ModelNamingEvent(BaseModel):
+class _ModelNamingEvent(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     session: _NamedSession | None = None
     response: _NamedModel | None = None
 
 
-class _ResponsesTurnEndEvent(BaseModel):
+class _ResponsesTurnEndEvent(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: Literal["response.completed", "response.incomplete", "response.failed"]

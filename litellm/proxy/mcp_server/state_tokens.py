@@ -10,9 +10,10 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import ConfigDict, JsonValue, ValidationError
 
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _PREFIX: Final = "mcp_state_v1."
 _MAX_TOKEN_LENGTH: Final = 65536
@@ -26,7 +27,7 @@ class StateTokenError(str, Enum):
     TOO_LARGE = "Pagination state exceeds the supported size"
 
 
-class _Envelope(BaseModel):
+class _Envelope(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     expires_at: int

@@ -3,22 +3,23 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import ChatCompletionThinkingBlock
 
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
 
-class _SAPThoughtBlock(BaseModel):
+class _SAPThoughtBlock(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     content: str = ""
     signature: str | None = None
 
 
-class _SAPThoughts(BaseModel):
+class _SAPThoughts(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     reasoning_content: tuple[_SAPThoughtBlock, ...]

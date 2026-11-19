@@ -1,7 +1,6 @@
 from typing import Final
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     ValidationError,
@@ -11,6 +10,7 @@ from pydantic import (
 )
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
@@ -69,7 +69,7 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         return "Noma Security v2"
 
 
-class NomaV2StreamingParams(BaseModel):
+class NomaV2StreamingParams(LiteLLMBaseModel):
     """Streaming settings a Noma v2 guardrail reads from the top level of its litellm_params.
 
     A key left unset, or set to a value that does not validate, stays None, so the unified

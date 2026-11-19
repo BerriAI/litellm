@@ -9,7 +9,7 @@ from typing import Final
 from urllib.parse import quote, unquote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -17,6 +17,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, sign_aws_json_post
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams
 
 AGENTCORE_SESSION_HEADER: Final = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
@@ -54,14 +55,14 @@ def invoked_runtime(url: httpx.URL) -> AgentCoreRuntime | None:
     return runtime if runtime is not None and runtime.invocations_url == str(url) else None
 
 
-class _RuntimeError(BaseModel):
+class _RuntimeError(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     code: str
     message: str = ""
 
 
-class _RuntimeReply(BaseModel):
+class _RuntimeReply(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     error: _RuntimeError | None = None
@@ -76,7 +77,7 @@ def _runtime_error(content: bytes) -> _RuntimeError | None:
     return reply.error if reply.answers is None else None
 
 
-class _SessionParams(BaseModel):
+class _SessionParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agentcore_runtime_session_id: str | None = None

@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.proxy.control_plane.audit.event import CONTROL_PLANE_ID
 from litellm.proxy.control_plane.settings import (
     ControlPlaneSettings,
@@ -10,6 +11,21 @@ from litellm.proxy.control_plane.settings import (
     load_settings,
 )
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
+
+
+def test_control_plane_settings_defer_build_preserves_required_environment_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_MASTER_KEY", MASTER_KEY)
+
+    class DeferredControlPlaneSettings(ControlPlaneSettings):
+        pass
+
+    assert DeferredControlPlaneSettings.model_config["defer_build"] is DEFER_PYDANTIC_BUILD
+    assert not DeferredControlPlaneSettings.__pydantic_complete__
+    settings: Final = DeferredControlPlaneSettings()
+    assert settings.master_key.get_secret_value() == MASTER_KEY
+    assert settings.session_ttl_seconds == 12 * 60 * 60
 
 
 @pytest.mark.parametrize("configured", ["database_url", "redis_url"])

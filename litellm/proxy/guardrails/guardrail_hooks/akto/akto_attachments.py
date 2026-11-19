@@ -18,7 +18,9 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, TypeVar
 from urllib.parse import unquote, unquote_to_bytes, urlparse
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 AttachmentType: TypeAlias = Literal["image", "audio", "file"]
 
@@ -72,7 +74,7 @@ def _text_or_none(value: object) -> object:
 _Metadata: TypeAlias = Annotated[str | None, BeforeValidator(_text_or_none)]
 
 
-class _Model(BaseModel):
+class _Model(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
 

@@ -19,6 +19,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
@@ -32,7 +33,7 @@ _AGENTOPS_EXPORTER_KIND: Final = "agentops"
 
 
 class _AgentOpsSettings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     api_key: str | None = Field(default=None, validation_alias="AGENTOPS_API_KEY")
     service_name: str = Field(default="agentops", validation_alias="AGENTOPS_SERVICE_NAME")

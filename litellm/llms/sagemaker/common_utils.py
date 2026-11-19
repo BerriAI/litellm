@@ -8,11 +8,12 @@ from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base_model import LiteLLMBaseModel, LiteLLMRootModel
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import LlmProviders, StreamingChatCompletionChunk
 
@@ -44,11 +45,11 @@ class _SageMakerStreamEvent(TypedDict, total=False):
     chunk: ReadOnly[_SageMakerPayloadPart]
 
 
-class _SageMakerChunkDataRoot(RootModel[_SageMakerChunkData]):
+class _SageMakerChunkDataRoot(LiteLLMRootModel[_SageMakerChunkData]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
-class _SageMakerMessagesChunkDataRoot(RootModel[_SageMakerMessagesChunkData]):
+class _SageMakerMessagesChunkDataRoot(LiteLLMRootModel[_SageMakerMessagesChunkData]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
@@ -206,17 +207,17 @@ def with_inference_component_hint(error_message: str) -> str:
     return error_message
 
 
-class _ClientErrorBody(BaseModel):
+class _ClientErrorBody(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     message: str | None = Field(default=None, alias="Message")
 
 
-class _ClientErrorMetadata(BaseModel):
+class _ClientErrorMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     http_status_code: int = Field(default=500, alias="HTTPStatusCode")
 
 
-class _ClientErrorResponse(BaseModel):
+class _ClientErrorResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     error: _ClientErrorBody = Field(default_factory=_ClientErrorBody, alias="Error")
     response_metadata: _ClientErrorMetadata = Field(default_factory=_ClientErrorMetadata, alias="ResponseMetadata")
@@ -244,7 +245,7 @@ class SagemakerError(BaseLLMException):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
-class _StreamExceptionBody(BaseModel):
+class _StreamExceptionBody(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
     message: str = Field(default="", alias="Message")
     error_code: str | None = Field(default=None, alias="ErrorCode")

@@ -1,23 +1,25 @@
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
+from pydantic import ConfigDict, Field, StrictFloat, StrictInt, StrictStr
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class NativeReseed(BaseModel):
+class NativeReseed(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     counter_key: str
     actual_cost: float
 
 
-class NativePendingIncrement(BaseModel):
+class NativePendingIncrement(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     counter_key: str
     increment: float
 
 
-class NativeSettlement(BaseModel):
+class NativeSettlement(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     adjustments: tuple[float | None, ...]
@@ -28,7 +30,7 @@ class NativeSettlement(BaseModel):
 PyNumber: TypeAlias = StrictInt | StrictFloat
 
 
-class _Check(BaseModel):
+class _Check(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
 

@@ -10,7 +10,7 @@ from typing import (
 )
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
@@ -24,6 +24,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
 from litellm.types.proxy.management_endpoints.apps import (
     App,
@@ -58,13 +59,13 @@ class _DefinitionState(AppDefinition):
     locked: bool = False
 
 
-class _ConfigRecord(BaseModel):
+class _ConfigRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     param_value: object
 
 
-class _ResourceRecord(BaseModel):
+class _ResourceRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     team_id: str | None = None

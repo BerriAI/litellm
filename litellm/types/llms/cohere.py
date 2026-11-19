@@ -1,7 +1,9 @@
 from typing import Literal
 
-from pydantic import AliasPath, BaseModel, ConfigDict, Field
+from pydantic import AliasPath, ConfigDict, Field
 from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
 class CallObject(TypedDict):
@@ -101,7 +103,7 @@ class CohereV2ChatResponse(TypedDict):
     logprobs: CohereV2ChatResponseLogProbs
 
 
-class CohereV2StreamedToolCall(BaseModel):
+class CohereV2StreamedToolCall(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str | None = Field(default=None, validation_alias=AliasPath("delta", "message", "tool_calls", "id"))

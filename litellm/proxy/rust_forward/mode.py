@@ -8,18 +8,19 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.proxy.server_listener import LOOPBACK_HOST, AssignedPort, InheritedFd, PrivateListener
 from litellm.rust_bridge.configuration import RustSwitch
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 SWITCH_ENV: Final = "LITELLM_RUST_FIRST"
 SUPERVISED_ENV: Final = "_LITELLM_GATEWAY_SUPERVISED"
 RUST_HOP: Final = LOOPBACK_HOST
 
 
-class _Switch(BaseModel):
+class _Switch(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     rust: RustSwitch = Field(None, validation_alias=SWITCH_ENV)

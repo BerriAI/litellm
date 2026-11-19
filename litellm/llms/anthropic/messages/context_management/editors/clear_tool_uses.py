@@ -17,12 +17,13 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, StrictInt, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AppliedEdit
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from ..constants import (
     CLEAR_TOOL_USES_EDIT_TYPE,
@@ -57,14 +58,14 @@ _TOKEN_COUNTER_BLOCK_TYPES: Final = frozenset(
 ToolNames = Literal["all"] | frozenset[str]
 
 
-class _ClearAtLeast(BaseModel):
+class _ClearAtLeast(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["input_tokens"]
     value: Annotated[StrictInt, Field(ge=0)]
 
 
-class _ClearToolUsesFields(BaseModel):
+class _ClearToolUsesFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     trigger: Mapping[str, object] | None = None

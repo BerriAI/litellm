@@ -1,10 +1,12 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from typing_extensions import Self
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
-class RequestTagMapping(BaseModel):
+
+class RequestTagMapping(LiteLLMBaseModel):
     """An exact baggage value mapping, or a prefix for any value of a key."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

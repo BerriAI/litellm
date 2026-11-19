@@ -7,10 +7,11 @@ from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import ConfigDict, field_validator
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.auth.auth_checks import get_user_role
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 IMPERSONATE_USER_HEADER: Final = "X-LiteLLM-Impersonate-User"
@@ -38,7 +39,7 @@ class ImpersonatedUserNotFound:
 ImpersonationError: TypeAlias = ImpersonationForbidden | ImpersonatedUserNotFound
 
 
-class _KeyPermissions(BaseModel):
+class _KeyPermissions(LiteLLMBaseModel):
     """Typed view of the key's `permissions` JSON column, read off the auth object by attribute."""
 
     model_config = ConfigDict(frozen=True, from_attributes=True, extra="ignore")
@@ -51,7 +52,7 @@ class _KeyPermissions(BaseModel):
         return {} if value is None else value
 
 
-class _SubjectGrants(BaseModel):
+class _SubjectGrants(LiteLLMBaseModel):
     """Typed view of the untyped list/dict columns on the user row."""
 
     model_config = ConfigDict(frozen=True, from_attributes=True, extra="ignore")

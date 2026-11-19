@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -34,6 +34,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_reconcile_success,
     io_token_refund_failure,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
@@ -64,7 +65,7 @@ def seconds_until_daily_reset(now: datetime, reset_offset: timedelta = timedelta
     return max(1, int((next_reset - now).total_seconds()))
 
 
-class _DailyLimitParams(BaseModel):
+class _DailyLimitParams(LiteLLMBaseModel):
     """rpd, tpd and daily_reset_time live in litellm_params only."""
 
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
@@ -77,12 +78,12 @@ class _DailyLimitParams(BaseModel):
         return parse_daily_reset_time(self.daily_reset_time)
 
 
-class _DailyLimitModelInfo(BaseModel):
+class _DailyLimitModelInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
     id: str | None = None
 
 
-class _DailyLimitDeployment(BaseModel):
+class _DailyLimitDeployment(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
     model_name: str = ""
     litellm_params: _DailyLimitParams = _DailyLimitParams()

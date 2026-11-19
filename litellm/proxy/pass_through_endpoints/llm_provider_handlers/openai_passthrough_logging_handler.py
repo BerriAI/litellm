@@ -10,7 +10,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -34,6 +34,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.types.decisions import OpenAIDecisionResponse
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
@@ -138,19 +139,19 @@ _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-class _AgentConfig(BaseModel):
+class _AgentConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: str
 
 
-class _AgentsApiBody(BaseModel):
+class _AgentsApiBody(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent: _AgentConfig
 
 
-class _AgentsApiSessionEvent(BaseModel):
+class _AgentsApiSessionEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     session: _AgentsApiBody

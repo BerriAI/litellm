@@ -2,10 +2,12 @@ from datetime import datetime
 from typing import Annotated, Final, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class SkillScannerConfig(BaseModel):
+class SkillScannerConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     endpoint: str = Field(max_length=2048, description="External scanner's authenticated POST endpoint")
@@ -36,7 +38,7 @@ class SkillScannerConfig(BaseModel):
         return value
 
 
-class SkillScanFinding(BaseModel):
+class SkillScanFinding(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     rule_id: str = Field(max_length=200)
@@ -48,7 +50,7 @@ class SkillScanFinding(BaseModel):
     remediation: str | None = Field(default=None, max_length=8000)
 
 
-class SkillScanReport(BaseModel):
+class SkillScanReport(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     scanner_version: str = Field(min_length=1, max_length=100)
@@ -59,7 +61,7 @@ class SkillScanReport(BaseModel):
     limitations: tuple[Annotated[str, Field(max_length=2000)], ...] = Field(default=(), max_length=100)
 
 
-class SkillScan(BaseModel):
+class SkillScan(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -80,11 +82,11 @@ class SkillScan(BaseModel):
         return self
 
 
-class SkillScanRequest(BaseModel):
+class SkillScanRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-class SkillScanResponse(BaseModel):
+class SkillScanResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     configured: bool

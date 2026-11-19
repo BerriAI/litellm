@@ -4,18 +4,19 @@ from collections.abc import Callable, Mapping
 from typing import Final, Literal
 
 import jwt
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 CLOCK_SKEW_SECONDS: Final = 5
 
 
-class Claims(BaseModel):
+class Claims(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
     iss: Literal["litellm-lens"]
     aud: Literal["litellm"]

@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
+from pydantic import ConfigDict, PositiveInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router, constants, provider_list
@@ -49,6 +49,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     resolve_inference_model,
 )
 from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -735,7 +736,7 @@ TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: Final = "allowed_s3_buckets"
 _BUCKET_NAMES: Final = TypeAdapter(tuple[str, ...])
 
 
-class _ClientSideStorageAllowlist(BaseModel):
+class _ClientSideStorageAllowlist(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     allowed_client_side_s3_buckets: tuple[str, ...] | None = None

@@ -23,11 +23,12 @@ from mcp.types import (
     InputResponses,
     ReadResourceRequest,
 )
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.outbound_credentials.result import Error
 from litellm.proxy.mcp_server.state_tokens import StateTokenError, open_state, seal_state
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -60,7 +61,7 @@ class BoundInputRequiredResult(InputRequiredResult):
     gateway_responses: InputResponses | None = Field(default=None, exclude=True)
 
 
-class ContinuationState(BaseModel):
+class ContinuationState(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     principal: str

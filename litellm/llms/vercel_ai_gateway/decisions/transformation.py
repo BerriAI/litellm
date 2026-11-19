@@ -13,11 +13,12 @@ from litellm.types.decisions import (
     DecisionsIRUsage,
     OpenAIDecisionInputTokensDetails,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _Model: Final = TypeVar("_Model", bound=BaseModel)
 
 
-class _ProviderAttempt(BaseModel):
+class _ProviderAttempt(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: str | None = None
@@ -25,13 +26,13 @@ class _ProviderAttempt(BaseModel):
     success: bool = False
 
 
-class _ModelAttempt(BaseModel):
+class _ModelAttempt(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider_attempts: tuple[_ProviderAttempt, ...] = Field(default=(), alias="providerAttempts")
 
 
-class _Routing(BaseModel):
+class _Routing(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_attempts: tuple[_ModelAttempt, ...] = Field(default=(), alias="modelAttempts")
@@ -41,13 +42,13 @@ class _Routing(BaseModel):
         return next((attempt for attempt in attempts if attempt.success), None)
 
 
-class _GatewayRouting(BaseModel):
+class _GatewayRouting(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     routing: _Routing = _Routing()
 
 
-class _GatewayCharge(BaseModel):
+class _GatewayCharge(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     cost: float
@@ -59,20 +60,20 @@ class _GatewayCharge(BaseModel):
         return self.cost + self.market_cost
 
 
-class _UpstreamUsage(BaseModel):
+class _UpstreamUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     input_tokens: int
     input_tokens_details: OpenAIDecisionInputTokensDetails
 
 
-class _UpstreamReport(BaseModel):
+class _UpstreamReport(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     usage: _UpstreamUsage
 
 
-class _GatewayDecisionResponse(BaseModel):
+class _GatewayDecisionResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider_metadata: Mapping[str, object]

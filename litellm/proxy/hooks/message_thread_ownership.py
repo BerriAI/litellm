@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm.integrations.custom_logger import CustomLogger
@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.messages.native.utils import continued_message_id, message_thread_not_found_body
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines_keepends
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ class _FirstClaimStore(Protocol):
     async def async_get_cache(self, key: str) -> object: ...
 
 
-class _ThreadBinding(BaseModel):
+class _ThreadBinding(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     owner: str

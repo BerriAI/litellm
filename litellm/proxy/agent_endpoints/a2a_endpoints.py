@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -52,6 +52,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.utils import ProxyLogging, get_custom_url
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import all_litellm_params
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
-class _A2AJsonRpcRequest(BaseModel):
+class _A2AJsonRpcRequest(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
 
     jsonrpc: Literal["2.0"]
@@ -71,7 +72,7 @@ class _A2AJsonRpcRequest(BaseModel):
     params: Mapping[str, object]
 
 
-class _A2AJsonRpcResponse(BaseModel):
+class _A2AJsonRpcResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
 
     jsonrpc: Literal["2.0"]
@@ -291,7 +292,7 @@ def _jsonrpc_error(
     )
 
 
-class _JsonRpcRequestId(BaseModel):
+class _JsonRpcRequestId(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str | int | None = None

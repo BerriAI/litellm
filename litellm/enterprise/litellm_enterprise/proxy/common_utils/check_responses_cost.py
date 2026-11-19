@@ -38,7 +38,7 @@ from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ResponseCreator,
     creator_billing_started_at,
 )
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -53,6 +53,7 @@ from litellm.constants import (
 from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import Deployment
 from litellm.types.utils import (
@@ -71,12 +72,12 @@ _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(di
 _CALLBACK_LIST_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
-class _RoutedModelInfo(BaseModel):
+class _RoutedModelInfo(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     id: str | None = None
 
 
-class _RoutedDeployment(BaseModel):
+class _RoutedDeployment(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     model_info: _RoutedModelInfo = _RoutedModelInfo()
 
@@ -213,7 +214,7 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> Bi
     return BilledCharge(cost=cost, logging_obj=logging_obj)
 
 
-class _DeploymentBaseModel(BaseModel):
+class _DeploymentBaseModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     base_model: str | None = None

@@ -4,7 +4,7 @@ from typing import ClassVar, Final, TypeAlias
 from urllib.parse import quote, urlencode
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
@@ -14,6 +14,7 @@ from litellm.llms.bedrock.web_identity_session_policy import (
     WebIdentitySessionPolicy,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams
 
 LIST_MODELS_TIMEOUT: Final = 10.0
@@ -24,26 +25,26 @@ _DECODED_JSON: Final = TypeAdapter(object)
 QueryPairs: TypeAlias = tuple[tuple[str, str], ...]
 
 
-class FoundationModelSummary(BaseModel):
+class FoundationModelSummary(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str = Field(alias="modelId")
 
 
-class ListFoundationModelsResponse(BaseModel):
+class ListFoundationModelsResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     summaries: tuple[FoundationModelSummary, ...] = Field(default=(), alias="modelSummaries")
 
 
-class InferenceProfileSummary(BaseModel):
+class InferenceProfileSummary(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str = Field(alias="inferenceProfileId")
     status: str
 
 
-class ListInferenceProfilesResponse(BaseModel):
+class ListInferenceProfilesResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     summaries: tuple[InferenceProfileSummary, ...] = Field(default=(), alias="inferenceProfileSummaries")

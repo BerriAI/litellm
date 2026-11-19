@@ -1,14 +1,16 @@
 from collections.abc import Mapping
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 Kind: TypeAlias = Literal["dataplane", "role"]
 Entity: TypeAlias = Mapping[str, JsonValue]
 ENTITY: Final = TypeAdapter(Entity)
 
 
-class Change(BaseModel):
+class Change(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     op: Literal["upsert", "delete", "resync"]
@@ -18,7 +20,7 @@ class Change(BaseModel):
     actor: str
 
 
-class Entry(BaseModel):
+class Entry(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     revision: str = Field(pattern=r"^\d+-\d+$")

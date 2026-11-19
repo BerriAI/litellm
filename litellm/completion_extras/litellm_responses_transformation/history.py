@@ -8,13 +8,15 @@ from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
+
 REPLAY_FIELD: Final = "openai_responses_replay"
 PHASE_FIELD: Final = "phase"
 
 Phase: TypeAlias = Literal["commentary", "final_answer"]
 
 
-class _Frozen(BaseModel):
+class _Frozen(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
 

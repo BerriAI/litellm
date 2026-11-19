@@ -8,6 +8,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -31,7 +32,7 @@ _DEFAULT_REGION: Final = "us"
 
 
 class _NewRelicSettings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     # The same env vars the agent-based integration documents; the key is the
     # operator-level fallback for traffic without team credentials, the region

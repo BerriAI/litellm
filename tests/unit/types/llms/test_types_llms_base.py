@@ -3,13 +3,37 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from itertools import chain
 from typing import Final
 
 import pytest
-from pydantic import ConfigDict, create_model
+from pydantic import ConfigDict, GetCoreSchemaHandler, ValidationError, create_model
+from pydantic_core import CoreSchema
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+_SCHEMA_BUILD_BARRIER: Final = ContextVar[threading.Barrier | None]("schema_build_barrier", default=None)
+_CONCURRENT_SCHEMA_BUILD: Final = ContextVar[threading.Event | None]("concurrent_schema_build", default=None)
+
+
+class _ConcurrentSchemaBuildProbe:
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: object, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        barrier: Final = _SCHEMA_BUILD_BARRIER.get()
+        if barrier is not None:
+            try:
+                barrier.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+            else:
+                concurrent_build: Final = _CONCURRENT_SCHEMA_BUILD.get()
+                if concurrent_build is not None:
+                    concurrent_build.set()
+        return handler(str)
+
 
 _PROBE: Final = """
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -142,3 +166,79 @@ def test_concurrent_first_use_of_a_deferred_subclass_always_builds_that_subclass
             assert _concurrent_first_use_outcomes(child) == {child.__name__}, f"round {round_id}"
     finally:
         sys.setswitchinterval(previous_switch_interval)
+
+
+def test_rebuild_lock_prevents_parallel_deferred_schema_builds() -> None:
+    class FirstModel(LiteLLMBaseModel):
+        value: _ConcurrentSchemaBuildProbe
+
+    class SecondModel(LiteLLMBaseModel):
+        value: _ConcurrentSchemaBuildProbe
+
+    assert not FirstModel.__pydantic_complete__
+    assert not SecondModel.__pydantic_complete__
+    start_barrier: Final = threading.Barrier(2)
+    schema_barrier: Final = threading.Barrier(2, timeout=1)
+    concurrent_build: Final = threading.Event()
+
+    def rebuild(model: type[LiteLLMBaseModel]) -> str:
+        schema_token: Final = _SCHEMA_BUILD_BARRIER.set(schema_barrier)
+        concurrent_token: Final = _CONCURRENT_SCHEMA_BUILD.set(concurrent_build)
+        try:
+            start_barrier.wait(timeout=5)
+            model.model_rebuild(force=True)
+            value: Final = model.model_validate({"value": "sample"}).model_dump()["value"]
+            return str(value)
+        finally:
+            _CONCURRENT_SCHEMA_BUILD.reset(concurrent_token)
+            _SCHEMA_BUILD_BARRIER.reset(schema_token)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results: Final = tuple(executor.map(rebuild, (FirstModel, SecondModel)))
+
+    assert results == ("sample", "sample")
+    assert not concurrent_build.is_set()
+    assert FirstModel.__pydantic_complete__
+    assert SecondModel.__pydantic_complete__
+
+
+def test_migrated_model_defers_first_use_and_preserves_validation_and_schema() -> None:
+    from litellm.types.integrations.customer_budget import CustomerBudgetEvent
+
+    class DeferredCustomerBudgetEvent(CustomerBudgetEvent):
+        pass
+
+    payload: Final = {
+        "event": "soft_budget_crossed",
+        "scope": "customer_org",
+        "entity_id": "org-1",
+        "spend": 1.25,
+        "budget": 2.5,
+        "period": "daily",
+        "timestamp": "2025-01-01T00:00:00Z",
+    }
+
+    assert not DeferredCustomerBudgetEvent.__pydantic_complete__
+    event: Final = DeferredCustomerBudgetEvent.model_validate(payload)
+    assert event.model_dump()["entity_id"] == "org-1"
+    assert "event" in DeferredCustomerBudgetEvent.model_json_schema()["properties"]
+    with pytest.raises(ValidationError):
+        DeferredCustomerBudgetEvent.model_validate({})
+    with pytest.raises(ValidationError):
+        DeferredCustomerBudgetEvent.model_validate({**payload, "event": "invalid"})
+
+
+def test_migrated_root_model_defers_first_use_and_preserves_root_schema() -> None:
+    from litellm.types.interactions.generated import ModelOption
+
+    class DeferredModelOption(ModelOption):
+        pass
+
+    assert not DeferredModelOption.__pydantic_complete__
+    model: Final = DeferredModelOption.model_validate("sample-model")
+    assert model.model_dump() == "sample-model"
+    assert DeferredModelOption.model_json_schema()["type"] == "string"
+    with pytest.raises(ValidationError):
+        DeferredModelOption.model_validate({})
+    with pytest.raises(ValidationError):
+        DeferredModelOption.model_validate(None)

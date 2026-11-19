@@ -32,6 +32,7 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFER_PYDANTIC_BUILD
 
 COLLECTOR_ENV_PREFIX: Final = "LITELLM_COLLECTOR_"
 COLLECTOR_JOB_ROLE: Final = "collector"
@@ -47,7 +48,12 @@ class CollectorSettings(BaseSettings):
     """``LITELLM_COLLECTOR_*`` env vars, shared by the gateway producer and the sidecar consumer."""
 
     model_config = SettingsConfigDict(
-        env_prefix=COLLECTOR_ENV_PREFIX, case_sensitive=False, extra="ignore", frozen=True, populate_by_name=True
+        env_prefix=COLLECTOR_ENV_PREFIX,
+        case_sensitive=False,
+        extra="ignore",
+        frozen=True,
+        populate_by_name=True,
+        defer_build=DEFER_PYDANTIC_BUILD,
     )
 
     enabled: bool = False

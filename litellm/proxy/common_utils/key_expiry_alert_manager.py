@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm.constants import (
@@ -19,6 +19,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.key_expiring_email import VIRTUAL_KEY_EXPIRING_EMAIL_EVENT
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
@@ -34,7 +35,7 @@ WHERE expires IS NOT NULL AND expires > $1::timestamp AND expires <= $2::timesta
 logger: Final = logging.getLogger(__name__)
 
 
-class _ExpiryAlertKey(BaseModel):
+class _ExpiryAlertKey(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     token: str

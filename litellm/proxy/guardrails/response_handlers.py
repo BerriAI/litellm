@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
@@ -17,6 +17,7 @@ from litellm.types.guardrails import (
     GuardrailResponseFormat,
     NativeGuardrailResponse,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 GuardrailEndpointResponse: TypeAlias = ApplyGuardrailResponse | NativeGuardrailResponse
@@ -53,14 +54,14 @@ class StandardGuardrailResponseHandler:
         return modified if isinstance(modified, ApplyGuardrailResponse) else original
 
 
-class _NativeGuardrailRecord(BaseModel):
+class _NativeGuardrailRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     guardrail_name: str | None = None
     guardrail_response: JsonValue = None
 
 
-class _NativeGuardrailMetadata(BaseModel):
+class _NativeGuardrailMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     standard_logging_guardrail_information: tuple[_NativeGuardrailRecord, ...] = ()

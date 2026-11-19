@@ -22,7 +22,7 @@ from typing import Annotated, Final, Literal, TypeAlias
 
 import regex
 import tiktoken
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
+from pydantic import ConfigDict, Field, JsonValue, ValidationError, model_validator
 from typing_extensions import Self
 
 import litellm
@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     is_flat_responses_tool,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 KIMI_K3_REPO: Final = "moonshotai/Kimi-K3"
@@ -165,7 +166,7 @@ class KimiK3Encodings:
         return None
 
 
-class _Converse(BaseModel):
+class _Converse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
@@ -243,7 +244,7 @@ class _ToolSpecBlock(_Converse):
     tool_spec: _ToolSpec = Field(alias="toolSpec")
 
 
-class _ToolConfig(BaseModel):
+class _ToolConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     tools: tuple[_ToolSpecBlock | _CachePoint, ...]
     tool_choice: Mapping[str, JsonValue] | None = Field(default=None, alias="toolChoice")
@@ -267,7 +268,7 @@ def _call_ids(message: _Message | None) -> frozenset[str]:
     return frozenset(call.tool_use_id for call in message.calls())
 
 
-class _ConverseRequest(BaseModel):
+class _ConverseRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     messages: tuple[_Message, ...]
     system: tuple[_Text | _CachePoint, ...] = ()
@@ -439,12 +440,12 @@ def _text_tokens(encoding: tiktoken.Encoding, text: str) -> int:
     return sum(len(encoding.encode_ordinary(text[start:end])) for start, end in spans)
 
 
-class _TextPart(BaseModel):
+class _TextPart(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     type: Literal["text"]
 
 
-class _TextOnlyMessage(BaseModel):
+class _TextOnlyMessage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     content: str | tuple[_TextPart, ...] | None = None
 

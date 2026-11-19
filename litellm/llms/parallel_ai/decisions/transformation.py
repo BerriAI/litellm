@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, ir_to_systemone_request
 from litellm.types.decisions import (
@@ -10,9 +10,10 @@ from litellm.types.decisions import (
     DecisionsIRResponse,
     UnsupportedDecisionsRequest,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class _ParallelResponse(BaseModel):
+class _ParallelResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
 
     mode: str

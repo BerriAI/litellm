@@ -78,6 +78,7 @@ from litellm.responses.utils import (
     normalize_responses_api_stream_options,
     opt_in_auto_reasoning_summary,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
@@ -257,7 +258,7 @@ def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> b
     )
 
 
-class _PromptCacheRequest(BaseModel):
+class _PromptCacheRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     prompt_cache_options: object = None
 
@@ -825,7 +826,7 @@ def _responses_event_type(chunk: Mapping[str, object]) -> object:
     return event_type.value if isinstance(event_type, ResponsesAPIStreamEvents) else event_type
 
 
-class _TypedPayload(BaseModel):
+class _TypedPayload(LiteLLMBaseModel):
     """The ``type`` discriminator of a response_format dict or a Responses output item."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
@@ -61,6 +61,7 @@ from litellm.llms.base_llm.harness.utils import (
     stderr_tail_text,
     turn_prompt,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import ModelInfo
 from litellm.utils import get_model_info
 
@@ -175,7 +176,7 @@ FAILED_STOP_REASONS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-class _Frozen(BaseModel):
+class _Frozen(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
 

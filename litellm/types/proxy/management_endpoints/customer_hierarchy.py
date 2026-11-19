@@ -6,7 +6,6 @@ from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import (
     AwareDatetime,
-    BaseModel,
     ConfigDict,
     Field,
     NonNegativeInt,
@@ -18,13 +17,14 @@ from pydantic.json_schema import SkipJsonSchema
 
 from litellm.models.budget import BudgetLimits
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 CapPolicy: TypeAlias = Literal["pause_until_reset", "pause_allow_increase"]
 INCREASE_REQUEST_ROUTE: Final = "/management/v1/customer_budget_increase_requests"
 IncreaseRequestStatus: TypeAlias = Literal["pending_review", "approved", "rejected"]
 
 
-class Budget(BaseModel):
+class Budget(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_budget: float | None = Field(default=None, ge=0, allow_inf_nan=False)
@@ -66,7 +66,7 @@ class BudgetGroupChange(BudgetTemplate):
     budget_id: str | None = Field(default=None, description="Existing template ID. Omit to create a template.")
 
 
-class BudgetGroupsUpdate(BaseModel):
+class BudgetGroupsUpdate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_revision: str = Field(min_length=64, max_length=64)
@@ -76,7 +76,7 @@ class BudgetGroupsUpdate(BaseModel):
     default_budget_template: str | None = Field(description="Final name of the default group, or null for no default.")
 
 
-class OrganizationFields(BaseModel):
+class OrganizationFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
@@ -112,7 +112,7 @@ class OrganizationUpsert(OrganizationCreate):
         return self
 
 
-class TeamPatch(BaseModel):
+class TeamPatch(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
@@ -126,7 +126,7 @@ class TeamCreate(TeamPatch):
     parent_org_id: str
 
 
-class MemberFields(BaseModel):
+class MemberFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str | None = None
@@ -169,7 +169,7 @@ class MemberUpsert(MemberFields):
         return self
 
 
-class CustomerBudgetUsage(BaseModel):
+class CustomerBudgetUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     source: Literal["scalar", "window"]
@@ -180,7 +180,7 @@ class CustomerBudgetUsage(BaseModel):
     reset_at: datetime | None = None
 
 
-class AuditFields(BaseModel):
+class AuditFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     alias: str | None = None
@@ -197,7 +197,7 @@ class AuditFields(BaseModel):
     updated_by: str
 
 
-class BudgetGroups(BaseModel):
+class BudgetGroups(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     default_budget_template_id: str | None = None
@@ -256,7 +256,7 @@ class MemberUpsertResponse(CustomerMember):
     created: bool
 
 
-class BudgetIncreaseRequestCreate(BaseModel):
+class BudgetIncreaseRequestCreate(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     customer_member_id: str = Field(max_length=256)
@@ -265,13 +265,13 @@ class BudgetIncreaseRequestCreate(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
-class BudgetIncreaseRejection(BaseModel):
+class BudgetIncreaseRejection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     review_notes: str | None = Field(default=None, max_length=1000)
 
 
-class BudgetIncreaseRequest(BaseModel):
+class BudgetIncreaseRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     request_id: str

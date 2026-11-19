@@ -23,13 +23,14 @@ from typing import TYPE_CHECKING, Final, Literal
 from uuid import uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 from litellm.rust_bridge.clickhouse import spend_storage_config
 from litellm.tracing.generated.types import AllQueryScope, Trace
 from litellm.tracing.remote import LensConnection, RemoteTraceStore
 from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import SpendLogRecord
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -51,26 +52,26 @@ LONG_SESSION_SOURCE: Final = "openai_agents_swarm"
 LONG_SESSION_REPEATS: Final = (50, 400, 4000)
 
 
-class TenantIdentity(BaseModel):
+class TenantIdentity(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     team_id: str
     api_key: str
     user: str
 
 
-class IngestionKeyRecord(BaseModel):
+class IngestionKeyRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     id: str
 
 
-class IngestionKeyCreated(BaseModel):
+class IngestionKeyCreated(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     key: str
     active: bool
     record: IngestionKeyRecord
 
 
-class FixtureCapture(BaseModel):
+class FixtureCapture(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     name: str
     trace_id: str
@@ -292,7 +293,7 @@ def postgres_row(row: SpendLogRecord) -> LiteLLM_SpendLogsCreateWithoutRelations
     )
 
 
-class SeedOptions(BaseModel):
+class SeedOptions(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     profile: Literal["default", "large"]
     copies: int | None

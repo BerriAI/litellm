@@ -1065,12 +1065,12 @@ _THOUGHT_SIGNATURE_CALL_TYPES: Final = frozenset(
 _MESSAGE_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
-class _ToolCallIdRef(BaseModel):
+class _ToolCallIdRef(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
     id: str | None = None
 
 
-class _MessageToolCallIds(BaseModel):
+class _MessageToolCallIds(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
     tool_call_id: str | None = None
     tool_calls: tuple[_ToolCallIdRef, ...] | None = None

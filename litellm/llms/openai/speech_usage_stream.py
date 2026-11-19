@@ -3,9 +3,10 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils import model_cost_table
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
 
@@ -21,14 +22,14 @@ _AUDIO_MEDIA_TYPES: Final[Mapping[str, str]] = {
 }
 
 
-class _SpeechUsage(BaseModel):
+class _SpeechUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     input_tokens: int
     output_tokens: int
 
 
-class _SpeechPricing(BaseModel):
+class _SpeechPricing(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     litellm_provider: str | None = None
@@ -38,7 +39,7 @@ class _SpeechPricing(BaseModel):
 _EXTRA_BODY: Final = TypeAdapter(dict[str, object])
 
 
-class _SpeechEvent(BaseModel):
+class _SpeechEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str

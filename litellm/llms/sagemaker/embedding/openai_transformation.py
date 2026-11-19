@@ -10,12 +10,14 @@ read as the OpenAI embeddings object (`data[].embedding`, `usage`).
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from litellm.types.llms.base_model import LiteLLMBaseModel
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllEmbeddingInputValues
 
 from httpx._models import Headers, Response
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -28,19 +30,19 @@ SUPPORTED_OPENAI_PARAMS: Final = ("dimensions", "encoding_format", "user")
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-class OpenAIEmbeddingUsage(BaseModel):
+class OpenAIEmbeddingUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     prompt_tokens: int = 0
     total_tokens: int | None = None
 
 
-class OpenAIEmbeddingRow(BaseModel):
+class OpenAIEmbeddingRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     embedding: tuple[float, ...] | str
     index: int | None = None
 
 
-class OpenAIEmbeddingsPayload(BaseModel):
+class OpenAIEmbeddingsPayload(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     data: tuple[OpenAIEmbeddingRow, ...]
     model: str | None = None

@@ -103,6 +103,7 @@ from litellm.types.llms.anthropic import (
     AnthropicWebSearchTool,
     AnthropicWebSearchUserLocation,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     AllMessageValues,
@@ -3541,7 +3542,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-class JsonModeRequest(BaseModel):
+class JsonModeRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     tools: object = None

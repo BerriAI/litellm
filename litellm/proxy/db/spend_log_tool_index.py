@@ -22,7 +22,7 @@ from itertools import chain, groupby
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
@@ -31,6 +31,7 @@ from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.repositories.table_repositories import SpendLogToolIndexRepository
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -84,26 +85,26 @@ def _server_tool_call_names(completion_response: object) -> tuple[str | None, ..
     return tuple(server_tool_call["function"].get("name") for server_tool_call in server_tool_calls)
 
 
-class _ExecutedTool(BaseModel):
+class _ExecutedTool(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str | None = None
 
 
-class _OutputText(BaseModel):
+class _OutputText(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     text: str
 
 
-class _ToolExecutionResults(BaseModel):
+class _ToolExecutionResults(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     type: Literal["tool_execution_results"]
     content: tuple[_OutputText, ...]
 
 
-class _ResponsesApiOutput(BaseModel):
+class _ResponsesApiOutput(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     output: tuple[object, ...]

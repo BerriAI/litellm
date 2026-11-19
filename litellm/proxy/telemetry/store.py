@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Final, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
@@ -14,6 +14,7 @@ from litellm.proxy.telemetry.settings import TelemetryDestination
 from litellm.telemetry.consent import ConsentError, TelemetryConsent, parse_consent
 from litellm.telemetry.report import Report, report_to_json
 from litellm.telemetry.sink import ExportOutcome
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 INSTANCE_ID_PARAM: Final = "telemetry_instance_id"
 HASH_SECRET_PARAM: Final = "telemetry_deployment_hash_secret"
@@ -25,13 +26,13 @@ class Database(Protocol):
     def execute_raw(self, query: LiteralString, *args: object) -> Awaitable[int]: ...
 
 
-class _ValueRow(BaseModel):
+class _ValueRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     value: str
 
 
-class StoredReport(BaseModel):
+class StoredReport(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -40,7 +41,7 @@ class StoredReport(BaseModel):
     report: JsonValue
 
 
-class _StoredGroups(BaseModel):
+class _StoredGroups(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     groups: tuple[str, ...]
@@ -53,7 +54,7 @@ class StoredSettings:
     destination: TelemetryDestination | None
 
 
-class _SettingsRow(BaseModel):
+class _SettingsRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     param_value: _StoredGroups

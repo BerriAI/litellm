@@ -208,7 +208,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
-class KubernetesPodsResponse(BaseModel):
+class KubernetesPodsResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_id: str

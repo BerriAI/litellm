@@ -58,7 +58,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import AnyUrl, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Self, assert_never
 
 import litellm
@@ -1967,7 +1967,7 @@ def _mcp_discovery_cache_ttl() -> float:
 _TOOL_LIST_ENTRY_LIMIT_KB: Final = 1024
 
 
-class _UpstreamToolListing(BaseModel):
+class _UpstreamToolListing(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     page: ListToolsResult

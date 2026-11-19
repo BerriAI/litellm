@@ -1,13 +1,15 @@
 from datetime import datetime
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 CustomerBudgetScope: TypeAlias = Literal["customer_org", "customer_team", "customer_member"]
 CustomerBudgetEventType: TypeAlias = Literal["soft_budget_crossed", "budget_crossed"]
 
 
-class CustomerBudgetEvent(BaseModel):
+class CustomerBudgetEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     event: CustomerBudgetEventType

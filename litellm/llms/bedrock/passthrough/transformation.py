@@ -23,6 +23,7 @@ from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     bedrock_invoke_guardrail_headers,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -445,14 +446,14 @@ def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
     return {BEDROCK_INVOKE_TRACE_FIELD: reply.get(BEDROCK_INVOKE_TRACE_FIELD)}
 
 
-class _TitanEmbeddingsByType(BaseModel):
+class _TitanEmbeddingsByType(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     binary: tuple[int, ...] | None = None
     floats: tuple[float, ...] | None = Field(default=None, alias="float")
 
 
-class _TitanEmbeddingReply(BaseModel):
+class _TitanEmbeddingReply(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     embedding: tuple[float, ...] | None = None

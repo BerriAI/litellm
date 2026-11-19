@@ -1,11 +1,13 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class AktoGuardrailConfigModelOptionalParams(BaseModel):
+class AktoGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     streaming_sampling_rate: int | None = Field(
         default=None,
         description=(

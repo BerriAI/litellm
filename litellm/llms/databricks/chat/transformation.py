@@ -35,6 +35,7 @@ from litellm.llms.base_llm.base_utils import (
 )
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
     DatabricksChoice,
@@ -307,14 +308,14 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class _ToolCallFunction(BaseModel):
+class _ToolCallFunction(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str | None = None
     arguments: str | None = None
 
 
-class _StreamedToolCall(BaseModel):
+class _StreamedToolCall(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     index: int = 0

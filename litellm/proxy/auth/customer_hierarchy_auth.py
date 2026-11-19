@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -40,6 +40,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.rust_bridge._native import jwt_claims
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
@@ -69,7 +70,7 @@ _TEAM_IDS: Final = TypeAdapter(tuple[str, ...])
 _SPEND: Final = TypeAdapter(float)
 
 
-class _OrganizationRow(BaseModel):
+class _OrganizationRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_org_id: str
@@ -78,7 +79,7 @@ class _OrganizationRow(BaseModel):
     budget: Mapping[str, object] | None = None
 
 
-class _TeamRow(BaseModel):
+class _TeamRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_team_id: str
@@ -89,7 +90,7 @@ class _TeamRow(BaseModel):
     budget_override_expires_at: datetime | None = None
 
 
-class _MemberRow(BaseModel):
+class _MemberRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     customer_member_id: str

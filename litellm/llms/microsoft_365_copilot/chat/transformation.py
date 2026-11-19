@@ -8,7 +8,7 @@ from typing import (
 )
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm.utils as litellm_utils
@@ -16,6 +16,7 @@ from litellm.constants import MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE
 from litellm.litellm_core_utils.oauth_token_exchange import redact_sensitive_values
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.microsoft_365_copilot.common_utils import Microsoft365CopilotError
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -40,38 +41,38 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
-class _TextPart(BaseModel):
+class _TextPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     type: Literal["text"]
     text: str
 
 
-class _GraphConversation(BaseModel):
+class _GraphConversation(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     id: str
 
 
-class _GraphMessage(BaseModel):
+class _GraphMessage(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     text: str | None = None
 
 
-class _GraphConversationResponse(BaseModel):
+class _GraphConversationResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     messages: Sequence[_GraphMessage] | None = None
 
 
-class _GraphError(BaseModel):
+class _GraphError(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     message: str | None = None
 
 
-class _GraphErrorResponse(BaseModel):
+class _GraphErrorResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     error: _GraphError | None = None

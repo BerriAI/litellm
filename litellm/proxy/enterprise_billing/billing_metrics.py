@@ -23,7 +23,7 @@ from opentelemetry.metrics import Counter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from requests.auth import AuthBase
 from typing_extensions import ReadOnly, Unpack
 
@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.url_utils import is_https_url_with_host
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
@@ -63,7 +64,7 @@ class BillingMetricsConfig:
     license_id: str | None
 
 
-class _BillingMetricsOAuthToken(BaseModel):
+class _BillingMetricsOAuthToken(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
     access_token: str

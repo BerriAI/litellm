@@ -1,13 +1,14 @@
 from collections.abc import Sequence
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy.utils import PrismaClient, query_raw_rows
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class _UserId(BaseModel):
+class _UserId(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     user_id: str
 

@@ -6,11 +6,12 @@ from functools import lru_cache, reduce
 from importlib import import_module
 from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
+from pydantic import ConfigDict, TypeAdapter, model_validator
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AUTH_OBJECTS_TARGET
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _TRUSTED_ATTRIBUTES: Final = frozenset(("jwt_claims", "user_id", "user_role"))
 
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
     from litellm.repositories.prisma_protocols import DatabaseClient
 
 
-class AccessGroupRule(BaseModel):
+class AccessGroupRule(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     attribute: str

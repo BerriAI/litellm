@@ -19,7 +19,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
@@ -55,6 +55,7 @@ from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicSystemMessageContent,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionCachedContent,
@@ -391,7 +392,7 @@ def openai_prompt_cache_breakpoint_support(
     return _named_model_breakpoint_support(model)
 
 
-class _DeclaredBaseModels(BaseModel):
+class _DeclaredBaseModels(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
 
     base_model: object = None

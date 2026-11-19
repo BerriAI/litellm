@@ -7,7 +7,7 @@ from types import MappingProxyType, TracebackType
 from typing import Final
 from urllib.parse import urlparse, urlunparse
 
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import ConfigDict, JsonValue, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, Self, TypedDict
 
 from litellm import verbose_logger
@@ -33,6 +33,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.llms.custom_httpx.http_handler import realtime_ssl_for_url
 from litellm.llms.soniox.common_utils import SonioxException, get_soniox_api_key
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     OpenAIRealtimeErrorEvent,
     OpenAIRealtimeEvents,
@@ -65,7 +66,7 @@ class SonioxProtocolError(RealtimeTranscriptionProtocolError):
     pass
 
 
-class SonioxRealtimeOptions(BaseModel):
+class SonioxRealtimeOptions(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     language_hints: tuple[str, ...] | None = None
@@ -105,7 +106,7 @@ class SonioxTranscriptionCompleted(OpenAIRealtimeInputAudioTranscriptionComplete
     segments: NotRequired[ReadOnly[tuple[SonioxTranscriptSegment, ...]]]
 
 
-class _SonioxToken(BaseModel):
+class _SonioxToken(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     text: str
@@ -119,7 +120,7 @@ class _SonioxToken(BaseModel):
         return self.speaker is not None or self.language is not None
 
 
-class _SonioxResponse(BaseModel):
+class _SonioxResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     tokens: tuple[_SonioxToken, ...] = ()

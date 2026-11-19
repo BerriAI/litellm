@@ -14,7 +14,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Final, TypeAlias, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, TypeAdapter, model_validator
+from pydantic import ConfigDict, Field, StrictInt, TypeAdapter, model_validator
 from typing_extensions import Self, assert_never
 
 from litellm.exceptions import ServiceUnavailableError, Timeout
@@ -37,6 +37,7 @@ from litellm.router_utils.dynamic_queue import (
     WaitRequest,
 )
 from litellm.router_utils.dynamic_queue_redis import RedisQueueBackend, ScriptHost
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 QUEUE_FULL_CODE: Final = "queue_full"
 REDIS_NOT_CONFIGURED: Final = "redis_not_configured"
@@ -44,7 +45,7 @@ MAX_WAITING_LIMIT: Final = 64
 TRIGGER_STATUS_CODES: Final = frozenset({429, 529})
 
 
-class DynamicQueueSettings(BaseModel):
+class DynamicQueueSettings(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     enabled: bool = False

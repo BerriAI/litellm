@@ -4,9 +4,10 @@ from contextvars import ContextVar
 from types import MappingProxyType
 from typing import Final, TypeVar
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
+from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_router_logger
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -44,7 +45,7 @@ _REQUEST_SELECTION: Final[ContextVar[tuple[str | None, str | None]]] = ContextVa
 )
 
 
-class _EndpointDeclaration(BaseModel):
+class _EndpointDeclaration(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     enforce_supported_endpoints: bool | None = None

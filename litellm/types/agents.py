@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictInt, field_validator
+from pydantic import ConfigDict, Field, PrivateAttr, StrictInt, field_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
@@ -343,7 +343,7 @@ class ListAgentsResponse(LiteLLMBaseModel):
     agents: list[AgentResponse]
 
 
-class AgentCreateRequest(BaseModel):
+class AgentCreateRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str

@@ -7,7 +7,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, model_validator
 
 from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
 from litellm.proxy.common_utils.timezone_utils import (
@@ -22,6 +22,7 @@ from litellm.proxy.management_helpers.customer_budget_usage import customer_budg
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, count_in, delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     BudgetGroupChange,
@@ -82,7 +83,7 @@ def _budget_sort_key(budget: Budget | None, sort: BudgetSort) -> tuple[bool, flo
     return limit is None, (limit or 0) * (-1 if sort == "budget_desc" else 1)
 
 
-class _BudgetSortRow(BaseModel):
+class _BudgetSortRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     entity_id: str
@@ -128,7 +129,7 @@ FREE_CAPACITY_ADVISORY_LOCK: Final = 714023581
 FREE_CAPACITY_LOCK_TIMEOUT_MS: Final = 1000
 
 
-class CustomerPortalLimits(BaseModel):
+class CustomerPortalLimits(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     limits_apply: bool
@@ -139,7 +140,7 @@ class CustomerPortalLimits(BaseModel):
     any_limit_reached: bool
 
 
-class _CapacityCounts(BaseModel):
+class _CapacityCounts(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     full_organizations: int
@@ -189,7 +190,7 @@ class BudgetRecord(Budget):
     temp_budget_expiry: datetime | None = Field(default=None, exclude=True)
 
 
-class BudgetWindow(BaseModel):
+class BudgetWindow(LiteLLMBaseModel):
     """The recurring window a budget row carries; customer rows read theirs from the budget they point at."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
@@ -198,7 +199,7 @@ class BudgetWindow(BaseModel):
     budget_reset_at: datetime | None = None
 
 
-class OrganizationMemberCount(BaseModel):
+class OrganizationMemberCount(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     customer_org_id: str
@@ -217,7 +218,7 @@ def window_reset_at(value: object) -> datetime | None:
     return None if window is None else window.budget_reset_at
 
 
-class _StoredWindow(BaseModel):
+class _StoredWindow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     budget_duration: str | None = None
@@ -358,14 +359,14 @@ async def organization_budget_group_ids(config: TableActions[PrismaRecord]) -> t
     return _BUDGET_IDS.validate_json(value) if isinstance(value, str) else _BUDGET_IDS.validate_python(value)
 
 
-class _MemberDeletionRow(BaseModel):
+class _MemberDeletionRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     customer_member_id: str
     budget_override_id: str | None = None
 
 
-class _TeamDeletionRow(BaseModel):
+class _TeamDeletionRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     customer_team_id: str
@@ -488,7 +489,7 @@ def member_window_reset_at(
     return window_reset_at(template)
 
 
-class CustomerRowWindow(BaseModel):
+class CustomerRowWindow(LiteLLMBaseModel):
     """The budget relations a customer row carries, read off a Prisma row or a dumped mapping."""
 
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)

@@ -1,9 +1,11 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
-class RoleResponse(BaseModel):
+class RoleResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
@@ -12,7 +14,7 @@ class RoleResponse(BaseModel):
     source: Literal["config", "runtime"]
 
 
-class RoleListResponse(BaseModel):
+class RoleListResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     items: tuple[RoleResponse, ...]

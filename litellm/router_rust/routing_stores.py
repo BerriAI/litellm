@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_router_logger
@@ -18,6 +18,7 @@ from litellm.router_utils import routing_prefetch
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.health_state_cache import health_states_of
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import RoutingArgs
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 __all__ = (
     "CACHE_STEP",
@@ -45,7 +46,7 @@ def _cooldown_value(value: JsonValue) -> CooldownCacheValue:
     return validated
 
 
-class _Step(BaseModel):
+class _Step(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
 

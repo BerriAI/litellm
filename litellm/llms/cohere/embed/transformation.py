@@ -19,13 +19,14 @@ from typing import Final, Protocol, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.llms.bedrock import (
     CohereEmbeddingRequest,
     CohereEmbeddingRequestWithModel,
@@ -66,7 +67,7 @@ class CohereEmbeddingRowShape(Enum):
     TYPED = "typed"
 
 
-class _CohereBilledUnits(BaseModel):
+class _CohereBilledUnits(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     input_tokens: int | None = None
@@ -74,7 +75,7 @@ class _CohereBilledUnits(BaseModel):
     images: int | None = None
 
 
-class _CohereEmbedMeta(BaseModel):
+class _CohereEmbedMeta(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     billed_units: _CohereBilledUnits = Field(default_factory=_CohereBilledUnits)
@@ -83,7 +84,7 @@ class _CohereEmbedMeta(BaseModel):
 _CohereEmbeddings: TypeAlias = Mapping[str, Sequence[object]] | Sequence[object]
 
 
-class _CohereEmbedBody(BaseModel):
+class _CohereEmbedBody(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     embeddings: _CohereEmbeddings

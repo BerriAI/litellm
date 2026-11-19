@@ -4,7 +4,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.duration_parser import get_next_standardized_res
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
+from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.utils import ModelInfo, SearchFreeRequests, StandardLoggingPayload, Usage
 
 _PERIOD_DURATION: Final = MappingProxyType({"day": "1d", "month": "1mo"})
@@ -24,7 +25,7 @@ class SharedCounter(Protocol):
     async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float: ...
 
 
-class _UsageCarrier(BaseModel):
+class _UsageCarrier(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
 
     usage: Usage | None = None
