@@ -337,7 +337,7 @@ async def _forwards_subscription_oauth(
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth,
 ) -> bool:
-    if request is None:
+    if request is None or not request.scope.get("headers"):
         return False
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
     from litellm.proxy.litellm_pre_call_utils import forwarded_anthropic_oauth_token
