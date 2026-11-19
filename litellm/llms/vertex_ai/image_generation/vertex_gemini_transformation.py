@@ -101,20 +101,29 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     elif k == "imageConfig":
                         if isinstance(v, dict):
                             mapped_params["imageConfig"] = v
-                        else:
+                        elif drop_params:
                             verbose_logger.warning("imageConfig must be a dict, got %s — ignoring.", type(v).__name__)
+                        else:
+                            raise litellm.BadRequestError(
+                                message=f"imageConfig must be a dict, got {type(v).__name__}.",
+                                model=model,
+                                llm_provider="vertex_ai",
+                            )
                     elif k not in ("tools", "web_search_options", "imageConfig"):
                         mapped_params[k] = v
 
         if "size" in non_default_params and "size" not in optional_params:
             image_params: Final = _JSON_OBJECT.validate_python(mapped_params)
             image_config: Final = _JSON_OBJECT.validate_python(image_params.get("imageConfig", {}))
+            mapped_size: Final = map_vertex_image_size(non_default_params["size"], model)
+            if mapped_size is None and not drop_params:
+                raise litellm.BadRequestError(
+                    message=f"Invalid size {non_default_params['size']!r}: size must be a '<width>x<height>' string.",
+                    model=model,
+                    llm_provider="vertex_ai",
+                )
             size_params: Final = {
-                key: value
-                for key, value in (
-                    map_vertex_image_size(non_default_params["size"], model) or {"aspectRatio": "1:1"}
-                ).items()
-                if key not in image_config
+                key: value for key, value in (mapped_size or {"aspectRatio": "1:1"}).items() if key not in image_config
             }
             return map_gemini_image_tools_params(
                 _JSON_OBJECT.validate_python(non_default_params), {**size_params, **image_params}
