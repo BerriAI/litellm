@@ -288,14 +288,8 @@ def provider_wire_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
 
-@pytest.mark.parametrize("provider", PROVIDERS)
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("stream", [False, True])
-async def test_internal_params_never_reach_provider_body(
-    provider_wire_environment: None,
-    provider: str,
-    asynchronous: bool,
-    stream: bool,
+async def _assert_internal_params_stay_off_the_wire(
+    provider: str, asynchronous: bool, stream: bool, internal: Mapping[str, object]
 ) -> None:
     with wire_server(_peer(provider)) as wire:
         parameters: Final = {
@@ -307,6 +301,7 @@ async def test_internal_params_never_reach_provider_body(
             "max_tokens": 16,
             "timeout": 5,
             "num_retries": 0,
+            **internal,
         }
         result: Final = (
             await litellm.acompletion(**parameters)
@@ -327,6 +322,30 @@ async def test_internal_params_never_reach_provider_body(
         assert not INTERNAL_FIELDS.intersection(keys)
         assert not frozenset(key for key in keys if key.startswith("_litellm_")), keys
         assert _custom_key(body, provider) == 1
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_internal_params_never_reach_provider_body(
+    provider_wire_environment: None,
+    provider: str,
+    asynchronous: bool,
+    stream: bool,
+) -> None:
+    await _assert_internal_params_stay_off_the_wire(provider, asynchronous, stream, {})
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_top_level_litellm_params_kwarg_never_reaches_provider_body(
+    provider_wire_environment: None,
+    provider: str,
+    asynchronous: bool,
+    stream: bool,
+) -> None:
+    await _assert_internal_params_stay_off_the_wire(provider, asynchronous, stream, {"litellm_params": {"foo": 1}})
 
 
 WALK_TEXT: Final = "walk every provider"
