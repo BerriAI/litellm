@@ -183,7 +183,11 @@ async def test_alert_snapshots_keep_each_committed_balance_before_the_next_rollo
         transactions=WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
             (
                 tuple(
-                    to_wire_payload(build_window_spend_transaction("app", "app", "1mo", start, delta, reset_at=reset))
+                    to_wire_payload(
+                        build_window_spend_transaction(
+                            "app", "app", "1mo", start, delta, reset_at=reset.isoformat().replace("+00:00", "Z")
+                        )
+                    )
                     for start, reset, _, delta in periods
                 ),
             )
