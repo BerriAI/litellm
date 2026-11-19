@@ -124,7 +124,6 @@
     "enableMemberLimits": "Set per-member limits",
     "optionalMemberLimitsHint": "Set a separate limit for each member of this customer in this app. Otherwise, the app's default member limits apply.",
     "organizationMemberDefault": "Per-member default for this customer",
-    "memberDefaultHint": "When disabled, members inherit this app’s default allowance. Existing member overrides keep their own budgets.",
     "onlyThisPair": "Applies only to {{customer}} in {{alias}}. The organization-wide budget also applies.",
     "saveBudget": "Save app budget",
     "memberTitle": "Member app budgets",

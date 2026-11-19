@@ -151,8 +151,7 @@ afterEach(() => {
   document.cookie = "token=; Max-Age=0; Path=/";
 });
 
-const customerLinks = () =>
-  within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
+const customerLinks = () => within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
 
 describe("customer organization overview", () => {
   it("shows each organization's assigned tier or custom budget in the budget group column", async () => {

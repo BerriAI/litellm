@@ -92,6 +92,7 @@ export function MultiSelect({
       : safeOptions;
 
   const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
+  const inputPlaceholder = selectedOptions.length ? undefined : placeholder;
 
   const handleValueChange = (selected: MultiSelectOption[]) => {
     const next = allowCustomValues
@@ -134,7 +135,7 @@ export function MultiSelect({
               <ComboboxChipsInput
                 id={id}
                 aria-describedby={describedBy}
-                placeholder={loading ? t("shared.multiSelect.loading") : selected.length ? undefined : placeholder}
+                placeholder={loading ? t("shared.multiSelect.loading") : inputPlaceholder}
                 className="min-w-8"
                 aria-label={placeholder || undefined}
               />
