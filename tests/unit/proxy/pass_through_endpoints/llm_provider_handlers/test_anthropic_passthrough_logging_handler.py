@@ -18,6 +18,61 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passth
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
+@pytest.mark.parametrize("overage", (False, True, None))
+def test_oauth_passthrough_prices_only_subscription_overage(monkeypatch: pytest.MonkeyPatch, overage: bool | None):
+    model: Final = "claude-subscription-passthrough-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic", "mode": "chat"},
+    )
+    logger: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    logger.update_environment_variables(
+        model=model,
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params={"metadata": {"used_client_oauth_token": True}},
+    )
+    body: Final = {
+        "id": "msg_subscription",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hello"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 10},
+    }
+    headers: Final = (
+        {}
+        if overage is None
+        else {
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-unified-overage-in-use": "true" if overage else "false",
+        }
+    )
+    result: Final = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=httpx.Response(200, json=body, headers=headers),
+        response_body=body,
+        logging_obj=logger,
+        url_route="/anthropic/v1/messages",
+        result="",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+    )
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.0 if overage is False else 100 * 0.01 + 10 * 0.02)
+    assert logger.model_call_details["response_cost"] == result["kwargs"]["response_cost"]
+
+
 async def _drain_tasks():
     """Await the fire-and-forget managed object write and let its done callback run."""
     pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
