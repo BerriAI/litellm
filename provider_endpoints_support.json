@@ -5564,7 +5564,7 @@
     },
     "apistore": {
       "display_name": "API Store (`apistore`)",
-      "url": "https://docs.litellm.ai/docs/providers/openai_compatible",
+      "url": "https://docs.litellm.ai/docs/providers/apistore",
       "endpoints": {
         "chat_completions": true,
         "responses": true,
