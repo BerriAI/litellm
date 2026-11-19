@@ -247,6 +247,17 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
+    additional_drop_params: Final = request_params.get("additional_drop_params")
+    drops_store: Final = isinstance(additional_drop_params, list) and "store" in additional_drop_params
+    upstream_store: Final = extra_body.get("store", None if drops_store else request_params.get("store"))
+    return upstream_store is not False or any(
+        params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
+        for params in (request_params, extra_body)
+    )
+
+
 def _build_responses_kwargs(
     *,
     max_tokens: int,
@@ -313,6 +324,7 @@ def _build_responses_kwargs(
     if output_format:
         request_data["output_format"] = output_format
 
+    caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,
@@ -321,13 +333,9 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
-        preserve_system_instructions=any(
-            params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
-            for params in (forwarded_kwargs, as_str_mapping(forwarded_kwargs.get("extra_body")) or {})
-        ),
+        preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
 
-    caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
     caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
     system_instructions: Final = responses_kwargs.get("instructions")
     if isinstance(system_instructions, str) and isinstance(caller_instructions, str):

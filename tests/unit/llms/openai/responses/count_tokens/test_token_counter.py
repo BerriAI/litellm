@@ -13,11 +13,141 @@ from pydantic import JsonValue, ValidationError
 import litellm
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
+from litellm.llms.anthropic.messages.responses_adapters.handler import _build_responses_kwargs
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+from litellm.proxy.anthropic_endpoints.endpoints import _count_tokens_body_options
+from litellm.proxy.proxy_server import _deployment_with_request_count_settings
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "requested", "preserve"),
+    [
+        ({"store": False}, {}, False),
+        ({"store": False}, {"store": None}, True),
+        ({"extra_body": {"store": False}}, {"extra_body": None}, True),
+        ({"store": False, "previous_response_id": "resp_old"}, {"previous_response_id": None}, False),
+        ({"store": False, "conversation": "conv_old"}, {"conversation": None}, False),
+        ({"store": False, "truncation": "auto"}, {"truncation": None}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {"additional_drop_params": None}, False),
+        ({"store": False, "drop_params": True}, {"drop_params": None}, False),
+    ],
+)
+async def test_count_explicit_null_overrides_match_routed_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: Mapping[str, object],
+    requested: Mapping[str, JsonValue],
+    preserve: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    params: Final = {"model": "openai/responses/gpt-6.2-sol", "api_key": "sk-test", **configured}
+    router: Final = litellm.Router(model_list=[{"model_name": "qa-null", "litellm_params": params}], num_retries=0)
+    messages: Final = [{"role": "user", "content": "hi"}]
+    with respx.mock:
+        generation: Final = respx.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "resp_null_override",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-6.2-sol",
+                    "output": [
+                        {
+                            "id": "msg_null_override",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "QA_OK", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+                },
+            )
+        )
+        await router.aanthropic_messages(
+            model="qa-null", max_tokens=64, system="Be brief.", messages=messages, **requested
+        )
+        generated: Final = json.loads(generation.calls.last.request.content)
+        options: Final = _count_tokens_body_options(requested, False)
+        deployment: Final = _deployment_with_request_count_settings(
+            {"litellm_params": params}, options["request_litellm_params"]
+        )
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 10}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-6.2-sol",
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+            request_model="openai/responses/gpt-6.2-sol",
+            system="Be brief.",
+            messages_format="anthropic",
+        )
+    assert result is not None and result.total_tokens == 10
+    assert generated.get("store") is (None if preserve else False)
+    assert generated.get("instructions") == ("Be brief." if preserve else None)
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "gpt-6.2-sol",
+        "input": generated["input"],
+        **({"instructions": "Be brief."} if preserve else {}),
+    }
+    assert deployment is not None
+    assert deployment["litellm_params"] == {**params, **requested}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "preserve"),
+    [
+        ({}, True),
+        ({"store": True}, True),
+        ({"store": False}, False),
+        ({"store": False, "truncation": "auto"}, True),
+        ({"store": False, "previous_response_id": "resp_prior"}, True),
+        ({"store": False, "conversation": "conv_prior"}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, False),
+        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": True, "extra_body": {"store": False}}, False),
+        ({"store": False, "extra_body": {"truncation": "auto"}}, True),
+    ],
+)
+async def test_anthropic_count_system_placement_matches_generation(
+    monkeypatch: pytest.MonkeyPatch, params: dict[str, object], preserve: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    messages: Final = [{"role": "user", "content": "hi"}]
+    generated: Final = _build_responses_kwargs(
+        max_tokens=64,
+        messages=messages,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **params},
+    )
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 10}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-6.2-sol",
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test", **params}},
+            request_model="openai/gpt-6.2-sol",
+            system="Be brief.",
+            messages_format="anthropic",
+        )
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert result is not None and result.total_tokens == 10
+    assert sent == {
+        "model": "gpt-6.2-sol",
+        "input": generated["input"],
+        **({"instructions": "Be brief."} if preserve else {}),
+    }
+    assert (sent.get("instructions") == "Be brief.") is preserve
+    assert (generated.get("instructions") == "Be brief.") is preserve
 
 
 async def _count(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> TokenCountResponse | None:
