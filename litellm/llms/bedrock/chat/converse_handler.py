@@ -3,6 +3,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
@@ -24,6 +25,8 @@ from litellm.utils import CustomStreamWrapper
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
 from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
 from .invoke_handler import AWSEventStreamDecoder, make_call
+
+_REQUEST_IDENTITY: Final = TypeAdapter(Mapping[str, object])
 
 
 def make_sync_call(
@@ -354,7 +357,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Final[Credentials | None] = (
             None
             if bedrock_bearer_token(api_key) is not None
-            else self.resolve_credentials(auth_params, aws_region_name)
+            else self.resolve_credentials(
+                auth_params, aws_region_name, _REQUEST_IDENTITY.validate_python(litellm_params)
+            )
         )
 
         ### SET RUNTIME ENDPOINT ###
