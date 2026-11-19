@@ -14,4 +14,6 @@ pub enum Error {
     DatabasePool(#[from] litellm_db::Error),
     #[error(transparent)]
     ModelCatalog(#[from] litellm_model_catalog::Error),
+    #[error(transparent)]
+    Secrets(#[from] litellm_secrets::Error),
 }

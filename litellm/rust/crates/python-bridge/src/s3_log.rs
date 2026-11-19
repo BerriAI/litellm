@@ -5,9 +5,11 @@ use litellm_callbacks_python::{RustCallback, payload};
 use litellm_callbacks_s3_log::{
     BatchUploadFailure, Constants, Host, S3Log, S3LogParts, Settings, python_backoff, system_clock,
 };
+use litellm_config::S3CallbackParams;
 use litellm_host_python::{from_py, json_from_py};
 use litellm_http::ClientVariant;
 use pyo3::{
+    exceptions::PyValueError,
     prelude::*,
     types::{PyBool, PyDict, PyInt, PyString},
 };
@@ -119,10 +121,12 @@ impl NativeS3Log {
         cold_storage_is_s3_v2: bool,
         region_from_environment: Option<String>,
     ) -> PyResult<Self> {
-        let resolved = settings_params(params);
+        let written: S3CallbackParams =
+            serde_json::from_value(Value::Object(settings_params(params)))
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let constants: Constants = from_py(constants)?;
         let logger = crate::logger::capture(py);
-        let settings = logger.scope(|| Settings::from_params(&resolved, &constants));
+        let settings = logger.scope(|| Settings::new(&written, &constants));
         let host = Arc::new(PythonHost {
             host: Arc::new(host),
         });

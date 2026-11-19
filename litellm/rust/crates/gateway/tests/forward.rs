@@ -79,8 +79,10 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 inference: litellm_gateway::build_inference(
                     &config,
                     &litellm_gateway::Resources::build(&config).unwrap(),
+                    None,
                 )
                 .unwrap(),
+                callbacks: None,
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
                 entitlements: Arc::new(Entitlements::Community),

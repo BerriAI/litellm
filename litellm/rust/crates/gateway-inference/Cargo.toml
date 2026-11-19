@@ -27,6 +27,9 @@ litellm-llms.workspace = true
 litellm-router.workspace = true
 litellm-secrets.workspace = true
 litellm-llms-types.workspace = true
+litellm-standard-logging.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 serde.workspace = true
 serde_json.workspace = true
 strum.workspace = true
@@ -38,6 +41,7 @@ litellm-cache-memory.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
+parking_lot.workspace = true
 tokio-tungstenite.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
 wiremock.workspace = true

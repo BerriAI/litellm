@@ -36,7 +36,7 @@ impl Sink for LogSink {
 }
 
 fn inference_for(config: &Config) -> Arc<Gateway> {
-    litellm_gateway::build_inference(config, &Resources::build(config).unwrap()).unwrap()
+    litellm_gateway::build_inference(config, &Resources::build(config).unwrap(), None).unwrap()
 }
 
 fn global(router: axum::Router) -> axum::Router {
@@ -56,6 +56,7 @@ fn inference() -> Arc<Gateway> {
 fn without_stores(inference: Arc<Gateway>) -> AppState {
     AppState {
         inference,
+        callbacks: None,
         redis: RedisClients::default(),
         database: None,
         entitlements: Arc::new(Entitlements::Community),

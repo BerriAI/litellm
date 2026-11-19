@@ -6,7 +6,8 @@ use veil::Redact;
 
 use crate::{
     AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, PassThroughEndpoint,
-    RedisSettings, RolePermissions, RouteList, Spelled, Value, value::one_or_many,
+    RedisSettings, RolePermissions, RouteList, S3CallbackParams, Spelled, Value,
+    value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -248,6 +249,7 @@ pub struct LiteLlmSettings {
     #[serde(deserialize_with = "one_or_many")]
     #[redact(fixed = 3)]
     pub failure_callback: Option<Vec<Value>>,
+    pub s3_callback_params: Option<S3CallbackParams>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
     #[serde(flatten)]

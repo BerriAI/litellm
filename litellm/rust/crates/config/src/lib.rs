@@ -6,6 +6,7 @@ mod model;
 mod pass_through;
 mod redis;
 mod routes;
+mod s3;
 mod settings;
 mod value;
 
@@ -24,6 +25,10 @@ pub use model::Model;
 pub use pass_through::{PassThroughEndpoint, PassThroughGuardrail};
 pub use redis::{CacheSettings, RedisSettings};
 pub use routes::RouteList;
+pub use s3::{
+    S3CallbackParams, S3PartitionGranularity, S3Region, Written, WrittenCount, WrittenText,
+    log_prompts_only, partition_granularity,
+};
 pub use settings::{
     ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
     TracingStoreSettings, UserHeaderMapping,

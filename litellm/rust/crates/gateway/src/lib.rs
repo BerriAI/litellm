@@ -1,4 +1,5 @@
 mod admit;
+mod callbacks;
 mod db;
 mod error;
 mod health;
@@ -7,7 +8,10 @@ pub mod middleware;
 mod redis;
 mod resources;
 mod state;
+#[cfg(test)]
+mod test_support;
 pub use admit::{Admit, Refused};
+pub use callbacks::Callbacks;
 pub use error::Error;
 pub use redis::RedisClients;
 pub use resources::Resources;
@@ -20,7 +24,7 @@ use axum::Router;
 use litellm_config::Config;
 use litellm_env::{Lookup, ProcessEnvironment};
 use litellm_gateway_auth::{Auth, BearerOrXApiKey};
-use litellm_gateway_inference::{Gateway, ModelRouter};
+use litellm_gateway_inference::{CallLog, Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution,
     media::PublicDnsResolver,
@@ -49,18 +53,24 @@ pub(crate) fn environment_secrets(
     )
 }
 
-pub fn build_inference(config: &Config, resources: &Resources) -> Result<Arc<Gateway>, Error> {
+pub fn build_inference(
+    config: &Config,
+    resources: &Resources,
+    call_log: Option<Arc<dyn CallLog>>,
+) -> Result<Arc<Gateway>, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let router = ModelRouter::from_config(config, &catalog);
-    Ok(Arc::new(
-        Gateway::new(
-            resources.core.clone(),
-            resources.http.clone(),
-            resources.secrets.clone(),
-            router,
-        )?
-        .with_client_side_credentials(config.general_settings.allow_client_side_credentials),
-    ))
+    let gateway = Gateway::new(
+        resources.core.clone(),
+        resources.http.clone(),
+        resources.secrets.clone(),
+        router,
+    )?
+    .with_client_side_credentials(config.general_settings.allow_client_side_credentials);
+    Ok(Arc::new(match call_log {
+        Some(call_log) => gateway.with_call_log(call_log),
+        None => gateway,
+    }))
 }
 
 pub fn install_crypto_provider() {

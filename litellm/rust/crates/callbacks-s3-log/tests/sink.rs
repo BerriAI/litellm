@@ -142,7 +142,7 @@ fn sink_from(
         .retain(|_, value| !value.is_null());
     let host = Arc::new(Recorder::default());
     let sink = S3Log::new(S3LogParts {
-        settings: Settings::from_params(params.as_object().unwrap(), &constants),
+        settings: Settings::new(&serde_json::from_value(params).unwrap(), &constants),
         client: litellm_http::Client::for_test(),
         download_client: litellm_http::Client::for_test(),
         environment: Arc::new(no_env),

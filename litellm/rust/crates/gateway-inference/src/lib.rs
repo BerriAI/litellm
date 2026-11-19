@@ -8,6 +8,7 @@ mod caching;
 mod chat_completions;
 mod error;
 mod headers;
+mod logging;
 pub mod messages;
 mod ocr;
 mod request;
@@ -29,10 +30,12 @@ use litellm_secrets::source::SecretSource;
 pub use error::{BodyError, Error};
 pub use headers::ExposedHeader;
 pub use litellm_router::{Deployment, Router as ModelRouter};
+pub use logging::CallLog;
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    call_log: Option<Arc<dyn CallLog>>,
     client_side_credentials: bool,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
@@ -49,6 +52,13 @@ impl Gateway {
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
         Self {
             cache: Some(cache),
+            ..self
+        }
+    }
+
+    pub fn with_call_log(self, call_log: Arc<dyn CallLog>) -> Self {
+        Self {
+            call_log: Some(call_log),
             ..self
         }
     }
@@ -70,6 +80,7 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            call_log: None,
             client_side_credentials: false,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
