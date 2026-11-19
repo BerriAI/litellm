@@ -1125,7 +1125,8 @@ def _run_on_autojump_clock(scenario: Callable[[AutojumpClockLoop], Awaitable[Non
         leftover: Final = asyncio.all_tasks(loop)
         for task in leftover:
             task.cancel()
-        loop.run_until_complete(asyncio.gather(*leftover, return_exceptions=True))
+        if leftover:
+            loop.run_until_complete(asyncio.gather(*leftover, return_exceptions=True))
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
 
