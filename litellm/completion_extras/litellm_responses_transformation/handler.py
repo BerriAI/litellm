@@ -14,6 +14,7 @@ from typing import (
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
 from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -192,7 +193,7 @@ class ResponsesToCompletionBridgeHandler:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
-        request_data: Final = self.transformation_handler.transform_request(
+        transformed_request: Final = self.transformation_handler.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -201,11 +202,13 @@ class ResponsesToCompletionBridgeHandler:
             litellm_logging_obj=logging_obj,
             client=kwargs.get("client"),
         )
+        request_data: Final = dict(
+            without_stored_instructions({**transformed_request, "custom_llm_provider": custom_llm_provider})
+        )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
         # `sanitized_litellm_params` already carries both, so passing them again
         # would raise a duplicate-keyword TypeError.
-        request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
@@ -307,7 +310,7 @@ class ResponsesToCompletionBridgeHandler:
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
         try:
-            request_data: Final = self.transformation_handler.transform_request(
+            transformed_request: Final = self.transformation_handler.transform_request(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
@@ -317,11 +320,13 @@ class ResponsesToCompletionBridgeHandler:
             )
         except Exception as e:
             raise e
+        request_data: Final = dict(
+            await awithout_stored_instructions({**transformed_request, "custom_llm_provider": custom_llm_provider})
+        )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
         # `sanitized_litellm_params` already carries both, so passing them again
         # would raise a duplicate-keyword TypeError.
-        request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]

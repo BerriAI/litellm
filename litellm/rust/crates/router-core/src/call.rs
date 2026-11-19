@@ -1290,6 +1290,9 @@ impl<H: RouterHost> Call<'_, H> {
                         proxy_admin: request.proxy_admin,
                         allowed_models: &request.allowed_models,
                         wildcard_request: candidates.wildcard_request.as_deref(),
+                        refuse_cross_group_litellm_model: snapshot
+                            .settings
+                            .enable_cross_model_group_collision_check,
                         ..crate::resolve::Caller::default()
                     },
                     None,

@@ -292,6 +292,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "fallback_rate_limit_check",
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
+    "enable_cross_model_group_collision_check",
 )
 
 

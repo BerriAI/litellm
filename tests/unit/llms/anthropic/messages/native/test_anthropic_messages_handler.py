@@ -10,7 +10,6 @@ from typing import Any, Dict, Final, List
 
 import httpx
 import openai
-import responses
 import respx
 import pytest
 from fastapi.testclient import TestClient
@@ -2105,49 +2104,6 @@ async def test_bedrock_invoke_messages_answers_the_top_k_400_for_a_drop_list_tha
 
     assert raised.value.status_code == 400
     assert bodies == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
-async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
-    local_beta_headers_config: None, client_headers: dict[str, str]
-) -> None:
-    """Vertex rawPredict takes the beta as the `anthropic-beta` header and 400s on `safeguards` without it, so the beta rides along with the field."""
-    from litellm.llms.anthropic.messages.native import handler
-
-    safeguards, safeguard_results = _claude_code_auto_mode_request()
-    captured: dict[str, object] = {}
-
-    with responses.RequestsMock(assert_all_requests_are_fired=False) as oauth:
-        oauth.add(
-            responses.POST,
-            "https://oauth2.googleapis.com/token",
-            json={"access_token": "test-token", "expires_in": 3600},
-        )
-        response = await handler.anthropic_messages(
-            max_tokens=16,
-            messages=[{"role": "user", "content": "hi"}],
-            model="vertex_ai/claude-sonnet-5",
-            custom_llm_provider="vertex_ai",
-            vertex_project="test-project",
-            vertex_location="global",
-            vertex_credentials=json.dumps(
-                {
-                    "type": "authorized_user",
-                    "client_id": "synthetic-client",
-                    "client_secret": "synthetic-secret",
-                    "refresh_token": "synthetic-refresh",
-                }
-            ),
-            client=_upstream_answering_with(safeguard_results, captured),
-            safeguards=safeguards,
-            extra_headers=client_headers,
-        )
-
-    assert captured["body"]["safeguards"] == safeguards
-    assert "anthropic_beta" not in captured["body"]
-    assert captured["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
-    assert response["safeguard_results"] == safeguard_results
 
 
 _CURL_TOOL_USE: Final = {

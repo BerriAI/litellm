@@ -15,7 +15,7 @@ use litellm_host_python::{
 };
 use litellm_inference_messages::{
     DecodingError, Error, MessagesCall, MessagesSettings, MessagesShaping, UnencodableHeader,
-    litellm_params, messages_body,
+    UnsendableUrl, VertexShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
@@ -70,10 +70,32 @@ fn is_filtered_beta_header(
         && value.call_method1("encode", ("utf-8",)).is_ok()
 }
 
+const VERTEX_LABELS_HEADER: &str = "X-Vertex-AI-Labels";
+
+/// The caller headers the provider settles before Python's client encodes them, so a value it
+/// cannot encode never reaches the ASCII check.
+#[derive(Clone, Copy, Debug, Default)]
+struct SettledHeaders {
+    /// The provider filters `anthropic-beta`.
+    filters_beta: bool,
+    /// `vertex_ai` with `vertex_request_label_fields` set: the proxy replaces every caller
+    /// `X-Vertex-AI-Labels`, and one Python cannot decode adds no labels.
+    replaces_labels: bool,
+}
+
+impl SettledHeaders {
+    fn replaces(self, name: &Bound<'_, PyAny>) -> bool {
+        self.replaces_labels
+            && name
+                .extract::<String>()
+                .is_ok_and(|name| name.eq_ignore_ascii_case(VERTEX_LABELS_HEADER))
+    }
+}
+
 fn ascii_headers<'py>(
     headers: &Bound<'py, PyAny>,
     unencodable: &mut Option<Vec<u8>>,
-    filters_beta: bool,
+    settled: SettledHeaders,
 ) -> PyResult<Bound<'py, PyAny>> {
     let Ok(headers) = headers.cast::<PyDict>() else {
         return Ok(headers.clone());
@@ -82,11 +104,19 @@ fn ascii_headers<'py>(
     let kept = PyDict::new(py);
     for (name, value) in headers.iter() {
         if value.is_instance_of::<PyString>()
-            && !is_filtered_beta_header(&name, &value, filters_beta)
+            && !is_filtered_beta_header(&name, &value, settled.filters_beta)
             && let Err(error) = value.call_method1("encode", ("ascii",))
         {
             if !error.is_instance_of::<PyUnicodeEncodeError>(py) {
                 return Err(error);
+            }
+            if settled.replaces(&name) {
+                // Kept while it is text, so it still stands as the caller's labels header the
+                // replacement reads, and refuses, first; a value that is not text just goes.
+                if value.call_method1("encode", ("utf-8",)).is_ok() {
+                    kept.set_item(name, value)?;
+                }
+                continue;
             }
             if unencodable.is_none() {
                 let sent = value.call_method1("encode", ("utf-8", "surrogatepass"))?;
@@ -104,7 +134,7 @@ const PROVIDER_SPECIFIC_HEADERS_MODULE: &str =
 
 fn ascii_scoped_headers<'py>(
     value: &Bound<'py, PyAny>,
-    filters_beta: bool,
+    settled: SettledHeaders,
 ) -> PyResult<Bound<'py, PyAny>> {
     let ascii_entry = |entry: Bound<'py, PyAny>| -> PyResult<Bound<'py, PyAny>> {
         let Ok(entry) = entry.cast::<PyDict>() else {
@@ -116,7 +146,7 @@ fn ascii_scoped_headers<'py>(
         let kept = entry.copy()?;
         kept.set_item(
             "extra_headers",
-            ascii_headers(&headers, &mut None, filters_beta)?,
+            ascii_headers(&headers, &mut None, settled)?,
         )?;
         Ok(kept.into_any())
     };
@@ -186,6 +216,10 @@ const BEDROCK_METADATA_PARAMS: [&str; 2] = ["metadata", "litellm_metadata"];
 const BEDROCK_SPEND_LOGS_METADATA: &str = "spend_logs_metadata";
 const BEDROCK_REQUEST_METADATA_FIELDS: &str = "bedrock_request_metadata_fields";
 
+const VERTEX_AI_PROVIDER: &str = "vertex_ai";
+const VERTEX_REQUEST_LABEL_FIELDS: &str = "vertex_request_label_fields";
+const VERTEX_LABELS_METADATA: &str = "litellm_metadata";
+
 fn text_pairs(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
     let Ok(mapping) = value.cast::<PyMapping>() else {
         return Ok(Map::new());
@@ -231,6 +265,56 @@ fn bedrock_litellm_params<'py>(
         );
     }
     Ok(extra)
+}
+
+/// Python's `vertex_request_label_fields()`: a non-empty string names one field, a list or tuple
+/// its string members. With fields set, the call's `litellm_metadata` goes along as the labels'
+/// source.
+fn vertex_litellm_params<'py>(
+    py: Python<'py>,
+    argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<Map<String, Value>> {
+    let fields = vertex_label_fields(py)?;
+    if fields.is_empty() {
+        return Ok(Map::new());
+    }
+    let metadata = argument(VERTEX_LABELS_METADATA)?
+        .map(|value| text_pairs(&value))
+        .transpose()?;
+    Ok([(
+        VERTEX_REQUEST_LABEL_FIELDS.to_string(),
+        Value::Array(fields),
+    )]
+    .into_iter()
+    .chain(metadata.map(|pairs| (VERTEX_LABELS_METADATA.to_string(), Value::Object(pairs))))
+    .collect())
+}
+
+fn vertex_label_fields(py: Python<'_>) -> PyResult<Vec<Value>> {
+    Ok(match module_global(py, VERTEX_REQUEST_LABEL_FIELDS)? {
+        Some(configured) if configured.is_instance_of::<PyString>() => {
+            let field = configured.cast::<PyString>()?.to_str()?.to_string();
+            (!field.is_empty())
+                .then_some(Value::String(field))
+                .into_iter()
+                .collect()
+        }
+        Some(configured)
+            if configured.is_instance_of::<PyList>() || configured.is_instance_of::<PyTuple>() =>
+        {
+            configured
+                .try_iter()?
+                .filter_map(|field| match field {
+                    Ok(field) => field
+                        .cast::<PyString>()
+                        .ok()
+                        .map(|text| Ok(Value::String(text.to_str()?.to_string()))),
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<PyResult<_>>()?
+        }
+        _ => Vec::new(),
+    })
 }
 
 fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
@@ -688,15 +772,20 @@ impl MessagesPythonHost {
             .call1((&model, custom_llm_provider.as_deref(), api_base.as_deref()))?
             .extract()?;
         install_loaded_beta_headers_config(py)?;
+        let settled_headers = SettledHeaders {
+            filters_beta,
+            replaces_labels: custom_llm_provider.as_deref() == Some(VERTEX_AI_PROVIDER)
+                && !vertex_label_fields(py)?.is_empty(),
+        };
         let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),
-            None => self.merged_headers(py, arguments, filters_beta)?,
+            None => self.merged_headers(py, arguments, settled_headers)?,
         };
         let provider_specific_header = self.provider_specific_header(
             py,
             arguments,
             custom_llm_provider.as_deref(),
-            filters_beta,
+            settled_headers,
             &mut unencodable_request_header,
         )?;
         let azure = match custom_llm_provider.as_deref() {
@@ -727,8 +816,15 @@ impl MessagesPythonHost {
             }
             None => self.capabilities(py, &model, custom_llm_provider.as_deref())?,
         };
+        let vertex = match custom_llm_provider.as_deref() {
+            Some(VERTEX_AI_PROVIDER) => VertexShaping {
+                supported_regions: super::model_catalog::vertex_supported_regions(py, &model)?,
+            },
+            _ => VertexShaping::default(),
+        };
         let shaping = MessagesShaping {
             capabilities,
+            vertex,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
                 presanitized,
@@ -753,6 +849,9 @@ impl MessagesPythonHost {
                 azure_settled_params(azure, argument(CALLER_TOKEN_PROVIDER_PARAM)?)?
             }
             (None, true) => bedrock_litellm_params(py, argument)?,
+            (None, false) if custom_llm_provider.as_deref() == Some(VERTEX_AI_PROVIDER) => {
+                vertex_litellm_params(py, argument)?
+            }
             (None, false) => Map::new(),
         };
         let litellm_params = project_litellm_params(provider_fields, settled, argument, |name| {
@@ -777,13 +876,13 @@ impl MessagesPythonHost {
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-        filters_beta: bool,
+        settled: SettledHeaders,
     ) -> PyResult<MergedHeaders> {
         let mut unencodable = None;
         let mut mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
             self.view
                 .argument(py, arguments, name)?
-                .map(|value| from_py(&ascii_headers(&value, &mut unencodable, filters_beta)?))
+                .map(|value| from_py(&ascii_headers(&value, &mut unencodable, settled)?))
                 .transpose()
         };
         let headers = mapping("headers")?;
@@ -796,7 +895,7 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         provider: Option<&str>,
-        filters_beta: bool,
+        settled: SettledHeaders,
         unencodable: &mut Option<Vec<u8>>,
     ) -> PyResult<Option<ProviderSpecificHeaders>> {
         let Some(value) = self
@@ -812,9 +911,9 @@ impl MessagesPythonHost {
                 .getattr("ProviderSpecificHeaderUtils")?
                 .call_method1("get_provider_specific_headers", (&value, provider, true))
         {
-            ascii_headers(&scoped, unencodable, filters_beta)?;
+            ascii_headers(&scoped, unencodable, settled)?;
         }
-        from_py(&ascii_scoped_headers(&value, filters_beta)?).map(Some)
+        from_py(&ascii_scoped_headers(&value, settled)?).map(Some)
     }
 
     fn capabilities(
@@ -955,6 +1054,13 @@ impl MessagesPythonHost {
                 .import(ROUTE_HOST_MODULE)?
                 .getattr("unencodable_header")?
                 .call1((PyBytes::new(py, value), received))?;
+            return self.map_transport_failure(py, PyErr::from_value(raised));
+        }
+        if let Some(UnsendableUrl(message)) = litellm_error::find::<UnsendableUrl>(&error) {
+            let raised = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("unsendable_url")?
+                .call1((message.as_str(),))?;
             return self.map_transport_failure(py, PyErr::from_value(raised));
         }
         if let Some(undecodable) = litellm_error::find::<DecodingError>(&error) {
@@ -1345,40 +1451,67 @@ mod tests {
         );
     }
 
+    const BETA_FILTERED: SettledHeaders = SettledHeaders {
+        filters_beta: true,
+        replaces_labels: false,
+    };
+    const LABELS_REPLACED: SettledHeaders = SettledHeaders {
+        filters_beta: true,
+        replaces_labels: true,
+    };
+
     #[rstest]
     #[case::a_beta_is_left_to_the_provider_filter(
         c"{'anthropic-beta': 'ZWJ\\u200djoined'}",
-        true,
+        BETA_FILTERED,
         json!({"anthropic-beta": "ZWJ\u{200d}joined"}),
         None
     )]
     #[case::in_any_spelling(
         c"{'Anthropic-Beta': 'ZWJ\\u200djoined'}",
-        true,
+        BETA_FILTERED,
         json!({"Anthropic-Beta": "ZWJ\u{200d}joined"}),
         None
     )]
     #[case::a_beta_held_back_where_the_provider_does_not_filter_it(
         c"{'anthropic-beta': 'ZWJ\\u200djoined', 'x-note': 'caf\\xe9', 'x-kept': 'b'}",
-        false,
+        SettledHeaders::default(),
         json!({"x-kept": "b"}),
         Some("ZWJ\u{200d}joined".as_bytes().to_vec())
     )]
     #[case::a_beta_python_cannot_hand_over_as_text(
         c"{'anthropic-beta': 'a\\ud800', 'x-kept': 'b'}",
-        true,
+        BETA_FILTERED,
         json!({"x-kept": "b"}),
         Some(b"a\xed\xa0\x80".to_vec())
     )]
     #[case::any_other_header(
         c"{'x-note': 'ZWJ\\u200d', 'x-kept': 'b'}",
-        true,
+        BETA_FILTERED,
         json!({"x-kept": "b"}),
         Some("ZWJ\u{200d}".as_bytes().to_vec())
     )]
-    fn a_header_python_cannot_encode_is_held_back_unless_the_provider_filters_it(
+    #[case::vertex_labels_the_proxy_replaces(
+        c"{'X-Vertex-AI-Labels': 'ZWJ\\u200djoined', 'x-kept': 'b'}",
+        LABELS_REPLACED,
+        json!({"X-Vertex-AI-Labels": "ZWJ\u{200d}joined", "x-kept": "b"}),
+        None
+    )]
+    #[case::in_any_spelling_and_gone_when_not_text(
+        c"{'x-vertex-ai-labels': 'a\\ud800', 'x-kept': 'b'}",
+        LABELS_REPLACED,
+        json!({"x-kept": "b"}),
+        None
+    )]
+    #[case::vertex_labels_the_caller_still_owns(
+        c"{'X-Vertex-AI-Labels': 'ZWJ\\u200djoined', 'x-kept': 'b'}",
+        BETA_FILTERED,
+        json!({"x-kept": "b"}),
+        Some("ZWJ\u{200d}joined".as_bytes().to_vec())
+    )]
+    fn a_header_python_cannot_encode_is_held_back_unless_the_provider_settles_it(
         #[case] headers: &std::ffi::CStr,
-        #[case] filters_beta: bool,
+        #[case] settled: SettledHeaders,
         #[case] kept: Value,
         #[case] unencodable: Option<Vec<u8>>,
     ) {
@@ -1387,7 +1520,7 @@ mod tests {
             let headers = py.eval(headers, None, None).unwrap();
             let mut held_back = None;
             let sent: Value =
-                from_py(&ascii_headers(&headers, &mut held_back, filters_beta).unwrap()).unwrap();
+                from_py(&ascii_headers(&headers, &mut held_back, settled).unwrap()).unwrap();
             assert_eq!((sent, held_back), (kept, unencodable));
         });
     }
