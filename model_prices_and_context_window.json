@@ -3,7 +3,7 @@
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
@@ -44,7 +44,7 @@
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
@@ -3879,7 +3879,7 @@
     "azure/codex-mini": {
         "cache_read_input_token_cost": 3.75e-07,
         "successor_model": "azure/gpt-5.1-codex-mini",
-        "deprecation_date": "2026-11-15",
+        "deprecation_date": "2026-11-17",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "azure",
@@ -4764,8 +4764,8 @@
     },
     "azure_ai/codex-mini": {
         "cache_read_input_token_cost": 3.75e-07,
-        "deprecation_date": "2026-11-15",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2026-11-17",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 200000,
@@ -6939,7 +6939,7 @@
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_image_token_cost": 5e-07,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
@@ -6980,7 +6980,7 @@
         "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_image_token_cost": 8e-08,
         "cache_read_input_token_cost": 6e-08,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
@@ -7159,7 +7159,7 @@
     },
     "azure/gpt-4o-transcribe": {
         "successor_model": "azure/gpt-live-transcribe",
-        "deprecation_date": "2026-10-15",
+        "deprecation_date": "2027-02-26",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_audio_token": 6e-06,
         "input_cost_per_token": 2.5e-06,
@@ -7190,7 +7190,8 @@
         ]
     },
     "azure/gpt-realtime-whisper": {
-        "deprecation_date": "2027-05-06",
+        "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_second": 0.0002833333333333333,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
@@ -11446,7 +11447,7 @@
     "azure/gpt-image-1": {
         "cache_read_input_image_token_cost": 2.5e-06,
         "cache_read_input_token_cost": 1.25e-06,
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-image-1.5",
         "input_cost_per_image_token": 1e-05,
@@ -11482,7 +11483,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/high/1024-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 1.59263611e-07,
         "litellm_provider": "azure",
@@ -11493,7 +11494,7 @@
         ]
     },
     "azure/high/1024-x-1536/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "azure",
@@ -11504,7 +11505,7 @@
         ]
     },
     "azure/high/1536-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 1.58945719e-07,
         "litellm_provider": "azure",
@@ -11515,7 +11516,7 @@
         ]
     },
     "azure/low/1024-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 1.0490417e-08,
         "litellm_provider": "azure",
@@ -11526,7 +11527,7 @@
         ]
     },
     "azure/low/1024-x-1536/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "azure",
@@ -11537,7 +11538,7 @@
         ]
     },
     "azure/low/1536-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 1.0172526e-08,
         "litellm_provider": "azure",
@@ -11548,7 +11549,7 @@
         ]
     },
     "azure/medium/1024-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
@@ -11559,7 +11560,7 @@
         ]
     },
     "azure/medium/1024-x-1536/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
@@ -11570,7 +11571,7 @@
         ]
     },
     "azure/medium/1536-x-1024/gpt-image-1": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-10-28",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
@@ -75531,7 +75532,7 @@
     },
     "azure/eu/codex-mini": {
         "successor_model": "azure/eu/gpt-5.1-codex-mini",
-        "deprecation_date": "2026-11-15",
+        "deprecation_date": "2026-11-17",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 4.13e-07,
         "input_cost_per_token": 1.65e-06,
@@ -76164,7 +76165,7 @@
     },
     "azure/us/codex-mini": {
         "successor_model": "azure/us/gpt-5.1-codex-mini",
-        "deprecation_date": "2026-11-15",
+        "deprecation_date": "2026-11-17",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 4.13e-07,
         "input_cost_per_token": 1.65e-06,
@@ -76567,6 +76568,7 @@
     },
     "azure/gpt-live-1": {
         "deprecation_date": "2027-09-10",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_second": 0.000833333333333,
         "litellm_provider": "azure",
         "mode": "realtime",
@@ -76585,6 +76587,7 @@
     },
     "azure/gpt-live-transcribe": {
         "deprecation_date": "2028-02-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_second": 0.000283333333333,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
@@ -76610,6 +76613,7 @@
     },
     "azure/gpt-transcribe": {
         "deprecation_date": "2028-02-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_second": 7.5e-05,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
@@ -76636,6 +76640,7 @@
     },
     "azure/gpt-realtime-translate": {
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_second": 0.000566666666667,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
@@ -91088,7 +91093,7 @@
         "cache_read_input_audio_token_cost": 4.4e-07,
         "cache_read_input_image_token_cost": 5.5e-07,
         "cache_read_input_token_cost": 4.4e-07,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_audio_token": 3.52e-05,
         "input_cost_per_image_token": 5.5e-06,
@@ -91128,7 +91133,7 @@
         "cache_read_input_audio_token_cost": 3.3e-07,
         "cache_read_input_image_token_cost": 8.8e-08,
         "cache_read_input_token_cost": 6.6e-08,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_audio_token": 1.1e-05,
         "input_cost_per_image_token": 8.8e-07,
