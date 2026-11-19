@@ -23,6 +23,7 @@ queries next to ported ones. These invariants hold until Prisma is gone:
 import os
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -32,6 +33,9 @@ RUST_RESERVED_CONNECTIONS: Final = 2
 MIN_CONNECTION_LIMIT: Final = 2
 RUST_WRITER_CONNECTIONS_ENV_VAR: Final = "LITELLM_RUST_WRITER_DATABASE_CONNECTIONS"
 RUST_READER_CONNECTIONS_ENV_VAR: Final = "LITELLM_RUST_READER_DATABASE_CONNECTIONS"
+configure_pool_budget_from_settings: Final[ContextVar[bool]] = ContextVar(
+    "configure_pool_budget_from_settings", default=False
+)
 
 
 class UnsplittableConnectionLimit(ValueError):

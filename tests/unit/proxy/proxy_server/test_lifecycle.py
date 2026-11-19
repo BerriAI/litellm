@@ -947,12 +947,14 @@ async def test_proxy_startup_event_is_async_context_manager_with_expected_signat
     sig = inspect.signature(proxy_startup_event)
     wrapped = getattr(proxy_startup_event, "__wrapped__", None)
     observed = {
-        "accepts_app_only": sig.bind(object()).arguments.keys() == {"app"},
+        "param_count": len(sig.parameters),
+        "has_app_param": "app" in sig.parameters,
         "wrapped_is_async": inspect.iscoroutinefunction(wrapped) or inspect.isasyncgenfunction(wrapped),
         "has_asynccontextmanager_wrapper": wrapped is not None,
     }
     assert normalize(observed) == {
-        "accepts_app_only": True,
+        "param_count": 1,
+        "has_app_param": True,
         "wrapped_is_async": True,
         "has_asynccontextmanager_wrapper": True,
     }

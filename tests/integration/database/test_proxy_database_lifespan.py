@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Final, Literal, TypeAlias, cast
 
+import httpx
 import psutil
 import pytest
 
@@ -71,15 +72,16 @@ async def _assert_one_prisma_session(db: SupportsRawQueries) -> None:
 
 async def _assert_gateway_pool_is_capped(database_url: str) -> None:
     from gateway.main import app
-    from litellm.repositories.database import Database
+    from litellm.proxy import proxy_server
 
-    async with app.router.lifespan_context(app) as state:
-        assert state is not None
-        database: Final[object] = state["database"]
-        assert isinstance(database, Database)
-        assert database.native is not None
-        for db in (database.prisma.writer_db, database.prisma.read_db):
+    async with app.router.lifespan_context(app):
+        prisma_client: Final = proxy_server.prisma_client
+        assert prisma_client is not None
+        for db in (prisma_client.writer_db, prisma_client.read_db):
             await _assert_one_prisma_session(cast(SupportsRawQueries, db))  # cast-ok: PrismaWrapper forwards query_raw
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response: Final = await client.post("/v1/vector_stores/example/search", json={"query": "example"})
+            assert response.status_code == 401, response.text
     await _assert_lifespan_closed(database_url)
 
 
@@ -151,6 +153,7 @@ def test_proxy_lifespan_releases_database_resources(tmp_path: Path, mode: Mode, 
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
             "LITELLM_TELEMETRY_ENABLED": "false",
             "PRISMA_HEALTH_WATCHDOG_ENABLED": "true",
+            **({"LITELLM_DISABLE_LAZY_ROUTES": "true"} if mode == "gateway" else {}),
             "PYTHONPATH": os.pathsep.join((str(ROOT), str(ROOT / "litellm/enterprise"), str(ROOT / "litellm/runtime"))),
             **({"DATABASE_URL_READ_REPLICA": database_url} if replica else {}),
         }
