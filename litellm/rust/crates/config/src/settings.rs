@@ -1,4 +1,4 @@
-use litellm_python_compat::lenient::{IsTrue, StrBool, Truthy};
+use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -222,6 +222,7 @@ pub struct RouterSettings {
 }
 
 /// Callback entries can carry credentials inline, so only whether they are set is printed.
+#[serde_as]
 #[derive(Clone, Default, Deserialize, Redact)]
 #[serde(default)]
 pub struct LiteLlmSettings {
@@ -234,7 +235,25 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
-    pub drop_params: Option<Spelled<bool>>,
+    #[serde_as(as = "LaxBool")]
+    pub drop_params: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub modify_params: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub enable_anthropic_prompt_caching: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub reasoning_auto_summary: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub use_chat_completions_url_for_anthropic_messages: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub route_all_chat_openai_to_responses: Option<bool>,
+    #[serde_as(as = "LaxBool")]
+    pub gemini_live_defer_setup: Option<bool>,
+    pub anthropic_prompt_caching_ttl: Option<String>,
+    pub model_cost_map_url: Option<SecretValue>,
+    pub blog_posts_url: Option<SecretValue>,
+    pub anthropic_beta_headers_url: Option<SecretValue>,
+    pub autorouter_presets_url: Option<SecretValue>,
     pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
@@ -258,7 +277,7 @@ pub struct LiteLlmSettings {
 mod tests {
     use rstest::rstest;
 
-    use super::GeneralSettings;
+    use super::{GeneralSettings, LiteLlmSettings};
     use crate::JwtAuthSettings;
 
     #[test]
@@ -271,6 +290,19 @@ mod tests {
 
         assert!(!debug.contains("credential-value"), "{debug}");
         assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[rstest]
+    #[case::a_word_for_on(serde_json::json!("on"), Some(true))]
+    #[case::a_word_that_is_no_flag(serde_json::json!("banana"), None)]
+    fn a_flag_key_written_as_text_is_read_by_the_one_flag_rule(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<bool>,
+    ) {
+        let settings: LiteLlmSettings =
+            serde_json::from_value(serde_json::json!({"modify_params": written})).unwrap();
+
+        assert_eq!(settings.modify_params, expected);
     }
 
     #[test]
