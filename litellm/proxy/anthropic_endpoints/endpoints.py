@@ -244,16 +244,17 @@ async def anthropic_response(
         return JSONResponse(status_code=e.status_code, content=body)
     except Exception as raised:
         answered: Final = with_answered_status(raised)
-        await proxy_logging_obj.post_call_failure_hook(
+        transformed: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=answered,
             request_data=base_llm_response_processor.data,
         )
+        failure: Final = transformed if transformed is not None else answered
         log_llm_api_exception(answered, base_llm_response_processor.litellm_call_id)
 
-        if isinstance(answered, ProxyException):
+        if isinstance(failure, ProxyException):
             return _anthropic_error_json_response(
-                with_litellm_call_id(answered, base_llm_response_processor.litellm_call_id), request
+                with_litellm_call_id(failure, base_llm_response_processor.litellm_call_id), request
             )
 
         # Extract model_id from request metadata (same as success path)
@@ -278,8 +279,8 @@ async def anthropic_response(
             litellm_logging_obj=None,
         )
 
-        if isinstance(answered, HTTPException):
-            return _anthropic_error_json_response(proxy_exception_from_http_exception(answered, headers), request)
+        if isinstance(failure, HTTPException):
+            return _anthropic_error_json_response(proxy_exception_from_http_exception(failure, headers), request)
 
         error_msg: Final = f"{answered}"
         return _anthropic_error_json_response(
