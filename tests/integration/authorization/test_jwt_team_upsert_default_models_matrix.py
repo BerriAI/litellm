@@ -350,16 +350,20 @@ def test_a_team_upserted_from_an_unusual_team_claim_is_still_limited_to_the_defa
         if isinstance(claim, list)
         else f"{claim}{suffix}"
         if isinstance(claim, str) and claim
+        else uuid.uuid4().int >> 76
+        if isinstance(claim, int)
         else claim
     )
     named: Final = str(unique[0] if isinstance(unique, list) else unique)
     matrix.scenario.cleanups.callback(delete_team_if_present, matrix.scenario, named)
     marker: Final = _marker()
+    existing: Final = team_models(named)
 
     answer: Final = _chat_raw(matrix, matrix.token(unique), matrix.unapproved, marker)
     control: Final = _chat_raw(matrix, matrix.token(matrix.new_team()), matrix.approved, _marker())
 
     assert control[0] == 200, control
+    assert existing == [], named
     assert (answer[0], team_models(named)) == (expected_status, [[matrix.approved]] if team_created else []), answer
     assert marker not in matrix.provider_markers()
 
