@@ -468,6 +468,7 @@ jobs:
               tests/test_litellm_rust/responses/test_dispatch.py
               tests/unit/compression
               tests/unit/harness
+              tests/unit/lens
               tests/unit/rust_bridge
               tests/unit/sandbox
               --ignore=tests/unit/rust_bridge/native_route_wheel_test.py

@@ -153,4 +153,6 @@ coverage-rust.xml
 
 # make lens-dev worker token, generated config and logs
 .lens-dev/
+.lens/
+lens-demo/
 .mypy_cache/

@@ -115,6 +115,7 @@ proxy = [
 # cryptography with it.
 cli = [
     "rich>=13.9.4,<14.0",
+    "prompt-toolkit>=3.0.43,<4.0",
     "pyyaml>=6.0.3,<7.0",
     "requests>=2.32.0,<3.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -211,10 +212,13 @@ proxy-runtime = [
 [project.scripts]
 litellm = "litellm_cli.main:proxy_server"
 lite = "litellm_cli.main:cli"
+lens = "litellm.lens.cli:main"
 litellm-proxy = "litellm_cli.main:litellm_proxy_cli"
 
 [dependency-groups]
 dev = [
+    "rich==13.9.4",
+    "prompt-toolkit==3.0.52",
     "numpy>=1.26.0,<3.0",
     "diff-cover==9.7.2",
     "hypothesis==6.165.10",
