@@ -148,6 +148,9 @@ class BaseAnthropicMessagesConfig(ABC):
     def supports_message_threads(self) -> bool:
         return False
 
+    def supports_diagnostics(self) -> bool:
+        return True
+
     def serves_api_base(self, model: str, api_base: str | None) -> bool:
         return True
 
