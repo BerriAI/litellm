@@ -10,30 +10,133 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
+import gc
 import json
+import logging
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi import Depends, FastAPI, HTTPException, Request
+import respx
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.testclient import WebSocketDenialResponse
 from starlette.types import Message
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from litellm.proxy._types import ProxyException
+from litellm import Router
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.proxy_server import (
+    ProxyConfig,
     _close_dangling_otel_server_span,
+    aws_error_type_exception_handler,
     openai_exception_handler,
     otel_request_validation_exception_handler,
     otel_unhandled_exception_handler,
     otlp_http_exception_handler,
 )
+from litellm.proxy.utils import ProxyLogging
 
 from .conftest import normalize
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("error_envelope", ("proxy", "http", "aws"))
+@pytest.mark.parametrize("num_retries", (0, None), ids=("retries-zero", "default-retries"))
+async def test_failed_endpoint_releases_request_body_without_cyclic_gc(
+    error_envelope: str,
+    num_retries: int | None,
+    caplog: pytest.LogCaptureFixture,
+    failure_fields_executor: ThreadPoolExecutor,
+) -> None:
+    caplog.set_level(logging.CRITICAL, logger="LiteLLM Proxy")
+    caplog.set_level(logging.CRITICAL, logger="LiteLLM")
+
+    class Body(str):
+        def __repr__(self) -> str:
+            return f"<Body length={len(self)}>"
+
+    references: Final[asyncio.Queue[weakref.ReferenceType[Body]]] = asyncio.Queue()
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "judge",
+                "litellm_params": {
+                    "model": "openai/judge",
+                    "api_base": "https://failure.example/v1",
+                    "api_key": "fake",
+                },
+            }
+        ],
+        **({} if num_retries is None else {"num_retries": num_retries}),
+        retry_after=0,
+    )
+    app: Final = FastAPI(
+        exception_handlers={
+            ProxyException: openai_exception_handler,
+            StarletteHTTPException: otlp_http_exception_handler,
+            AwsErrorTypeProxyException: aws_error_type_exception_handler,
+        }
+    )
+
+    @app.post("/v1/chat/completions")
+    async def endpoint(request: Request) -> None:
+        body: Final = Body((await request.body()).decode())
+        await references.put(weakref.ref(body))
+        processor: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "judge", "messages": [{"role": "user", "content": body}]}
+        )
+        try:
+            await processor.base_process_llm_request(
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                route_type="acompletion",
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+                general_settings={},
+                proxy_config=ProxyConfig(),
+                llm_router=router,
+            )
+        except Exception as error:
+            try:
+                await processor.handle_llm_api_exception(
+                    e=error,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+                )
+            except ProxyException as proxy_error:
+                if error_envelope == "http":
+                    raise HTTPException(status_code=500, detail=proxy_error.message) from proxy_error
+                if error_envelope == "aws":
+                    raise AwsErrorTypeProxyException(proxy_error, "InternalServerException") from proxy_error
+                raise
+
+    gc.disable()
+    try:
+        with respx.mock as upstream:
+            upstream.post("https://failure.example/v1/chat/completions").respond(
+                500, json={"error": {"message": "server failed", "type": "server_error"}}
+            )
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as client:
+                response: Final = await asyncio.create_task(client.post("/v1/chat/completions", content=b"x" * 1024**2))
+            reference: Final = await references.get()
+        failure_fields_executor.shutdown(wait=True)
+        assert response.status_code == 500, response.text
+        assert "server failed" in response.text
+        assert reference() is None
+    finally:
+        gc.enable()
+        router.reset()
 
 
 def _make_request(parent_otel_span=None, path="/chat/completions", headers=()):

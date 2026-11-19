@@ -25,6 +25,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.router import Router
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 
@@ -101,7 +102,7 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         messages=MESSAGES,
         model="openai/gpt-6.2-sol",
         system="Be brief.",
-        extra_kwargs={"custom_llm_provider": "openai", **forwarded, **request_params},
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
     )
     instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
     assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
@@ -113,6 +114,108 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         ),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params,wire_controls,preserve_instructions",
+    [
+        ({}, {}, True),
+        ({"store": False, "drop_params": True}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, False),
+        ({"extra_body": {"store": None}}, {"store": None}, True),
+        (
+            {"store": False, "extra_body": {"conversation": "conv_prior"}},
+            {"store": False, "conversation": "conv_prior"},
+            True,
+        ),
+        ({"store": True}, {"store": True}, True),
+        ({"store": False}, {"store": False}, False),
+        ({"extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "conversation": "conv_prior"}, {"store": False}, True),
+        (
+            {"store": False, "previous_response_id": "resp_prior"},
+            {"store": False, "previous_response_id": "resp_prior"},
+            True,
+        ),
+        ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+    ],
+)
+async def test_messages_system_input_requires_forwarded_store_false(
+    request_params: dict[str, object],
+    wire_controls: dict[str, object],
+    preserve_instructions: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        counted: Final = router.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 10})
+        )
+        await litellm.anthropic.messages.acreate(
+            model="openai/responses/gpt-6.2-sol",
+            max_tokens=16,
+            system="Stable prefix",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            **request_params,
+        )
+        await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-6.2-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            system="Stable prefix",
+            messages_format="anthropic",
+            deployment={"litellm_params": {"api_key": "sk-test", **request_params}},
+        )
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    count_body: Final = json.loads(counted.calls[0].request.content)
+    assert {key: count_body[key] for key in ("input", "instructions") if key in count_body} == {
+        key: request_body[key] for key in ("input", "instructions") if key in request_body
+    }
+    assert {
+        key: request_body[key]
+        for key in ("store", "conversation", "previous_response_id", "truncation")
+        if key in request_body
+    } == wire_controls
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    if preserve_instructions:
+        assert request_body["instructions"] == "Stable prefix"
+        assert request_body["input"] == [user_input]
+    else:
+        assert "instructions" not in request_body
+        assert request_body["input"] == [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+            user_input,
+        ]
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():

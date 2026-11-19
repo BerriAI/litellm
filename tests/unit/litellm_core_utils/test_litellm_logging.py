@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import gc
 import importlib.abc
 import json
 import logging
@@ -13,6 +14,7 @@ from concurrent.futures import Future
 import time
 import traceback
 import tracemalloc
+import weakref
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
@@ -2879,6 +2881,164 @@ def _register_failure_counting_logger(
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [logger])
     monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True))
+@pytest.mark.parametrize("callback_raises", (False, True))
+@pytest.mark.parametrize("guardrail_scope", (False, True))
+async def test_failure_callbacks_release_exception_without_losing_traceback(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    sync: bool,
+    callback_raises: bool,
+    guardrail_scope: bool,
+) -> None:
+    caplog.set_level(logging.CRITICAL, logger="LiteLLM")
+
+    class Body(str):
+        pass
+
+    class Failure(Exception):
+        pass
+
+    observations: Final[asyncio.Queue[tuple[bool, bool, bool, bool]]] = asyncio.Queue()
+    references: Final[asyncio.Queue[weakref.ReferenceType[Body]]] = asyncio.Queue()
+
+    class Recorder(CustomLogger):
+        def record(self, kwargs: dict[str, object]) -> None:
+            failure: Final = kwargs.get("exception")
+            trace: Final = kwargs.get("traceback_exception")
+            scoped: Final = logging_obj.guardrail_scoped_copy() if guardrail_scope else logging_obj.attempt_scoped_copy()
+            scoped.dynamic_failure_callbacks = []
+            scoped.failure_handler(cast(Exception, failure), cast(str, trace))
+            observations.put_nowait(
+                (
+                    isinstance(failure, Failure),
+                    isinstance(failure, BaseException)
+                    and "failed_request" in "".join(traceback.format_exception(failure)),
+                    isinstance(trace, str) and "Failure: upstream failure" in trace,
+                    "exception" not in scoped.model_call_details and kwargs.get("exception") is failure,
+                )
+            )
+            if callback_raises:
+                raise RuntimeError("callback failed")
+
+        def log_failure_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            self.record(kwargs)
+
+        async def async_log_failure_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            self.record(kwargs)
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj.call_type = "completion" if sync else "acompletion"
+    logging_obj.dynamic_failure_callbacks = [recorder]
+    logging_obj.dynamic_async_failure_callbacks = [recorder]
+
+    async def failed_request() -> None:
+        body: Final = Body("x" * 1024**2)
+        references.put_nowait(weakref.ref(body))
+        try:
+            raise Failure("upstream failure")
+        except Failure as error:
+            if sync:
+                logging_obj.failure_handler(error, traceback.format_exc())
+            else:
+                await logging_obj.async_failure_handler(error, traceback.format_exc())
+            raise
+
+    gc.disable()
+    try:
+        with pytest.raises(Failure, match="upstream failure"):
+            await failed_request()
+        caplog.clear()
+        assert observations.qsize() == 1
+        assert observations.get_nowait() == (True, True, True, True)
+        assert references.get_nowait()() is None
+    finally:
+        gc.enable()
+
+
+@pytest.mark.asyncio
+async def test_retry_failure_callbacks_keep_estimates_and_no_log_filtering_when_a_callback_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observations: Final[asyncio.Queue[tuple[str, bool, bool, bool]]] = asyncio.Queue()
+    error: Final = litellm.ServiceUnavailableError("upstream failure", model="test-model", llm_provider="openai")
+
+    class Recorder(CustomLogger):
+        logs_every_failed_attempt = True
+        wants_failed_prompt_token_estimate = True
+        runs_on_no_log_requests = True
+
+        def __init__(self, label: str, raises: bool) -> None:
+            super().__init__()
+            self.label = label
+            self.raises = raises
+
+        async def async_log_failure_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            observations.put_nowait(
+                (
+                    self.label,
+                    kwargs.get("exception") is error,
+                    kwargs.get("traceback_exception") == "upstream traceback",
+                    isinstance(kwargs.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY), int),
+                )
+            )
+            if self.raises:
+                raise RuntimeError("callback failed")
+
+    filtered: Final = _EveryFailureAttemptRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    logging_obj: Final = LitellmLogging(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "count these prompt words"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="failed-retry",
+        function_id="fn",
+        dynamic_async_failure_callbacks=[Recorder("broken", True), Recorder("healthy", False), filtered],
+    )
+    logging_obj.update_environment_variables(
+        model="hosted_vllm/test-model", user="", optional_params={}, litellm_params={"no-log": True}
+    )
+    for index in range(2):
+        marker: Final = datetime.datetime(2026, 1, 1) + datetime.timedelta(seconds=index)
+        logging_obj.model_call_details["current_attempt_api_call_start_time"] = marker
+        await logging_obj.async_failure_handler(error, "upstream traceback", marker, marker)
+
+    assert tuple(observations.get_nowait() for _ in range(observations.qsize())) == (
+        ("broken", True, True, True),
+        ("healthy", True, True, True),
+        ("broken", True, True, True),
+        ("healthy", True, True, True),
+    )
+    assert filtered.payloads == []
 
 
 @pytest.mark.parametrize("stream", [False, True])
