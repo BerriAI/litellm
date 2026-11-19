@@ -1,6 +1,6 @@
 import asyncio
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from fastapi import FastAPI
@@ -32,6 +32,81 @@ def client(
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, user_id="admin")
     app.dependency_overrides[get_app_store] = lambda: store
     return TestClient(app), store
+
+
+GRANT_ROUTES: Final = ("user", "team", "organization")
+
+
+async def grant_apps(database: AppDatabase, route: str, app_ids: tuple[str, ...]) -> None:
+    """Give user "admin" the apps through their own, their team's or their organization's object permission."""
+    await database.litellm_objectpermissiontable.create(
+        data={"object_permission_id": "grant", "apps": list(app_ids), "mcp_servers": ["unrelated"]}
+    )
+    await database.litellm_usertable.create(
+        data={
+            "user_id": "admin",
+            "teams": ["owners"] if route == "team" else [],
+            "object_permission_id": "grant" if route == "user" else None,
+        }
+    )
+    await database.litellm_teamtable.create(
+        data={"team_id": "owners", "object_permission_id": "grant" if route == "team" else None}
+    )
+    await database.litellm_organizationtable.create(
+        data={"organization_id": "division", "object_permission_id": "grant" if route == "organization" else None}
+    )
+    if route == "organization":
+        await database.litellm_organizationmembership.create(data={"organization_id": "division", "user_id": "admin"})
+
+
+def two_apps(role: LitellmUserRoles, route: str | None) -> tuple[TestClient, str, str]:
+    admin, store = client()
+    assert admin.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    chat: Final = admin.post("/management/v1/apps", json={"resource_id": "chat"}).json()["app_id"]
+    search: Final = admin.post("/management/v1/apps", json={"resource_id": "search"}).json()["app_id"]
+    if route is not None:
+        asyncio.run(grant_apps(cast(AppDatabase, store.db), route, (chat,)))  # cast-ok: the store wraps this fake
+    grantee: Final = FastAPI()
+    grantee.add_exception_handler(ManagementProblem, lambda request, error: problem_response(error.problem))
+    grantee.include_router(router)
+    grantee.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, user_id="admin")
+    grantee.dependency_overrides[get_app_store] = lambda: store
+    return TestClient(grantee), chat, search
+
+
+@pytest.mark.parametrize("route", GRANT_ROUTES)
+def test_a_grantee_reads_only_the_apps_granted_to_them_their_team_or_their_organization(route: str) -> None:
+    http, chat, search = two_apps(LitellmUserRoles.INTERNAL_USER, route)
+    listed: Final = http.get("/management/v1/apps")
+    assert listed.status_code == 200, listed.text
+    assert [app["app_id"] for app in listed.json()] == [chat]
+    assert http.get(f"/management/v1/apps/{chat}").json()["app_id"] == chat
+    assert http.get(f"/management/v1/apps/{search}").status_code == 403
+    assert http.get(f"/management/v1/apps/{search}/customer_members/anyone").status_code == 403
+    assert http.get(f"/management/v1/apps/{search}/customer_organizations/anyone").status_code == 403
+    assert http.get("/management/v1/apps/definition").json()["resource_type"] == "team"
+
+
+@pytest.mark.parametrize("route", GRANT_ROUTES)
+def test_a_grantee_cannot_change_an_app_they_can_read(route: str) -> None:
+    http, chat, _ = two_apps(LitellmUserRoles.INTERNAL_USER, route)
+    assert http.patch(f"/management/v1/apps/{chat}", json={"budget": {"max_budget": 1}}).status_code == 403
+    assert http.post("/management/v1/apps", json={"resource_id": "chat"}).status_code == 403
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 403
+    assert http.get("/management/v1/apps/resources", params={"resource_type": "team"}).status_code == 403
+    assert http.put(f"/management/v1/apps/{chat}/customer_members/anyone", json={}).status_code == 403
+    assert http.put(f"/management/v1/apps/{chat}/customer_organizations/anyone", json={}).status_code == 403
+
+
+def test_a_user_without_a_grant_reads_no_apps() -> None:
+    http, chat, _ = two_apps(LitellmUserRoles.INTERNAL_USER, None)
+    assert http.get("/management/v1/apps").status_code == 403
+    assert http.get(f"/management/v1/apps/{chat}").status_code == 403
+
+
+def test_a_proxy_admin_reads_every_app_without_a_grant() -> None:
+    http, chat, search = two_apps(LitellmUserRoles.PROXY_ADMIN, None)
+    assert sorted(app["app_id"] for app in http.get("/management/v1/apps").json()) == sorted((chat, search))
 
 
 def test_choose_definition_discover_and_configure_existing_resource() -> None:
