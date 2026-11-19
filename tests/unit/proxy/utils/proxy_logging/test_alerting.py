@@ -17,6 +17,7 @@ from prisma.errors import PrismaError
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils import litellm_logging
 from litellm.proxy._types import AlertType, CallInfo, Litellm_EntityType
+from litellm.proxy.utils import ProxyLogging
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +363,7 @@ async def test_failure_handler_propagates_service_logging_error_raises(proxy_log
 
 
 @pytest.mark.asyncio
-async def test_team_percentage_event_does_not_duplicate_legacy_hard_budget_dispatch(proxy_logging):
+async def test_team_percentage_event_does_not_duplicate_legacy_hard_budget_dispatch(proxy_logging: ProxyLogging) -> None:
     proxy_logging.alerting = ["webhook", "email"]
     webhook: Final = AsyncMock()
     email: Final = AsyncMock()

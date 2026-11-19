@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, cast
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
+from unittest.mock import _Call, AsyncMock, MagicMock, PropertyMock, call, patch
 
 import httpx
 import litellm
@@ -11198,13 +11198,15 @@ def _team_alert_row(existing_metadata: dict[str, object], existing_max_budget: f
     return row
 
 
-async def _update_team_for_alert_validation(existing_metadata, existing_max_budget, **update_fields):
+async def _update_team_for_alert_validation(
+    existing_metadata: dict[str, object], existing_max_budget: float | None, **update_fields: object
+) -> _Call:
     from fastapi import Request
 
     from litellm.proxy._types import LiteLLM_UserTable, UpdateTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
-    existing_row = _team_alert_row(existing_metadata, existing_max_budget)
+    existing_row: Final = _team_alert_row(existing_metadata, existing_max_budget)
     with (
         patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
@@ -11240,8 +11242,8 @@ async def _update_team_for_alert_validation(existing_metadata, existing_max_budg
 )
 @pytest.mark.asyncio
 async def test_update_team_rejects_new_budget_alert_config_that_could_never_send(
-    update_fields, existing_max_budget, disable_audit_logging_for_mocked_team
-):
+    update_fields: dict[str, object], existing_max_budget: float | None, disable_audit_logging_for_mocked_team: None
+) -> None:
     from litellm.proxy._types import ProxyException
 
     with pytest.raises(ProxyException) as exc_info:
@@ -11253,9 +11255,9 @@ async def test_update_team_rejects_new_budget_alert_config_that_could_never_send
 
 @pytest.mark.asyncio
 async def test_update_team_accepts_valid_budget_alert_config_against_the_stored_max_budget(
-    disable_audit_logging_for_mocked_team,
-):
-    call = await _update_team_for_alert_validation(
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    call: Final = await _update_team_for_alert_validation(
         {"cost_center": "eng"},
         100.0,
         metadata={"cost_center": "eng", "max_budget_alert_emails": {"50": ["a@co.com"], "90": "b@co.com"}},
@@ -11266,11 +11268,11 @@ async def test_update_team_accepts_valid_budget_alert_config_against_the_stored_
 
 @pytest.mark.asyncio
 async def test_update_team_leaves_stored_invalid_budget_alert_config_alone_on_unrelated_edits(
-    disable_audit_logging_for_mocked_team,
-):
-    stored = {"max_budget_alert_emails": {"150": []}, "cost_center": "eng"}
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    stored: Final = {"max_budget_alert_emails": {"150": []}, "cost_center": "eng"}
 
-    call = await _update_team_for_alert_validation(
+    call: Final = await _update_team_for_alert_validation(
         stored, None, metadata={**stored, "cost_center": "finance"}, team_alias="renamed"
     )
 
@@ -11279,23 +11281,23 @@ async def test_update_team_leaves_stored_invalid_budget_alert_config_alone_on_un
 
 @pytest.mark.asyncio
 async def test_update_team_can_clear_a_stored_budget_alert_config_even_when_it_is_invalid(
-    disable_audit_logging_for_mocked_team,
-):
-    call = await _update_team_for_alert_validation(
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    call: Final = await _update_team_for_alert_validation(
         {"max_budget_alert_emails": {"150": []}}, None, metadata={"cost_center": "eng"}
     )
 
     assert call is not None
 
 
-STORED_ALERTS = {"cost_center": "eng", "max_budget_alert_emails": {"90": ["lead@co.com"]}}
+STORED_ALERTS: Final = {"cost_center": "eng", "max_budget_alert_emails": {"90": ["lead@co.com"]}}
 
 
 @pytest.mark.parametrize("update_fields", [{"max_budget": 0}, {"max_budget": None}])
 @pytest.mark.asyncio
 async def test_update_team_rejects_a_max_budget_change_that_would_silently_disable_stored_alerts(
-    update_fields, disable_audit_logging_for_mocked_team
-):
+    update_fields: dict[str, object], disable_audit_logging_for_mocked_team: None
+) -> None:
     from litellm.proxy._types import ProxyException
 
     with pytest.raises(ProxyException) as exc_info:
@@ -11307,17 +11309,17 @@ async def test_update_team_rejects_a_max_budget_change_that_would_silently_disab
 
 @pytest.mark.asyncio
 async def test_update_team_accepts_a_new_positive_max_budget_with_stored_alerts(
-    disable_audit_logging_for_mocked_team,
-):
-    call = await _update_team_for_alert_validation(STORED_ALERTS, 100.0, max_budget=250.0)
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    call: Final = await _update_team_for_alert_validation(STORED_ALERTS, 100.0, max_budget=250.0)
 
     assert call.kwargs["data"]["max_budget"] == 250.0
 
 
 @pytest.mark.asyncio
 async def test_update_team_rejects_new_alerts_sent_with_an_explicit_null_max_budget_even_if_one_is_stored(
-    disable_audit_logging_for_mocked_team,
-):
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
     from litellm.proxy._types import ProxyException
 
     with pytest.raises(ProxyException) as exc_info:
@@ -11330,10 +11332,12 @@ async def test_update_team_rejects_new_alerts_sent_with_an_explicit_null_max_bud
 
 
 @pytest.mark.asyncio
-async def test_update_team_clears_alerts_together_with_the_max_budget(disable_audit_logging_for_mocked_team):
-    call = await _update_team_for_alert_validation(STORED_ALERTS, 100.0, max_budget=None, metadata={"cost_center": "eng"})
+async def test_update_team_clears_alerts_together_with_the_max_budget(
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    call: Final = await _update_team_for_alert_validation(STORED_ALERTS, 100.0, max_budget=None, metadata={"cost_center": "eng"})
 
-    written = call.kwargs["data"]
+    written: Final = call.kwargs["data"]
     assert written["max_budget"] is None
     assert "max_budget_alert_emails" not in written["metadata"]
     assert written["metadata"]["cost_center"] == "eng"
@@ -11341,11 +11345,11 @@ async def test_update_team_clears_alerts_together_with_the_max_budget(disable_au
 
 @pytest.mark.asyncio
 async def test_update_team_keeps_stored_invalid_alerts_through_unrelated_edits_that_leave_the_budget_alone(
-    disable_audit_logging_for_mocked_team,
-):
-    stored = {"max_budget_alert_emails": {"150": ["nobody"]}, "cost_center": "eng"}
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
+    stored: Final = {"max_budget_alert_emails": {"150": ["nobody"]}, "cost_center": "eng"}
 
-    call = await _update_team_for_alert_validation(
+    call: Final = await _update_team_for_alert_validation(
         stored, 100.0, max_budget=100.0, team_alias="renamed", metadata={**stored, "cost_center": "ops"}
     )
 
@@ -11355,7 +11359,9 @@ async def test_update_team_keeps_stored_invalid_alerts_through_unrelated_edits_t
 
 @pytest.mark.parametrize("recipient", ["", "   ", " , , "])
 @pytest.mark.asyncio
-async def test_update_team_rejects_empty_alert_recipients(recipient, disable_audit_logging_for_mocked_team):
+async def test_update_team_rejects_empty_alert_recipients(
+    recipient: str, disable_audit_logging_for_mocked_team: None
+) -> None:
     from litellm.proxy._types import ProxyException
 
     with pytest.raises(ProxyException) as exc_info:
@@ -11376,8 +11382,8 @@ async def test_update_team_rejects_empty_alert_recipients(recipient, disable_aud
 )
 @pytest.mark.asyncio
 async def test_new_team_rejects_budget_alert_config_that_could_never_send(
-    max_budget, metadata, mock_db_client, mock_admin_auth, monkeypatch
-):
+    max_budget: float | None, metadata: dict[str, object], mock_db_client: MagicMock, mock_admin_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from fastapi import Request
 
     import litellm
@@ -11401,8 +11407,8 @@ async def test_new_team_rejects_budget_alert_config_that_could_never_send(
 @pytest.mark.parametrize("use_legacy_defaults", [False, True])
 @pytest.mark.asyncio
 async def test_new_team_percentage_alerts_use_inherited_budget(
-    mock_db_client, mock_admin_auth, monkeypatch, use_legacy_defaults
-):
+    mock_db_client: MagicMock, mock_admin_auth: UserAPIKeyAuth, monkeypatch: pytest.MonkeyPatch, use_legacy_defaults: bool
+) -> None:
     from fastapi import Request
 
     import litellm

@@ -1153,27 +1153,27 @@ def _team_alert(team_id: str, team_alias: str, token: str | None = None, spend: 
 
 @pytest.mark.asyncio
 async def test_team_budget_alert_names_the_team_and_goes_only_to_the_configured_recipients(
-    base_email_logger, mock_send_email
-):
+    base_email_logger: BaseEmailLogger, mock_send_email: mock.AsyncMock
+) -> None:
     with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
         await base_email_logger.budget_alerts(
             type="max_budget_alert", user_info=_team_alert("team_a", "Platform", token="sk-rotating-1")
         )
 
     assert mock_send_email.call_count == 2
-    ninety = next(c.kwargs for c in mock_send_email.call_args_list if "90%" in c.kwargs["subject"])
+    ninety: Final = next(c.kwargs for c in mock_send_email.call_args_list if "90%" in c.kwargs["subject"])
     assert ninety["subject"] == "LiteLLM: Team Budget Alert - 90% of Team Budget Reached"
     assert sorted(ninety["to_email"]) == ["finance@co.com", "lead@co.com"]
     assert "Platform" in ninety["html_body"] and "team budget" in ninety["html_body"]
     assert "sk-rotating-1" not in ninety["html_body"]
-    fifty = next(c.kwargs for c in mock_send_email.call_args_list if "50%" in c.kwargs["subject"])
+    fifty: Final = next(c.kwargs for c in mock_send_email.call_args_list if "50%" in c.kwargs["subject"])
     assert fifty["to_email"] == ["finance@co.com"]
 
 
 @pytest.mark.asyncio
 async def test_team_budget_alert_is_sent_once_per_team_and_threshold_across_rotating_keys(
-    base_email_logger, mock_send_email
-):
+    base_email_logger: BaseEmailLogger, mock_send_email: mock.AsyncMock
+) -> None:
     for token in ("sk-old", "sk-new", None):
         await base_email_logger.budget_alerts(
             type="max_budget_alert", user_info=_team_alert("team_a", "Platform", token=token)
@@ -1193,9 +1193,9 @@ async def test_team_budget_alert_is_sent_once_per_team_and_threshold_across_rota
 
 @pytest.mark.asyncio
 async def test_team_budget_alert_does_not_share_a_claim_with_a_key_alert_that_has_the_same_threshold(
-    base_email_logger, mock_send_email
-):
-    key_alert = CallInfo(
+    base_email_logger: BaseEmailLogger, mock_send_email: mock.AsyncMock
+) -> None:
+    key_alert: Final = CallInfo(
         token="sk-key-1",
         team_id="team_a",
         user_email="owner@co.com",
@@ -1210,7 +1210,7 @@ async def test_team_budget_alert_does_not_share_a_claim_with_a_key_alert_that_ha
             type="max_budget_alert", user_info=_team_alert("team_a", "Platform", token="sk-key-1")
         )
 
-    recipients = sorted(tuple(sorted(c.kwargs["to_email"])) for c in mock_send_email.call_args_list)
+    recipients: Final = sorted(tuple(sorted(c.kwargs["to_email"])) for c in mock_send_email.call_args_list)
     assert recipients == [("finance@co.com",), ("finance@co.com", "lead@co.com"), ("owner@co.com",)]
 
 
@@ -1608,8 +1608,8 @@ async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without
 @pytest.mark.parametrize("spend", [90.0, 100.0, 110.0])
 @pytest.mark.asyncio
 async def test_team_percentage_emails_survive_mixed_webhook_routing_at_hard_limit(
-    base_email_logger, mock_send_email, spend
-):
+    base_email_logger: BaseEmailLogger, mock_send_email: mock.AsyncMock, spend: float
+) -> None:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
