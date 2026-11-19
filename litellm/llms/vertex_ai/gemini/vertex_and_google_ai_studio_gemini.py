@@ -910,13 +910,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return super().get_json_schema_from_pydantic_object(response_format)
 
     @staticmethod
+    def _strip_regional_prefix(model: str) -> str:
+        return re.sub(
+            r"(^|/)(?:[a-z0-9_-]+\.)+(?=gem(?:ini|ma)-)",
+            r"\1",
+            model,
+            flags=re.IGNORECASE,
+        )
+
+    @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
         """
         Check if the model is Gemini 3 or newer.
         """
-        model_name: Final = model.split("/")[-1].lower()
+        normalized_model: Final = VertexGeminiConfig._strip_regional_prefix(model).lower()
+        model_name: Final = normalized_model.split("/")[-1]
         is_vertex_fine_tuned_model: Final = model_name.isdigit() or (
-            model.startswith("gemini/") and not model_name.startswith("gemini-")
+            normalized_model.startswith("gemini/") and not model_name.startswith("gemini-")
         )
         if not model_name or is_vertex_fine_tuned_model or model_name.startswith("gemma-"):
             return False
@@ -1024,7 +1034,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
 
-        if supports_reasoning(model) or self._is_gemini_3_or_newer(model):
+        if supports_reasoning(self._strip_regional_prefix(model)) or self._is_gemini_3_or_newer(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
 
@@ -1650,20 +1660,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
+        normalized_model: Final = VertexGeminiConfig._strip_regional_prefix(model)
         providers: Final = ("gemini", "vertex_ai")
         key: Final = "supports_minimal_reasoning_effort"
         declared_by_model_map: Final = any(
-            supports_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
+            supports_factory(model=normalized_model, custom_llm_provider=provider, key=key) for provider in providers
         )
-        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in model.lower()
+        is_gemini3_or_newer_flash: Final = (
+            VertexGeminiConfig._is_gemini_3_or_newer(normalized_model) and "flash" in normalized_model.lower()
+        )
         return (declared_by_model_map or is_gemini3_or_newer_flash) and not any(
-            is_explicitly_disabled_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
+            is_explicitly_disabled_factory(model=normalized_model, custom_llm_provider=provider, key=key)
+            for provider in providers
         )
 
     @staticmethod
     def _supports_xhigh_thinking_level(model: str) -> bool:
+        normalized_model: Final = VertexGeminiConfig._strip_regional_prefix(model)
         return any(
-            supports_factory(model=model, custom_llm_provider=provider, key="supports_xhigh_reasoning_effort")
+            supports_factory(
+                model=normalized_model, custom_llm_provider=provider, key="supports_xhigh_reasoning_effort"
+            )
             for provider in ("gemini", "vertex_ai")
         )
 
@@ -1764,45 +1781,43 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         asks_for_thoughts: Final = VertexGeminiConfig._thinking_asks_for_thoughts(thinking_param)
         sends_thoughts: Final = VertexGeminiConfig._include_thoughts(True if asks_for_thoughts else None)
 
-        params: Final[GeminiThinkingConfig] = {}
-
         # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
         if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
-            if thinking_enabled:
-                if thinking_budget == 0:
-                    params["includeThoughts"] = False
-                else:
-                    params["includeThoughts"] = sends_thoughts
-                    if thinking_budget is not None:
-                        warn_dropped_reasoning(
-                            "thinking.budget_tokens",
-                            thinking_budget,
-                            model,
-                            _LEVEL_ONLY_BUDGET_REASON,
-                            drop_params_gated=False,
-                        )
-                    # Follow provider defaults unless explicitly opted into legacy behavior.
-                    if litellm.enable_gemini_default_thinking_level_low is True:
-                        params["thinkingLevel"] = (  # pyright: ignore[reportTypedDictNotRequiredAccess]  # built in place
-                            "minimal" if VertexGeminiConfig._supports_minimal_thinking_level(model) else "low"
-                        )
-            else:
-                # Thinking disabled
-                params["includeThoughts"] = False
-        else:
-            # For older Gemini models, use thinkingBudget
-            if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
-                params["includeThoughts"] = sends_thoughts
-            if isinstance(thinking_budget, int):
-                params["thinkingBudget"] = thinking_budget
-            elif thinking_budget is not None:
-                warn_dropped_reasoning(
-                    "thinking.budget_tokens",
-                    thinking_budget,
-                    model,
-                    _NON_INTEGER_BUDGET_REASON,
-                    drop_params_gated=False,
-                )
+            default_low_thinking_level: Final[Literal["minimal", "low"]] = (
+                "minimal" if VertexGeminiConfig._supports_minimal_thinking_level(model) else "low"
+            )
+            if thinking_enabled and thinking_budget != 0:
+                if thinking_budget is not None:
+                    warn_dropped_reasoning(
+                        "thinking.budget_tokens",
+                        thinking_budget,
+                        model,
+                        _LEVEL_ONLY_BUDGET_REASON,
+                        drop_params_gated=False,
+                    )
+                # Follow provider defaults unless explicitly opted into legacy behavior.
+                if litellm.enable_gemini_default_thinking_level_low is True:
+                    return {"includeThoughts": sends_thoughts, "thinkingLevel": default_low_thinking_level}
+                return {"includeThoughts": sends_thoughts}
+            return {
+                "thinkingLevel": default_low_thinking_level,
+                "includeThoughts": False,
+            }
+
+        # For older Gemini models, use thinkingBudget
+        params: Final[GeminiThinkingConfig] = {}
+        if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
+            params["includeThoughts"] = sends_thoughts
+        if isinstance(thinking_budget, int):
+            params["thinkingBudget"] = thinking_budget
+        elif thinking_budget is not None:
+            warn_dropped_reasoning(
+                "thinking.budget_tokens",
+                thinking_budget,
+                model,
+                _NON_INTEGER_BUDGET_REASON,
+                drop_params_gated=False,
+            )
 
         return params
 
