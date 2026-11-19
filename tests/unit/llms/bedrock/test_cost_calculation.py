@@ -56,7 +56,7 @@ def test_an_unreadable_geo_multiplier_raises_as_on_main(monkeypatch: pytest.Monk
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "anthropic.claude-probe-geo": row})
 
-    with pytest.raises(ValueError, match="high"):
+    with pytest.raises(ValueError, match=r"No price for model=anthropic\.claude-probe-geo"):
         cost_per_token(
             model="anthropic.claude-probe-geo",
             usage=Usage(prompt_tokens=1000, completion_tokens=1000, inference_geo="us"),
