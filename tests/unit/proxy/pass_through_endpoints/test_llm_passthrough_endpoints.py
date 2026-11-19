@@ -582,6 +582,22 @@ def test_vertex_pass_through_still_forwards_a_model_no_deployment_serves(
     assert upstream.calls.last.request.headers["authorization"] == f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"
 
 
+def test_vertex_pass_through_refuses_an_encoded_model_name_whose_deployment_disables_pass_through(
+    vertex_proxy_pass_through_disabled: TestClient, respx_mock: "respx.MockRouter"
+) -> None:
+    encoded_path: Final = _VERTEX_DEPLOYMENT_PATH.replace("claude-sonnet-4-5", "%2563laude-sonnet-4-5")
+
+    response: Final = vertex_proxy_pass_through_disabled.post(
+        f"/vertex_ai/{encoded_path}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={"x-litellm-api-key": "sk-caller", "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "use_in_pass_through" in response.text
+    assert respx_mock.calls.call_count == 0
+
+
 @pytest.mark.parametrize("flag", [None, False], ids=["flag-absent", "flag-false"])
 async def test_allm_passthrough_route_refuses_a_model_whose_deployments_all_disable_pass_through(
     flag: bool | None,
@@ -652,6 +668,59 @@ def test_pass_through_disabled_for_vertex_model_lifts_when_any_deployment_enable
     )
 
     assert _pass_through_disabled_for_vertex_model(router, "gemini-image-model") is False
+
+
+def test_pass_through_disabled_for_vertex_model_matches_a_wildcard_group() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _pass_through_disabled_for_vertex_model,
+    )
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini-*",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-*",
+                    "vertex_project": _VERTEX_DEPLOYMENT_PROJECT,
+                    "vertex_location": "us-central1",
+                },
+            }
+        ]
+    )
+
+    assert _pass_through_disabled_for_vertex_model(router, "gemini-2.5-flash") is True
+    assert _pass_through_disabled_for_vertex_model(router, "claude-sonnet-4-5") is False
+
+
+def test_pass_through_disabled_for_vertex_model_wildcard_group_lifts_when_any_deployment_enables_it() -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _pass_through_disabled_for_vertex_model,
+    )
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini-*",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-*",
+                    "vertex_project": "project-a",
+                    "vertex_location": "us-central1",
+                },
+            },
+            {
+                "model_name": "gemini-*",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-*",
+                    "vertex_project": "project-b",
+                    "vertex_location": "us-central1",
+                    "vertex_credentials": _vertex_service_account_json(),
+                    "use_in_pass_through": True,
+                },
+            },
+        ]
+    )
+
+    assert _pass_through_disabled_for_vertex_model(router, "gemini-2.5-flash") is False
 
 
 async def test_allm_passthrough_route_does_not_refuse_a_model_with_a_pass_through_deployment() -> None:
