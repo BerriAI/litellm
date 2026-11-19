@@ -176,7 +176,12 @@ const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityCon
   return enabledPages.includes(item.page);
 };
 
-const CUSTOMER_PORTAL_ADMIN_KEYS: ReadonlySet<string> = new Set(["customers", "apps", "customer-settings"]);
+const CUSTOMER_PORTAL_ADMIN_KEYS: ReadonlySet<string> = new Set([
+  "customers",
+  "apps",
+  "customer-access",
+  "customer-settings",
+]);
 
 const menuItemIsVisible = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean => {
   if (item.children && item.children.length === 0) return false;
@@ -225,6 +230,13 @@ const customerPortalGroups: MenuGroup[] = [
         page: "apps",
         label: "apps.title",
         icon: <AppWindow {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
+        key: "customer-access",
+        page: "customers/access",
+        label: "apps.internalAccess.title",
+        icon: <ShieldCheck {...ICON} />,
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
       {
@@ -530,10 +542,11 @@ const HOME_ROUTE = "home";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
+const CUSTOMER_SUBPAGES = ["customers/settings", "customers/access"] as const;
+
 const routeForPathname = (pathname: string): string =>
-  pathname.replace(/\/$/, "").endsWith("/customers/settings")
-    ? "customers/settings"
-    : routeSegmentForPathname(pathname) || HOME_ROUTE;
+  CUSTOMER_SUBPAGES.find((page) => pathname.replace(/\/$/, "").endsWith(`/${page}`)) ??
+  (routeSegmentForPathname(pathname) || HOME_ROUTE);
 
 const findParentKey = (route: string): string | null => {
   for (const group of menuGroups) {

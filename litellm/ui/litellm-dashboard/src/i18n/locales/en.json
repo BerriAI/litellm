@@ -22,6 +22,15 @@
       }
     },
     "settingsTitle": "Applications",
+    "internalAccess": {
+      "title": "Internal Access",
+      "hint": "Choose which applications a team can view in Customer Management. Team members see those applications, their customers and usage, read-only.",
+      "team": "Team",
+      "apps": "Applications this team can view",
+      "appsPlaceholder": "Select applications",
+      "save": "Save access",
+      "saved": "Access updated"
+    },
     "grantedHint": "The applications you have been given access to, with their spend and budget.",
     "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
     "alias": "App",
@@ -16925,9 +16934,6 @@
         "accessGroupsPlaceholder": "Select access groups (optional)",
         "vectorStores": "Vector Stores",
         "vectorStoresPlaceholder": "Select vector stores",
-        "customerApps": "Customer Management Apps",
-        "customerAppsHint": "Members of this team can view these apps, their customers and usage in Customer Management.",
-        "customerAppsPlaceholder": "Select apps",
         "passThroughRoutes": "Allowed Pass Through Routes",
         "passThroughRoutesPremiumHint": "Premium feature - Upgrade to set allowed pass through routes",
         "passThroughRoutesAdminOnlyHint": "Only proxy admins can set allowed pass through routes",
