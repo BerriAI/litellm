@@ -740,3 +740,39 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
         await _run_background_health_check()
 
     assert probed["ids"] == ["listed-1", "listed-2"]
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_model_under_its_own_name():
+    from litellm import Router
+    from litellm.proxy.health_check import public_wildcard_probe_deployments
+
+    served = "bedrock/us.anthropic.claude-opus-4-8"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*", "mock_response": "ok"},
+                "model_info": {"id": "wildcard"},
+            }
+        ]
+    )
+    exact = {"model_name": "opus", "litellm_params": {"model": served}, "model_info": {"id": "exact"}}
+    prisma_client = MagicMock()
+    prisma_client.db.query_raw = AsyncMock(return_value=[])
+    prisma_client.save_health_check_result = AsyncMock(return_value=object())
+
+    _schedule_background_health_check_db_save(
+        prisma_client=prisma_client,
+        shared_health_manager=None,
+        model_list=[exact],
+        healthy_endpoints=[{"model": served, "model_id": "exact"}],
+        unhealthy_endpoints=[],
+        wildcard_probes=public_wildcard_probe_deployments([served], router, None),
+    )
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+
+    assert sorted(
+        (call.kwargs["model_name"], call.kwargs["model_id"], call.kwargs["status"])
+        for call in prisma_client.save_health_check_result.await_args_list
+    ) == [(served, None, "healthy"), ("opus", "exact", "healthy")]

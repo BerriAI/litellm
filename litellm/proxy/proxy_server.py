@@ -737,6 +737,7 @@ from litellm.proxy.health_check import (
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
+    public_wildcard_probe_deployments,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -5100,8 +5101,14 @@ def _schedule_background_health_check_db_save(
     unhealthy_endpoints: list,
     pod_lock_manager: PodLockManager | None = None,
     lock_ttl: int | None = None,
+    wildcard_probes: Sequence[Mapping[str, object]] = (),
+    details: bool | None = True,
+    max_concurrency: int | None = None,
 ) -> None:
-    """Fire-and-forget: persist health check results to DB if prisma is available."""
+    """Fire-and-forget: persist health check results to DB if prisma is available.
+
+    ``wildcard_probes`` are probed here, inside the window-gated save, so their results reach only the DB.
+    """
     if prisma_client is None:
         return
     import time as time_module
@@ -5112,16 +5119,58 @@ def _schedule_background_health_check_db_save(
 
     checked_by: Final = shared_health_manager.pod_id if shared_health_manager is not None else "background_health_check"
     start_time: Final = time_module.time()
-    save: Final = partial(
+    save: Final = (
+        partial(
+            _probe_wildcards_and_save,
+            prisma_client,
+            model_list,
+            healthy_endpoints,
+            unhealthy_endpoints,
+            start_time,
+            checked_by,
+            wildcard_probes,
+            details,
+            max_concurrency,
+        )
+        if wildcard_probes
+        else partial(
+            save_background_health_checks_to_db,
+            prisma_client,
+            model_list,
+            healthy_endpoints,
+            unhealthy_endpoints,
+            start_time,
+            checked_by=checked_by,
+        )
+    )
+    asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
+
+
+async def _probe_wildcards_and_save(
+    prisma_client: PrismaClient,
+    model_list: Sequence[Mapping[str, object]],
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
+    start_time: float,
+    checked_by: str,
+    wildcard_probes: Sequence[Mapping[str, object]],
+    details: bool | None,
+    max_concurrency: int | None,
+) -> bool:
+    from litellm.proxy.health_check import probe_public_wildcard_deployments
+    from litellm.proxy.health_endpoints._health_endpoints import (
         save_background_health_checks_to_db,
+    )
+
+    probe_healthy, probe_unhealthy = await probe_public_wildcard_deployments(wildcard_probes, details, max_concurrency)
+    return await save_background_health_checks_to_db(
         prisma_client,
-        model_list,
-        healthy_endpoints,
-        unhealthy_endpoints,
+        [*model_list, *wildcard_probes],
+        [*healthy_endpoints, *probe_healthy],
+        [*unhealthy_endpoints, *probe_unhealthy],
         start_time,
         checked_by=checked_by,
     )
-    asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
 
 
 def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
@@ -5310,6 +5359,11 @@ async def _run_background_health_check():
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
         _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
+        wildcard_probes = (
+            public_wildcard_probe_deployments(litellm.public_model_groups or (), llm_router, scoped_model_groups)
+            if llm_router is not None
+            else ()
+        )
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
                 "background_health_check_model_groups matched no deployments; groups=%s",
@@ -5418,6 +5472,9 @@ async def _run_background_health_check():
             unhealthy_endpoints,
             pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             lock_ttl=health_check_interval,
+            wildcard_probes=wildcard_probes,
+            details=details_bool,
+            max_concurrency=health_check_concurrency,
         )
 
         # Write health state to router cache for health-check-driven routing

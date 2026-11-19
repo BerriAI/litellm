@@ -6,8 +6,9 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -415,6 +416,60 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
     if not resolved:
         return None
     return frozenset(ident for entry in resolved if (ident := _deployment_id(entry)))
+
+
+_WILDCARD_PROBE_DROPPED_INFO: Final = frozenset({"id", "health_check_model"})
+
+
+def _wildcard_probe(public_name: str, row: Mapping[str, object]) -> Mapping[str, object]:
+    params: Final = row.get("litellm_params")
+    info: Final = row.get("model_info")
+    return {
+        **row,
+        "model_name": public_name,
+        "litellm_params": dict(params) if isinstance(params, Mapping) else {},
+        "model_info": (
+            {k: v for k, v in info.items() if k not in _WILDCARD_PROBE_DROPPED_INFO}
+            if isinstance(info, Mapping)
+            else {}
+        ),
+    }
+
+
+def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: AbstractSet[str] | None) -> bool:
+    return model_groups is None or public_name in model_groups or row.get("model_name") in model_groups
+
+
+def _wildcard_probes_for(
+    public_name: str, router: "Router", model_groups: AbstractSet[str] | None
+) -> tuple[Mapping[str, object], ...]:
+    rows: Final = router.registry().deployments(public_name, source="wildcard")
+    if _resolved_deployment_ids(router, public_name) != frozenset(i for row in rows if (i := _deployment_id(row))):
+        return ()
+    eligible: Final = (row for row in rows if not _skips_health_checks(row))
+    return tuple(
+        _wildcard_probe(public_name, row) for row in eligible if _in_model_groups(public_name, row, model_groups)
+    )
+
+
+def public_wildcard_probe_deployments(
+    public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
+) -> tuple[Mapping[str, object], ...]:
+    """Id-less copies of the wildcards serving each public name nothing else serves, probing that exact model.
+
+    The ids must match exactly, so a name an exact deployment, alias or routing group serves is left out.
+    """
+    return tuple(
+        chain.from_iterable(_wildcard_probes_for(name, router, model_groups) for name in dict.fromkeys(public_names))
+    )
+
+
+async def probe_public_wildcard_deployments(
+    probes: Sequence[Mapping[str, object]], details: bool | None, max_concurrency: int | None
+) -> tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]]]:
+    """Healthy and unhealthy endpoints for ``probes``, never filtered by id since they carry none."""
+    healthy, unhealthy, _ = await _perform_health_check(list(probes), details, max_concurrency)
+    return healthy, unhealthy
 
 
 def _dependency_failure(

@@ -187,10 +187,10 @@ def test_aggregate_health_check_results():
     }
 
     healthy_endpoints = [
-        {"model": "gpt-3.5-turbo"},
+        {"model": "gpt-3.5-turbo", "model_id": "model-123"},
     ]
     unhealthy_endpoints = [
-        {"model": "gpt-4", "error": "Rate limit exceeded"},
+        {"model": "gpt-4", "model_id": "model-456", "error": "Rate limit exceeded"},
     ]
 
     result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, unhealthy_endpoints)
@@ -219,8 +219,8 @@ def test_aggregate_health_check_results_multiple_endpoints():
     }
 
     healthy_endpoints = [
-        {"model": "gpt-3.5-turbo"},
-        {"model": "gpt-3.5-turbo"},
+        {"model": "gpt-3.5-turbo", "model_id": "model-123"},
+        {"model": "gpt-3.5-turbo", "model_id": "model-123"},
     ]
     unhealthy_endpoints = []
 
@@ -433,7 +433,7 @@ async def test_save_background_health_checks_to_db():
         },
     ]
 
-    healthy_endpoints = [{"model": "gpt-3.5-turbo"}]
+    healthy_endpoints = [{"model": "gpt-3.5-turbo", "model_id": "model-123"}]
     unhealthy_endpoints = []
 
     start_time = 1234567890.0
@@ -536,7 +536,7 @@ def _one_model_setup():
             "litellm_params": {"model": "gpt-3.5-turbo"},
         },
     ]
-    return model_list, [{"model": "gpt-3.5-turbo"}], []
+    return model_list, [{"model": "gpt-3.5-turbo", "model_id": "model-123"}], []
 
 
 @pytest.mark.asyncio
@@ -667,7 +667,7 @@ async def test_save_background_health_checks_compares_raw_checked_at_against_utc
     await save_background_health_checks_to_db(
         mock_prisma,
         model_list,
-        [{"model": "openai/stale"}, {"model": "openai/fresh"}],
+        [{"model": "openai/stale", "model_id": "stale-id"}, {"model": "openai/fresh", "model_id": "fresh-id"}],
         [],
         time.time(),
         "pod-1",
@@ -1163,6 +1163,81 @@ def test_chatgpt_health_check_model_comparison_does_not_access_credentials(
     assert (
         _same_health_check_model("chatgpt/health-probe", {"model": model, "custom_llm_provider": "chatgpt"}) is expected
     )
+
+
+_WILDCARD_SERVED: Final = "bedrock/us.anthropic.claude-opus-4-8"
+_EXACT: Final = "bedrock/us.anthropic.claude-sonnet-4-6"
+_ALIAS: Final = "bedrock/fast"
+
+
+def _wildcard_router(wildcard_info: dict[str, object]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*", "aws_region_name": "us-east-1"},
+                "model_info": {"id": "wildcard", **wildcard_info},
+            },
+            {"model_name": _EXACT, "litellm_params": {"model": _EXACT}, "model_info": {"id": "exact"}},
+        ],
+        model_group_alias={_ALIAS: _EXACT},
+    )
+
+
+def test_public_wildcard_probe_deployments_probes_only_names_a_wildcard_alone_serves():
+    from litellm.proxy.health_check import public_wildcard_probe_deployments
+
+    router: Final = _wildcard_router({"health_check_model": "bedrock/us.anthropic.claude-haiku-4-5", "mode": "chat"})
+
+    probes: Final = public_wildcard_probe_deployments(
+        [_WILDCARD_SERVED, _WILDCARD_SERVED, _EXACT, _ALIAS, "openai/unserved"], router, None
+    )
+
+    assert [(p["model_name"], p["litellm_params"]["model"], p["model_info"].get("mode")) for p in probes] == [
+        (_WILDCARD_SERVED, _WILDCARD_SERVED, "chat")
+    ]
+    assert probes[0]["litellm_params"]["aws_region_name"] == "us-east-1"
+    assert probes[0]["model_info"].keys().isdisjoint({"id", "health_check_model"})
+
+
+def test_public_wildcard_probe_deployments_skips_a_wildcard_with_background_checks_disabled():
+    from litellm.proxy.health_check import public_wildcard_probe_deployments
+
+    router: Final = _wildcard_router({"disable_background_health_check": True})
+
+    assert public_wildcard_probe_deployments([_WILDCARD_SERVED], router, None) == ()
+
+
+@pytest.mark.parametrize(
+    "model_groups,probed",
+    [({_WILDCARD_SERVED}, True), ({"bedrock/*"}, True), ({_EXACT}, False)],
+)
+def test_public_wildcard_probe_deployments_honors_background_model_groups(model_groups, probed):
+    from litellm.proxy.health_check import public_wildcard_probe_deployments
+
+    probes: Final = public_wildcard_probe_deployments(
+        [_WILDCARD_SERVED], _wildcard_router({}), frozenset(model_groups)
+    )
+
+    assert [p["model_name"] for p in probes] == ([_WILDCARD_SERVED] if probed else [])
+
+
+def test_aggregate_health_check_results_keeps_an_id_less_probe_off_a_deployment_with_an_id():
+    model_list: Final = [
+        {"model_name": "opus", "litellm_params": {"model": _WILDCARD_SERVED}, "model_info": {"id": "exact"}},
+        {"model_name": _WILDCARD_SERVED, "litellm_params": {"model": _WILDCARD_SERVED}, "model_info": {}},
+    ]
+
+    result: Final = _aggregate_health_check_results(
+        _build_model_param_to_info_mapping(model_list),
+        [{"model": _WILDCARD_SERVED, "model_id": "exact"}],
+        [{"model": _WILDCARD_SERVED, "error": "throttled"}],
+    )
+
+    assert {key: (value["healthy_count"], value["unhealthy_count"]) for key, value in result.items()} == {
+        ("exact", "opus"): (1, 0),
+        (None, _WILDCARD_SERVED): (0, 1),
+    }
 
 
 if __name__ == "__main__":
