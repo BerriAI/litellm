@@ -656,26 +656,62 @@ async def test_litellm_proxy_decisions_refuse_what_the_deployment_turns_off(
     assert not route.called
 
 
+_PROXY_COST_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("header", "billed"), [("0.00042", 0.00042), ("not-a-cost", None)])
+@pytest.mark.parametrize(("cost_header", "billed"), [("0.00042", 0.00042), ("0", 0.0)])
 async def test_litellm_proxy_decisions_bill_the_cost_the_proxy_reports(
     respx_mock: respx.MockRouter,
-    header: str,
-    billed: float | None,
+    cost_header: str,
+    billed: float,
 ) -> None:
     respx_mock.post("https://proxy.example/v1/decisions").respond(
-        json=_OPENAI_PREDICATE_RESPONSE, headers={"x-litellm-response-cost": header}
+        json=_OPENAI_PREDICATE_RESPONSE, headers={"x-litellm-response-cost": cost_header}
     )
 
     response: Final = await litellm.adecisions(
         model="litellm_proxy/openai/gpt-6-luna",
-        input="The package arrived broken.",
-        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        **_PROXY_COST_REQUEST,
         api_base="https://proxy.example/v1",
         api_key="proxy-key",
     )
 
-    assert get_response_cost_from_hidden_params(response.hidden_params) == billed
+    assert response._hidden_params["response_cost"] == billed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost_header", [None, "not-a-cost", "-1", "nan", "inf"])
+async def test_litellm_proxy_decisions_bill_the_model_price_without_a_usable_cost_header(
+    respx_mock: respx.MockRouter,
+    cost_header: str | None,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE,
+        headers={} if cost_header is None else {"x-litellm-response-cost": cost_header},
+    )
+    respx_mock.post("https://openai.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    proxied: Final = await litellm.adecisions(
+        model="litellm_proxy/openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+    direct: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://openai.example/v1",
+        api_key="caller-key",
+    )
+
+    assert direct._hidden_params["response_cost"] > 0
+    assert proxied._hidden_params["response_cost"] == direct._hidden_params["response_cost"]
 
 
 @pytest.mark.asyncio
@@ -692,6 +728,7 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
         state="review photo-1",
         questions=_QUESTIONS,
         assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        images=[_PNG_DATA_URL],
         safety_identifier="end-user-1",
         api_base="https://proxy.example/v1",
         api_key="proxy-key",
@@ -702,6 +739,7 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
     assert sent["model"] == "gemini/gemini-decision-1"
     assert sent["questions"] == _QUESTIONS
     assert sent["assets"] == {"photo-1": {"format": "png", "data_base64": "AA=="}}
+    assert sent["images"] == [_PNG_DATA_URL]
     assert sent["safety_identifier"] == "end-user-1"
     assert systemone_route.calls.last.request.headers["authorization"] == "Bearer proxy-key"
     assert response.answers["sentiment"].confidence == 0.8
