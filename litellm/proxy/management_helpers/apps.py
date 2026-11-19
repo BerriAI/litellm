@@ -13,7 +13,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
+from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchyStore,
@@ -43,6 +43,8 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
 
 if TYPE_CHECKING:
     from prisma import Prisma
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +149,7 @@ class AppStore:
         self,
         db: object,
         now: datetime | None = None,
-        cache: UserApiKeyCache | None = None,
+        cache: "UserApiKeyCache | None" = None,
     ) -> None:
         self.db: Final = cast("Prisma", db)  # cast-ok: Prisma wrappers share the generated client API
         self.now: Final = now or datetime.now(timezone.utc)
@@ -175,16 +177,15 @@ class AppStore:
         )
 
     async def definition(self) -> AppDefinition:
-        cache: Final = self.cache
-        if not isinstance(cache, UserApiKeyCache):
-            return await self._read_definition()
-        cached: Final = await cache.async_get_cache(key=_DEFINITION_CACHE_KEY, model_type=AppDefinition)
-        if cached is not None:
-            return cached
-        lease: Final = await cache.lease(_DEFINITION_CACHE_KEY)
-        definition: Final = await self._read_definition()
-        _ = await cache.async_set_leased(lease, definition, get_management_object_ttl(cache))
-        return definition
+        if self.cache is not None:
+            cached: Final = await self.cache.async_get_cache(key=_DEFINITION_CACHE_KEY, model_type=AppDefinition)
+            if cached is not None:
+                return cached
+            lease: Final = await self.cache.lease(_DEFINITION_CACHE_KEY)
+            definition: Final = await self._read_definition()
+            _ = await self.cache.async_set_leased(lease, definition, get_management_object_ttl(self.cache))
+            return definition
+        return await self._read_definition()
 
     async def _read_definition(self) -> AppDefinition:
         row: Final = await self.config.find_unique(where={"param_name": _DEFINITION_PARAM})
@@ -198,9 +199,8 @@ class AppStore:
         if not self._definition_cache_dirty:
             return
         self._definition_cache_dirty = False
-        cache: Final = self.cache
-        if isinstance(cache, UserApiKeyCache):
-            await evict_and_broadcast((_DEFINITION_CACHE_KEY,), cache)
+        if self.cache is not None:
+            await evict_and_broadcast((_DEFINITION_CACHE_KEY,), self.cache)
 
     async def lock_definition(self) -> _DefinitionState:
         from prisma import Json
