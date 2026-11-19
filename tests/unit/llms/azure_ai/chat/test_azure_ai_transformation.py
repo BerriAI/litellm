@@ -187,6 +187,16 @@ CHAT_COMPLETION_PAYLOAD: Final = {
     [
         pytest.param(FOUNDRY_RESOURCE_BASE, None, "/models/chat/completions", b"", id="resource-root"),
         pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/", None, "/openai/v1/chat/completions", b"", id="resource-openai-base"
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai",
+            "preview",
+            "/openai/v1/chat/completions",
+            b"api-version=preview",
+            id="resource-openai-base-preview",
+        ),
+        pytest.param(
             f"{FOUNDRY_RESOURCE_BASE}/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
             None,
             "/openai/deployments/gpt-4.1-mini/chat/completions",

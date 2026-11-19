@@ -38,13 +38,13 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning, warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
-    AZURE_OPENAI_RESOURCE_HOST_SUFFIXES,
     CHAT_COMPLETIONS_PATH,
     OPENAI_V1_PATH,
     api_key_header_for_base,
     foundry_project_root,
     foundry_v1_root,
     is_foundry_model_inference_base,
+    is_openai_v1_resource_base,
     with_foundry_project_scope,
     without_api_version,
 )
@@ -481,8 +481,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         v1_root: Final = foundry_v1_root(original_url) or (
             OPENAI_V1_PATH
             if (
-                original_url.host.endswith(AZURE_OPENAI_RESOURCE_HOST_SUFFIXES)
-                and original_url.path.rstrip("/") in ("", "/openai")
+                is_openai_v1_resource_base(original_url)
                 and (requested_api_version is None or BaseAzureLLM.is_azure_v1_api_version(requested_api_version))
             )
             else None
