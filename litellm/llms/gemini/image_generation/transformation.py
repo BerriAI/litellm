@@ -60,6 +60,23 @@ def raise_if_image_gen_flagged(
     from litellm.exceptions import ContentPolicyViolationError
     from litellm.litellm_core_utils.core_helpers import map_finish_reason
 
+    # A prompt blocked before generation has promptFeedback.blockReason and no
+    # candidates; the chat path maps this to content_filter as well.
+    prompt_feedback = response_object.get("promptFeedback")
+    if isinstance(prompt_feedback, Mapping):
+        block_reason = prompt_feedback.get("blockReason")
+        if isinstance(block_reason, str):
+            raise ContentPolicyViolationError(
+                message=f"Gemini image generation prompt blocked with blockReason={block_reason}",
+                model=model,
+                llm_provider=llm_provider,
+                response=raw_response,
+                provider_specific_fields={
+                    "block_reason": block_reason,
+                    "block_reason_message": prompt_feedback.get("blockReasonMessage"),
+                },
+            )
+
     for candidate in _JSON_OBJECTS.validate_python(response_object.get("candidates", [])):
         finish_reason = candidate.get("finishReason")
         if isinstance(finish_reason, str) and map_finish_reason(finish_reason) == "content_filter":

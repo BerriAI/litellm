@@ -220,6 +220,12 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         ]
 
         model_response.data = cast(list[OpenAIImage], data_list)
+        if not data_list:
+            from litellm.llms.gemini.image_generation.transformation import (
+                raise_if_image_gen_flagged,
+            )
+
+            raise_if_image_gen_flagged(response_json, model, raw_response, llm_provider="vertex_ai")
         return model_response
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:

@@ -284,3 +284,27 @@ class TestGeminiImageEditTransformation:
         Without this, Gemini returns: "Invalid JSON payload received. Unexpected token."
         """
         assert self.config.use_multipart_form_data() is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"parts": []}}]},
+        {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}},
+    ],
+)
+def test_transform_image_edit_response_raises_on_safety_block(payload) -> None:
+    from litellm.exceptions import ContentPolicyViolationError
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.json.return_value = payload
+    mock_response.status_code = 200
+    mock_response.headers = {}
+
+    with pytest.raises(ContentPolicyViolationError) as exc:
+        GeminiImageEditConfig().transform_image_edit_response(
+            model="gemini-2.5-flash-image",
+            raw_response=mock_response,
+            logging_obj=MagicMock(),
+        )
+    assert exc.value.llm_provider == "gemini"
