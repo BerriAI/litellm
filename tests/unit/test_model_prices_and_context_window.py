@@ -22,6 +22,8 @@ REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
+CostMap = Mapping[str, Mapping[str, JsonValue]]
+
 
 @pytest.fixture(scope="module")
 def prices() -> dict:
@@ -1080,11 +1082,11 @@ def test_model_prices_backup_is_synchronized(prices: dict):
         ("gpt-6.1-terra", "apac/gpt-6.1-terra"),
     ),
 )
-def test_azure_aliases_and_model_variants_retire_together(prices: dict, alias: str, snapshot: str) -> None:
+def test_azure_aliases_and_model_variants_retire_together(prices: CostMap, alias: str, snapshot: str) -> None:
     assert prices[f"azure/{alias}"]["deprecation_date"] == prices[f"azure/{snapshot}"]["deprecation_date"]
 
 
-def test_gmi_gemini_hydrogen_bills_at_its_hosted_rates(prices: dict, local_model_cost_map: None) -> None:
+def test_gmi_gemini_hydrogen_bills_at_its_hosted_rates(prices: CostMap, local_model_cost_map: None) -> None:
     model: Final = "gmi/google/gemini-4-hydrogen"
     row: Final = prices[model]
 
@@ -1099,11 +1101,12 @@ def test_gmi_gemini_hydrogen_bills_at_its_hosted_rates(prices: dict, local_model
     )
 
     expected_input: Final = (
-        50 * row["input_cost_per_token"]
-        + 10 * row["cache_creation_input_token_cost"]
-        + 40 * row["cache_read_input_token_cost"]
+        50 * TypeAdapter(float).validate_python(row["input_cost_per_token"])
+        + 10 * TypeAdapter(float).validate_python(row["cache_creation_input_token_cost"])
+        + 40 * TypeAdapter(float).validate_python(row["cache_read_input_token_cost"])
     )
-    assert (prompt_cost, completion_cost) == pytest.approx((expected_input, 20 * row["output_cost_per_token"]))
+    expected_output: Final = 20 * TypeAdapter(float).validate_python(row["output_cost_per_token"])
+    assert (prompt_cost, completion_cost) == pytest.approx((expected_input, expected_output))
 
 
 def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:
