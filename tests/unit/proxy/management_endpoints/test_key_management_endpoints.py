@@ -6985,6 +6985,30 @@ async def test_info_key_fn_archived_key_keeps_owner_authorization(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_info_key_fn_lets_an_ownerless_key_read_itself_by_plaintext(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    own_key: Final = "sk-ownerless-service-key"
+    other_key: Final = "sk-another-ownerless-key"
+    mock_prisma_client: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    caller: Final = UserAPIKeyAuth(api_key=hash_token(own_key), user_id=None, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hash_token(own_key), user_id=None, key_alias="own-service-key")
+    )
+    own_result: Final = await info_key_fn(key=own_key, user_api_key_dict=caller)
+    assert own_result["info"]["key_alias"] == "own-service-key"
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hash_token(other_key), user_id=None, key_alias="other-service-key")
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        await info_key_fn(key=other_key, user_api_key_dict=caller)
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
 async def test_info_key_fn_unknown_key_still_404s(monkeypatch):
     from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
 
