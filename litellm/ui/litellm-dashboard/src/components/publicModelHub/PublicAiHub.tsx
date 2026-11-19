@@ -15,6 +15,7 @@ import { type HubData, useHubData } from "./useHubData";
 import { type HubTab, useHubUrlState } from "./useHubUrlState";
 import { useRequirePublicHubAuth } from "./useRequirePublicHubAuth";
 import { catalogTypography } from "./fonts";
+import { useIsNarrow } from "./useIsNarrow";
 
 const hubStatus = (hub: HubData): HubStatus => {
   if (hub.models.error && hub.skills.isError) return "unavailable";
@@ -28,9 +29,11 @@ function PublicAiHubContent() {
   const hub = useHubData();
   const status = hubStatus(hub);
   const { tab, setTab, open, setOpen } = useHubUrlState();
+  const narrow = useIsNarrow();
   const paneProps = { selected: open, onSelect: setOpen };
   return (
     <Tabs
+      data-catalog-narrow={narrow || undefined}
       value={tab}
       onValueChange={(next) => setTab(next as HubTab)}
       className={`${catalogTypography} min-h-dvh gap-0 bg-background`}

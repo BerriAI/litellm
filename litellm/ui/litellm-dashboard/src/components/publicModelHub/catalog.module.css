@@ -46,10 +46,8 @@
   --primary-foreground: var(--background);
 }
 
-@media (max-width: 1100px) {
-  .typography {
-    --page-gutter: 28px;
-  }
+.typography:where([data-catalog-narrow]) {
+  --page-gutter: 28px;
 }
 
 @media (max-width: 640px) {

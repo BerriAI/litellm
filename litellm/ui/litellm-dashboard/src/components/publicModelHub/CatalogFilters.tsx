@@ -24,21 +24,21 @@ export function CatalogFilters({
   return (
     <aside
       data-slot="catalog-filters"
-      className="border-r border-r-border pr-[26px] max-[1099px]:border max-[1099px]:border-border max-[1099px]:pr-0"
+      className="border-r border-r-border pr-[26px] in-data-[catalog-narrow]:border in-data-[catalog-narrow]:border-border in-data-[catalog-narrow]:pr-0"
     >
       <Collapsible open={!narrow || expanded} onOpenChange={setExpanded}>
         <div
           data-slot="catalog-filter-heading"
-          className="flex items-center justify-between gap-2 pb-5 max-[1099px]:px-4 max-[1099px]:py-3"
+          className="flex items-center justify-between gap-2 pb-5 in-data-[catalog-narrow]:px-4 in-data-[catalog-narrow]:py-3"
         >
-          <h2 className="text-sm leading-[1.6] font-semibold max-[1099px]:hidden">
+          <h2 className="text-sm leading-[1.6] font-semibold in-data-[catalog-narrow]:hidden">
             {t("publicModelHub.catalog.filters")}
           </h2>
           <CollapsibleTrigger
             render={
               <Button
                 variant="ghost"
-                className="hidden h-auto flex-1 cursor-pointer items-center justify-between gap-2 p-0 text-sm leading-[1.6] font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 max-[1099px]:flex [&_svg]:size-3.5"
+                className="hidden h-auto flex-1 cursor-pointer items-center justify-between gap-2 p-0 text-sm leading-[1.6] font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 in-data-[catalog-narrow]:flex [&_svg]:size-3.5"
               />
             }
           >
@@ -52,7 +52,7 @@ export function CatalogFilters({
             </Button>
           )}
         </div>
-        <CollapsibleContent className="flex flex-col gap-[22px] max-[1099px]:grid max-[1099px]:grid-cols-2 max-[1099px]:gap-5 max-[1099px]:px-4 max-[1099px]:pt-1 max-[1099px]:pb-[18px]">
+        <CollapsibleContent className="flex flex-col gap-[22px] in-data-[catalog-narrow]:grid in-data-[catalog-narrow]:grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] in-data-[catalog-narrow]:gap-5 in-data-[catalog-narrow]:px-4 in-data-[catalog-narrow]:pt-1 in-data-[catalog-narrow]:pb-[18px]">
           {children}
         </CollapsibleContent>
       </Collapsible>
