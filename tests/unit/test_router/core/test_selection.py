@@ -791,3 +791,46 @@ async def test_a_refused_shared_litellm_model_reaches_only_its_configured_fallba
     core: Final = _collision_core(make_core, monkeypatch, None, True, **fallback_arguments)
     await core.call(op, {"model": "openai/shared", "messages": MESSAGES})
     assert host.deployments_called(op) == [expected]
+
+
+def _serving_only(
+    endpoint: str,
+) -> dict[str, object]:  # mutable-ok: deployment() reads model_info only when it is a dict
+    return {"enforce_supported_endpoints": True, "supported_endpoints": [endpoint]}
+
+
+def _chat_and_embedding_core(make_core: MakeCore, monkeypatch: pytest.MonkeyPatch, flag: bool) -> RouterCore:
+    monkeypatch.delenv(COLLISION_CHECK_ENV, raising=False)
+    return make_core(
+        model_list=[
+            deployment("chat-g", "c-1", model="openai/shared", model_info=_serving_only("/v1/chat/completions")),
+            deployment("emb-g", "e-1", model="openai/shared", model_info=_serving_only("/v1/embeddings")),
+        ],
+        num_retries=2,
+        retry_after=0,
+        disable_cooldowns=True,
+        enable_cross_model_group_collision_check=flag,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", [False, True])
+async def test_a_litellm_model_one_endpoint_serves_retries_a_transient_failure(
+    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch, host: ScriptedHost, flag: bool
+) -> None:
+    core: Final = _chat_and_embedding_core(make_core, monkeypatch, flag)
+    host.answer("openai/shared", server_error(), None)
+    await core.acompletion(model="openai/shared", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert host.deployments_called("acompletion") == ["c-1", "c-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", [False, True])
+async def test_a_litellm_model_one_endpoint_serves_spends_every_retry(
+    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch, host: ScriptedHost, flag: bool
+) -> None:
+    core: Final = _chat_and_embedding_core(make_core, monkeypatch, flag)
+    host.answer("openai/shared", server_error())
+    with pytest.raises(litellm.InternalServerError):
+        await core.acompletion(model="openai/shared", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert host.deployments_called("acompletion") == ["c-1", "c-1", "c-1"]

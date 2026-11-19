@@ -327,9 +327,8 @@ impl<H: RouterHost> Call<'_, H> {
             endpoint,
             requested: inputs.requested.as_deref().unwrap_or(name),
             wildcard_request: wildcard_request.as_deref(),
-            refuse_cross_group_litellm_model: snapshot
-                .settings
-                .enable_cross_model_group_collision_check,
+            refuse_cross_group_litellm_model: !inputs.count_only
+                && snapshot.settings.enable_cross_model_group_collision_check,
         };
         let resolution = resolve_request(
             registry,
