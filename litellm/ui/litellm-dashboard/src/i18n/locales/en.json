@@ -20957,6 +20957,17 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "tokenUsage": {
+      "tokenBreakdown": "Token breakdown",
+      "viewTokenBreakdown": "{{total}} total tokens. View breakdown",
+      "percentCached": "{{percent}} cached",
+      "cacheReadTokens": "Cache read tokens",
+      "cacheWriteTokens": "Cache write tokens",
+      "cacheCost": "Recorded cache cost",
+      "uncachedInputTokens": "Uncached input tokens",
+      "unclassifiedTokens": "Unclassified tokens",
+      "inconsistent": "Days with inconsistent token counts are shown as unclassified tokens."
+    },
     "organizationGroups": {
       "title": "Organization budget groups",
       "help": "Create reusable budgets, then assign them to customer organizations.",

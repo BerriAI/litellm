@@ -29,7 +29,6 @@ runs:
       id: cache
       uses: ./.github/actions/restore-rust-bridge
       with:
-        gateway: ${{ inputs.gateway }}
         stale-cost-map: ${{ inputs.stale-cost-map }}
 
     - name: Set up Python
@@ -86,7 +85,7 @@ runs:
         retention-days: 1
 
     - name: Save editable Rust bridge
-      if: steps.cache.outputs.restored != 'true' && (inputs.save-cache == 'true' || github.event_name == 'pull_request')
+      if: steps.cache.outputs.restored != 'true' && inputs.save-cache == 'true' && inputs.gateway == 'true'
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: rust-bridge-dist

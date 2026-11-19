@@ -16,7 +16,7 @@ pub use auth::{
     LitellmRole, OneOrMany, RbacRole, RoleMapping, RolePermissions, RoutingPath, ScopeMapping,
     UnregisteredJwtClientBehavior,
 };
-pub use environment::Environment;
+pub use environment::{Environment, Flag};
 pub use error::Error;
 pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
