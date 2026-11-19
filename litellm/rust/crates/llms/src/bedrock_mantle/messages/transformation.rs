@@ -1075,12 +1075,7 @@ mod tests {
             .chain(&[("x-other", "keep")])
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
-        let (body, headers) = sent(
-            config,
-            request("claude-test", json!({})),
-            forwarded,
-        )
-        .unwrap();
+        let (body, headers) = sent(config, request("claude-test", json!({})), forwarded).unwrap();
         assert_eq!(
             body.get("user_profile_id").and_then(Value::as_str),
             expected
