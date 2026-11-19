@@ -25673,6 +25673,14 @@
         "litellm_provider": "webiq",
         "mode": "search"
     },
+    "clawifi/search": {
+        "input_cost_per_query": 0.0019,
+        "litellm_provider": "clawifi",
+        "mode": "search",
+        "metadata": {
+            "notes": "Clawifi pricing: 1 credit per search call, Starter plan $19 for 10,000 credits a month. Cost = $19 / 10,000 = $0.0019 per query. Cache hits and searches with no results cost 0 credits. Source: https://clawifi.dev/pricing"
+        }
+    },
     "perplexity/search": {
         "input_cost_per_query": 0.005,
         "litellm_provider": "perplexity",
