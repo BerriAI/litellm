@@ -305,6 +305,9 @@ from litellm.types.utils import (
     is_litellm_owned_kwarg,
 )
 from litellm.types.utils import (
+    FileTypes as _FileTypes,
+)
+from litellm.types.utils import (
     TextChoices as _TextChoices,
 )
 from litellm.types.utils import (
@@ -355,6 +358,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, Type
 
 from typing_extensions import assert_never
 
+FileTypes: TypeAlias = _FileTypes
 TextChoices: TypeAlias = _TextChoices
 TextCompletionResponse: TypeAlias = _TextCompletionResponse
 TextCompletionStreamWrapper: TypeAlias = _TextCompletionStreamWrapper
