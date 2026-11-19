@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import math
 import re
 import sys
 import time
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -28,6 +29,7 @@ from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    PROXY_DB_LOOKUP_DEADLINE_SECONDS,
     PROXY_DB_LOOKUP_MAX_CONCURRENCY,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
@@ -96,10 +98,12 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_toke
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+    MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
+    model_access_group_registry_cache_key,
     object_permission_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
@@ -108,6 +112,7 @@ from litellm.utils import get_utc_datetime
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from tests._master_key import MASTER_KEY
+from tests._support.clock_loops import AutojumpClockLoop
 from pydantic import BaseModel
 from pydantic_core import to_json
 
@@ -121,8 +126,10 @@ from tests.unit.redis.stores.auth_cache_double import shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from tests.unit.proxy.rust_auth_stores import (
     FakeKeyStore,
+    FakeModelAccessGroupStore,
     FakeOrganizationStore,
     FakeTeamStore,
+    GroupBudget,
     RustAuthStores,
     install_rust_auth_stores,
 )
@@ -1083,6 +1090,180 @@ async def test_a_stalled_end_user_registry_falls_back_at_the_db_lookup_deadline(
         assert (registry, time.monotonic() - started < 2) == (None, True)
 
     assert db_lookup_stall_tracker.stalled_within(60)
+
+
+@dataclass
+class _StallableRegistryScanStore(FakeModelAccessGroupStore):
+    """Budget rows always answer, while the names-only registry scan hangs until ``stalled`` is cleared."""
+
+    stalled: bool = True
+    scans: int = 0
+    scan_started: asyncio.Event = field(default_factory=asyncio.Event)
+    scan_cancelled: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def names(self, limit: int) -> list[str]:
+        self.scans += 1
+        if not self.stalled:
+            return await super().names(limit)
+        self.scan_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.scan_cancelled.set()
+            raise
+        return []
+
+
+_VIRTUAL_DEADLOCK_GUARD_SECONDS: Final = 10 * (PROXY_DB_LOOKUP_DEADLINE_SECONDS + REGISTRY_ERROR_NEGATIVE_CACHE_TTL)
+
+
+def _run_on_autojump_clock(scenario: Callable[[AutojumpClockLoop], Awaitable[None]]) -> None:
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(asyncio.wait_for(scenario(loop), timeout=_VIRTUAL_DEADLOCK_GUARD_SECONDS))
+    finally:
+        leftover: Final = asyncio.all_tasks(loop)
+        for task in leftover:
+            task.cancel()
+        loop.run_until_complete(asyncio.gather(*leftover, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+
+def _cache_on_loop_clock(loop: AutojumpClockLoop) -> UserApiKeyCache:
+    return UserApiKeyCache(in_memory_cache=InMemoryCache(clock=loop.time))
+
+
+async def _load_model_access_group_registry(cache: UserApiKeyCache) -> frozenset[str] | None:
+    return await auth_checks._load_model_access_group_registry(prisma_client=MagicMock(), user_api_key_cache=cache)
+
+
+@pytest.fixture
+def _isolated_model_access_group_registry_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A contended asyncio.Lock binds to the first loop that waits on it, so the module lock must not meet this loop.
+    monkeypatch.setattr(auth_checks, "_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK", asyncio.Lock())
+
+
+def test_a_stalled_model_access_group_registry_scan_frees_holder_and_waiter_at_the_db_lookup_deadline(
+    _clear_db_lookup_stall, _isolated_model_access_group_registry_lock, monkeypatch: pytest.MonkeyPatch
+):
+    """A hung registry scan must not hold the load lock forever. The request running the scan and the request
+    queued behind it both fall back to per-group reads at the lookup deadline, the scan runs once and is cancelled,
+    and the miss is negative-cached for exactly its window before the scan is retried."""
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        store: Final = _StallableRegistryScanStore(groups={"tier-a": GroupBudget(max_budget=1.0)})
+        install_rust_auth_stores(monkeypatch, RustAuthStores(model_access_group=store))
+        cache: Final = _cache_on_loop_clock(loop)
+
+        holder: Final = asyncio.ensure_future(_load_model_access_group_registry(cache))
+        await store.scan_started.wait()
+        waiter: Final = asyncio.ensure_future(_load_model_access_group_registry(cache))
+        loaded: Final = await asyncio.gather(holder, waiter)
+        released_at: Final = loop.time()
+        await store.scan_cancelled.wait()
+
+        assert (loaded, store.scans, released_at >= PROXY_DB_LOOKUP_DEADLINE_SECONDS) == ([None, None], 1, True)
+        assert await cache.async_get_cache(key=model_access_group_registry_cache_key()) == (
+            MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL
+        )
+        assert db_lookup_stall_tracker.stalled_within(math.inf)
+
+        store.stalled = False
+        loop.advance(REGISTRY_ERROR_NEGATIVE_CACHE_TTL - 1)
+        assert (await _load_model_access_group_registry(cache), store.scans) == (None, 1)
+
+        loop.advance(2)
+        assert (await _load_model_access_group_registry(cache), store.scans) == (frozenset({"tier-a"}), 2)
+
+    _run_on_autojump_clock(scenario)
+
+
+def test_cancelling_a_request_mid_registry_scan_cancels_the_scan_and_frees_the_load_lock(
+    _clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch
+):
+    """Cancellation is not a database failure: it reaches the scan at once, caches nothing, and leaves the lock free
+    for the next request."""
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        store: Final = _StallableRegistryScanStore(groups={"tier-a": GroupBudget(max_budget=1.0)})
+        install_rust_auth_stores(monkeypatch, RustAuthStores(model_access_group=store))
+        cache: Final = _cache_on_loop_clock(loop)
+
+        request: Final = asyncio.ensure_future(_load_model_access_group_registry(cache))
+        await store.scan_started.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        await store.scan_cancelled.wait()
+
+        assert loop.time() < PROXY_DB_LOOKUP_DEADLINE_SECONDS
+        assert await cache.async_get_cache(key=model_access_group_registry_cache_key()) is None
+
+        store.stalled = False
+        assert (await _load_model_access_group_registry(cache), store.scans) == (frozenset({"tier-a"}), 2)
+
+    _run_on_autojump_clock(scenario)
+
+
+_ACCESS_GROUP_MODEL_LIST: Final = (
+    {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+        "model_info": {"access_groups": ["tier-a", "tier-b"]},
+    },
+)
+
+
+async def _spend_recorded_on_the_row(*, fallback_spend: float, **_: object) -> float:
+    return fallback_spend
+
+
+def test_an_over_budget_access_group_is_still_refused_when_the_registry_scan_stalls(
+    _clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch
+):
+    """With the registry unusable after the deadline, every group serving the model stays a candidate, so the
+    per-group budget read still refuses a request whose group is over budget."""
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        store: Final = _StallableRegistryScanStore(groups={"tier-a": GroupBudget(spend=5.0, max_budget=1.0)})
+        install_rust_auth_stores(monkeypatch, RustAuthStores(model_access_group=store))
+        cache: Final = _cache_on_loop_clock(loop)
+
+        with (
+            patch(  # test-quality-ok: common_checks lazily imports prisma_client from proxy_server
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: common_checks lazily imports user_api_key_cache from proxy_server
+                "litellm.proxy.proxy_server.user_api_key_cache", cache
+            ),
+            patch(  # test-quality-ok: get_current_spend is lazily imported inside the budget check
+                "litellm.proxy.proxy_server.get_current_spend", _spend_recorded_on_the_row
+            ),
+            pytest.raises(litellm.BudgetExceededError) as exc_info,
+        ):
+            await common_checks(
+                request_body={"model": "gpt-4o", "messages": []},
+                team_object=None,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=litellm.Router(model_list=list(_ACCESS_GROUP_MODEL_LIST)),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+                valid_token=UserAPIKeyAuth(api_key="hashed", models=["tier-a"], user_id="user-1"),
+                request=SimpleNamespace(
+                    method="POST", headers={}, query_params={}, url=SimpleNamespace(path="/v1/chat/completions")
+                ),
+                skip_budget_checks=False,
+            )
+
+        assert (exc_info.value.entity_id, store.scans, store.budget_lookups) == ("tier-a", 1, [("tier-a",)])
+        assert loop.time() >= PROXY_DB_LOOKUP_DEADLINE_SECONDS
+
+    _run_on_autojump_clock(scenario)
 
 
 @pytest.mark.asyncio
