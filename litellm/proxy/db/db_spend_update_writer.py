@@ -2430,13 +2430,14 @@ class DBSpendUpdateWriter:
             commit_window_spend_updates,
         )
 
-        await commit_window_spend_updates(
+        committed: Final = await commit_window_spend_updates(
             prisma_client=prisma_client,
             transactions=window_spend_transactions,
+            capture_spend=proxy_logging_obj is not None and bool(CustomerBudgetAlerting.callbacks()),
         )
         if proxy_logging_obj is not None:
             await CustomerBudgetAlerting.detect_committed_windows(
-                window_spend_transactions, prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
+                committed, prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
             )
 
     async def _drain_and_commit_daily_tag_spend_from_redis(

@@ -1,18 +1,26 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from litellm.accounting.delivery_projection import entity_transactions, project_deliveries
 from litellm.accounting.projection import Contribution
-from litellm.proxy.db.budget_window_spend_writer import commit_window_spend_updates
+from litellm.proxy.db.budget_window_spend_writer import CommittedWindowSpend, commit_window_spend_updates
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.db.model_usage_rollup import queue_model_usage_upsert
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
+from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.repositories.accounting_delivery_repository import DeliveryProjection, LedgerTransaction
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+
+@dataclass(frozen=True, slots=True)
+class AppliedDeliveries:
+    contributions: tuple[Contribution, ...] = ()
+    windows: tuple[CommittedWindowSpend, ...] = ()
 
 
 async def apply_deliveries(
@@ -22,7 +30,7 @@ async def apply_deliveries(
     prisma_client: "PrismaClient",
     writer: "DBSpendUpdateWriter",
     proxy_logging_obj: "ProxyLogging",
-) -> tuple[Contribution, ...]:
+) -> AppliedDeliveries:
     from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
 
     contributions: Final = project_deliveries(deliveries)
@@ -56,8 +64,10 @@ async def apply_deliveries(
                 outer_transaction=transaction,
             )
     windows: Final = tuple(_window(item) for item in contributions if item.table == "LiteLLM_BudgetWindowSpend")
-    await commit_window_spend_updates(prisma_client, windows, outer_transaction=transaction)
-    return contributions
+    committed: Final = await commit_window_spend_updates(
+        prisma_client, windows, outer_transaction=transaction, capture_spend=bool(CustomerBudgetAlerting.callbacks())
+    )
+    return AppliedDeliveries(contributions, committed)
 
 
 def _window(item: Contribution) -> WindowSpendTransaction:

@@ -4,7 +4,8 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+from itertools import product
 from typing import Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, InstanceOf, TypeAdapter
@@ -13,9 +14,8 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
+from litellm.proxy.db.budget_window_spend_writer import CommittedWindowSpend
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_identity
-from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (
     PrismaRecord,
     customer_row_reset_at,
@@ -29,6 +29,8 @@ from litellm.types.integrations.customer_budget import (
     CustomerBudgetEventType,
     CustomerBudgetScope,
 )
+from litellm.types.integrations.slack_alerting import SlackAlertingArgsEnum
+from litellm.types.proxy.auth.customer_hierarchy import app_budget_limits
 from litellm.types.proxy.management_endpoints.apps import App, AppFailure, AppMember, AppOrganization
 from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, CustomerBudgetUsage
 
@@ -160,7 +162,52 @@ async def _app_entity(
             return await store.get_member(app.app_id, customer_id, known_to_app_only=True)
 
 
-async def _app_events(scope: AppBudgetScope, entity_id: str, store: AppStore) -> tuple[CustomerBudgetEvent, ...]:
+def _app_usages(
+    scope: AppBudgetScope,
+    entity_id: str,
+    budget: Budget,
+    lifetime_spend: float,
+    store: AppStore,
+    windows: Sequence[CommittedWindowSpend] | None,
+) -> tuple[CustomerBudgetUsage, ...]:
+    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+
+    if windows is None:
+        return (
+            (
+                CustomerBudgetUsage(
+                    source="scalar", budget_duration=None, max_budget=budget.max_budget, spend=lifetime_spend
+                ),
+            )
+            if budget.max_budget is not None and budget.budget_duration is None
+            else ()
+        )
+    return tuple(
+        CustomerBudgetUsage(
+            source="window",
+            budget_duration=window.window_duration,
+            max_budget=limit.max_budget,
+            spend=window.spend,
+            window_start=window.window_start,
+            reset_at=customer_window_counters(
+                scope,
+                entity_id,
+                (limit,),
+                now=window.window_start.replace(tzinfo=timezone.utc),
+                reset_settings=store.customers.settings,
+            )[0].reset_at,
+        )
+        for window, limit in product(windows, app_budget_limits(budget))
+        if window.window_duration == limit.budget_duration
+    )
+
+
+async def _app_events(
+    scope: AppBudgetScope,
+    entity_id: str,
+    store: AppStore,
+    windows: Sequence[CommittedWindowSpend] | None,
+) -> tuple[CustomerBudgetEvent, ...]:
     app_id, customer_id = (entity_id, "") if scope == "app" else app_scope_identity(entity_id)
     app: Final = await store.get(app_id)
     if isinstance(app, AppFailure):
@@ -171,9 +218,7 @@ async def _app_events(scope: AppBudgetScope, entity_id: str, store: AppStore) ->
     budget: Final = entity.budget if isinstance(entity, App) else entity.effective_budget
     if budget is None:
         return ()
-    usages: Final = await app_budget_usage(
-        scope, entity_id, budget, entity.spend, store.customers.window_spend, store.now, store.customers.settings
-    )
+    usages: Final = _app_usages(scope, entity_id, budget, entity.spend, store, windows)
 
     def event(kind: CustomerBudgetEventType, usage: CustomerBudgetUsage, threshold: float) -> CustomerBudgetEvent:
         return CustomerBudgetEvent(
@@ -202,7 +247,7 @@ async def _app_events(scope: AppBudgetScope, entity_id: str, store: AppStore) ->
     soft_usages: Final = (
         existing
         if existing
-        else await app_budget_usage(
+        else _app_usages(
             scope,
             entity_id,
             Budget(
@@ -211,9 +256,8 @@ async def _app_events(scope: AppBudgetScope, entity_id: str, store: AppStore) ->
                 budget_limits=budget.budget_limits,
             ),
             entity.spend,
-            store.customers.window_spend,
-            store.now,
-            store.customers.settings,
+            store,
+            windows,
         )
     )
     soft: Final = tuple(
@@ -227,11 +271,16 @@ async def _app_events(scope: AppBudgetScope, entity_id: str, store: AppStore) ->
 
 
 async def _detect_app_events(
-    scope: AppBudgetScope, entity_id: str, database: object, cache: CustomerBudgetClaims, now: datetime
+    scope: AppBudgetScope,
+    entity_id: str,
+    database: object,
+    cache: CustomerBudgetClaims,
+    now: datetime,
+    windows: Sequence[CommittedWindowSpend] | None = None,
 ) -> None:
     try:
         store: Final = AppStore(getattr(database, "writer_db", getattr(database, "db", database)), now)
-        for event in await _app_events(scope, entity_id, store):
+        for event in await _app_events(scope, entity_id, store, windows):
             await CustomerBudgetAlerting.emit(event, cache)
     except Exception:  # noqa: BLE001  # Alert failures must not replay committed spend.
         verbose_proxy_logger.exception("Failed to send %s budget alert for %s", scope, entity_id)
@@ -253,6 +302,7 @@ class CustomerBudgetAlerting:
         cache: CustomerBudgetClaims,
         *,
         now: datetime | None = None,
+        windows: Sequence[CommittedWindowSpend] = (),
     ) -> None:
         if not CustomerBudgetAlerting.callbacks():
             return
@@ -267,19 +317,29 @@ class CustomerBudgetAlerting:
             ).items():
                 if cost > 0:
                     await _detect_app_events(scope, entity_id, database, cache, instant)
+        await CustomerBudgetAlerting.detect_committed_windows(windows, database, cache, now=instant)
 
     @staticmethod
     async def detect_committed_windows(
-        transactions: Sequence[WindowSpendTransaction], database: object, cache: CustomerBudgetClaims
+        transactions: Sequence[CommittedWindowSpend],
+        database: object,
+        cache: CustomerBudgetClaims,
+        *,
+        now: datetime | None = None,
     ) -> None:
         if not CustomerBudgetAlerting.callbacks():
             return
-        now: Final = utc_now()
+        instant: Final = now if now is not None else utc_now()
         for scope in _APP_SCOPES:
-            for entity_id in frozenset(
-                item["entity_id"] for item in transactions if item["entity_type"] == scope and item["spend"] > 0
-            ):
-                await _detect_app_events(scope, entity_id, database, cache, now)
+            for entity_id in frozenset(item.entity_id for item in transactions if item.entity_type == scope):
+                await _detect_app_events(
+                    scope,
+                    entity_id,
+                    database,
+                    cache,
+                    instant,
+                    tuple(item for item in transactions if item.entity_type == scope and item.entity_id == entity_id),
+                )
 
     @staticmethod
     @with_service_target("customer_budget_alerts")
@@ -295,7 +355,10 @@ class CustomerBudgetAlerting:
         ttl: Final = (
             100 * 365 * 24 * 60 * 60
             if event.period == "lifetime"
-            else max(1, math.ceil((datetime.fromisoformat(event.period) - event.timestamp).total_seconds()))
+            else max(
+                SlackAlertingArgsEnum.budget_alert_ttl.value if event.scope in _APP_SCOPES else 1,
+                math.ceil((datetime.fromisoformat(event.period) - event.timestamp).total_seconds()),
+            )
         )
         if await cache.async_increment_cache(key=key, value=1, ttl=ttl) != 1:
             return
