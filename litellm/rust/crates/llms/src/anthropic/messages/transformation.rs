@@ -364,7 +364,6 @@ pub(crate) fn transform_messages_request(
         messages,
         params: MessagesOptionalParams {
             context_management,
-            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
@@ -449,13 +448,6 @@ fn drop_non_string_tool_result_texts(
         .collect()
 }
 
-fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
-    extra
-        .into_iter()
-        .filter(|(key, value)| key != "safeguards" || !value.is_null())
-        .collect()
-}
-
 pub(crate) fn update_headers_with_anthropic_beta(
     headers: Headers,
     request: &MessagesRequest,
@@ -495,7 +487,7 @@ fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
 }
 
 fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
-    let Some(Value::Object(thread)) = params.extra.get("thread") else {
+    let Some(Value::Object(thread)) = &params.thread else {
         return false;
     };
     thread.get("type").and_then(Value::as_str) == Some("continue")
@@ -505,10 +497,7 @@ fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
 }
 
 fn is_threaded(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("thread")
-        .is_some_and(|thread| !thread.is_null())
+    params.thread.is_some()
 }
 
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
@@ -579,10 +568,7 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
 }
 
 fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
-    params
-        .extra
-        .get("safeguards")
-        .is_some_and(|value| !value.is_null())
+    params.safeguards.is_some()
 }
 
 /// Python's `messages_carry_output_config` reads any mapping, so a message that did not parse,

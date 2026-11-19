@@ -8,9 +8,11 @@ use std::{collections::BTreeMap, sync::Arc};
 use parking_lot::Mutex;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
+use litellm_router_types::RoutingStrategy;
+
 use crate::{
     Call, RouterStateSnapshot,
-    config::{Op, RoutingStrategy},
+    config::Op,
     error::Error,
     health_routing::WhenAllUnhealthy,
     host::{RouterHost, RouterRequest, RoutingContext, SelectStage},

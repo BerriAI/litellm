@@ -559,8 +559,9 @@ mod tests {
     use crate::{
         cache::{InMemoryRouterCache, UsageCounts},
         config::{RouterConfig, RouterDynamicConfig},
-        registry::{DeploymentSpec, RoutingGroupSpec},
+        registry::DeploymentSpec,
     };
+    use litellm_router_types::RoutingGroupSpec;
 
     #[rstest]
     #[case::rate_limit(FailureKind::RateLimit, Some(429), true)]
