@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import copy
 import json
 import re
@@ -526,6 +527,94 @@ async def test_litellm_proxy_decisions_go_to_the_proxy_with_its_own_key(
     assert route.called
     assert route.calls[0].request.headers["authorization"] == "Bearer proxy-key"
     assert json.loads(route.calls[0].request.content)["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_litellm_proxy", "model"),
+    [(True, "openai/gpt-6-luna"), (False, "litellm_proxy/openai/gpt-6-luna")],
+)
+async def test_litellm_proxy_decisions_without_a_proxy_base_never_go_to_openai(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    use_litellm_proxy: bool,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", use_litellm_proxy)
+    monkeypatch.delenv("LITELLM_PROXY_API_BASE", raising=False)
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openai-base.example/v1")
+    openai_routes: Final = tuple(
+        respx_mock.post(url).respond(json=_OPENAI_PREDICATE_RESPONSE)
+        for url in ("https://api.openai.com/v1/decisions", "https://openai-base.example/v1/decisions")
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="LITELLM_PROXY_API_BASE"):
+        await litellm.adecisions(
+            model=model,
+            input="The package arrived broken.",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        )
+
+    assert not any(route.called for route in openai_routes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_litellm_proxy", "model"),
+    [(True, "openai/gpt-6-luna"), (False, "litellm_proxy/openai/gpt-6-luna")],
+)
+async def test_litellm_proxy_decisions_never_send_the_openai_key_to_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    use_litellm_proxy: bool,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", use_litellm_proxy)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    with contextlib.suppress(litellm.AuthenticationError):
+        await litellm.adecisions(
+            model=model,
+            input="The package arrived broken.",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        )
+
+    assert "Bearer openai-key" not in {call.request.headers.get("authorization") for call in proxy_route.calls}
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_flagged_use_litellm_proxy_sends_decisions_to_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", False)
+    monkeypatch.delenv("USE_LITELLM_PROXY", raising=False)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {"model": "openai/gpt-6-luna", "use_litellm_proxy": True},
+            }
+        ]
+    )
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await router.adecisions(
+        model="decider",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert proxy_route.called
+    assert proxy_route.calls[0].request.headers["authorization"] == "Bearer proxy-key"
 
 
 @pytest.mark.asyncio
