@@ -46,7 +46,7 @@ def _relay_to(listener: socket.socket, address: tuple[str, int]) -> None:
     with contextlib.suppress(OSError):
         while True:
             client, _ = listener.accept()
-            upstream = socket.create_connection(address)
+            upstream: Final = socket.create_connection(address)
             threading.Thread(target=_pump, args=(client, upstream), daemon=True).start()
             threading.Thread(target=_pump, args=(upstream, client), daemon=True).start()
 
