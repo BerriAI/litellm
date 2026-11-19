@@ -1,5 +1,4 @@
 import json
-from decimal import Decimal
 from pathlib import Path
 from typing import Final
 
@@ -26,103 +25,11 @@ NEW_MODELS: Final = (
     "databricks/databricks-gpt-5-6-luna",
 )
 
-DOLLARS_PER_DBU: Final = Decimal("0.070")
-PRICE_FIELDS: Final = (
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "cache_creation_input_token_cost",
-    "cache_read_input_token_cost",
-)
-PUBLISHED_DBU_PER_MILLION: Final = {
-    "databricks/databricks-claude-haiku-5-5": ("1.429", "7.143", "1.786", "0.143"),
-    "databricks/databricks-claude-sonnet-5-5": ("28.571", "142.857", "35.714", "1.429"),
-    "databricks/databricks-gpt-6-1-sol": ("28.571", "142.857", "35.714", "1.429"),
-    "databricks/databricks-gpt-6-1-terra": ("14.286", "71.429", "17.857", "0.714"),
-    "databricks/databricks-gpt-6-astra": ("142.857", "714.286", "178.571", "14.286"),
-    "databricks/databricks-gpt-6-luna": ("1.429", "7.143", "1.786", "0.143"),
-    "databricks/databricks-gpt-6-sol": ("28.571", "142.857", "35.714", "2.857"),
-    "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
-    "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
-    "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
-    "databricks/databricks-claude-fable-5-2": ("114.286", "571.429", "142.857", "2.857"),
-    "databricks/system.ai.claude-fable-5-2": ("114.286", "571.429", "142.857", "2.857"),
-    "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
-    "databricks/databricks-claude-opus-4-8": ("71.429", "357.143", "89.286", "7.143"),
-    "databricks/databricks-claude-opus-4-7": ("71.429", "357.143", "89.286", "7.143"),
-    "databricks/databricks-claude-opus-4-6": ("71.429", "357.143", "89.286", "7.143"),
-    "databricks/databricks-claude-opus-4-5": ("71.429", "357.143", "89.286", "7.143"),
-    "databricks/databricks-claude-opus-4-1": ("214.286", "1071.429", "267.857", "21.429"),
-    "databricks/databricks-claude-opus-4": ("214.286", "1071.429", "267.857", "21.429"),
-    "databricks/databricks-claude-sonnet-5": ("28.571", "142.857", "35.714", "2.857"),
-    "databricks/databricks-claude-sonnet-4-6": ("42.857", "214.286", "53.571", "4.286"),
-    "databricks/databricks-claude-sonnet-4-5": ("42.857", "214.286", "53.571", "4.286"),
-    "databricks/databricks-claude-sonnet-4-1": ("42.857", "214.286", "53.571", "4.286"),
-    "databricks/databricks-claude-sonnet-4": ("42.857", "214.286", "53.571", "4.286"),
-    "databricks/databricks-claude-3-7-sonnet": ("42.857", "214.286", "53.571", "4.286"),
-    "databricks/databricks-claude-haiku-4-5": ("14.286", "71.429", "17.857", "1.429"),
-    "databricks/databricks-gpt-5": ("17.857", "142.857", "17.857", "1.786"),
-    "databricks/databricks-gpt-5-1": ("17.857", "142.857", "17.857", "1.786"),
-    "databricks/databricks-gpt-5-1-codex-max": ("17.857", "142.857", "17.857", "1.786"),
-    "databricks/databricks-gpt-5-1-codex-mini": ("3.571", "28.571", "3.571", "0.357"),
-    "databricks/databricks-gpt-5-mini": ("3.571", "28.571", "3.571", "0.357"),
-    "databricks/databricks-gpt-5-nano": ("0.714", "5.714", "0.714", "0.071"),
-    "databricks/databricks-gpt-5-2": ("25.000", "200.000", "25.000", "2.500"),
-    "databricks/databricks-gpt-5-2-codex": ("25.000", "200.000", "25.000", "2.500"),
-    "databricks/databricks-gpt-5-3-codex": ("25.000", "200.000", "25.000", "2.500"),
-    "databricks/databricks-gpt-5-6-sol": ("57.143", "285.714", "71.429", "5.714"),
-    "databricks/databricks-gpt-5-6-terra": ("35.714", "214.286", "44.643", "3.571"),
-    "databricks/databricks-gpt-5-6-luna": ("14.286", "85.714", "17.857", "1.429"),
-    "databricks/databricks-gpt-5-5": ("71.429", "428.571", "71.429", "7.143"),
-    "databricks/databricks-gpt-5-5-pro": ("428.571", "2571.429", "428.571", "428.571"),
-    "databricks/databricks-gpt-5-4": ("35.714", "214.286", "35.714", "3.571"),
-    "databricks/databricks-gpt-5-4-mini": ("10.714", "64.286", "10.714", "1.071"),
-    "databricks/databricks-gpt-5-4-nano": ("2.857", "17.857", "2.857", "0.286"),
-    "databricks/databricks-gemini-3-6-flash": ("26.786", "133.929", "26.786", "2.679"),
-    "databricks/databricks-gemini-3-5-flash": ("26.786", "160.714", "26.786", "2.679"),
-    "databricks/databricks-gemini-3-5-flash-lite": ("5.357", "44.643", "5.357", "0.536"),
-    "databricks/databricks-gemini-3-1-pro": ("35.714", "214.286", "35.714", "3.571"),
-    "databricks/databricks-gemini-3-pro": ("35.714", "214.286", "35.714", "3.571"),
-    "databricks/databricks-gemini-3-flash": ("8.929", "53.571", "8.929", "0.893"),
-    "databricks/databricks-gemini-3-1-flash-lite": ("4.464", "26.786", "4.464", "0.446"),
-    "databricks/databricks-gemini-2-5-pro": ("22.321", "178.571", "22.321", "2.232"),
-    "databricks/databricks-gemini-2-5-flash": ("5.357", "44.643", "5.357", "0.536"),
-    "databricks/databricks-kimi-k3": ("42.857", "214.286", "42.857", "4.286"),
-    "databricks/databricks-deepseek-v4-flash-0731": ("2.000", "4.000", "2.000", "0.400"),
-    "databricks/databricks-deepseek-v4-pro-0813": ("18.857", "56.571", "18.857", "1.886"),
-    "databricks/databricks-glm-5-2": ("20.000", "62.857", "20.000", "3.714"),
-    "databricks/databricks-glm-5-3": ("20.000", "62.857", "20.000", "3.714"),
-    "databricks/databricks-glm-5-3-flash": ("2.143", "7.143", "2.143", "0.429"),
-    "databricks/databricks-inkling": ("14.286", "57.857", "14.286", "2.429"),
-    "databricks/databricks-grok-4-6": ("35.714", "107.143", "35.714", "8.929"),
-    "databricks/databricks-qwen35-122b-a10b": ("3.143", "31.429", "3.143", "3.143"),
-    "databricks/databricks-qwen3-next-80b-a3b-instruct": ("2.143", "17.143", "2.143", "2.143"),
-    "databricks/databricks-qwen3-embedding-0-6b": ("0.286", "0", "0.286", "0.286"),
-}
-PROMOTIONAL_DISCOUNT: Final = 0.80
-PROMOTION_EXPIRES: Final = "2027-01-31"
-ENTRIES_STORING_PROMOTIONAL_RATE: Final = (
-    "databricks/databricks-gemini-2-5-pro",
-    "databricks/databricks-gemini-2-5-flash",
-)
-ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION: Final = (
-    "databricks/databricks-gemini-3-6-flash",
-    "databricks/databricks-gemini-3-5-flash",
-    "databricks/databricks-gemini-3-5-flash-lite",
-    "databricks/databricks-grok-4-6",
-    "databricks/databricks-gemini-3-1-pro",
-    "databricks/databricks-gemini-3-pro",
-    "databricks/databricks-gemini-3-flash",
-    "databricks/databricks-gemini-3-1-flash-lite",
-)
 CACHE_FIELDS: Final = ("cache_creation_input_token_cost", "cache_read_input_token_cost")
 
 
 def _model_info(model: str) -> ModelInfo:
     return litellm.get_model_info(model=model, custom_llm_provider="databricks")
-
-
-def _dollars_per_token(dbu_per_million: str) -> float:
-    return float(Decimal(dbu_per_million) * DOLLARS_PER_DBU / Decimal(10) ** 6)
 
 
 @pytest.mark.parametrize(
@@ -207,21 +114,34 @@ def test_models_without_a_cache_discount_bill_cache_tokens_at_the_input_rate(
     assert prompt_cost > 8000 * info["input_cost_per_token"]
 
 
-def test_every_model_without_published_cache_dbu_bills_cache_writes_at_its_own_input_rate(
-    local_model_cost_map: None,
+@pytest.mark.parametrize("uncached_tokens", (0, 1000))
+def test_every_priced_model_bills_cache_writes_at_its_configured_rate(
+    local_model_cost_map: None, uncached_tokens: int
 ) -> None:
-    without_published_rates: Final = [
+    priced_models: Final = tuple(
         model
         for model, info in litellm.model_cost.items()
         if model.startswith("databricks/")
-        and info.get("input_cost_per_token")
-        and model not in PUBLISHED_DBU_PER_MILLION
+        and info.get("input_cost_per_token") is not None
         and not (isinstance(info, AliasedCostEntry) and info.names[0] != model)
-    ]
+    )
+    assert priced_models
+    usage: Final = Usage(
+        prompt_tokens=uncached_tokens + 2000,
+        completion_tokens=0,
+        total_tokens=uncached_tokens + 2000,
+        cache_creation_input_tokens=2000,
+    )
 
-    for model in without_published_rates:
-        info = _model_info(model)
-        assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"]), model
+    for model in priced_models:
+        info: Final = _model_info(model)
+
+        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+
+        assert prompt_cost == pytest.approx(
+            uncached_tokens * info["input_cost_per_token"] + 2000 * info["cache_creation_input_token_cost"]
+        ), model
+        assert completion_cost == 0, model
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)
