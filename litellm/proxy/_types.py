@@ -2836,6 +2836,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
+    health_check_skip_blocked_background_models: bool = Field(
+        False,
+        description=(
+            "When true, deployments with model_info.blocked set to true are skipped by background health checks. "
+            "On-demand checks and Test Connection are unaffected."
+        ),
+    )
     background_health_check_model_groups: tuple[str, ...] | None = Field(
         None,
         description=(

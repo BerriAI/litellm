@@ -5290,21 +5290,25 @@ async def _run_background_health_check():
         cycle_id = f"bg-{background_health_check_cycle_seq}"
         cycle_start_time = time.monotonic()
 
-        # make 1 deep copy of llm_model_list on every health check iteration
-        _llm_model_list = copy.deepcopy(llm_model_list) or []
-        model_count_total = len(_llm_model_list)
-
-        # filter out models that have disabled background health checks
-        _llm_model_list = [
-            m for m in _llm_model_list if not m.get("model_info", {}).get("disable_background_health_check", False)
+        deployments = as_object_list(copy.deepcopy(llm_model_list)) or ()
+        model_count_total = len(deployments)
+        skip_blocked = general_settings_view().get("health_check_skip_blocked_background_models") is True
+        probe_candidates = [
+            deployment
+            for entry in deployments
+            if (deployment := as_str_mapping(entry)) is not None
+            and not (info := as_str_mapping(deployment.get("model_info")) or {}).get(
+                "disable_background_health_check", False
+            )
+            and (not skip_blocked or info.get("blocked") is not True)
         ]
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
-        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
+        _llm_model_list = list(filter_deployments_to_model_groups(probe_candidates, scoped_model_groups))
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
-                "background_health_check_model_groups matched no deployments; groups=%s",
+                "background_health_check_model_groups matched no eligible deployments; groups=%s",
                 sorted(scoped_model_groups),
             )
         model_count_enabled = len(_llm_model_list)

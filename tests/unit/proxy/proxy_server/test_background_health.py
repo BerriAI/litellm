@@ -15,11 +15,16 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 
+import litellm
 import litellm.proxy.proxy_server as proxy_server
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME
 from litellm.router_api import RouterSettings
 from litellm.proxy.proxy_server import (
@@ -740,3 +745,85 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
         await _run_background_health_check()
 
     assert probed["ids"] == ["listed-1", "listed-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared", [False, True], ids=["direct", "shared"])
+@pytest.mark.parametrize(
+    ("skip_blocked", "blocked", "expected"),
+    [
+        (None, True, ["active", "paused"]),
+        (False, True, ["active", "paused"]),
+        (True, True, ["active"]),
+        (True, False, ["active", "paused"]),
+    ],
+    ids=["unset", "off", "on", "unblocked"],
+)
+async def test_background_health_check_can_skip_blocked_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+    router_redis: tuple[RedisCache, object],
+    shared: bool,
+    skip_blocked: bool | None,
+    blocked: bool,
+    expected: list[str],
+) -> None:
+    deployments: Final = [
+        ("active", {}),
+        ("paused", {"blocked": blocked}),
+        ("opted-out", {"disable_background_health_check": True}),
+    ]
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_model_list",
+        [
+            {
+                "model_name": "health-probe",
+                "model_info": {"id": deployment_id, "mode": "chat", **flags},
+                "litellm_params": {
+                    "model": "openai/health-probe",
+                    "api_base": f"https://background-health.example/{deployment_id}/v1",
+                    "api_key": "test-key",
+                },
+            }
+            for deployment_id, flags in deployments
+        ],
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {} if skip_blocked is None else {"health_check_skip_blocked_background_models": skip_blocked},
+    )
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", shared)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", router_redis[0] if shared else None)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(proxy_server, "background_health_check_cycle_seq", 0)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    async def stop_after_cycle(_seconds: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(proxy_server, "asyncio", SimpleNamespace(sleep=stop_after_cycle))
+    with respx.mock as upstream:
+        upstream.post(host="background-health.example").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-probe",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "health-probe",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                },
+            )
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await _run_background_health_check()
+        paths: Final = sorted(call.request.url.path for call in upstream.calls)
+
+    assert paths == [f"/{deployment_id}/v1/chat/completions" for deployment_id in expected]
+    assert proxy_server.health_check_results["healthy_count"] == len(expected)
+    assert proxy_server.health_check_results["unhealthy_count"] == 0
