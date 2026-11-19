@@ -16,7 +16,6 @@ import pytest
 from fastapi import HTTPException, Response
 from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
-from typing_extensions import Never
 
 import litellm
 from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
@@ -5252,8 +5251,9 @@ async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 
-    class StampThenReport(CustomLogger):
+    class StampRejectThenReport(CustomLogger):
         async def async_pre_call_hook(
             self,
             user_api_key_dict: UserAPIKeyAuth,
@@ -5261,6 +5261,8 @@ async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data
             data: dict[str, object],
             call_type: str,
         ) -> dict[str, object]:
+            if "incoming_bearer_token" in data:
+                raise HTTPException(status_code=418, detail={"error": "teapot"})
             return {**data, "stamped_by_pre_call": call_type}
 
         async def async_post_call_response_headers_hook(
@@ -5272,8 +5274,8 @@ async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data
         ) -> dict[str, str]:
             return {"x-callback-stamp": str(data.get("stamped_by_pre_call")), "x-callback-response": str(response)}
 
-    async def explode(**kwargs: object) -> Never:
-        raise HTTPException(status_code=418, detail={"error": "teapot"})
+    async def echo() -> str:
+        return "not-reached"
 
     managed: Final = MCPServer(
         server_id="failing",
@@ -5283,20 +5285,25 @@ async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data
         allow_all_keys=True,
     )
     monkeypatch.setitem(rest_endpoints.global_mcp_server_manager.registry, managed.server_id, managed)
-    monkeypatch.setattr(litellm, "callbacks", [StampThenReport()])
-    monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", explode)
-    with pytest.raises(HTTPException) as error:
-        await rest_endpoints.call_tool_rest_api(
-            _build_request(
-                path="/mcp-rest/tools/call",
-                json_body={"server_id": "failing", "name": "failing-explode", "arguments": {}},
-            ),
-            Response(),
-            user_api_key_dict=UserAPIKeyAuth(
-                api_key="sk-failing",
-                object_permission={"object_permission_id": "failing", "mcp_servers": ["failing"]},
-            ),
-        )
+    monkeypatch.setattr(litellm, "callbacks", [StampRejectThenReport()])
+    global_mcp_tool_registry.register_tool(
+        name="failing-echo", description="Echo", input_schema={"type": "object"}, handler=echo
+    )
+    try:
+        with pytest.raises(HTTPException) as error:
+            await rest_endpoints.call_tool_rest_api(
+                _build_request(
+                    path="/mcp-rest/tools/call",
+                    json_body={"server_id": "failing", "name": "failing-echo", "arguments": {}},
+                ),
+                Response(),
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-failing",
+                    object_permission={"object_permission_id": "failing", "mcp_servers": ["failing"]},
+                ),
+            )
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("failing-")
     assert (error.value.status_code, error.value.detail) == (418, {"error": "teapot"})
     assert error.value.headers == {"x-callback-stamp": "call_mcp_tool", "x-callback-response": "None"}
 
