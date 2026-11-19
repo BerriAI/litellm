@@ -1,4 +1,5 @@
 import base64
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from pathlib import Path
@@ -12,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.gemini.transformation import (
     _extract_max_media_resolution_from_messages,
     _get_highest_media_resolution,
@@ -23,6 +25,134 @@ from litellm.responses.litellm_completion_transformation.transformation import L
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolMessage
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        ({}, {}),
+        (
+            {"document_metadata": {"start_page": 2, "end_page": 4, "content_layers": ["PAGE_TEXT"]}},
+            {"document_metadata": {"startPage": 2, "endPage": 4, "contentLayers": ["PAGE_TEXT"]}},
+        ),
+        (
+            {
+                "spreadsheet_metadata": {
+                    "sheet_index": 2,
+                    "visible_cells": "A1:D10",
+                    "content_layers": ["DATA", "VISUAL"],
+                },
+                "resolution": "high",
+            },
+            {
+                "spreadsheet_metadata": {
+                    "sheetIndex": 2,
+                    "visibleCells": "A1:D10",
+                    "contentLayers": ["DATA", "VISUAL"],
+                },
+                "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+            },
+        ),
+    ],
+)
+def test_file_inspection_preserves_slice_and_uri(version, metadata, expected):
+    uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", **metadata}}],
+        }
+    ]
+    original = deepcopy(messages)
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-3.8-flash")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}, **expected}, {"text": " "}],
+        }
+    ]
+    assert messages == original
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+def test_tool_files_api_reference_is_nested_file_data(version):
+    uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    result = gemini_convert_messages_with_history(
+        _responses_tool_media_history({"type": "file", "file": {"file_id": uri, "format": "application/pdf"}}),
+        model="gemini-3.8-flash",
+        custom_llm_provider="gemini",
+    )
+    assert result[-1] == {
+        "role": "user",
+        "parts": [
+            {
+                "function_response": {
+                    "id": "call_media",
+                    "name": "get_media",
+                    "response": {"ok": True},
+                    "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}],
+                }
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
+@pytest.mark.parametrize(
+    ("mime_type", "selection", "expected_selection"),
+    [
+        (
+            "application/pdf",
+            {"document_metadata": {"start_page": 3, "end_page": 4}},
+            {"document_metadata": {"startPage": 3, "endPage": 4}},
+        ),
+        (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            {"spreadsheet_metadata": {"sheet_index": 2}},
+            {"spreadsheet_metadata": {"sheetIndex": 2}},
+        ),
+    ],
+)
+def test_chat_tool_file_inspection_preserves_nested_selection(source, mime_type, selection, expected_selection):
+    if source == "inline":
+        file = {"file_data": f"data:{mime_type};base64,cGRm"}
+        expected_part = {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+    else:
+        uri = f"https://generativelanguage.googleapis.com/{source}/files/report"
+        file = {"file_id": uri}
+        expected_part = {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_media", "type": "function", "function": {"name": "get_media", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_media",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {**file, **selection, "format": mime_type, "resolution": "low", "detail": "high"},
+                }
+            ],
+        },
+    ]
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result[-1]["parts"] == [
+        {
+            "function_response": {
+                "id": "call_media",
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [
+                    {**expected_part, **expected_selection, "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"}}
+                ],
+            }
+        }
+    ]
 
 
 def _responses_tool_media_history(content: Mapping[str, object]) -> list[AllMessageValues]:
@@ -113,7 +243,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
             "https://generativelanguage.googleapis.com/v1beta/files/clip",
             None,
             True,
-            "inline media",
+            None,
         ),
         ("gemini", "gemini-3.8-flash", "gs://media-test/clip.mp4", None, True, "inline media"),
         ("vertex_ai", "gemini-2.5-flash", "gs://media-test/clip.mp4", None, False, None),

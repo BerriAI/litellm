@@ -13,7 +13,8 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
 from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
-from ...vertex_ai.gemini.transformation import GEMINI_FILES_API_URI_PREFIX, gemini_convert_messages_with_history
+from ...vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
+from ...vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 
@@ -135,7 +136,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         if (
                             _image_url
                             and "https://" in _image_url
-                            and not _image_url.startswith(GEMINI_FILES_API_URI_PREFIX)
+                            and not _image_url.startswith(GEMINI_FILES_API_URI_PREFIXES)
                         ):
                             image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
                             converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)
@@ -159,7 +160,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         if (
                             file_id
                             and ("http://" in file_id or "https://" in file_id)
-                            and not file_id.startswith(GEMINI_FILES_API_URI_PREFIX)
+                            and not file_id.startswith(GEMINI_FILES_API_URI_PREFIXES)
                         ):
                             # Convert HTTP/HTTPS file URL to base64 data
                             try:
