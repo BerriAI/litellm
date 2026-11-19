@@ -9,6 +9,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -37,9 +38,7 @@ HAPPY_RESPONSE = {
 def patched_chat(monkeypatch):
     """Stub chat-completions pipeline at ProxyBaseLLMRequestProcessing."""
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     async def _fake_process(self, *args, **kwargs):
         return dict(HAPPY_RESPONSE)
@@ -56,9 +55,7 @@ def patched_chat(monkeypatch):
 def patched_chat_error(monkeypatch):
     """Variant that makes the pipeline raise -> 400 via _handle_llm_api_exception."""
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(
-        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
-    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
 
     from litellm.proxy._types import ProxyException
 
@@ -66,9 +63,7 @@ def patched_chat_error(monkeypatch):
         raise ValueError("boom")
 
     async def _handler(self, *, e, user_api_key_dict, proxy_logging_obj):
-        return ProxyException(
-            message="boom", type="bad_request_error", param="model", code=400
-        )
+        return ProxyException(message="boom", type="bad_request_error", param="model", code=400)
 
     monkeypatch.setattr(
         common_request_processing.ProxyBaseLLMRequestProcessing,
@@ -77,7 +72,7 @@ def patched_chat_error(monkeypatch):
     )
     monkeypatch.setattr(
         common_request_processing.ProxyBaseLLMRequestProcessing,
-        "_handle_llm_api_exception",
+        "handle_llm_api_exception",
         _handler,
     )
     yield
@@ -117,6 +112,18 @@ def test_chat_completion_happy_path(client, auth_as, patched_chat, path):
         ],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
+
+
+def test_an_azure_chat_stream_cut_answers_the_client_with_the_error_line_alone(client, auth_as, azure_stream_cut):
+    payload = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    with auth_as():
+        response = client.post("/v1/chat/completions", json=payload)
+    _, error_frame, done = response.text.removesuffix("\n\n").split("\n\n")
+    assert response.status_code == 200
+    assert json.loads(error_frame.removeprefix("data: "))["error"]["message"] == (
+        "litellm.APIConnectionError: AzureException APIConnectionError - Response payload is not completed"
+    )
+    assert done == "data: [DONE]"
 
 
 @pytest.mark.parametrize("path", _CHAT_PATHS)

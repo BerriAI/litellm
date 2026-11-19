@@ -1,7 +1,8 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
@@ -27,13 +28,18 @@ class TranscriptionUsageObjectTransformation:
         if isinstance(usage_object, TranscriptionUsageDurationObject):
             return None
         elif isinstance(usage_object, TranscriptionUsageTokensObject):
+            input_token_details: Final = usage_object.input_token_details
             return Usage(
                 prompt_tokens=usage_object.input_tokens,
                 completion_tokens=usage_object.output_tokens,
                 total_tokens=usage_object.total_tokens,
-                prompt_tokens_details=PromptTokensDetailsWrapper(
-                    text_tokens=usage_object.input_token_details.text_tokens,
-                    audio_tokens=usage_object.input_token_details.audio_tokens,
+                prompt_tokens_details=(
+                    None
+                    if input_token_details is None
+                    else PromptTokensDetailsWrapper(
+                        text_tokens=input_token_details.text_tokens,
+                        audio_tokens=input_token_details.audio_tokens,
+                    )
                 ),
             )
         return None
@@ -50,19 +56,29 @@ _INTERACTIONS_MODALITY_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _modality_field(entry: Mapping[str, object]) -> str | None:
-    return _INTERACTIONS_MODALITY_FIELDS.get(str(entry.get("modality", "")).lower())
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _modality_field(entry: object) -> str | None:
+    return _INTERACTIONS_MODALITY_FIELDS.get(
+        str(require_attributes(entry, _SupportsGet, "get").get("modality", "")).lower()
+    )
 
 
 def _token_count(value: object) -> int:
     return value if isinstance(value, int) else 0
 
 
-def _modality_token_sums(entries: Sequence[Mapping[str, object]]) -> Mapping[str, int]:
+def _modality_token_sums(entries: Sequence[object]) -> Mapping[str, int]:
     fields: Final = frozenset(field for entry in entries if (field := _modality_field(entry)) is not None)
     return MappingProxyType(
         {
-            field: sum(_token_count(entry.get("tokens")) for entry in entries if _modality_field(entry) == field)
+            field: sum(
+                _token_count(require_attributes(entry, _SupportsGet, "get").get("tokens"))
+                for entry in entries
+                if _modality_field(entry) == field
+            )
             for field in fields
         }
     )
@@ -114,12 +130,16 @@ class InteractionsUsageObjectTransformation:
         return "total_input_tokens" in usage_object or "total_output_tokens" in usage_object
 
     @staticmethod
-    def transform_interactions_usage_object(usage_object: Mapping[str, Any]) -> Usage:
-        input_entries: Final = tuple(usage_object.get("input_tokens_by_modality") or ()) + tuple(
-            usage_object.get("tool_use_tokens_by_modality") or ()
+    def transform_interactions_usage_object(usage_object: Mapping[str, object]) -> Usage:
+        input_entries: Final = tuple(iter_items(usage_object.get("input_tokens_by_modality") or ())) + tuple(
+            iter_items(usage_object.get("tool_use_tokens_by_modality") or ())
         )
-        cached_sums: Final = _modality_token_sums(tuple(usage_object.get("cached_tokens_by_modality") or ()))
-        output_sums: Final = _modality_token_sums(tuple(usage_object.get("output_tokens_by_modality") or ()))
+        cached_sums: Final = _modality_token_sums(
+            tuple(iter_items(usage_object.get("cached_tokens_by_modality") or ()))
+        )
+        output_sums: Final = _modality_token_sums(
+            tuple(iter_items(usage_object.get("output_tokens_by_modality") or ()))
+        )
 
         total_cached_tokens: Final = _token_count(usage_object.get("total_cached_tokens"))
         input_sums: Final = _subtract_cached_from_input(

@@ -209,7 +209,7 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     """
     import litellm
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     test_guardrail = {
@@ -229,8 +229,7 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     initialized = [
         callback
         for callback in litellm.callbacks
-        if isinstance(callback, _OPTIONAL_PresidioPIIMasking)
-        and callback.guardrail_name == "test_presidio_chunk_size"
+        if isinstance(callback, OPTIONAL_PresidioPIIMasking) and callback.guardrail_name == "test_presidio_chunk_size"
     ]
     assert initialized, "presidio guardrail was not registered as a callback"
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
@@ -370,6 +369,44 @@ def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     }
     assert "broken_lakera_advisory" not in guardrail_names
     assert "healthy_presidio" in guardrail_names
+
+
+def test_init_guardrails_v2_keeps_guardrail_whose_env_values_are_blank():
+    """
+    Regression: a config.yaml guardrail with `default_on: os.environ/GUARDRAIL_DEFAULT_ON` and
+    that variable exported blank (a Helm `value: ""`) resolved to "", pydantic rejected it on the
+    bool field, and the proxy logged the guardrail and booted without it. Blank now means unset,
+    so the guardrail boots with its defaults.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "presidio_with_blank_env_values",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": "pre_call",
+                "default_on": "",
+                "mask_request_content": "",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    initialized = {
+        guardrail["guardrail_name"]: guardrail
+        for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "presidio_with_blank_env_values" in initialized
+    litellm_params = initialized["presidio_with_blank_env_values"]["litellm_params"]
+    assert litellm_params.default_on is False
+    assert litellm_params.mask_request_content is None
 
 
 def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_compile():
@@ -526,3 +563,45 @@ async def test_presidio_initialized_output_dispatch(
         )
     assert response.choices[0].message.content == expected
     assert len(selected) == expected_calls
+
+
+def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.guardrails import guardrail_registry
+    from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import AporiaGuardrail
+
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", InMemoryGuardrailHandler())
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "aporia-guard",
+                "guardrail_id": "aporia-1",
+                "litellm_params": {
+                    "guardrail": "aporia",
+                    "mode": "during_call",
+                    "default_on": True,
+                    "api_key": "aporia-key",
+                    "api_base": "https://aporia.example.test/project-1",
+                },
+            }
+        ]
+    )
+
+    (registered,) = (callback for callback in litellm.callbacks if isinstance(callback, AporiaGuardrail))
+    assert router.get_available_guardrail("aporia-guard") == {
+        "guardrail_name": "aporia-guard",
+        "litellm_params": {
+            "guardrail": "aporia",
+            "mode": "during_call",
+            "api_key": "aporia-key",
+            "api_base": "https://aporia.example.test/project-1",
+        },
+        "callback": registered,
+        "id": "aporia-1",
+    }

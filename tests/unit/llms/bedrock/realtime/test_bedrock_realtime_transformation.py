@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +14,9 @@ from litellm.llms.bedrock.realtime.transformation import (
 )
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.openai import OpenAIRealtimeEventTypes
+
+OBJECT_PARAMETERS: Final = {"type": "object"}
+CONFLICT_TOOL: Final = {"type": "function", "name": "get_weather", "parameters": OBJECT_PARAMETERS}
 
 
 class TestBedrockRealtimeConfig:
@@ -109,6 +113,50 @@ class TestBedrockRealtimeConfig:
         assert schema["type"] == "object"
         assert "location" in schema["properties"]
 
+    def test_transform_tools_flat_realtime_shape(self):
+        """The flat OpenAI Realtime tool shape {type: function, name, parameters}
+        produces the same toolSpec as the nested chat-completions shape (LIT-9465)"""
+        config = BedrockRealtimeConfig()
+
+        nested = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather for a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        flat = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get current weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            }
+        ]
+
+        assert config._transform_tools_to_bedrock_format(flat) == config._transform_tools_to_bedrock_format(nested)
+
+        flat_tools = config._transform_tools_to_bedrock_format(flat)
+        assert flat_tools[0]["toolSpec"]["name"] == "get_weather"
+        assert flat_tools[0]["toolSpec"]["description"] == "Get current weather for a city"
+        schema = json.loads(flat_tools[0]["toolSpec"]["inputSchema"]["json"])
+        assert schema["required"] == ["location"]
+
+        session_config = config.session_configuration_request("amazon.nova-2-sonic-v1:0", tools=flat)
+        prompt_start = json.loads(session_config)["prompt_start"]["event"]["promptStart"]
+        assert prompt_start["toolConfiguration"]["tools"][0]["toolSpec"]["name"] == "get_weather"
+
     def test_audio_format_mapping(self):
         """Test audio format to sample rate mapping"""
         config = BedrockRealtimeConfig()
@@ -147,6 +195,49 @@ class TestBedrockRealtimeConfig:
         # Verify session start message
         session_start = json.loads(messages[0])
         assert session_start["event"]["sessionStart"]["inferenceConfiguration"]["temperature"] == 0.9
+
+    def test_session_update_without_instructions_sends_empty_system_prompt(self):
+        config = BedrockRealtimeConfig()
+        session_update = {
+            "type": "session.update",
+            "session": {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get current weather",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ]
+            },
+        }
+
+        messages = config.transform_session_update_event(session_update)
+        event_names = [next(iter(json.loads(message)["event"])) for message in messages]
+        assert event_names[:3] == ["sessionStart", "promptStart", "contentStart"]
+        system_content_start = json.loads(messages[2])["event"]["contentStart"]
+        assert system_content_start["role"] == "SYSTEM"
+        text_input = json.loads(messages[3])["event"]["textInput"]
+        assert text_input["content"] == ""
+        assert json.loads(messages[4])["event"]["contentEnd"]["contentName"] == system_content_start["contentName"]
+
+    def test_session_update_instructions_become_system_prompt(self):
+        config = BedrockRealtimeConfig()
+        session_update = {"type": "session.update", "session": {"instructions": "Answer tersely."}}
+
+        messages = config.transform_session_update_event(session_update)
+        text_input = json.loads(messages[3])["event"]["textInput"]
+        assert text_input["content"] == "Answer tersely."
+
+    def test_second_session_update_sends_no_duplicate_prompt_start(self):
+        config = BedrockRealtimeConfig()
+        session_update = {"type": "session.update", "session": {"instructions": "You are helpful."}}
+
+        first = config.transform_session_update_event(session_update)
+        assert any("promptStart" in message for message in first)
+        assert config.transform_session_update_event(session_update) == []
 
     def test_transform_session_update_with_tools(self):
         """Test session.update with tools"""
@@ -273,12 +364,14 @@ class TestBedrockRealtimeResponseCreate:
             "amazon.nova-sonic-v1:0",
         )
 
-    def test_response_create_before_session_update_is_noop(self):
+    def test_response_create_before_session_update_starts_prompt_with_defaults(self):
         config = BedrockRealtimeConfig()
 
         messages = config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
 
-        assert messages == []
+        events = [next(iter(json.loads(message)["event"])) for message in messages]
+        assert events[:5] == ["sessionStart", "promptStart", "contentStart", "textInput", "contentEnd"]
+        assert "audioInput" in events[5:]
 
     def test_response_create_emits_spoken_trigger_audio(self):
         config = BedrockRealtimeConfig()
@@ -527,7 +620,9 @@ class TestBedrockRealtimeResponseTransformation:
         assert audio_deltas[0]["delta"] == "base64_audio_content"
 
     def test_transform_tool_use_response(self):
-        """Test toolUse response transformation"""
+        """toolUse is forwarded with its arguments even when no assistant response is
+        active yet (Bedrock Nova Sonic sends the call inside a role TOOL block before
+        any ASSISTANT contentStart, LIT-9465)"""
         config = BedrockRealtimeConfig()
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_123"
@@ -535,9 +630,77 @@ class TestBedrockRealtimeResponseTransformation:
         tool_use_message = {
             "event": {
                 "toolUse": {
-                    "toolUseId": "tool_call_123",
+                    "completionId": "comp_1",
+                    "content": '{"location":"New York"}',
+                    "contentId": "content_1",
+                    "promptName": "prompt_1",
+                    "role": "TOOL",
+                    "sessionId": "sess_1",
                     "toolName": "get_weather",
-                    "input": json.dumps({"location": "San Francisco"}),
+                    "toolUseId": "tool_call_123",
+                }
+            }
+        }
+
+        result = config.transform_realtime_response(
+            json.dumps(tool_use_message),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_message_1",
+                "current_response_id": None,
+                "current_conversation_id": None,
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": None,
+            },
+        )
+
+        assert [e["type"] for e in result["response"]] == [
+            "response.created",
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+        ]
+        response_created = result["response"][0]
+        assert response_created["response"]["id"] == result["current_response_id"]
+
+        arguments_delta = result["response"][2]
+        assert arguments_delta["delta"] == '{"location":"New York"}'
+        assert arguments_delta["call_id"] == "tool_call_123"
+        assert arguments_delta["item_id"] == result["response"][1]["item"]["id"]
+        assert arguments_delta["response_id"] == result["current_response_id"]
+
+        function_call = result["response"][3]
+        assert function_call["call_id"] == "tool_call_123"
+        assert function_call["name"] == "get_weather"
+        assert function_call["arguments"] == '{"location":"New York"}'
+        assert function_call["response_id"] == result["current_response_id"]
+        assert function_call["item_id"] != "item_message_1"
+        assert function_call["item_id"] == result["response"][1]["item"]["id"]
+        assert result["response"][1]["item"]["type"] == "function_call"
+
+        done_item = result["response"][4]["item"]
+        assert done_item["type"] == "function_call"
+        assert done_item["status"] == "completed"
+        assert done_item["call_id"] == "tool_call_123"
+        assert done_item["arguments"] == '{"location":"New York"}'
+
+    def test_tool_use_reuses_active_response(self):
+        """A toolUse arriving while an assistant response is in flight must not emit a
+        second response.created and must reuse the active response id"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        tool_use_message = {
+            "event": {
+                "toolUse": {
+                    "content": '{"location":"New York"}',
+                    "toolName": "get_weather",
+                    "toolUseId": "tool_call_123",
                 }
             }
         }
@@ -557,20 +720,19 @@ class TestBedrockRealtimeResponseTransformation:
             },
         )
 
-        # Check for function call event
-        assert len(result["response"]) == 1
-        function_call = result["response"][0]
-        assert function_call["type"] == "response.function_call_arguments.done"
-        assert function_call["call_id"] == "tool_call_123"
-        assert function_call["name"] == "get_weather"
-
-        # Verify arguments are properly formatted
-        args = json.loads(function_call["arguments"])
-        assert args["location"] == "San Francisco"
+        assert [e["type"] for e in result["response"]] == [
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+        ]
+        assert result["current_response_id"] == "resp_123"
+        assert all(e.get("response_id") == "resp_123" for e in result["response"])
 
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
         config = BedrockRealtimeConfig()
+        config._assistant_block_open = True
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_123"
 
@@ -828,8 +990,9 @@ class TestBedrockRealtimeSessionEvents:
 
 
 class TestBedrockRealtimeUserEventsAndUsage:
-    """Regression tests for #38346: USER ASR transcripts, speech boundary events,
-    usage propagation, and duplicate response.created"""
+    """Regression tests for #38346 (USER ASR transcripts, speech boundary events,
+    usage propagation, duplicate response.created) and for FINAL assistant text
+    blocks replaying every sentence after the audio turn ended"""
 
     @staticmethod
     def _run(config, messages):
@@ -1130,6 +1293,534 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ],
         )
         assert [e["type"] for e in events] == ["conversation.item.input_audio_transcription.delta"]
+
+    @staticmethod
+    def _assistant_text_block(stage: str, text: str, stop_reason: str) -> list[dict[str, object]]:
+        return [
+            {
+                "event": {
+                    "contentStart": {
+                        "role": "ASSISTANT",
+                        "type": "TEXT",
+                        "additionalModelFields": json.dumps({"generationStage": stage}),
+                    }
+                }
+            },
+            {"event": {"textOutput": {"content": text}}},
+            {"event": {"contentEnd": {"stopReason": stop_reason}}},
+        ]
+
+    @staticmethod
+    def _assistant_audio_block(stop_reason: str) -> list[dict[str, object]]:
+        return [
+            {"event": {"contentStart": {"role": "ASSISTANT", "type": "AUDIO"}}},
+            {"event": {"audioOutput": {"content": base64.b64encode(b"\x00\x01" * 8).decode()}}},
+            {"event": {"contentEnd": {"stopReason": stop_reason}}},
+        ]
+
+    def test_final_assistant_text_blocks_do_not_replay_the_spoken_sentences(self):
+        sentences: Final = ["I can't check live weather.", " Try a weather app.", " It will have the forecast."]
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", sentences[0], "PARTIAL_TURN")
+            + self._assistant_audio_block("PARTIAL_TURN")
+            + self._assistant_text_block("SPECULATIVE", sentences[1], "PARTIAL_TURN")
+            + self._assistant_audio_block("PARTIAL_TURN")
+            + self._assistant_text_block("SPECULATIVE", sentences[2], "PARTIAL_TURN")
+            + self._assistant_audio_block("END_TURN")
+            + self._assistant_text_block("FINAL", sentences[0], "END_TURN")
+            + self._assistant_text_block("FINAL", sentences[1], "PARTIAL_TURN")
+            + self._assistant_text_block("FINAL", sentences[2], "PARTIAL_TURN"),
+        )
+        types: Final = [e["type"] for e in events]
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == sentences
+        assert types.count("response.created") == 1
+        assert types.count("response.done") == 1
+        assert types[-1] == "response.done"
+        response_ids: Final = {e["response_id"] for e in events if e["type"] == "response.text.delta"}
+        assert response_ids == {events[0]["response"]["id"]}
+
+    def test_final_assistant_text_after_end_turn_opens_no_response(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("FINAL", "Already spoken.", "END_TURN"),
+        )
+        assert events == []
+
+    def test_speculative_text_after_a_final_block_is_forwarded(self):
+        config: Final = BedrockRealtimeConfig()
+        self._run(config, self._assistant_text_block("FINAL", "Already spoken.", "END_TURN"))
+        events: Final = self._run(config, self._assistant_text_block("SPECULATIVE", "Next turn.", "PARTIAL_TURN"))
+        assert [e["type"] for e in events][:1] == ["response.created"]
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == ["Next turn."]
+
+    def test_barge_in_marker_in_final_block_is_dropped_and_the_next_answer_still_flows(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "I can't check live weather.", "PARTIAL_TURN")
+            + self._assistant_audio_block("INTERRUPTED")
+            + self._assistant_text_block("FINAL", '{ "interrupted" : true }', "INTERRUPTED")
+            + self._assistant_text_block("FINAL", "I can't check live weather.", "INTERRUPTED")
+            + self._assistant_text_block("SPECULATIVE", "Still no live weather.", "PARTIAL_TURN")
+            + self._assistant_audio_block("END_TURN"),
+        )
+        types: Final = [e["type"] for e in events]
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == [
+            "I can't check live weather.",
+            "Still no live weather.",
+        ]
+        assert types.count("response.created") == 1
+        assert types.count("response.done") == 1
+
+    def test_nova2_sonic_tool_call_sequence_forwards_each_call_with_arguments(self):
+        """The real Nova 2 Sonic event sequence for one question: a USER transcript
+        block, two role TOOL blocks each carrying a toolUse with a distinct toolUseId,
+        then the post-tool-result ASSISTANT answer (LIT-9465)"""
+        args_json: Final = '{"location":"New York"}'
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            [
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "USER",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "FINAL"}),
+                        }
+                    }
+                },
+                {"event": {"textOutput": {"content": "ready"}}},
+                {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
+            ]
+            + self._tool_block("tooluse_A", args_json)
+            + self._tool_block("tooluse_B", args_json)
+            + self._assistant_text_block(
+                "SPECULATIVE", "The current weather in New York is sunny and 72 degrees.", "END_TURN"
+            ),
+        )
+
+        function_calls: Final = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+        assert [e["call_id"] for e in function_calls] == ["tooluse_A", "tooluse_B"]
+        assert all(e["name"] == "get_weather" for e in function_calls)
+        assert all(e["arguments"] == args_json for e in function_calls)
+        assert function_calls[0]["item_id"] != function_calls[1]["item_id"]
+
+        response_dones: Final = [e for e in events if e["type"] == "response.done"]
+        assert len(response_dones) == 3
+        tool_call_dones: Final = [
+            d for d in response_dones if any(o["type"] == "function_call" for o in d["response"]["output"])
+        ]
+        assert len(tool_call_dones) == 2
+        assert tool_call_dones[0]["response"]["output"][0]["call_id"] == "tooluse_A"
+        assert tool_call_dones[1]["response"]["output"][0]["call_id"] == "tooluse_B"
+        for done, call in zip(tool_call_dones, function_calls):
+            assert len(done["response"]["output"]) == 1
+            assert done["response"]["output"][0]["type"] == "function_call"
+            assert done["response"]["output"][0]["status"] == "completed"
+            assert done["response"]["id"] == call["response_id"]
+        final_output: Final = response_dones[2]["response"]["output"]
+        assert [o["type"] for o in final_output] == ["message"]
+        assert final_output[0]["status"] == "completed"
+
+        response_ids: Final = {d["response"]["id"] for d in response_dones}
+        assert len(response_ids) == 3
+
+    @staticmethod
+    def _tool_block(tool_use_id: str, arguments: str = '{"city":"Paris"}') -> list[dict[str, object]]:
+        return [
+            {"event": {"contentStart": {"role": "TOOL", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
+            {
+                "event": {
+                    "toolUse": {
+                        "content": arguments,
+                        "contentId": f"c_{tool_use_id}",
+                        "role": "TOOL",
+                        "toolName": "get_weather",
+                        "toolUseId": tool_use_id,
+                    }
+                }
+            },
+            {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
+        ]
+
+    @staticmethod
+    def _item_id_of(event) -> str | None:
+        if event["type"].startswith("response.output_item."):
+            return event["item"]["id"]
+        return event.get("item_id")
+
+    def test_tool_call_after_assistant_message_uses_output_index_one(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "Let me check.", "PARTIAL_TURN") + self._tool_block("tooluse_A"),
+        )
+        types: Final = [e["type"] for e in events]
+        assert types.count("response.created") == 1
+
+        added_items: Final = [e["item"]["id"] for e in events if e["type"] == "response.output_item.added"]
+        message_id, call_id = added_items
+
+        message_events: Final = [e for e in events if self._item_id_of(e) == message_id]
+        call_events: Final = [e for e in events if self._item_id_of(e) == call_id]
+        assert message_events and all(e["output_index"] == 0 for e in message_events)
+        assert call_events and all(e["output_index"] == 1 for e in call_events)
+
+        response_dones: Final = [e for e in events if e["type"] == "response.done"]
+        assert len(response_dones) == 1
+        assert [o["id"] for o in response_dones[0]["response"]["output"]] == [message_id, call_id]
+
+    def test_tool_call_inside_open_assistant_block_defers_response_done(self):
+        config: Final = BedrockRealtimeConfig()
+        events: Final = self._run(
+            config,
+            [
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "ASSISTANT",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "SPECULATIVE"}),
+                        }
+                    }
+                },
+                {"event": {"textOutput": {"content": "Let me check."}}},
+            ]
+            + self._tool_block("tooluse_A")
+            + [
+                {"event": {"textOutput": {"content": " It is 72."}}},
+                {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN"}}},
+            ],
+        )
+        types: Final = [e["type"] for e in events]
+        assert types.count("response.done") == 1
+        assert types[-1] == "response.done"
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == ["Let me check. It is 72."]
+
+        next_events: Final = self._run(config, self._assistant_text_block("SPECULATIVE", "Sunny.", "END_TURN"))
+        assert [e["text"] for e in next_events if e["type"] == "response.text.done"] == ["Sunny."]
+        assert all(e["output_index"] == 0 for e in next_events if "output_index" in e)
+        assert [e["response"]["id"] for e in next_events if e["type"] == "response.created"] != [
+            e["response"]["id"] for e in events if e["type"] == "response.created"
+        ]
+
+    def test_response_done_message_item_carries_the_text_part(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "It is 72.", "END_TURN"),
+        )
+        (done,) = [e for e in events if e["type"] == "response.done"]
+        (message_item,) = [o for o in done["response"]["output"] if o["type"] == "message"]
+        assert message_item["content"] == [{"type": "text", "text": "It is 72."}]
+
+    def test_response_done_message_item_merges_text_then_audio_parts_in_order(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "Hi.", "PARTIAL_TURN") + self._assistant_audio_block("END_TURN"),
+        )
+        (done,) = [e for e in events if e["type"] == "response.done"]
+        assert [o["type"] for o in done["response"]["output"]] == ["message"]
+        assert done["response"]["output"][0]["content"] == [
+            {"type": "text", "text": "Hi."},
+            {"type": "audio", "transcript": ""},
+        ]
+
+    def test_session_update_rejection_before_prompt_start(self):
+        assert (
+            BedrockRealtimeConfig().session_update_rejection(
+                {"type": "session.update", "session": {"tools": [CONFLICT_TOOL]}}
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        "session,expects_conflict",
+        [
+            ({"modalities": ["text"]}, False),
+            ({"tools": [CONFLICT_TOOL]}, False),
+            ({"tools": [{"parameters": OBJECT_PARAMETERS, "name": "get_weather", "type": "function"}]}, False),
+            (
+                {"tools": [{"type": "function", "function": {"name": "get_weather", "parameters": OBJECT_PARAMETERS}}]},
+                False,
+            ),
+            ({"tools": None}, False),
+            ({"voice": None}, False),
+            ({"output_sample_rate_hertz": 24000.0}, False),
+            ({"output_sample_rate_hertz": 16000.0}, True),
+            ({"tools": [{"type": "function", "name": "get_time", "parameters": OBJECT_PARAMETERS}]}, True),
+            ({"tools": []}, True),
+            ({"instructions": "Be brief."}, True),
+            ({"instructions": None}, False),
+            ({"instructions": ""}, False),
+            ({"voice": "amy"}, True),
+            ({"output_audio_format": "g711_ulaw"}, True),
+            ({"output_sample_rate_hertz": 8000}, True),
+            ({"temperature": 0.1}, True),
+            ({"max_response_output_tokens": 512}, True),
+            ({"voice": "matthew", "temperature": 0.7}, False),
+            ({"input_audio_format": "g711_alaw"}, False),
+        ],
+    )
+    def test_session_update_rejection_locked_settings(self, session, expects_conflict):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": {"tools": [CONFLICT_TOOL]}})
+        assert config.prompt_started
+
+        conflict: Final = config.session_update_rejection({"type": "session.update", "session": session})
+        assert (conflict.code if conflict else None) == ("session_update_not_applied" if expects_conflict else None)
+
+    def test_session_update_with_inf_max_tokens_omits_max_tokens_from_session_start(self):
+        config: Final = BedrockRealtimeConfig()
+        messages: Final = config.transform_session_update_event(
+            {"type": "session.update", "session": {"max_response_output_tokens": "inf", "modalities": ["text"]}}
+        )
+        session_start: Final = json.loads(messages[0])["event"]["sessionStart"]["inferenceConfiguration"]
+        assert "maxTokens" not in session_start
+        assert session_start["topP"] == 0.9
+        assert session_start["temperature"] == 0.7
+
+    @pytest.mark.parametrize(
+        "first_session,later_session,expects_conflict",
+        [
+            ({"modalities": ["text"]}, {"max_response_output_tokens": "inf"}, True),
+            ({"max_response_output_tokens": "inf"}, {"max_response_output_tokens": "inf"}, False),
+            ({"max_response_output_tokens": "inf"}, {"max_response_output_tokens": 2048}, True),
+        ],
+    )
+    def test_session_update_rejection_inf_max_tokens(self, first_session, later_session, expects_conflict):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": first_session})
+        assert config.prompt_started
+
+        conflict: Final = config.session_update_rejection({"type": "session.update", "session": later_session})
+        assert (conflict is not None) == expects_conflict
+
+    def test_session_update_after_start_leaves_locked_attributes_unchanged(self):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": {"modalities": ["text"]}})
+
+        config.transform_session_update_event(
+            {
+                "type": "session.update",
+                "session": {"voice": "amy", "output_audio_format": "g711_ulaw", "temperature": 0.1},
+            }
+        )
+        assert config.voice_id == "matthew"
+        assert config.output_sample_rate_hertz == 24000
+        assert config.temperature == 0.7
+
+        # Input audio settings still apply mid-session
+        config.transform_session_update_event(
+            {"type": "session.update", "session": {"input_audio_format": "g711_alaw"}}
+        )
+        assert config.input_sample_rate_hertz == 8000
+        config.transform_session_update_event({"type": "session.update", "session": {"input_sample_rate_hertz": 16000}})
+        assert config.input_sample_rate_hertz == 16000
+
+    def test_stray_non_assistant_content_end_emits_no_duplicate_done_events(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "Hi.", "PARTIAL_TURN")
+            + [
+                {"event": {"contentStart": {"role": "USER", "type": "AUDIO"}}},
+                {"event": {"contentEnd": {}}},
+            ],
+        )
+        assert len([e for e in events if e["type"] == "response.text.done"]) == 1
+        message_item_dones: Final = [
+            e for e in events if e["type"] == "response.output_item.done" and e["item"]["type"] == "message"
+        ]
+        assert len(message_item_dones) == 1
+
+    @staticmethod
+    def _inference_configuration(config: BedrockRealtimeConfig, session: dict[str, object]) -> dict[str, object]:
+        messages: Final = config.transform_session_update_event({"type": "session.update", "session": session})
+        return json.loads(messages[0])["event"]["sessionStart"]["inferenceConfiguration"]
+
+    @pytest.mark.parametrize("max_output_tokens", [4096.0, 4096.5])
+    def test_float_max_tokens_reaches_session_start_as_an_integer(self, max_output_tokens):
+        inference: Final = self._inference_configuration(
+            BedrockRealtimeConfig(), {"max_response_output_tokens": max_output_tokens, "temperature": 1}
+        )
+        assert inference["maxTokens"] == 4096
+        assert isinstance(inference["maxTokens"], int)
+        assert inference["temperature"] == 1.0
+
+    @pytest.mark.parametrize(
+        "session,param",
+        [
+            ({"temperature": "0.2"}, "session.temperature"),
+            ({"temperature": True}, "session.temperature"),
+            ({"max_response_output_tokens": "4096"}, "session.max_response_output_tokens"),
+            ({"temperature": float("nan")}, "session.temperature"),
+            ({"max_response_output_tokens": float("inf")}, "session.max_response_output_tokens"),
+            ({"max_response_output_tokens": True}, "session.max_response_output_tokens"),
+            ({"output_sample_rate_hertz": "16000"}, "session.output_sample_rate_hertz"),
+            ({"instructions": {"role": "pirate"}}, "session.instructions"),
+            ({"voice": {"id": "voice_123"}}, "session.voice"),
+            ({"modalities": "text"}, "session.modalities"),
+            ({"modalities": ["text", 1]}, "session.modalities"),
+            ({"input_sample_rate_hertz": "16000"}, "session.input_sample_rate_hertz"),
+            ({"tools": {"type": "function", "name": "lookup"}}, "session.tools"),
+            ({"input_audio_format": {"type": "audio/pcm"}}, "session.input_audio_format"),
+            ({"output_audio_format": {"type": "audio/pcmu"}}, "session.output_audio_format"),
+        ],
+    )
+    def test_malformed_setting_is_rejected_without_drop_params(self, session, param):
+        rejection: Final = BedrockRealtimeConfig().session_update_rejection(
+            {"type": "session.update", "session": session}
+        )
+        assert rejection is not None
+        assert (rejection.code, rejection.param) == ("invalid_type", param)
+
+    @pytest.mark.parametrize(
+        "session",
+        [
+            {"temperature": "0.2", "max_response_output_tokens": "4096"},
+            {"temperature": True, "max_response_output_tokens": float("nan")},
+        ],
+    )
+    def test_malformed_number_setting_is_dropped_with_drop_params(self, session):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        inference: Final = self._inference_configuration(config, session)
+        assert (inference["temperature"], inference["maxTokens"]) == (0.7, 1024)
+
+    def test_non_number_input_sample_rate_is_dropped_with_drop_params(self):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        session: Final = {"input_sample_rate_hertz": "8000"}
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        config.transform_session_update_event({"type": "session.update", "session": session})
+        assert config.input_sample_rate_hertz == BedrockRealtimeConfig().input_sample_rate_hertz
+
+    def test_non_string_instructions_and_voice_are_dropped_with_drop_params(self):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        session: Final = {"instructions": {"role": "pirate"}, "voice": {"id": "voice_123"}}
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        sent: Final = self._voice_and_system_prompt(config, session)
+        assert sent == self._voice_and_system_prompt(BedrockRealtimeConfig(), {})
+
+    @pytest.mark.parametrize("voice", ["alloy", "marin", "Alloy", "", " "])
+    def test_openai_or_empty_voice_is_rejected_without_drop_params(self, voice):
+        rejection: Final = BedrockRealtimeConfig().session_update_rejection(
+            {"type": "session.update", "session": {"voice": voice}}
+        )
+        assert rejection is not None
+        assert (rejection.code, rejection.param) == ("invalid_value", "session.voice")
+        assert f"'{voice}'" in rejection.message
+
+    def test_openai_voice_is_dropped_with_drop_params(self):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        session: Final = {"voice": "alloy", "instructions": "Answer as a pirate."}
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        voice, system_prompt = self._voice_and_system_prompt(config, session)
+        assert voice == self._voice_and_system_prompt(BedrockRealtimeConfig(), {})[0]
+        assert system_prompt == "Answer as a pirate."
+
+    def test_nova_voice_is_applied(self):
+        session: Final = {"voice": "tiffany"}
+        assert BedrockRealtimeConfig().session_update_rejection({"type": "session.update", "session": session}) is None
+        assert self._voice_and_system_prompt(BedrockRealtimeConfig(), session)[0] == "tiffany"
+
+    def test_g711_input_audio_format_sets_the_input_sample_rate(self):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": {"input_audio_format": "g711_ulaw"}})
+        assert config.input_sample_rate_hertz == 8000
+
+    @staticmethod
+    def _voice_and_system_prompt(config: BedrockRealtimeConfig, session: dict[str, object]) -> tuple[object, object]:
+        events: Final = [
+            json.loads(message)["event"]
+            for message in config.transform_session_update_event({"type": "session.update", "session": session})
+        ]
+        voice: Final = next(
+            e["promptStart"]["audioOutputConfiguration"]["voiceId"] for e in events if "promptStart" in e
+        )
+        system_prompt: Final = next(e["textInput"]["content"] for e in events if "textInput" in e)
+        return voice, system_prompt
+
+    def test_null_number_settings_count_as_unset(self):
+        session: Final = {"temperature": None, "max_response_output_tokens": None}
+        config: Final = BedrockRealtimeConfig()
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        inference: Final = self._inference_configuration(config, session)
+        assert (inference["temperature"], inference["maxTokens"]) == (0.7, 1024)
+
+    @staticmethod
+    def _audio_output_configuration(session: dict[str, object]) -> dict[str, object]:
+        messages: Final = BedrockRealtimeConfig().transform_session_update_event(
+            {"type": "session.update", "session": session}
+        )
+        return json.loads(messages[1])["event"]["promptStart"]["audioOutputConfiguration"]
+
+    @pytest.mark.parametrize("output_sample_rate_hertz", [16000, 16000.0])
+    def test_output_sample_rate_reaches_prompt_start_as_an_integer(self, output_sample_rate_hertz):
+        audio_output: Final = self._audio_output_configuration({"output_sample_rate_hertz": output_sample_rate_hertz})
+        assert audio_output["sampleRateHertz"] == 16000
+        assert isinstance(audio_output["sampleRateHertz"], int)
+
+    def test_null_voice_keeps_the_default_voice(self):
+        assert self._audio_output_configuration({"voice": None})["voiceId"] == "matthew"
+
+    @pytest.mark.parametrize(
+        "client_event",
+        [
+            {"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": []}},
+            {"type": "input_audio_buffer.append", "audio": base64.b64encode(bytes(320)).decode()},
+            {"type": "response.create"},
+        ],
+    )
+    def test_first_input_without_an_applied_session_update_starts_the_prompt_once(self, client_event):
+        config: Final = BedrockRealtimeConfig()
+        rejected: Final = {"type": "session.update", "session": {"temperature": "warm"}}
+        assert config.session_update_rejection(rejected) is not None
+
+        first: Final = config.transform_realtime_request(json.dumps(client_event), "amazon.nova-2-sonic-v1:0")
+        second: Final = config.transform_realtime_request(json.dumps(client_event), "amazon.nova-2-sonic-v1:0")
+
+        first_events: Final = [json.loads(message)["event"] for message in first]
+        assert [next(iter(event)) for event in first_events[:2]] == ["sessionStart", "promptStart"]
+        assert first_events[2]["contentStart"]["role"] == "SYSTEM"
+        assert first_events[0]["sessionStart"]["inferenceConfiguration"]["temperature"] == 0.7
+        assert not any("promptStart" in json.loads(message)["event"] for message in second)
+
+    @pytest.mark.parametrize(
+        "tool_use,name,arguments",
+        [
+            ({"toolUseId": "t1", "content": '{"city":"Paris"}'}, "", '{"city":"Paris"}'),
+            (
+                {"toolUseId": "t1", "toolName": "get_weather", "content": {"city": "Paris"}},
+                "get_weather",
+                '{"city": "Paris"}',
+            ),
+        ],
+    )
+    def test_tool_use_with_missing_name_or_object_content_is_forwarded(self, tool_use, name, arguments):
+        events: Final = self._run(BedrockRealtimeConfig(), [{"event": {"toolUse": tool_use}}])
+        (function_call,) = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+        assert (function_call["name"], function_call["arguments"]) == (name, arguments)
+
+    def test_tool_use_without_tool_use_id_is_forwarded_with_empty_call_id(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            [{"event": {"toolUse": {"content": '{"city":"Paris"}', "toolName": "get_weather"}}}],
+        )
+        (function_call,) = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+        assert (function_call["call_id"], function_call["arguments"]) == ("", '{"city":"Paris"}')
+
+    def test_tool_call_without_assistant_message_stays_output_index_zero(self):
+        events: Final = self._run(BedrockRealtimeConfig(), self._tool_block("tooluse_A"))
+        call_events: Final = [
+            e
+            for e in events
+            if e["type"]
+            in (
+                "response.output_item.added",
+                "response.output_item.done",
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            )
+        ]
+        assert call_events and all(e["output_index"] == 0 for e in call_events)
 
 
 if __name__ == "__main__":

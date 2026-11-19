@@ -31,10 +31,14 @@ import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import RouterSettingsOverride
 from reliability_support import (
+    AZURE_MODEL,
     CONTENT_POLICY_PROMPT,
+    REAL_MODEL,
+    SMALL_CONTEXT_MODEL,
     azure_prompt_filter_skipped,
     chat_override,
     completion_tokens_of,
@@ -49,6 +53,8 @@ from reliability_support import (
 )
 
 pytestmark = pytest.mark.e2e
+
+FALLBACK_MODEL: Final = "gpt-5.5"
 
 
 def _assert_served_by_fallback(resp: StreamingResponse) -> None:
@@ -95,6 +101,14 @@ def _filter_verdict(resp: StreamingResponse) -> str:
 
 class TestReliabilityFallbacks:
     @pytest.mark.covers("reliability.fallback.5xx.routes_to_fallback")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(FALLBACK_MODEL, REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_5xx_routes_to_fallback(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -107,11 +121,19 @@ class TestReliabilityFallbacks:
             scoped_key,
             primary,
             f"say hi {unique_marker()}",
-            override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
+            override=RouterSettingsOverride(fallbacks=[{primary: [FALLBACK_MODEL]}]),
         )
         _assert_served_by_fallback(resp)
 
     @pytest.mark.covers("reliability.fallback.timeout.routes_to_fallback")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(FALLBACK_MODEL, REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_timeout_routes_to_fallback(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -124,11 +146,19 @@ class TestReliabilityFallbacks:
             scoped_key,
             primary,
             f"say hi {unique_marker()}",
-            override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
+            override=RouterSettingsOverride(fallbacks=[{primary: [FALLBACK_MODEL]}]),
         )
         _assert_served_by_fallback(resp)
 
     @pytest.mark.covers("reliability.fallback.context_window.routes_to_fallback")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(FALLBACK_MODEL, SMALL_CONTEXT_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_context_window_routes_to_fallback(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -141,11 +171,19 @@ class TestReliabilityFallbacks:
             scoped_key,
             primary,
             oversized_prompt(unique_marker()),
-            override=RouterSettingsOverride(context_window_fallbacks=[{primary: ["gpt-5.5"]}]),
+            override=RouterSettingsOverride(context_window_fallbacks=[{primary: [FALLBACK_MODEL]}]),
         )
         _assert_served_by_fallback(resp)
 
     @pytest.mark.covers("reliability.fallback.content_policy.routes_to_fallback")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.AZURE, Provider.OPENAI,),
+            models=(AZURE_MODEL, FALLBACK_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_content_policy_routes_to_fallback(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -167,7 +205,7 @@ class TestReliabilityFallbacks:
                 scoped_key,
                 primary,
                 f"{CONTENT_POLICY_PROMPT} {unique_marker()}",
-                override=RouterSettingsOverride(content_policy_fallbacks=[{primary: ["gpt-5.5"]}]),
+                override=RouterSettingsOverride(content_policy_fallbacks=[{primary: [FALLBACK_MODEL]}]),
             )
         )
         _assert_served_by_fallback(resp)

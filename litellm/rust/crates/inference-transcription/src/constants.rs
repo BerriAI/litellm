@@ -1,0 +1,1 @@
+pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;

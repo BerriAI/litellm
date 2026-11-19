@@ -1,4 +1,5 @@
 import types
+from collections.abc import Mapping
 from typing import Final
 
 from openai.types.image import Image
@@ -20,9 +21,10 @@ class AmazonStability3Config:
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -64,6 +66,13 @@ class AmazonStability3Config:
             if "stable-image" in model:
                 return True
         return False
+
+    @classmethod
+    def is_stability_3_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_stability_3_model(model)
 
     @classmethod
     def transform_request_body(cls, text: str, optional_params: dict) -> AmazonStability3TextToImageRequest:

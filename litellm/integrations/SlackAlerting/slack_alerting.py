@@ -2,10 +2,11 @@
 #    Class for sending Slack Alerts #
 import asyncio
 import datetime
+import json
 import os
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -16,6 +17,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 import litellm.types
+from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -30,27 +32,28 @@ from litellm.integrations.SlackAlerting.hanging_request_check import (
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
-    _add_key_name_and_team_to_alert,
+    add_key_name_and_team_to_alert,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import (
+from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.table_repositories import InvitationLinkRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.types.integrations.slack_alerting import *
+from litellm.types.integrations.slack_alerting import (
     AlertType,
     CallInfo,
     InvitationModel,
     InvitationNew,
     Litellm_EntityType,
-    UserAPIKeyAuth,
     VirtualKeyEvent,
     WebhookEvent,
 )
-from litellm.repositories.table_repositories import InvitationLinkRepository
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.types.integrations.slack_alerting import *
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
     DEPRECATION_IDLE_POLL_SECONDS,
@@ -83,6 +86,15 @@ def _proxy_llm_router() -> Router | None:
     return llm_router
 
 
+_DAILY_REPORT_TARGET: Final = "daily_report_schedule"
+
+
+async def _model_deprecations_enabled() -> bool:
+    from litellm.proxy.proxy_server import prisma_client
+
+    return prisma_client is None or await ConfigRepository(prisma_client, use_writer=True).model_deprecations_enabled()
+
+
 class SlackAlerting(CustomBatchLogger):
     """
     Class for sending Slack Alerts
@@ -93,12 +105,13 @@ class SlackAlerting(CustomBatchLogger):
         self,
         internal_usage_cache: DualCache | None = None,
         alerting_threshold: float | None = None,  # threshold for slow / hanging llm responses (in seconds)
-        alerting: list | None = [],
+        alerting: list[str] | None = [],
         alert_types: list[AlertType] = DEFAULT_ALERT_TYPES,
         alert_to_webhook_url: dict[AlertType, list[str] | str]
         | None = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
         default_webhook_url: str | None = None,
+        model_deprecations_enabled: Callable[[], Awaitable[bool]] = _model_deprecations_enabled,
         alert_type_config: dict[str, dict] | None = None,
         async_http_handler: AsyncHTTPHandler | None = None,
         **kwargs,
@@ -116,6 +129,7 @@ class SlackAlerting(CustomBatchLogger):
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
+        self.model_deprecations_enabled: Final = model_deprecations_enabled
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
         self._periodic_flush_task: asyncio.Task[None] | None = None
@@ -138,7 +152,7 @@ class SlackAlerting(CustomBatchLogger):
 
     def update_values(
         self,
-        alerting: list | None = None,
+        alerting: list[str] | None = None,
         alerting_threshold: float | None = None,
         alert_types: list[AlertType] | None = None,
         alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None,
@@ -289,7 +303,7 @@ class SlackAlerting(CustomBatchLogger):
             # add deployment latencies to alert
             if kwargs is not None and "litellm_params" in kwargs and "metadata" in kwargs["litellm_params"]:
                 _metadata: Final[dict] = kwargs["litellm_params"]["metadata"]
-                request_info = _add_key_name_and_team_to_alert(request_info=request_info, metadata=_metadata)
+                request_info = add_key_name_and_team_to_alert(request_info=request_info, metadata=_metadata)
 
                 _deployment_latency_map: Final = self._get_deployment_latencies_to_alert(metadata=_metadata)
                 if _deployment_latency_map is not None:
@@ -345,7 +359,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             return 0
 
-    async def send_daily_reports(self, router) -> bool:
+    async def send_daily_reports(self, router: Router) -> bool:
         """
         Send a daily report on:
         - Top 5 deployments with most failed requests
@@ -361,7 +375,7 @@ class SlackAlerting(CustomBatchLogger):
             False -> if not sent
         """
 
-        ids: Final = router.get_model_ids()
+        ids: Final = router.registry().names(kind="ids")
 
         # get keys
         failed_request_keys: Final = [f"{id}:{SlackAlertingCacheKeys.failed_requests_key.value}" for id in ids]
@@ -426,7 +440,7 @@ class SlackAlerting(CustomBatchLogger):
             message += "\tNone\n"
         for i in range(len(top_5_failed)):
             key = failed_request_keys[top_5_failed[i]].split(":")[0]
-            _deployment = router.get_model_info(key)
+            _deployment = router.registry().deployment_dict(key)
             if isinstance(_deployment, dict):
                 deployment_name = _deployment["litellm_params"].get("model", "")
             else:
@@ -448,7 +462,7 @@ class SlackAlerting(CustomBatchLogger):
             message += "\tNone\n"
         for i in range(len(top_5_slowest)):
             key = latency_keys[top_5_slowest[i]].split(":")[0]
-            _deployment = router.get_model_info(key)
+            _deployment = router.registry().deployment_dict(key)
             if _deployment is not None:
                 deployment_name = _deployment["litellm_params"].get("model", "")
             else:
@@ -798,7 +812,7 @@ class SlackAlerting(CustomBatchLogger):
         if self.llm_router is None:
             return
 
-        deployment: Final = self.llm_router.get_deployment(model_id=deployment_id)
+        deployment: Final = self.llm_router.registry().deployment(deployment_id)
 
         if deployment is None:
             return
@@ -949,7 +963,7 @@ class SlackAlerting(CustomBatchLogger):
                 return
 
             ### EXTRACT MODEL DETAILS ###
-            deployment: Final = self.llm_router.get_deployment(model_id=deployment_id)
+            deployment: Final = self.llm_router.registry().deployment(deployment_id)
             if deployment is None:
                 return
 
@@ -1110,7 +1124,7 @@ Model Info:
         The daily lock is claimed only once there is something to say, so an empty pass never blocks a
         later real one, and a sent alert is stamped in the shared cache for a day so sibling pods stop asking
         """
-        if not self._deprecation_alerts_enabled():
+        if not self._deprecation_alerts_enabled() or not await self.model_deprecations_enabled():
             return False
 
         from litellm.proxy.common_utils.model_deprecation import (
@@ -1189,6 +1203,26 @@ Model Info:
                 await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
                 continue
             await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
+
+    def performance_alert_webhooks(self) -> tuple[str, ...]:
+        if not self.alerting or "slack" not in self.alerting or AlertType.performance_alerts not in self.alert_types:
+            return ()
+        configured: Final = (self.alert_to_webhook_url or {}).get(AlertType.performance_alerts)
+        destination: Final = (
+            configured
+            or self.default_webhook_url
+            or os.getenv("SLACK_WEBHOOK_URL")
+            or os.getenv("ALERTING_WEBHOOK_URL")
+        )
+        if isinstance(destination, list):
+            return tuple(dict.fromkeys(destination))
+        return (destination,) if destination else ()
+
+    async def send_performance_alert_summary(self, webhook: str, message: str) -> bool:
+        response: Final = await self.async_http_handler.post(
+            url=webhook, headers={"Content-Type": "application/json"}, data=json.dumps({"text": message})
+        )
+        return response.status_code == 200
 
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
@@ -1760,18 +1794,20 @@ Model Info:
         """
         report_sent_bool = False
 
-        report_sent: Final = await self.internal_usage_cache.async_get_cache(
-            key=SlackAlertingCacheKeys.report_sent_key.value,
-            parent_otel_span=None,
-        )  # None | float
+        with service_target(_DAILY_REPORT_TARGET):
+            report_sent: Final = await self.internal_usage_cache.async_get_cache(
+                key=SlackAlertingCacheKeys.report_sent_key.value,
+                parent_otel_span=None,
+            )  # None | float
 
         current_time: Final = time.time()
 
         if report_sent is None:
-            await self.internal_usage_cache.async_set_cache(
-                key=SlackAlertingCacheKeys.report_sent_key.value,
-                value=current_time,
-            )
+            with service_target(_DAILY_REPORT_TARGET):
+                await self.internal_usage_cache.async_set_cache(
+                    key=SlackAlertingCacheKeys.report_sent_key.value,
+                    value=current_time,
+                )
         elif isinstance(report_sent, float):
             # Check if current time - interval >= time last sent
             interval_seconds: Final = self.alerting_args.daily_report_frequency
@@ -1790,17 +1826,18 @@ Model Info:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
-                await self.internal_usage_cache.async_set_cache(
-                    key=SlackAlertingCacheKeys.report_sent_key.value,
-                    value=current_time,
-                )
+                with service_target(_DAILY_REPORT_TARGET):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=SlackAlertingCacheKeys.report_sent_key.value,
+                        value=current_time,
+                    )
                 report_sent_bool = True
 
         return report_sent_bool
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: Any | None = None,
+        llm_router: object | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """
@@ -1838,7 +1875,7 @@ Model Info:
 
         try:
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
-                _get_spend_report_for_time_range,
+                get_spend_report_for_time_range,
             )
 
             # Parse the time range
@@ -1855,7 +1892,7 @@ Model Info:
             if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
                 return
 
-            _resp: Final = await _get_spend_report_for_time_range(
+            _resp: Final = await get_spend_report_for_time_range(
                 start_date=start_date.strftime("%Y-%m-%d"),
                 end_date=todays_date.strftime("%Y-%m-%d"),
             )
@@ -1902,7 +1939,7 @@ Model Info:
             from calendar import monthrange
 
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
-                _get_spend_report_for_time_range,
+                get_spend_report_for_time_range,
             )
 
             todays_date: Final = datetime.datetime.now().date()
@@ -1914,7 +1951,7 @@ Model Info:
             if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
                 return
 
-            _resp: Final = await _get_spend_report_for_time_range(
+            _resp: Final = await get_spend_report_for_time_range(
                 start_date=first_day_of_month.strftime("%Y-%m-%d"),
                 end_date=last_day_of_month.strftime("%Y-%m-%d"),
             )

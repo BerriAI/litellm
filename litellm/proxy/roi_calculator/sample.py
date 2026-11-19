@@ -1,7 +1,14 @@
 from datetime import datetime, timedelta
 from typing import Final
 
-from litellm.types.roi_calculator import DEFAULT_PROMPT, ROIEstimate, ROIPullRecord, ROIReport, ROISpendRecord
+from litellm.types.roi_calculator import (
+    DEFAULT_PROMPT,
+    ROIBranchSpend,
+    ROIEstimate,
+    ROIPullRecord,
+    ROIReport,
+    ROISpendRecord,
+)
 
 
 def sample_report(now: datetime) -> ROIReport:
@@ -9,8 +16,10 @@ def sample_report(now: datetime) -> ROIReport:
     examples: Final = (
         ("alex", "alex@example.com", "Add usage breakdown by model", 6.5, 18.2),
         ("jordan", "jordan@example.com", "Fix streaming response cancellation", 4.0, 12.8),
-        ("casey", "", "Add integration tests for billing", 5.5, 0.0),
+        ("casey", "", "Add integration tests for billing", 5.5, 7.4),
     )
+    branches: Final = ("feature/model-usage", "fix/stream-cancellation", "test/billing-integration")
+    branch_costs: Final = (9.1, 6.4, 7.4)
 
     def pull(index: int, login: str, email: str, title: str, hours: float) -> ROIPullRecord:
         estimate: Final[ROIEstimate] = {
@@ -23,6 +32,8 @@ def sample_report(now: datetime) -> ROIReport:
             "cached": False,
         }
         return ROIPullRecord(
+            source_repo="github.com/example/gateway",
+            source_branch=branches[index],
             repo="example/gateway",
             number=142 + index,
             title=title,
@@ -47,9 +58,13 @@ def sample_report(now: datetime) -> ROIReport:
     spend: Final = tuple(
         ROISpendRecord(date=pulls[index]["merged_at"][:10], user_id=login, email=email, spend=cost, requests=150)
         for index, (login, email, _, _, cost) in enumerate(examples)
-        if email
     )
     return ROIReport(
+        branch_spend=tuple(
+            ROIBranchSpend(repo="github.com/example/gateway", branch=branch, spend=cost, requests=75)
+            for branch, cost in zip(branches, branch_costs)
+        )
+        + (ROIBranchSpend(repo="github.com/example/gateway", branch="feature/cost-export", spend=3.6, requests=30),),
         mode="demo",
         start=start.isoformat(),
         end=now.date().isoformat(),

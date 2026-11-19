@@ -4,16 +4,26 @@ to a writer client. Used when DATABASE_URL_READ_REPLICA is configured;
 otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
+import asyncio
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
     from prisma.types import HttpConfig
+
+    from litellm.proxy.db.prisma_client import PrismaBatchSession, PrismaTransactionManager
+    from litellm.repositories.prisma_protocols import TableActions
+
+    _DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+    _DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 
 # Per-model action methods that read from the database. These are routed to
 # the read replica when one is configured.
@@ -33,6 +43,8 @@ _MODEL_READ_METHODS: Final = frozenset(
 
 # Top-level Prisma client methods that read from the database.
 _TOP_LEVEL_READ_METHODS: Final = frozenset({"query_first", "query_raw"})
+
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 class _RoutedActions:
@@ -57,8 +69,8 @@ class _RoutedActions:
 
     def __getattr__(self, name: str) -> object:
         if name in _MODEL_READ_METHODS and self._should_use_reader():
-            return getattr(self._reader_actions, name)
-        return getattr(self._writer_actions, name)
+            return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._reader_actions, name))
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._writer_actions, name))
 
 
 class WriterPinnedClient:
@@ -122,6 +134,7 @@ class RoutingPrismaWrapper:
         # When True, reads fall back to the writer. Flipped on by reader
         # connect/recreate failures and flipped off on the next reader recovery.
         self._reader_unavailable: bool = False
+        self._reader_repair_epoch: int = 0
         self._writer_unavailable: bool = False
 
     @property
@@ -229,8 +242,13 @@ class RoutingPrismaWrapper:
         await self._reader.start_token_refresh_task()
 
     async def stop_token_refresh_task(self) -> None:
-        await self._writer.stop_token_refresh_task()
-        await self._reader.stop_token_refresh_task()
+        results: Final = await asyncio.gather(
+            self._writer.stop_token_refresh_task(),
+            self._reader.stop_token_refresh_task(),
+            return_exceptions=True,
+        )
+        if (error := next((result for result in results if isinstance(result, BaseException)), None)) is not None:
+            raise error
 
     async def recreate_prisma_client(
         self,
@@ -262,16 +280,67 @@ class RoutingPrismaWrapper:
         if not writer_recreated:
             return False
         self._writer_unavailable = False
-        try:
-            await self._recreate_reader(http_client=http_client)
-            self._reader_unavailable = False
-        except Exception as e:
-            self._reader_unavailable = True
-            verbose_proxy_logger.warning(
+        repair: Final = self._begin_reader_repair()
+        self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._recreate_reader(http_client=http_client),
                 "Failed to recreate reader Prisma client: %s. "
                 "Reads will fall back to the writer until the reader recovers.",
-                e,
-            )
+            ),
+        )
+        return True
+
+    def _begin_reader_repair(self) -> int:
+        self._reader_unavailable = True
+        self._reader_repair_epoch += 1
+        return self._reader_repair_epoch
+
+    def _finish_reader_repair(self, repair: int, reader_answered: bool) -> bool:
+        """Route reads back to the reader unless a newer repair started while this one ran."""
+        if not reader_answered or repair != self._reader_repair_epoch:
+            return False
+        self._reader_unavailable = False
+        return True
+
+    async def degrade_reader_unless_healthy(self) -> None:
+        """Probe the reader and send reads to the writer when it does not answer."""
+        if self._reader_unavailable:
+            return
+        repair: Final = self._begin_reader_repair()
+        self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._reader.query_raw("SELECT 1"),
+                "Reader probe failed: %s. Reads will fall back to the writer until the reader recovers.",
+            ),
+        )
+
+    async def recover_reader(self) -> bool:
+        """Recreate a reader that reads currently bypass, and route reads back to it on success."""
+        repair: Final = self._begin_reader_repair()
+        recovered: Final = self._finish_reader_repair(
+            repair,
+            await self._reader_answers(
+                self._recreate_and_probe_reader(),
+                "Reader Prisma client is still unavailable: %s",
+            ),
+        )
+        if recovered:
+            verbose_proxy_logger.info("Reader Prisma client recovered; reads are routed to the reader again.")
+        return recovered
+
+    async def _recreate_and_probe_reader(self) -> None:
+        await self._recreate_reader()
+        await self._reader.query_raw("SELECT 1")
+
+    @staticmethod
+    async def _reader_answers(step: Awaitable[object], failure_message: str) -> bool:
+        try:
+            await step
+        except Exception as e:
+            verbose_proxy_logger.warning(failure_message, e)
+            return False
         return True
 
     async def _recreate_reader(self, http_client: "HttpConfig | None" = None) -> None:
@@ -292,16 +361,39 @@ class RoutingPrismaWrapper:
             raise RuntimeError("DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client")
         await self._reader.recreate_prisma_client(reader_url, http_client=http_client)
 
+    if TYPE_CHECKING:
+
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        def tx(
+            self, *, max_wait: int | timedelta = _DEFAULT_TX_MAX_WAIT, timeout: int | timedelta = _DEFAULT_TX_TIMEOUT
+        ) -> PrismaTransactionManager: ...
+
+        def batch_(self) -> PrismaBatchSession: ...
+
+        @property
+        def litellm_deprecatedverificationtoken(
+            self,
+        ) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_shadowevaljob(self) -> TableActions[prisma_models.LiteLLM_ShadowEvalJob]: ...
+
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:
-            return getattr(self.read_target, name)
-        writer_attr: Final[object] = getattr(self._writer, name)
+            return _DELEGATED_ATTRIBUTE.validate_python(getattr(self.read_target, name))
+        writer_attr: Final = _DELEGATED_ATTRIBUTE.validate_python(getattr(self._writer, name))
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /
         # tx are callables and stay on the writer untouched.
         if not callable(writer_attr) and hasattr(writer_attr, "find_many") and hasattr(writer_attr, "create"):
             try:
-                reader_attr: Final[object] = getattr(self._reader, name)
+                reader_attr: Final = _DELEGATED_ATTRIBUTE.validate_python(getattr(self._reader, name))
             except AttributeError:
                 return writer_attr
             return _RoutedActions(writer_attr, reader_attr, self._should_use_reader)

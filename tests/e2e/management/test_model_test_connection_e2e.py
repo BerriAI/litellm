@@ -23,6 +23,7 @@ import time
 import pytest
 
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from management_client import ManagementClient
 from models import ConnectionTestBody, ConnectionTestResponse, LiteLLMParamsBody
 
@@ -50,6 +51,15 @@ def _probe_mantle(client: ManagementClient) -> ConnectionTestResponse:
 
 class TestModelTestConnection:
     @pytest.mark.covers("mgmt.model.test_connection.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.HEALTH,
+            providers=(Provider.BEDROCK_MANTLE,),
+            models=(MANTLE_RESPONSES_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_mantle_responses_connection_succeeds(self, client: ManagementClient) -> None:
         for attempt in range(1, PROBE_ATTEMPTS + 1):
             response = _probe_mantle(client)

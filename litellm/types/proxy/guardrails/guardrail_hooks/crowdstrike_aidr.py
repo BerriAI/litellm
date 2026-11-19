@@ -1,9 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class CrowdStrikeAIDRGuardrailConfigModelOptionalParams(BaseModel):
+class CrowdStrikeAIDRGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     streaming_buffer_until_moderated: bool | None = Field(
         default=None,
         description="When True, withhold streamed chunks until moderation passes. Defaults to False when unset.",

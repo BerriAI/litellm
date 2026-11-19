@@ -1,4 +1,3 @@
-import time
 import uuid
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -36,10 +35,12 @@ from integration._support.daily_activity import (
 )
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.timing import assert_enforced_within, timed
+from litellm.constants import SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
 from pydantic import JsonValue
 
 DAY_OUTSIDE_THE_WINDOW: Final = "2026-02-10"
-GIVES_UP_WITHIN_SECONDS: Final = 10
+LOCKED_LOOKUP_SLACK_SECONDS: Final = 5
 CONCURRENT_READS: Final = 20
 CACHED_MISS_CLEARS_WITHIN_SECONDS: Final = 45
 ALIAS_OF_ONE_SPEND_LOG: Final = (
@@ -450,16 +451,18 @@ def test_alias_lookup_gives_up_while_spend_logs_are_locked_and_answers_once_they
             spend_logs_of_key(api_key, (named_row(0, alias),), database_url=database_url),
         ):
             with locked_table(SPEND_LOGS_TABLE, database_url=database_url):
-                started: Final = time.monotonic()
-                locked: Final = activity_of_key(owned.gateway, AGGREGATED_USER_ACTIVITY, api_key)
-                waited: Final = time.monotonic() - started
+                locked: Final = timed(lambda: activity_of_key(owned.gateway, AGGREGATED_USER_ACTIVITY, api_key))
             unlocked: Final = eventually(
                 lambda: activity_of_key(owned.gateway, AGGREGATED_USER_ACTIVITY, api_key),
                 _names_the_key(api_key, alias),
                 seconds=CACHED_MISS_CLEARS_WITHIN_SECONDS,
             )
-    assert waited < GIVES_UP_WITHIN_SECONDS, waited
-    assert_key_reported(locked, api_key, DAY, key_metadata(user=owner, email=email), seeded_metrics(1))
+    assert_enforced_within(
+        locked.seconds,
+        configured=SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS / 1000,
+        slack=LOCKED_LOOKUP_SLACK_SECONDS,
+    )
+    assert_key_reported(locked.value, api_key, DAY, key_metadata(user=owner, email=email), seeded_metrics(1))
     assert_key_reported(unlocked, api_key, DAY, key_metadata(alias=alias, user=owner, email=email), seeded_metrics(1))
 
 
