@@ -393,34 +393,6 @@ def systemone_response_to_ir(response: DecisionsResponse, request: DecisionsIRRe
     )
 
 
-_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_LABELS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
-
-
-def _normalize_answer(value: object) -> object:
-    if not isinstance(value, Mapping):
-        return value
-    answer: Final = _MAPPING.validate_python(value)
-    legend: Final = answer.get("legend")
-    if answer.get("type") != "score" or not isinstance(legend, list):
-        return answer
-    labels: Final = _LABELS.validate_python(legend)
-    return {**answer, "legend": {str(index): label for index, label in enumerate(labels)}}
-
-
-def _normalize_systemone_response(payload: object) -> object:
-    if not isinstance(payload, Mapping):
-        return payload
-    response: Final = _MAPPING.validate_python(payload)
-    answers: Final = response.get("answers")
-    if not isinstance(answers, Mapping):
-        return response
-    return {
-        **response,
-        "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
-    }
-
-
 def _validation_detail(detail: ErrorDetails) -> str:
     location: Final = ".".join(str(part) for part in detail["loc"])
     return f"{location}: {detail['msg']}" if location else detail["msg"]
@@ -435,9 +407,7 @@ class DecisionsResponseValidationError(BaseLLMException):
 
 
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
-    return systemone_response_to_ir(
-        _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
-    )
+    return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(payload), request)
 
 
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:

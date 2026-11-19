@@ -291,9 +291,10 @@ async def test_gemini_custom_base_cannot_receive_environment_key(
 @pytest.mark.usefixtures("gemini_httpx_transport")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("systemone", (False, True))
+@pytest.mark.parametrize("sync", (False, True))
 @pytest.mark.parametrize("base_parameter", ("api_base", "base_url"))
 async def test_router_gemini_custom_base_cannot_receive_deployment_key(
-    systemone: bool, base_parameter: str, respx_mock: respx.MockRouter
+    systemone: bool, sync: bool, base_parameter: str, respx_mock: respx.MockRouter
 ) -> None:
     router: Final = litellm.Router(
         model_list=[
@@ -307,23 +308,22 @@ async def test_router_gemini_custom_base_cannot_receive_deployment_key(
     destination: Final = respx_mock.post("https://gateway.example/v1beta/decisions").respond(
         json={"answers": {"ok": {"type": "noul", "noul": 0.5}}}
     )
+    payload: Final = (
+        {"state": "Inspect", "questions": {"ok": {"type": "noul", "instructions": "Is it damaged?"}}}
+        if systemone
+        else {"input": "Inspect", "questions": [{"name": "ok", "type": "predicate", "instructions": "Is it damaged?"}]}
+    )
+    request: Final = router.systemone if systemone else router.decisions
+    async_request: Final = router.asystemone if systemone else router.adecisions
     options: Final = {base_parameter: "https://gateway.example"}
-    if systemone:
-        with pytest.raises(litellm.BadRequestError, match="explicit api_key"):
-            await router.asystemone(
-                model="gemini-decisions",
-                state="Inspect",
-                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-                **options,
-            )
-    else:
-        with pytest.raises(litellm.BadRequestError, match="explicit api_key"):
-            await router.adecisions(
-                model="gemini-decisions",
-                input="Inspect",
-                questions=[{"name": "ok", "type": "predicate", "instructions": "Is it damaged?"}],
-                **options,
-            )
+
+    async def call() -> object:
+        if sync:
+            return request(model="gemini-decisions", **payload, **options)
+        return await async_request(model="gemini-decisions", **payload, **options)
+
+    with pytest.raises(litellm.BadRequestError, match="explicit api_key"):
+        await call()
     assert destination.call_count == 0
 
 
@@ -349,11 +349,13 @@ async def test_router_gemini_keeps_keys_with_their_configured_or_explicit_destin
         ],
         num_retries=0,
     )
-    target: Final = "https://gateway.example" if overrides else "https://deployment.example"
+    target: Final = (
+        "https://gateway.example" if overrides and base_parameter == "api_base" else "https://deployment.example"
+    )
     destination: Final = respx_mock.post(f"{target}/v1beta/decisions").respond(
         json={"answers": {"ok": {"type": "noul", "noul": 0.5}}}
     )
-    options: Final = {base_parameter: target, "api_key": "caller-key"} if overrides else {}
+    options: Final = {base_parameter: "https://gateway.example", "api_key": "caller-key"} if overrides else {}
     payload: Final = (
         {"state": "Inspect", "questions": {"ok": {"type": "noul", "instructions": "Is it damaged?"}}}
         if systemone
