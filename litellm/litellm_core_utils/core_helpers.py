@@ -1107,7 +1107,7 @@ def finite_reported_cost(value: object) -> float | None:
     return cost
 
 
-def _reported_cost_value(value: object) -> float | None:
+def reported_cost_value(value: object) -> float | None:
     """A reported cost is a number, or a breakdown whose total lives under ``total_cost``."""
     raw: Final[object] = value
     if isinstance(value, Mapping):
@@ -1199,8 +1199,8 @@ def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None)
     ``usage.opencode.list_cost``, while its ``usage.cost`` is what hit the prepaid balance, 0 inside the plan.
     """
     if custom_llm_provider == "opencode_go":
-        return _reported_cost_value(_usage_field(_usage_field(usage, "opencode"), "list_cost"))
-    return _reported_cost_value(_usage_field(usage, "cost"))
+        return reported_cost_value(_usage_field(_usage_field(usage, "opencode"), "list_cost"))
+    return reported_cost_value(_usage_field(usage, "cost"))
 
 
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:

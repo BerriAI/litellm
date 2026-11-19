@@ -13,6 +13,8 @@ pub struct Usd(f64);
 pub struct Multiplier(f64);
 
 impl UnitPrice {
+    pub const ZERO: Self = Self(0.0);
+
     pub fn new(usd_per_unit: f64) -> Option<Self> {
         (usd_per_unit.is_finite() && usd_per_unit >= 0.0).then_some(Self(usd_per_unit))
     }
@@ -247,6 +249,7 @@ mod tests {
     #[case::negative(serde_json::json!(-1), None)]
     #[case::word(serde_json::json!("free"), None)]
     #[case::boolean(serde_json::json!(true), None)]
+    #[case::null(serde_json::json!(null), None)]
     fn unit_price_reads_numbers_and_numeric_strings(
         #[case] written: serde_json::Value,
         #[case] expected: Option<f64>,
