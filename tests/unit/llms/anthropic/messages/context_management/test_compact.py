@@ -47,6 +47,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook, RateLimitUnverifiableError
 from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.rust_auth_stores import FakeTeamMembershipStore, RustAuthStores, install_rust_auth_stores
 
 MODEL = "openai/gpt-4o"
 
@@ -1397,26 +1398,25 @@ async def test_summary_model_runs_only_when_every_scope_of_the_caller_grants_it(
 
 
 async def test_summary_model_denied_when_team_membership_read_hits_a_db_outage(
-    proxy_auth_state: ProxyAuthState,
+    proxy_auth_state: ProxyAuthState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A member-level scope that cannot be read fails closed: the summary
     model is not invoked while the membership row is unreachable."""
-
-    class _UnreachableMembershipPrisma:
-        class db:
-            class litellm_teammembership:
-                @staticmethod
-                async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
-                    raise httpx.ConnectError("All connection attempts failed")
-
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team_membership=FakeTeamMembershipStore(
+                rows={("user-outage", "team-outage"): httpx.ConnectError("All connection attempts failed")}
+            )
+        ),
+    )
     proxy_auth_state.seed(LiteLLM_TeamTableCachedObj(team_id="team-outage", models=["claude-haiku-4-5"]))
     summary_call: Final = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
 
-    with patch("litellm.proxy.proxy_server.prisma_client", _UnreachableMembershipPrisma()):
-        result: Final = await _compact_as(
-            _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage", user_id="user-outage"),
-            summary_call,
-        )
+    result: Final = await _compact_as(
+        _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage", user_id="user-outage"),
+        summary_call,
+    )
 
     summary_call.assert_not_awaited()
     assert result.applied_edits[0].get("error") == "summary_model_access_denied"

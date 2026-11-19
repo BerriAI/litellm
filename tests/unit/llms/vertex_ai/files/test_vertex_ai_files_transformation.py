@@ -2542,3 +2542,22 @@ def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: py
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+def test_batch_row_keeps_flagged_logprobs_only_when_the_row_allows_them(
+    allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+    knobs: Final = {"logprobs": True, "top_logprobs": 3, "drop_params": True}
+
+    (allowed_row, dropped_row) = _wrap_entries(
+        [
+            _chat_entry("gemini-zeta-9", {**knobs, "allowed_openai_params": list(allowed)}),
+            _chat_entry("gemini-zeta-9", knobs),
+        ]
+    )
+
+    assert _generation_config(allowed_row) == {"max_output_tokens": 5, "responseLogprobs": True, "logprobs": 3}
+    assert _generation_config(dropped_row) == {"max_output_tokens": 5}

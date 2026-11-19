@@ -133,6 +133,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_identity_from_request,
     resolve_customer_hierarchy,
 )
+from litellm.proxy.auth.customer_provisioning import registration_refusal, resolve_registered_customer
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.impersonation import (
     IMPERSONATE_USER_HEADER,
@@ -3241,14 +3242,20 @@ async def _authorize_authenticated_request_checks(
             try:
                 if customer_identity is not None and has_customer:
                     with tracer.trace("litellm.proxy.auth.resolve_customer_hierarchy"):  # pyright: ignore[reportUnknownMemberType]  # tracer is the untyped proxy tracer
-                        hierarchy: Final = await resolve_customer_hierarchy(
-                            identity=customer_identity,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                            llm_router=llm_router,
-                            request_model=request_model,
-                            route=route,
-                            key_metadata=key_metadata,
+                        hierarchy: Final = await resolve_registered_customer(
+                            customer_identity,
+                            partial(registration_refusal, prisma_client, user_api_key_auth_obj),
+                            lambda register, register_organization: resolve_customer_hierarchy(
+                                identity=customer_identity,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                                llm_router=llm_router,
+                                request_model=request_model,
+                                route=route,
+                                key_metadata=key_metadata,
+                                register=register,
+                                register_organization=register_organization,
+                            ),
                         )
                     user_api_key_auth_obj.customer_hierarchy = hierarchy  # rebind-ok: request state
                 if user_api_key_auth_obj.customer_hierarchy is not None or RouteChecks.runs_inference_checks(route):

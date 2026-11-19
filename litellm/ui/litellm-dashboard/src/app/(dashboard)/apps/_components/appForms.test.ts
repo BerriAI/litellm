@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appBudgetFields, appBudgetValue } from "./appForms";
+import { appBudgetFields, appBudgetValue, appSurchargeField, appSurchargeValue } from "./appForms";
 
 describe("app budget forms", () => {
   it("saves a rate-only budget and preserves zero limits", () => {
@@ -46,5 +46,34 @@ describe("app budget forms", () => {
   });
   it.each(["-1", "NaN", "Infinity", "1.2.3"])("should reject invalid numeric input %s", (maxBudget) => {
     expect(appBudgetValue({ ...appBudgetFields({}), maxBudget }).ok).toBe(false);
+  });
+});
+
+describe("app surcharge form", () => {
+  it.each([
+    ["2", 0.02],
+    [" 2.5 ", 0.025],
+    ["0", 0],
+    ["1000", 10],
+  ])("should send %s percent as the fraction %s", (text, fraction) => {
+    expect(appSurchargeValue(text)).toEqual({ ok: true, value: fraction });
+  });
+
+  it("should send an empty field as null so the app falls back to the gateway surcharge", () => {
+    expect(appSurchargeValue("  ")).toEqual({ ok: true, value: null });
+  });
+
+  it.each(["-1", "1000.1", "two", "Infinity"])("should refuse %s", (text) => {
+    expect(appSurchargeValue(text)).toEqual({ ok: false });
+  });
+
+  it.each([
+    [0.02, "2"],
+    [0.025, "2.5"],
+    [0, "0"],
+    [null, ""],
+    [undefined, ""],
+  ])("should show the stored fraction %s as %s percent", (margin, text) => {
+    expect(appSurchargeField(margin)).toBe(text);
   });
 });

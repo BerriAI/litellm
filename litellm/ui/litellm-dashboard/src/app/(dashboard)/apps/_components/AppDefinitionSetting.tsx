@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,12 +39,32 @@ export default function AppDefinitionSetting() {
     setPending(true);
     setError(null);
     try {
-      const response = await fetchClient.PUT("/management/v1/apps/definition", { body: { resource_type: selected } });
+      const response = await fetchClient.PUT("/management/v1/apps/definition", {
+        body: {
+          resource_type: selected,
+          auto_create_customers_without_app: definition.data?.auto_create_customers_without_app ?? true,
+        },
+      });
       if (!response.data) throw new Error(t("apps.saveFailed"));
       queryClient.setQueryData(appDefinitionKey, response.data);
       await queryClient.invalidateQueries({ queryKey: ["app-resources"] });
       await queryClient.invalidateQueries({ queryKey: ["apps"] });
       setDraft(null);
+    } catch (failure) {
+      setError(extractProxyErrorMessage(failure));
+    } finally {
+      setPending(false);
+    }
+  };
+  const saveWithoutApp = async (allowed: boolean) => {
+    setPending(true);
+    setError(null);
+    try {
+      const response = await fetchClient.PUT("/management/v1/apps/definition", {
+        body: { resource_type: definition.data?.resource_type ?? null, auto_create_customers_without_app: allowed },
+      });
+      if (!response.data) throw new Error(t("apps.saveFailed"));
+      queryClient.setQueryData(appDefinitionKey, response.data);
     } catch (failure) {
       setError(extractProxyErrorMessage(failure));
     } finally {
@@ -123,6 +144,11 @@ export default function AppDefinitionSetting() {
             )}
           </div>
           <p className="text-xs text-muted-foreground">{t("apps.definition.lockHint")}</p>
+          <CustomersWithoutAppSwitch
+            checked={definition.data.auto_create_customers_without_app}
+            disabled={pending}
+            onChange={(allowed) => void saveWithoutApp(allowed)}
+          />
         </>
       )}
       {error && (
@@ -131,5 +157,26 @@ export default function AppDefinitionSetting() {
         </p>
       )}
     </section>
+  );
+}
+
+function CustomersWithoutAppSwitch({
+  checked,
+  disabled,
+  onChange,
+}: {
+  checked?: boolean;
+  disabled: boolean;
+  onChange: (allowed: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-1.5 border-t pt-4">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <Checkbox checked={checked ?? true} disabled={disabled} onCheckedChange={(value) => onChange(value === true)} />
+        {t("apps.definition.autoCreateWithoutApp")}
+      </label>
+      <p className="text-xs text-muted-foreground">{t("apps.definition.autoCreateWithoutAppHint")}</p>
+    </div>
   );
 }
