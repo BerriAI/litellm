@@ -4476,6 +4476,27 @@ async def test_follow_up_reads_the_stored_chain_only_from_the_provider_of_the_re
 
 
 @pytest.mark.asyncio
+async def test_follow_up_reads_the_stored_chain_within_the_timeout_of_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        await awithout_stored_instructions(
+            {
+                "instructions": "Stable prefix",
+                "previous_response_id": "resp_prior",
+                "custom_llm_provider": "openai",
+                "api_key": "sk-test",
+                "timeout": 7.5,
+            }
+        )
+    assert chain.calls[0].request.extensions["timeout"] == {"connect": 7.5, "read": 7.5, "write": 7.5, "pool": 7.5}
+
+
+@pytest.mark.asyncio
 async def test_follow_up_reads_the_stored_chain_of_an_azure_deployment_with_its_ad_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
