@@ -1,9 +1,8 @@
-from collections.abc import Mapping
 from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, normalize_cache_control_in_anthropic_payload
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -46,9 +45,26 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: in-place out-param, as in the base signature
+        max_tokens: int | None,
+        custom_llm_provider: str,
     ) -> None:
-        return None
+        if AnthropicModelInfo.is_mapped_model(model, custom_llm_provider):
+            AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base takes a bare dict
+                model, optional_params, max_tokens, custom_llm_provider
+            )
+
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: in-place out-param, as in the base signature
+        custom_llm_provider: str,
+    ) -> None:
+        if AnthropicModelInfo.is_mapped_model(model, custom_llm_provider):
+            AnthropicMessagesConfig._drop_incompatible_temperature_for_thinking(  # pyright: ignore[reportUnknownMemberType]  # the base takes a bare dict
+                model, optional_params, custom_llm_provider
+            )
 
     def validate_anthropic_messages_environment(
         self,

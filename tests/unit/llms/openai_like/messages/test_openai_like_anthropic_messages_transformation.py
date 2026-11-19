@@ -1,9 +1,14 @@
+import copy
+from collections.abc import Callable
 from typing import Final
 
 import pytest
 
 from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.messages.transformation import (
+    JSONProviderAnthropicMessagesConfig,
     OpenAILikeAnthropicMessagesConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -269,24 +274,50 @@ def test_request_maps_reasoning_effort_to_thinking(config):
     assert payload["thinking"]["budget_tokens"] < payload["max_tokens"]
 
 
-@pytest.mark.parametrize("drop_params", [None, True])
-def test_request_forwards_adaptive_thinking_and_effort_unchanged(
-    config: OpenAILikeAnthropicMessagesConfig, drop_params: bool | None
-) -> None:
-    payload = config.transform_anthropic_messages_request(
-        model="example/reasoning-model",
+_REASONING_REQUESTS: Final[list[dict[str, object]]] = [
+    {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}},
+    {"output_config": {"effort": "low"}, "temperature": 0},
+    {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}, "temperature": 0},
+]
+
+
+def _transform(config: AnthropicMessagesConfig, model: str, reasoning: dict[str, object], drop_params: bool | None):
+    return config.transform_anthropic_messages_request(
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
-        anthropic_messages_optional_request_params={
-            "max_tokens": 256,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": "low"},
-        },
+        anthropic_messages_optional_request_params={"max_tokens": 4096, **copy.deepcopy(reasoning)},
         litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers={},
     )
 
-    assert payload["thinking"] == {"type": "adaptive"}
-    assert payload["output_config"] == {"effort": "low"}
+
+@pytest.mark.parametrize("drop_params", [None, True])
+@pytest.mark.parametrize("reasoning", _REASONING_REQUESTS)
+def test_request_forwards_reasoning_fields_unchanged_for_an_unknown_model(
+    config: OpenAILikeAnthropicMessagesConfig, reasoning: dict[str, object], drop_params: bool | None
+) -> None:
+    payload = _transform(config, "example/reasoning-model", reasoning, drop_params)
+
+    assert {key: payload.get(key) for key in reasoning} == reasoning
+
+
+def _sail_config() -> JSONProviderAnthropicMessagesConfig:
+    provider = JSONProviderRegistry.get("sail")
+    assert provider is not None
+    return JSONProviderAnthropicMessagesConfig(provider)
+
+
+@pytest.mark.parametrize("passthrough", [OpenAILikeAnthropicMessagesConfig, _sail_config])
+@pytest.mark.parametrize(
+    "model", ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5", "claude-opus-4-7", "claude-quill-4-5"]
+)
+@pytest.mark.parametrize("reasoning", _REASONING_REQUESTS)
+def test_request_for_a_known_model_matches_the_native_anthropic_transform(
+    passthrough: Callable[[], OpenAILikeAnthropicMessagesConfig], model: str, reasoning: dict[str, object]
+) -> None:
+    assert _transform(passthrough(), model, reasoning, None) == _transform(
+        AnthropicMessagesConfig(), model, reasoning, None
+    )
 
 
 def test_passthrough_disables_anthropic_beta_filtering(config):

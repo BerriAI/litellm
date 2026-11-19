@@ -92,6 +92,7 @@ from litellm.types.utils import (
     Delta,
     LlmProviders,
     Message,
+    ModelInfoBase,
     chat_completion_tool_call_from_dict,
 )
 
@@ -1094,16 +1095,34 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model does not resolve under that provider or the resolved entry has no
         opinion on ``key``.
         """
+        info: Final = AnthropicModelInfo._provider_resolved_model_info(model, custom_llm_provider)
+        value: Final = info.get(key) if info is not None else None
+        return value if isinstance(value, bool) else None
+
+    @staticmethod
+    def _provider_resolved_model_info(model: str, custom_llm_provider: str) -> ModelInfoBase | None:
         from litellm.utils import get_model_info_helper
 
         try:
             resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-            value: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+            return get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
         except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
             return None
-        return value if isinstance(value, bool) else None
+
+    @staticmethod
+    def is_mapped_model(model: str, custom_llm_provider: str) -> bool:
+        """Whether the capability lookups resolve ``model`` to model-map data at all: the
+        provider-aware entry or fallback rule, or the raw model-map walk's alias candidates."""
+        from litellm.utils import get_model_cost_key
+
+        if AnthropicModelInfo._provider_resolved_model_info(model, custom_llm_provider) is not None:
+            return True
+        return any(
+            get_model_cost_key(candidate) is not None
+            for candidate in AnthropicModelInfo._model_map_lookup_candidates(model)
+        )
 
     @staticmethod
     def _supports_model_capability(model: str, key: str, custom_llm_provider: str) -> bool:
