@@ -619,3 +619,46 @@ def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_t
     assert "parameters" in forced_lookup and "parametersJsonSchema" in free_lookup
     assert lookup == (forced_lookup if forced else free_lookup)
     assert weather == forced_weather
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-2.5-flash"])
+def test_tool_results_answer_calls_from_every_assistant_message_merged_into_one_model_turn(model: str) -> None:
+    signature: Final = "c2lnLWNhbGwtYQ=="
+    messages: Final = [
+        {"role": "user", "content": "Weather in Paris and Rome?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": f"call_a__thought__{signature}",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "reasoning_content": "Now Rome too.",
+            "tool_calls": [
+                {
+                    "id": "call_b",
+                    "type": "function",
+                    "function": {"name": "get_time", "arguments": '{"city": "Rome"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": f"call_a__thought__{signature}", "content": "sunny"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "noon"},
+    ]
+
+    contents: Final = transformation.gemini_convert_messages_with_history(messages=messages, model=model)
+
+    assert [content["role"] for content in contents] == ["user", "model", "user"]
+    calls: Final = [part for part in contents[1]["parts"] if "function_call" in part]
+    assert [call["function_call"]["name"] for call in calls] == ["get_weather", "get_time"]
+    assert calls[0]["thoughtSignature"] == signature
+    assert calls[1].get("thoughtSignature") != signature
+    responses: Final = [part["function_response"] for part in contents[2]["parts"]]
+    assert [response["name"] for response in responses] == ["get_weather", "get_time"]
+    assert [response.get("id") for response in responses] == [call["function_call"].get("id") for call in calls]
