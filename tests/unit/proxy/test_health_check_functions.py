@@ -188,10 +188,10 @@ def test_aggregate_health_check_results():
     }
 
     healthy_endpoints = [
-        {"model": "gpt-3.5-turbo", "model_id": "model-123"},
+        {"model": "gpt-3.5-turbo"},
     ]
     unhealthy_endpoints = [
-        {"model": "gpt-4", "model_id": "model-456", "error": "Rate limit exceeded"},
+        {"model": "gpt-4", "error": "Rate limit exceeded"},
     ]
 
     result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, unhealthy_endpoints)
@@ -220,8 +220,8 @@ def test_aggregate_health_check_results_multiple_endpoints():
     }
 
     healthy_endpoints = [
-        {"model": "gpt-3.5-turbo", "model_id": "model-123"},
-        {"model": "gpt-3.5-turbo", "model_id": "model-123"},
+        {"model": "gpt-3.5-turbo"},
+        {"model": "gpt-3.5-turbo"},
     ]
     unhealthy_endpoints = []
 
@@ -434,7 +434,7 @@ async def test_save_background_health_checks_to_db():
         },
     ]
 
-    healthy_endpoints = [{"model": "gpt-3.5-turbo", "model_id": "model-123"}]
+    healthy_endpoints = [{"model": "gpt-3.5-turbo"}]
     unhealthy_endpoints = []
 
     start_time = 1234567890.0
@@ -537,7 +537,7 @@ def _one_model_setup():
             "litellm_params": {"model": "gpt-3.5-turbo"},
         },
     ]
-    return model_list, [{"model": "gpt-3.5-turbo", "model_id": "model-123"}], []
+    return model_list, [{"model": "gpt-3.5-turbo"}], []
 
 
 @pytest.mark.asyncio
@@ -668,7 +668,7 @@ async def test_save_background_health_checks_compares_raw_checked_at_against_utc
     await save_background_health_checks_to_db(
         mock_prisma,
         model_list,
-        [{"model": "openai/stale", "model_id": "stale-id"}, {"model": "openai/fresh", "model_id": "fresh-id"}],
+        [{"model": "openai/stale"}, {"model": "openai/fresh"}],
         [],
         time.time(),
         "pod-1",
@@ -1333,26 +1333,6 @@ def test_public_wildcard_probe_deployments_honors_background_model_groups(model_
     )
 
     assert [p["model_name"] for p in probes] == ([_WILDCARD_SERVED] if probed else [])
-
-
-def test_aggregate_health_check_results_keeps_an_id_less_probe_off_a_deployment_with_an_id():
-    model_list: Final = [
-        {"model_name": "opus", "litellm_params": {"model": _WILDCARD_SERVED}, "model_info": {"id": "exact"}},
-        {"model_name": _WILDCARD_SERVED, "litellm_params": {"model": _WILDCARD_SERVED}, "model_info": {}},
-        {"model_name": "blank-id", "litellm_params": {"model": "openai/blank"}, "model_info": {"id": ""}},
-    ]
-
-    result: Final = _aggregate_health_check_results(
-        _build_model_param_to_info_mapping(model_list),
-        [{"model": _WILDCARD_SERVED, "model_id": "exact"}, {"model": "openai/blank"}],
-        [{"model": _WILDCARD_SERVED, "error": "throttled"}],
-    )
-
-    assert {key: (value["healthy_count"], value["unhealthy_count"]) for key, value in result.items()} == {
-        ("exact", "opus"): (1, 0),
-        (None, _WILDCARD_SERVED): (0, 1),
-        ("", "blank-id"): (1, 0),
-    }
 
 
 if __name__ == "__main__":

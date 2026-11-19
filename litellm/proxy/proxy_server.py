@@ -5431,12 +5431,12 @@ async def _run_background_health_check():
             lock_ttl=health_check_interval,
             wildcard_scope=(
                 WildcardProbeScope(
-                    tuple(litellm.public_model_groups or ()),
-                    llm_router,
-                    scoped_model_groups,
-                    details_bool,
-                    health_check_concurrency,
-                    health_check_interval,
+                    public_names=tuple(litellm.public_model_groups or ()),
+                    router=llm_router,
+                    model_groups=scoped_model_groups,
+                    details=details_bool,
+                    max_concurrency=health_check_concurrency,
+                    deadline_seconds=health_check_interval,
                 )
                 if llm_router is not None
                 else None
