@@ -3,7 +3,7 @@ import copy
 import inspect
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
 from types import MappingProxyType
@@ -115,16 +115,19 @@ from litellm.llms.custom_httpx.container_handler import raise_for_error_status
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    anchor_handler_to,
     get_async_httpx_client,
     get_httpx_client,
     header_value,
 )
+from litellm.llms.custom_httpx.stream_close import aiter_bytes_then_close
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ProjectQuotaCallback,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
+    ResponsesWsFrameCheck,
     SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.containers.main import (
@@ -466,14 +469,6 @@ def _logged_file_content_request(
     return _PreparedFileContentRequest(url=url, params=params, headers=request_headers)
 
 
-async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) -> AsyncGenerator[bytes, None]:
-    try:
-        async for chunk in response.aiter_bytes(chunk_size=chunk_size):
-            yield chunk
-    finally:
-        await response.aclose()
-
-
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
@@ -737,7 +732,7 @@ class BaseLLMHTTPHandler:
 
         fake_stream = (
             fake_stream
-            or optional_params.pop("fake_stream", False)
+            or optional_params.pop("fake_stream", False) is True
             or provider_config.should_fake_stream(model=model, custom_llm_provider=custom_llm_provider, stream=stream)
         )
 
@@ -5466,6 +5461,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the buffered fetch
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        anchor_handler_to(response, async_httpx_client)
         if response.status_code >= 400:
             error_body: Final = await response.aread()
             await response.aclose()
@@ -5476,7 +5472,7 @@ class BaseLLMHTTPHandler:
             )
 
         return await provider_config.transform_file_content_stream(
-            stream_iterator=_aiter_bytes_then_close(response, chunk_size=chunk_size),
+            stream_iterator=aiter_bytes_then_close(response, chunk_size=chunk_size),
             headers=_decoded_body_headers(response),
             request_url=str(response.request.url),
             logging_obj=logging_obj,
@@ -6931,6 +6927,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_check: ResponsesWsFrameCheck | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6963,6 +6960,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                frame_check=frame_check,
                 **kwargs,
             )
             await handler.run()
@@ -12114,7 +12112,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12124,9 +12122,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -12229,7 +12230,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12239,9 +12240,12 @@ class BaseLLMHTTPHandler:
             generate_content_config_dict=generate_content_config_dict,
             system_instruction=system_instruction,
         )
+        request_fields: Final = generate_content_provider_config.transform_top_level_request_fields(
+            extra_body, litellm_params
+        )
 
-        if extra_body:
-            data.update(extra_body)
+        if request_fields:
+            data.update(request_fields)
 
         ## LOGGING
         logging_obj.pre_call(
