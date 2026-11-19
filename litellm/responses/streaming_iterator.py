@@ -3267,22 +3267,24 @@ class ManagedResponsesWebSocketHandler:
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
-        API message dicts suitable for the next turn's ``input``.
+        API message dicts suitable for the next turn's ``input``, keeping every item a later turn can answer by
+        ``call_id``.
         """
         resp_obj: Final = completed_event.get("response", {})
-        if not isinstance(resp_obj, dict):
+        if not _is_json_object(resp_obj):
             return []
+        output: Final = resp_obj.get("output")
         messages: Final[list[dict[str, object]]] = []
-        for item in resp_obj.get("output", []) or []:
-            if not isinstance(item, dict):
+        for item in output if _is_json_array(output) else []:
+            if not _is_json_object(item):
                 continue
             item_type = item.get("type")
             role = item.get("role", "assistant")
             if item_type == "message":
-                content_parts = item.get("content") or []
+                content_parts = item.get("content")
                 text_parts = [
                     p.get("text", "")
-                    for p in content_parts
+                    for p in (content_parts if _is_json_array(content_parts) else [])
                     if isinstance(p, dict) and p.get("type") in ("output_text", "text")
                 ]
                 text = "".join(text_parts)
@@ -3294,7 +3296,7 @@ class ManagedResponsesWebSocketHandler:
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
-            elif item_type == "function_call":
+            elif isinstance(item.get("call_id"), str):
                 messages.append(item)
         return messages
 
