@@ -793,6 +793,38 @@ async def test_messages_answers_the_error_the_failure_hook_returns(denial: Excep
     assert "strict-transport-security" not in response.headers
 
 
+@pytest.mark.asyncio
+async def test_messages_forwards_the_headers_of_a_proxy_rate_limit_without_a_failure_hook() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.utils import ProxyLogging
+
+    limited: Final = ProxyRateLimitError(
+        detail="parallel request limit reached",
+        headers={"retry-after": "37", "x-ratelimit-remaining-requests": "0"},
+    )
+    request: Final = MagicMock()
+    request.headers = {}
+    with (
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-haiku-5-5"})
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=AsyncMock(side_effect=limited)
+        ),  # test-quality-ok: the limiter's 429 is raised inside this call; the test targets the endpoint's except block
+        patch.object(
+            proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
+        ),  # test-quality-ok: module global imported at call time; no injection seam
+        patch.object(litellm, "callbacks", new=[]),  # test-quality-ok: no failure hook is registered
+    ):
+        response: Final = await ep.anthropic_response(
+            fastapi_response=MagicMock(), request=request, user_api_key_dict=UserAPIKeyAuth()
+        )
+
+    assert response.status_code == 429
+    assert (response.headers.get("retry-after"), response.headers.get("x-ratelimit-remaining-requests")) == ("37", "0")
+
+
 class TestErrorLogCarriesCallId:
     """LIT-7836: the /v1/messages and /v1/messages/count_tokens error lines must carry
     the request's litellm_call_id, rendered in the message and as a structured field."""
