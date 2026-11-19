@@ -592,11 +592,11 @@ class GoogleGenAIAdapter:
 
         # Create base request as dict (which is compatible with ChatCompletionRequest)
         config_fields: Final = _validated(_CONFIG_FIELDS, config) or {}
-        completion_request: Final[_GenAICompletionRequest] = {
-            "model": model,
-            "messages": messages,
+        completion_request: Final = _GenAICompletionRequest(
+            model=model,
+            messages=messages,
             **_completion_params(config_fields, model, litellm_params.custom_llm_provider if litellm_params else None),
-        }
+        )
 
         #########################################################
         # Supported OpenAI chat completion params

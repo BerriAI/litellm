@@ -2272,7 +2272,7 @@ class AmazonConverseConfig(BaseConfig):
                     serializable_request_params["output_config"] = anthropic_output_config
 
         if _has_native_text_format(output_config) and self._deployment_is_openai_gpt(model, deployment_base_model):
-            additional_request_params["text"] = _text_with_strict_format(additional_request_params.get("text"))
+            serializable_request_params["text"] = _text_with_strict_format(serializable_request_params.get("text"))
 
         return (
             inference_params,

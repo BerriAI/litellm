@@ -37,7 +37,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
-from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
+from litellm.litellm_core_utils.core_helpers import finite_cost, require_attributes, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -317,6 +317,8 @@ class _SpendBatch(Protocol):
     @property
     def litellm_customermembertable(self) -> BatchTable: ...
 
+
+class _AppSpendBatch(Protocol):
     @property
     def litellm_apptable(self) -> BatchTable: ...
 
@@ -441,19 +443,26 @@ class _CustomerHierarchyLevel:
 
 _CUSTOMER_HIERARCHY_LEVELS: Final = (
     _CustomerHierarchyLevel(
-        "app_list_transactions", "LiteLLM_AppTable", lambda batcher: batcher.litellm_apptable, "app_id"
+        "app_list_transactions",
+        "LiteLLM_AppTable",
+        lambda batcher: require_attributes(batcher, _AppSpendBatch, "litellm_apptable").litellm_apptable,
+        "app_id",
     ),
     _CustomerHierarchyLevel(
         "app_customer_org_list_transactions",
         "LiteLLM_AppCustomerOrgTable",
-        lambda batcher: batcher.litellm_appcustomerorgtable,
+        lambda batcher: (
+            require_attributes(batcher, _AppSpendBatch, "litellm_appcustomerorgtable").litellm_appcustomerorgtable
+        ),
         "app_id",
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
         "app_customer_member_list_transactions",
         "LiteLLM_AppCustomerMemberTable",
-        lambda batcher: batcher.litellm_appcustomermembertable,
+        lambda batcher: (
+            require_attributes(batcher, _AppSpendBatch, "litellm_appcustomermembertable").litellm_appcustomermembertable
+        ),
         "app_id",
         "customer_member_id",
     ),
