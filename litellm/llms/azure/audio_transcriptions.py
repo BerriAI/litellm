@@ -51,7 +51,9 @@ class AzureAudioTranscription(AzureChatCompletion):
     ):
         data: Final = {"model": model, "file": audio_file, **optional_params}
         sdk_data: Final = sdk_compatible_transcription_request_data(data)
-        deployment_api_version: Final = None if self.is_azure_v1_api_version(api_version) else api_version
+        deployment_api_version: Final = (
+            None if self.is_azure_v1_api_version(self.opt_out_client_api_version(api_version)) else api_version
+        )
 
         if atranscription is True:
             return self.async_audio_transcriptions(
