@@ -6,7 +6,7 @@ Helper util for handling perplexity-specific cost calculation
 from datetime import datetime
 from typing import Final
 
-from litellm.litellm_core_utils.core_helpers import finite_reported_cost
+from litellm.litellm_core_utils.core_helpers import reported_cost_value
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import BranchFacts, ReportedCost, branch_cost
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -15,15 +15,7 @@ from litellm.utils import get_model_info
 def stated_cost(usage: Usage) -> ReportedCost | None:
     """The cost Perplexity reports on ``usage.cost``, a number or a breakdown under ``total_cost``.
     ``ResponseAPIUsage.parse_cost`` may already have flattened the breakdown to a float, so both shapes count."""
-    cost_info: Final[object] = getattr(usage, "cost", None)
-    total: Final[object] = (
-        cost_info.get("total_cost")
-        if isinstance(cost_info, dict)
-        else cost_info
-        if isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool)
-        else None
-    )
-    reported: Final = None if total is None else finite_reported_cost(total)
+    reported: Final = reported_cost_value(getattr(usage, "cost", None))
     return None if reported is None else ReportedCost(source="usage.cost", usd=reported)
 
 
