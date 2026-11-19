@@ -3335,7 +3335,7 @@ def _proxy_attrs_for_centralized_checks(user_custom_auth=None, flag=False, maste
     """
     return {
         "prisma_client": None,
-        "user_api_key_cache": DualCache(),
+        "user_api_key_cache": UserApiKeyCache(),
         "proxy_logging_obj": MagicMock(),
         "general_settings": ({"custom_auth_run_common_checks": True} if flag else {}),
         "llm_router": None,
@@ -11466,7 +11466,6 @@ async def test_managed_agent_cannot_bypass_grants_with_server_default(
     for name, value in {
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": database,
-        "user_api_key_cache": UserApiKeyCache(),
         "general_settings": settings,
         "user_model": cli_model,
         "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
