@@ -543,4 +543,3 @@ class BaseConfig(ABC):
     ) -> None:
         """Hook for providers to merge chunk metadata into assembled streaming responses."""
         return
-
