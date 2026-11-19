@@ -4437,9 +4437,12 @@ async def test_follow_up_with_truncation_auto_keeps_instructions_without_reading
 
 
 def _litellm_response_id(provider: str, upstream_id: str) -> str:
-    return "resp_" + base64.b64encode(
-        f"litellm:custom_llm_provider:{provider};model_id:deployment-1;response_id:{upstream_id}".encode()
-    ).decode()
+    return (
+        "resp_"
+        + base64.b64encode(
+            f"litellm:custom_llm_provider:{provider};model_id:deployment-1;response_id:{upstream_id}".encode()
+        ).decode()
+    )
 
 
 @pytest.mark.asyncio
@@ -4478,7 +4481,9 @@ async def test_follow_up_reads_the_stored_chain_of_an_azure_deployment_with_its_
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock(assert_all_called=True) as router:
-        chain: Final = router.get(url__regex=r"https://qa\.openai\.azure\.com/.*responses/resp_prior/input_items.*").mock(
+        chain: Final = router.get(
+            url__regex=r"https://qa\.openai\.azure\.com/.*responses/resp_prior/input_items.*"
+        ).mock(
             return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
         )
         sent: Final = await awithout_stored_instructions(
