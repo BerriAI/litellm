@@ -37854,7 +37854,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "gpt-5.2-pro-2025-12-11": {
         "input_cost_per_token": 2.1e-05,
@@ -37903,7 +37904,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "gpt-6-astra": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -39267,7 +39269,8 @@
         "supports_minimal_reasoning_effort": false,
         "input_cost_per_token_above_272k_tokens_flex": 3e-05,
         "output_cost_per_token_above_272k_tokens_flex": 0.000135,
-        "source": "https://developers.openai.com/api/docs/pricing"
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supports_low_reasoning_effort": false
     },
     "gpt-5.4-pro-2026-03-05": {
         "input_cost_per_token": 3e-05,
@@ -39328,7 +39331,8 @@
         "supports_minimal_reasoning_effort": false,
         "input_cost_per_token_above_272k_tokens_flex": 3e-05,
         "output_cost_per_token_above_272k_tokens_flex": 0.000135,
-        "source": "https://developers.openai.com/api/docs/pricing"
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supports_low_reasoning_effort": false
     },
     "gpt-5.4-mini": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -39600,6 +39604,9 @@
             "auto",
             "current_turn"
         ],
+        "reasoning_effort_levels": [
+            "high"
+        ],
         "reasoning_modes": [
             "pro"
         ],
@@ -39633,7 +39640,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "gpt-5-pro-2025-10-06": {
         "deprecation_date": "2026-12-11",
@@ -39652,6 +39660,9 @@
             "auto",
             "current_turn"
         ],
+        "reasoning_effort_levels": [
+            "high"
+        ],
         "reasoning_modes": [
             "pro"
         ],
@@ -39685,7 +39696,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "gpt-5-2025-08-07": {
         "cache_read_input_token_cost": 1.25e-07,
