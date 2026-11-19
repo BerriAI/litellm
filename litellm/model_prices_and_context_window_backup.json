@@ -122263,5 +122263,22 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "web_search_billing_unit": "per_query"
+    },
+    "github_copilot/gemini-4-neon": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
     }
 }
