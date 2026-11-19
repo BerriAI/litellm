@@ -339,6 +339,88 @@ def test_member_upsert_keeps_private_budgets_and_updates_only_supplied_base_fiel
     assert edited.json()["budget"] == {**member["budget"], "max_budget": 900}
 
 
+@pytest.mark.parametrize("upsert", (False, True))
+@pytest.mark.parametrize(
+    "patch",
+    (
+        {"max_budget": 750},
+        {"tpm_limit": None, "rpm_limit": 0},
+        {"budget_limits": None, "model_tpm_limit": None, "model_rpm_limit": None, "allowed_models": []},
+        {},
+    ),
+)
+def test_first_custom_member_edit_copies_preset_and_preserves_temporary_grants(
+    upsert: bool, patch: dict[str, object]
+) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    organization: Final = family(http)
+    preset_id: Final = organization["default_budget_template_id"]
+    configured: Final = http.patch(
+        f"/management/v1/customer_organizations/org/default_budgets/{preset_id}",
+        json={
+            "max_budget": 500,
+            "budget_duration": "1mo",
+            "soft_budget": 400,
+            "tpm_limit": 1700,
+            "rpm_limit": 17,
+            "model_tpm_limit": {"model-a": 1000},
+            "model_rpm_limit": {"model-a": 10},
+            "cap_policy": "pause_allow_increase",
+            "budget_limits": [{"budget_duration": "12mo", "max_budget": 6000}],
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    reset_at: Final = NOW + timedelta(days=10)
+    asyncio.run(
+        database.litellm_budgettable.update(where={"budget_id": preset_id}, data={"budget_reset_at": reset_at})
+    )
+    created: Final = http.post(
+        "/management/v1/customer_members",
+        json={
+            "customer_member_id": "preset-member",
+            "parent_team_ids": ["team"],
+            "budget_override": {"max_budget": 1000, "tpm_limit": 5000},
+            "budget_override_expires_at": (NOW + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+    original: Final = created.json()
+    edited: Final = (
+        http.post(
+            "/management/v1/customer_members/upsert",
+            json={"customer_org_id": "org", "customer_member_id": "preset-member", "budget": patch},
+        )
+        if upsert
+        else http.patch("/management/v1/customer_members/preset-member", json={"budget": patch})
+    )
+    assert edited.status_code == 200, edited.text
+    member: Final = edited.json()
+    assert member["budget_id"] != preset_id
+    assert member["budget"] == {**original["budget"], **patch}
+    assert member["budget_reset_at"] == original["budget_reset_at"]
+    assert member["budget_override_id"] == original["budget_override_id"]
+    assert member["budget_override"] == original["budget_override"]
+    assert member["budget_override_expires_at"] == original["budget_override_expires_at"]
+    assert member["effective_budget"]["max_budget"] == 1000
+    assert member["effective_budget"]["tpm_limit"] == 5000
+    expired: Final = client(database=database, now=NOW + timedelta(days=2)).get(
+        "/management/v1/customer_members/preset-member"
+    )
+    assert expired.status_code == 200, expired.text
+    assert expired.json()["effective_budget"] == member["budget"]
+    assert http.get("/management/v1/customer_organizations/org").json()["default_budgets"] == configured.json()[
+        "default_budgets"
+    ]
+    changed_preset: Final = http.patch(
+        f"/management/v1/customer_organizations/org/default_budgets/{preset_id}", json={"rpm_limit": 99}
+    )
+    assert changed_preset.status_code == 200, changed_preset.text
+    unchanged: Final = http.get("/management/v1/customer_members/preset-member")
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["budget"] == member["budget"]
+
+
 @pytest.mark.parametrize("delete_path", ("customer_members/custom-member", "customer_teams/team?cascade=true"))
 def test_deleting_members_reclaims_private_base_budgets(delete_path: str) -> None:
     database: Final = Database()

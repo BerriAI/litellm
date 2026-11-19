@@ -952,7 +952,21 @@ class CustomerHierarchyStore:
         templates: Final = frozenset(template.budget_id for template in organization.default_budgets)
         if "budget" in payload.model_fields_set and payload.budget_id is None:
             owned_id: Final = None if current_id in templates else current_id
-            return await self.overall_budget_patch(owned_id, payload, actor)
+            template: Final = next(
+                (template for template in organization.default_budgets if template.budget_id == current_id), None
+            )
+            if template is None or payload.budget is None:
+                return await self.overall_budget_patch(owned_id, payload, actor)
+            custom: Final = Budget.model_validate(
+                {**budget_values(template), **payload.budget.model_dump(exclude_unset=True)}
+            )
+            budget_id: Final = await self.create_budget(custom, actor)
+            if custom.budget_duration is not None and custom.budget_duration == template.budget_duration:
+                original: Final = await self.budgets.find_unique(where={"budget_id": template.budget_id})
+                reset_at: Final = window_reset_at(original.model_dump() if original is not None else None)
+                if reset_at is not None:
+                    await update_budget_row(self.budgets, budget_id, {"budget_reset_at": reset_at}, actor)
+            return budget_id
         selected: Final = (
             payload.budget_id or organization.default_budget_template_id if inherit_default else payload.budget_id
         )

@@ -133,8 +133,9 @@ class MemberFields(BaseModel):
     budget_id: str | None = None
     budget: Budget | None = Field(
         default=None,
-        description="Permanent member-specific budget. Creates a private budget when leaving a preset; "
-        "otherwise patches the existing private budget. Independent of temporary budget_override.",
+        description="Permanent member-specific budget. When leaving a preset, copies its settings into a private budget "
+        "and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. "
+        "Independent of temporary budget_override.",
     )
     budget_override: Budget | None = None
     budget_override_expires_at: AwareDatetime | None = None

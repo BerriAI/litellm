@@ -41469,7 +41469,7 @@ export interface components {
         MemberCreate: {
             /** Alias */
             alias?: string | null;
-            /** @description Permanent member-specific budget. Creates a private budget when leaving a preset; otherwise patches the existing private budget. Independent of temporary budget_override. */
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
             budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
@@ -41493,7 +41493,7 @@ export interface components {
         MemberPatch: {
             /** Alias */
             alias?: string | null;
-            /** @description Permanent member-specific budget. Creates a private budget when leaving a preset; otherwise patches the existing private budget. Independent of temporary budget_override. */
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
             budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
@@ -41510,7 +41510,7 @@ export interface components {
         MemberUpsert: {
             /** Alias */
             alias?: string | null;
-            /** @description Permanent member-specific budget. Creates a private budget when leaving a preset; otherwise patches the existing private budget. Independent of temporary budget_override. */
+            /** @description Permanent member-specific budget. When leaving a preset, copies its settings into a private budget and applies supplied fields. Later edits patch that private budget. Explicit null fields clear limits. Independent of temporary budget_override. */
             budget?: components["schemas"]["Budget"] | null;
             /** Budget Id */
             budget_id?: string | null;
