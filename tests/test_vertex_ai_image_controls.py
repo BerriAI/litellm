@@ -132,3 +132,34 @@ def test_valid_controls_keep_existing_mapping(drop_params):
     assert generation.map_openai_params({"imageConfig": image_config}, {}, MODEL, drop_params) == {"imageConfig": image_config}
     assert edit.map_openai_params({"size": "1792x1024"}, MODEL, drop_params)["aspectRatio"] == "16:9"
     assert edit.map_openai_params({"size": "1536x1024"}, MODEL, drop_params)["aspectRatio"] == "3:2"
+
+
+def test_string_image_config_decoded_properly():
+    generation = VertexAIGeminiImageGenerationConfig()
+    edit = VertexAIGeminiImageEditConfig()
+    cfg_str = json.dumps({"aspectRatio": "9:16", "imageSize": "2K"})
+    gen_mapped = generation.map_openai_params({"imageConfig": cfg_str}, {}, MODEL, drop_params=False)
+    assert gen_mapped["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "2K"}
+
+    edit_mapped = edit.map_openai_params({"imageConfig": cfg_str}, MODEL, drop_params=False)
+    assert edit_mapped["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "2K"}
+
+    body, _ = edit.transform_image_edit_request(
+        model=MODEL,
+        prompt="Make it night",
+        image=PNG,
+        image_edit_optional_request_params=edit_mapped,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    image_config = json.loads(body)["generationConfig"].get("image_config", {})
+    assert image_config.get("aspect_ratio") == "9:16"
+    assert image_config.get("image_size") == "2K"
+
+
+def test_edit_preserves_explicit_controls_over_size():
+    edit = VertexAIGeminiImageEditConfig()
+    # If size="1024x1024" (default 1:1) and aspect_ratio="9:16" are passed, explicit aspect_ratio wins
+    mapped = edit.map_openai_params({"size": "1024x1024", "aspect_ratio": "9:16"}, MODEL, drop_params=False)
+    assert mapped["aspectRatio"] == "9:16"
+

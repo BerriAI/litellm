@@ -97,6 +97,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
                 elif k in ("imageSize", "image_size"):
                     mapped["imageSize"] = v
                 elif k in ("imageConfig", "image_config"):
+                    if isinstance(v, str):
+                        try:
+                            v = json.loads(v)
+                        except Exception:
+                            pass
                     if isinstance(v, dict):
                         mapped["imageConfig"] = v
                     elif not drop_params:
@@ -124,7 +129,9 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
                         model=model,
                     )
                 mapped_size = {"aspectRatio": "1:1"}
-            mapped.update(mapped_size)
+            for param, val in mapped_size.items():
+                if param not in mapped:
+                    mapped[param] = val
 
         return mapped
 
@@ -249,6 +256,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             image_edit_optional_request_params.get("imageConfig")
             or image_edit_optional_request_params.get("image_config")
         )
+        if isinstance(raw_image_config, str):
+            try:
+                raw_image_config = json.loads(raw_image_config)
+            except Exception:
+                pass
         if isinstance(raw_image_config, dict):
             for k, v in raw_image_config.items():
                 if k in ("aspectRatio", "aspect_ratio"):

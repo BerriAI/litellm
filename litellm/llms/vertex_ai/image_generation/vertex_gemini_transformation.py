@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
@@ -99,6 +100,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
                     elif k == "imageConfig":
+                        if isinstance(v, str):
+                            try:
+                                v = json.loads(v)
+                            except Exception:
+                                pass
                         if isinstance(v, dict):
                             mapped_params["imageConfig"] = v
                         elif not drop_params:
