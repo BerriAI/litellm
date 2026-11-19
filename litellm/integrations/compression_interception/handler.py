@@ -17,6 +17,7 @@ from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_function
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.proxy.guardrails.guardrail_hooks.content_text import assistant_text_from_response
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
     CompressionSavingsMetadata,
@@ -257,10 +258,12 @@ class CompressionInterceptionLogger(CustomLogger):
         call_id: Final = self._resolve_call_id(logging_obj=logging_obj, kwargs=kwargs)
         cache: Final = self._get_cache(call_id=call_id)
         retrieval_results: Final = [self._resolve_retrieval_content(tc, cache) for tc in tool_calls]
+        pre_tool_text: Final = assistant_text_from_response(response)
 
         assistant_message: Final = {
             "role": "assistant",
             "content": thinking_blocks
+            + ([{"type": "text", "text": pre_tool_text}] if pre_tool_text else [])
             + [
                 {
                     "type": "tool_use",
