@@ -1598,9 +1598,9 @@ def test_object_permission_dict_mirrors_pydantic_model():
 
 def _stored_apps_prisma(stored_apps: tuple[str, ...]) -> MagicMock:
     """Prisma double whose one object permission row grants the given customer management apps."""
-    prisma = MagicMock()
+    prisma: Final = MagicMock()
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
-    row = MagicMock(apps=list(stored_apps))
+    row: Final = MagicMock(apps=list(stored_apps))
     row.model_dump.return_value = {"object_permission_id": "perm-id", "apps": list(stored_apps)}
     prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=row)
     return prisma
@@ -1609,29 +1609,31 @@ def _stored_apps_prisma(stored_apps: tuple[str, ...]) -> MagicMock:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("requested", (["chat", "search"], ["search"], []))
 async def test_only_a_proxy_admin_can_change_the_apps_an_object_permission_grants(requested: list[str]) -> None:
-    prisma = _stored_apps_prisma(("chat",))
+    prisma: Final = _stored_apps_prisma(("chat",))
     with pytest.raises(HTTPException) as denied:
         await prepare_object_permission_upsert({"apps": requested}, "perm-id", prisma)
     assert denied.value.status_code == 403
-    granted = await prepare_object_permission_upsert({"apps": requested}, "perm-id", prisma, can_grant_apps=True)
+    granted: Final = await prepare_object_permission_upsert({"apps": requested}, "perm-id", prisma, can_grant_apps=True)
     assert granted.record["apps"] == requested
 
 
 @pytest.mark.asyncio
-async def test_a_non_admin_can_resend_unchanged_apps_while_editing_other_grants() -> None:
-    upsert = await prepare_object_permission_upsert(
+async def test_a_non_admin_edit_never_writes_the_stored_apps_back() -> None:
+    resent: Final = await prepare_object_permission_upsert(
         {"apps": ["chat"], "vector_stores": ["docs"]}, "perm-id", _stored_apps_prisma(("chat",))
     )
-    assert (upsert.record["apps"], upsert.record["vector_stores"]) == (["chat"], ["docs"])
-    untouched = await prepare_object_permission_upsert(
+    untouched: Final = await prepare_object_permission_upsert(
         {"vector_stores": ["docs"]}, "perm-id", _stored_apps_prisma(("chat",))
     )
-    assert untouched.record["apps"] == ["chat"]
+    assert [("apps" in upsert.record, upsert.record["vector_stores"]) for upsert in (resent, untouched)] == [
+        (False, ["docs"]),
+        (False, ["docs"]),
+    ]
 
 
 @pytest.mark.asyncio
 async def test_a_non_admin_cannot_create_an_object_permission_that_grants_apps() -> None:
-    prisma = _stored_apps_prisma(())
+    prisma: Final = _stored_apps_prisma(())
     with pytest.raises(HTTPException) as denied:
         await set_object_permission({"object_permission": {"apps": ["chat"]}}, prisma)
     assert denied.value.status_code == 403

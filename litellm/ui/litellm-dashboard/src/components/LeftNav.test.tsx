@@ -393,6 +393,19 @@ describe("Sidebar (leftnav)", () => {
       showSSOBanner: false,
     };
 
+    it("hides the admin-only Customer Management pages from an Admin Viewer with no app grant", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      localStorage.setItem("litellm_plugin_mode", "customer-portal");
+      renderWithProviders(
+        <PluginModeProvider>
+          <Sidebar {...defaultProps} />
+        </PluginModeProvider>,
+      );
+      expect(screen.queryByRole("link", { name: "Customer organizations" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Apps" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
+    });
+
     it("hides Playground from Admin Viewer (cost-incurring action)", () => {
       mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);

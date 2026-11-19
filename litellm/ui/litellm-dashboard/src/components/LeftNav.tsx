@@ -176,9 +176,12 @@ const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityCon
   return enabledPages.includes(item.page);
 };
 
+const CUSTOMER_PORTAL_ADMIN_KEYS: ReadonlySet<string> = new Set(["customers", "apps", "customer-settings"]);
+
 const menuItemIsVisible = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean => {
   if (item.children && item.children.length === 0) return false;
   if (item.key === "apps" && context.hasAppGrant) return true;
+  if (context.isViewOnly && CUSTOMER_PORTAL_ADMIN_KEYS.has(item.key)) return false;
   if (item.key === "llm-playground" && context.isViewOnly) return false;
   const adminVisibility = adminPageVisibility(item, context, isAdmin);
   if (adminVisibility !== null) return adminVisibility;

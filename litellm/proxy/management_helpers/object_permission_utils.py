@@ -121,9 +121,13 @@ async def prepare_object_permission_upsert(
         prisma_client=prisma_client,
     )
     merged: Final[dict[str, object]] = {
-        **existing_fields,
-        **new_object_permission,
-        "object_permission_id": object_permission_id,
+        key: value
+        for key, value in (
+            *existing_fields.items(),
+            *new_object_permission.items(),
+            ("object_permission_id", object_permission_id),
+        )
+        if can_grant_apps or key != "apps"
     }
     record: Final[dict[str, object]] = {
         **merged,

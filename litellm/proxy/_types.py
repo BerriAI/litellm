@@ -909,7 +909,6 @@ class LiteLLMRoutes(enum.Enum):
 
     self_managed_routes = [
         "/management/v1/customer_budget_increase_requests",
-        # Handlers admit proxy admins and callers granted the app through object_permission.apps
         "/management/v1/apps",
         "/management/v1/apps/definition",
         "/management/v1/apps/{app_id}",
