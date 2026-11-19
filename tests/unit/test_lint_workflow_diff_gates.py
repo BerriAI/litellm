@@ -390,6 +390,9 @@ CONSUMERS: Final = MappingProxyType(
         "test-unit.yml:ui-unit": Consumer(_ui_files_passed_to_vitest_related, _ui_files_changed_since_merge_base),
         "test-unit.yml:unit": Consumer(_schema_base_commit_and_its_type_in_the_checkout, _merge_base_as_a_commit),
         "test-unit.yml:unit-core": Consumer(_schema_base_commit_and_its_type_in_the_checkout, _merge_base_as_a_commit),
+        "test-unit.yml:unit-changed": Consumer(
+            _schema_base_commit_and_its_type_in_the_checkout, _merge_base_as_a_commit
+        ),
         "spend-logs-guard.yml:spend-logs-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
         "cost-map-guard.yml:cost-map-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
     }
