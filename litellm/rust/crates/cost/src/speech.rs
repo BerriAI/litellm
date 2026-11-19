@@ -235,7 +235,7 @@ mod tests {
         );
         let spoken = SpeechQuery {
             tokens: Some(TokenBilled {
-                row: row_ref("tokens-row"),
+                row: Some(row_ref("tokens-row")),
                 usage: usage(300, 50),
             }),
             ..query(Some(5), None)

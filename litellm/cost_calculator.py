@@ -23,6 +23,7 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
+from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -433,6 +434,13 @@ def _usage_reports_tokens(usage: Usage | None) -> bool:
     return (getattr(usage, "prompt_tokens", 0) or 0) > 0 or (getattr(usage, "completion_tokens", 0) or 0) > 0
 
 
+def _token_row(model: str, custom_llm_provider: str) -> ModelInfo | ModelNotMappedError:
+    try:
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except ModelNotMappedError as error:
+        return error
+
+
 def _transcription_cost(
     model: str,
     model_without_prefix: str,
@@ -450,6 +458,7 @@ def _transcription_cost(
         model=model_without_prefix, custom_llm_provider=custom_llm_provider
     )
     declared: Final[Mapping[str, object] | None] = litellm.model_cost.get(model_info.get("key"))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # model cost map is dynamically loaded
+    token_row: Final = _token_row(model, custom_llm_provider)
     outcome: Final = price_units(
         TranscriptionDocument(
             kind="transcription",
@@ -460,9 +469,15 @@ def _transcription_cost(
             service_tier=service_tier,
             data_residency=data_residency,
         ),
-        (litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider),),
+        () if isinstance(token_row, ModelNotMappedError) else (token_row,),
         catalog=declared if declared is not None else model_info,
     )
+    if (
+        isinstance(token_row, ModelNotMappedError)
+        and isinstance(outcome, NativeUnpriced)
+        and outcome.reason == "no_row"
+    ):
+        raise token_row
     return prompt_and_completion(outcome)
 
 

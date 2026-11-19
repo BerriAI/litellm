@@ -130,11 +130,12 @@ pub(crate) fn bill<S: RowSource>(
     }
 }
 
-/// The token usage a speech or transcription call reported and the row main's `generic_cost_per_token` read for it
+/// The token usage a speech or transcription call reported and the row main's `generic_cost_per_token` read for it,
+/// `None` when that lookup failed, which fails the call only if its tokens bill
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct TokenBilled {
-    pub row: RowRef,
+    pub row: Option<RowRef>,
     pub usage: TokenUsage,
 }
 
@@ -145,13 +146,14 @@ pub(crate) fn generic_tokens<S: RowSource>(
     header: &Header,
     tokens: &TokenBilled,
 ) -> PriceOutcome {
+    let Some(row) = &tokens.row else {
+        return no_row(header);
+    };
     let query = TokensQuery {
         rules: TokenRules::Generic,
         ..TokensQuery::new(
             Header {
-                source: PriceSource::Row {
-                    row: tokens.row.clone(),
-                },
+                source: PriceSource::Row { row: row.clone() },
                 basis: Basis {
                     vertex_location: None,
                     ..header.basis.clone()

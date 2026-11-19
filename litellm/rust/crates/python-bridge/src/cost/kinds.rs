@@ -62,7 +62,7 @@ enum UnitsDocument {
         #[serde(flatten)]
         tokens: TokenFacts,
     },
-    /// `tables` holds the row `generic_cost_per_token` reads for `tokens`
+    /// `tables` holds the row `generic_cost_per_token` reads for `tokens`, none when the caller could not look it up
     Transcription {
         #[serde(flatten)]
         named: Named,
@@ -277,10 +277,10 @@ impl UnitsDocument {
             _ => Default::default(),
         };
         let billed = |tokens: TokenFacts| {
-            tokens
-                .tokens
-                .zip(named_rows.first().cloned())
-                .map(|(usage, row)| TokenBilled { row, usage })
+            tokens.tokens.map(|usage| TokenBilled {
+                row: named_rows.first().cloned(),
+                usage,
+            })
         };
         let header = Header {
             candidates: vec![candidate],

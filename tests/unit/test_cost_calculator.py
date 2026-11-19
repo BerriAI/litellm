@@ -1730,6 +1730,41 @@ def test_transcription_ignores_invalid_provider_duration(malformed_seconds: floa
     assert _get_transcription_usage_duration(response) is None
 
 
+def _transcription_cost_under_an_unmapped_prefix(name: str, rates: Mapping[str, float], usage: Usage) -> tuple[float, float]:
+    litellm.register_model(
+        {f"openai/{name}": {"mode": "audio_transcription", "litellm_provider": "openai", **rates}},
+        persist_across_reloads=False,
+    )
+    return cost_per_token(
+        model=f"proxy/{name}",
+        custom_llm_provider="openai",
+        call_type="transcription",
+        usage_object=usage,
+        audio_transcription_file_duration=30.0,
+    )
+
+
+def test_transcription_reporting_tokens_bills_its_per_second_row_when_the_prefixed_name_is_unmapped() -> None:
+    per_second: Final = {"input_cost_per_second": 1e-4}
+    tokens: Final = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    billed: Final = _transcription_cost_under_an_unmapped_prefix("stt-per-second-probe", per_second, tokens)
+
+    assert billed == _transcription_cost_under_an_unmapped_prefix("stt-per-second-probe", per_second, Usage())
+    assert billed[0] > 0.0
+
+
+def test_transcription_reporting_tokens_on_a_token_row_raises_main_lookup_error_when_the_prefixed_name_is_unmapped() -> (
+    None
+):
+    tokens: Final = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    with pytest.raises(litellm.exceptions.ModelNotMappedError):
+        _transcription_cost_under_an_unmapped_prefix(
+            "stt-token-probe", {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, tokens
+        )
+
+
 def test_realtime_transcription_prices_each_clip_at_the_transcription_model_set_when_it_ran(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))

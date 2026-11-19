@@ -70,7 +70,6 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - Replicate bills an unmapped model at the A100 rate per second with no discount or margin, and without a response time reads the span between `created` and `ended`, in seconds, as milliseconds (`get_replicate_completion_pricing`)
 
 ## Not copied from main
-- A speech or transcription call whose usage reports tokens looks up the `get_model_info` row `generic_cost_per_token` reads before Rust picks its path, so an unmapped name raises there even when the declared row then bills characters or seconds, where main looked it up only on the token path
 - A result tier without a `max_results_range` is skipped, and a picked tier whose `input_cost_per_query` is not a price prices nothing, where main raised `KeyError` or multiplied what the row held. A `max_results` written as a numeric string reads as that number, and any other value that is not a number reads as 10, where main raised comparing either (`search_provider_cost_per_query`)
 - A regional endpoint, residency or FedRAMP multiplier below 1 lowers to no uplift, in the deployment prices the model group display shows too, where main applied it (`get_vertex_regional_endpoint_uplift` and its siblings, deleted)
 - `video_generation_cost` read a catalog row through `get_model_info`, which drops every `output_cost_per_second_<resolution>` key but six. The core reads any resolution the row lists. No shipped row lists another

@@ -116,7 +116,7 @@ mod parity {
             header: header(case["provider"].as_str().unwrap(), model),
             seconds: case["seconds"].as_f64().unwrap(),
             tokens: case["tokens"].as_bool().unwrap().then(|| TokenBilled {
-                row: row_ref(model),
+                row: Some(row_ref(model)),
                 usage: Default::default(),
             }),
         };
@@ -153,7 +153,7 @@ mod tests {
             header: header("openai", "whisper-1"),
             seconds: 61.37,
             tokens: tokens.then(|| TokenBilled {
-                row: row_ref("tokens-row"),
+                row: Some(row_ref("tokens-row")),
                 usage: usage(1_000, 200),
             }),
         }
@@ -199,6 +199,32 @@ mod tests {
             row(&[(Meter::TEXT_INPUT, 1e-6), (Meter::TEXT_OUTPUT, 4e-6)]),
         );
         assert_eq!(sides(&source, true), (1e-6 * 1_000.0, 4e-6 * 200.0));
+    }
+
+    #[rstest]
+    fn tokens_whose_row_the_caller_could_not_look_up_fail_only_a_call_whose_tokens_bill() {
+        let unlooked = |declared: TestRow| {
+            let query = TranscriptionQuery {
+                tokens: Some(TokenBilled {
+                    row: None,
+                    usage: usage(1_000, 200),
+                }),
+                ..query(false)
+            };
+            price(&TestSource::with_row("whisper-1", declared), &query)
+        };
+
+        assert_eq!(
+            unlooked(row(&[(INPUT_SECOND, 0.0001)])),
+            price(
+                &TestSource::with_row("whisper-1", row(&[(INPUT_SECOND, 0.0001)])),
+                &query(false)
+            )
+        );
+        assert!(matches!(
+            unlooked(row(&[(Meter::TEXT_INPUT, 1.0)])),
+            PriceOutcome::Unpriced(Unpriced::NoRow { .. })
+        ));
     }
 
     #[rstest]
