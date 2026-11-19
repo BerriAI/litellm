@@ -236,6 +236,15 @@ class _FakeJsonResponse:
 PROXY: Final = "http://localhost:4000"
 OTHER_PROXY: Final = "https://other-proxy.example.com"
 LITE_HELPER: Final = f"/usr/local/bin/lite --base-url {PROXY} auth print-token"
+_CLAUDE_PROVIDER_SWITCHES: Final = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
 
 
 def _overlay_writer(tmp_path):
@@ -335,6 +344,65 @@ class TestBuildAgentEnv:
             frozenset({"anthropic"}),
         )
         assert "ANTHROPIC_API_KEY" not in env
+
+    def test_anthropic_profile_clears_every_provider_switch(self):
+        base = {name: "1" for name in _CLAUDE_PROVIDER_SWITCHES}
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
+        assert {name: env[name] for name in _CLAUDE_PROVIDER_SWITCHES} == dict.fromkeys(_CLAUDE_PROVIDER_SWITCHES, "")
+
+    def test_proxy_key_launch_turns_off_claude_ai_services(self):
+        env = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
+        assert {
+            "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": env["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"],
+            "ENABLE_CLAUDEAI_MCP_SERVERS": env["ENABLE_CLAUDEAI_MCP_SERVERS"],
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": env["CLAUDE_CODE_ATTRIBUTION_HEADER"],
+            "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": env["CLAUDE_CODE_TOTAL_TOKENS_REMINDER"],
+            "DISABLE_ERROR_REPORTING": env["DISABLE_ERROR_REPORTING"],
+            "DISABLE_FEEDBACK_COMMAND": env["DISABLE_FEEDBACK_COMMAND"],
+            "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": env["CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"],
+        } == {
+            "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
+            "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+            "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "off",
+            "DISABLE_ERROR_REPORTING": "1",
+            "DISABLE_FEEDBACK_COMMAND": "1",
+            "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+        }
+
+    def test_proxy_key_launch_replaces_inherited_anthropic_settings(self):
+        base = {
+            "DISABLE_ERROR_REPORTING": "0",
+            "ENABLE_CLAUDEAI_MCP_SERVERS": "true",
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": "1",
+        }
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
+        assert env["DISABLE_ERROR_REPORTING"] == "1"
+        assert env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+        assert env["CLAUDE_CODE_ATTRIBUTION_HEADER"] == "0"
+
+    def test_auto_mode_server_uses_the_client_classifier_unless_set(self):
+        defaulted = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
+        chosen = build_agent_env(
+            {"CLAUDE_CODE_AUTO_MODE_SERVER": "1"}, "http://localhost:4000", "sk-key", frozenset({"anthropic"})
+        )
+        assert defaulted["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
+        assert chosen["CLAUDE_CODE_AUTO_MODE_SERVER"] == "1"
+
+    def test_subscription_keeps_the_claude_ai_services_it_signed_in_for(self):
+        base = {"ENABLE_CLAUDEAI_MCP_SERVERS": "true", "DISABLE_ERROR_REPORTING": "0"}
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}), subscription=True)
+        assert env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "true"
+        assert env["DISABLE_ERROR_REPORTING"] == "0"
+        assert "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST" not in env
+        assert "CLAUDE_CODE_ATTRIBUTION_HEADER" not in env
+        assert {name: env[name] for name in _CLAUDE_PROVIDER_SWITCHES} == dict.fromkeys(_CLAUDE_PROVIDER_SWITCHES, "")
+
+    def test_openai_profile_gets_no_claude_launch_env(self):
+        env = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"openai"}))
+        assert "CLAUDE_CODE_AUTO_MODE_SERVER" not in env
+        assert "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST" not in env
+        assert not any(name in env for name in _CLAUDE_PROVIDER_SWITCHES)
 
     def test_openai_profile_appends_v1(self):
         env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}))

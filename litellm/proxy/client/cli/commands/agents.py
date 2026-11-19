@@ -68,6 +68,16 @@ ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 ANTHROPIC_MODEL_ENV: Final = "ANTHROPIC_MODEL"
+AUTO_MODE_SERVER_ENV: Final = "CLAUDE_CODE_AUTO_MODE_SERVER"
+CLAUDE_PROVIDER_ENV_KEYS: Final = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
 CLAUDE_CODE_SUBAGENT_MODEL_ENV: Final = "CLAUDE_CODE_SUBAGENT_MODEL"
 CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV: Final = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 CLAUDE_CODE_AUTO_COMPACT_WINDOW_ENV: Final = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
@@ -76,6 +86,21 @@ _CLAUDE_MIN_AUTO_COMPACT_WINDOW: Final = 100_000
 _CLAUDE_MAX_AUTO_COMPACT_WINDOW: Final = 1_000_000
 _CLAUDE_MAX_OUTPUT_TOKENS: Final = 128_000
 _MODEL_FLAG: Final = "--model"
+_CLAUDE_PROXY_LAUNCH_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "off",
+        "DISABLE_ERROR_REPORTING": "1",
+        "DISABLE_FEEDBACK_COMMAND": "1",
+        "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+    }
+)
+_CLAUDE_MANAGED_PROVIDER_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
+        "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+    }
+)
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
@@ -160,13 +185,20 @@ def build_agent_env(
     ANTHROPIC_BASE_URL is not a first-party Anthropic host; a value already in
     the environment is left alone. CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
     defaults to 1 so Claude Code (v2.1.129+) fills its /model picker from the
-    proxy's /v1/models; likewise left alone when already set.
+    proxy's /v1/models; likewise left alone when already set. The provider
+    switches (CLAUDE_CODE_USE_*) are cleared so an inherited Bedrock, Vertex,
+    Foundry, Anthropic AWS, Google Cloud, Mantle or gateway setting cannot route
+    around the proxy, and CLAUDE_CODE_AUTO_MODE_SERVER defaults to 0 since the
+    proxy offers no server-side auto-mode check. A launch on a proxy key also
+    turns off claude.ai MCP servers and Anthropic attribution, feedback, survey
+    and error reporting, matching `ollama launch claude`.
     pi ignores both base URL variables and instead resolves $LITELLM_PROXY_API_KEY
     from its synced models.json provider entry.
     With subscription=True the Anthropic profile keeps Claude Code on its claude.ai login: the key
     travels in the x-litellm-api-key header through ANTHROPIC_CUSTOM_HEADERS, and no
     ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is left in the environment, since either one makes
-    Claude Code stop using the subscription (and its connectors).
+    Claude Code stop using the subscription (and its connectors). The claude.ai MCP servers and
+    Anthropic feedback settings are left alone too.
     With helper_renews_key=True the Anthropic profile leaves ANTHROPIC_AUTH_TOKEN out, so Claude Code takes
     its key from the renewing apiKeyHelper in its settings instead of a launch-time copy that expires.
     With subscription=True the OpenAI profile keeps Codex on its ChatGPT login: the key goes to
@@ -188,6 +220,13 @@ def build_agent_env(
         else:
             env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
         env.pop(ANTHROPIC_API_KEY_ENV, None)
+        for provider in CLAUDE_PROVIDER_ENV_KEYS:
+            env[provider] = ""
+        if AUTO_MODE_SERVER_ENV not in env:
+            env[AUTO_MODE_SERVER_ENV] = "0"
+        if not subscription:
+            env.update(_CLAUDE_PROXY_LAUNCH_ENV)
+            env.update(_CLAUDE_MANAGED_PROVIDER_ENV)
         if ENABLE_TOOL_SEARCH_ENV not in env:
             env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
         if ENABLE_GATEWAY_MODEL_DISCOVERY_ENV not in env:
