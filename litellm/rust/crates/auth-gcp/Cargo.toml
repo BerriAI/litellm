@@ -7,6 +7,9 @@ repository.workspace = true
 
 [features]
 google-sdk = []
+# Exposes fakes such as `google::OnGce` to other crates' tests, so they can log in without a
+# network. Enable it only from `[dev-dependencies]` or another crate's own `test-support`
+# feature, never for a build that ships. The workspace AGENTS.md describes the pattern.
 test-support = []
 
 [dependencies]
