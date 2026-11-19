@@ -48,6 +48,7 @@ def _response_cost(raw_response: httpx.Response) -> float | None:
 
 
 class _LiteLLMProxyHop(BaseDecisionsConfig):
+    confidence_optional = True
     api_base_env = ("LITELLM_PROXY_API_BASE",)
     api_key_env = ("LITELLM_PROXY_API_KEY",)
     api_key_required = False
