@@ -53,6 +53,7 @@ def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None)
 
 
 AZURE_AI_AGENTS_SCOPE: Final = "https://ai.azure.com/.default"
+AZURE_OPENAI_RESOURCE_HOST_SUFFIXES: Final = (".openai.azure.com", ".cognitiveservices.azure.com")
 FOUNDRY_PROJECT_PATH_PREFIX: Final = ("api", "projects")
 OPENAI_V1_PATH: Final = ("openai", "v1")
 CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")

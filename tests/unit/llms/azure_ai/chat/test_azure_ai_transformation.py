@@ -306,35 +306,85 @@ def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
     }
 
 
+AZURE_OPENAI_RESOURCE_HOST: Final = "example-resource.openai.azure.com"
+AZURE_COGNITIVE_SERVICES_HOST: Final = "example-resource.cognitiveservices.azure.com"
+API_KEY_HEADER: Final = ("api-key", "azure-ai-test-key")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("base_path", "expected_path", "expected_query"),
+    ("host", "base_path", "api_version", "expected_path", "expected_query", "expected_auth"),
     [
-        pytest.param("", "/openai/v1/chat/completions", b"", id="resource-root"),
-        pytest.param("/openai/", "/openai/v1/chat/completions", b"", id="openai-base"),
         pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST, "", None, "/openai/v1/chat/completions", b"", API_KEY_HEADER, id="resource-root"
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "/openai/",
+            None,
+            "/openai/v1/chat/completions",
+            b"",
+            API_KEY_HEADER,
+            id="openai-base",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
             "/openai/v1?api-version=v1",
+            None,
             "/openai/v1/chat/completions",
             b"api-version=v1",
+            API_KEY_HEADER,
             id="explicit-v1-base",
         ),
         pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "?api-version=preview",
+            None,
+            "/openai/v1/chat/completions",
+            b"api-version=preview",
+            API_KEY_HEADER,
+            id="preview-version-in-base",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "/openai",
+            "latest",
+            "/openai/v1/chat/completions",
+            b"api-version=latest",
+            API_KEY_HEADER,
+            id="latest-version-param",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
             "/openai?api-version=2024-10-21",
+            None,
             "/openai/chat/completions",
             b"api-version=2024-10-21",
+            API_KEY_HEADER,
             id="dated-version-preserved",
+        ),
+        pytest.param(
+            AZURE_COGNITIVE_SERVICES_HOST,
+            "",
+            None,
+            "/openai/v1/chat/completions",
+            b"",
+            ("authorization", "Bearer azure-ai-test-key"),
+            id="cognitive-services-root",
         ),
     ],
 )
 async def test_azure_ai_chat_health_check_routes_openai_resource_base(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    host: str,
     base_path: str,
+    api_version: str | None,
     expected_path: str,
     expected_query: bytes,
+    expected_auth: tuple[str, str],
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
-    host: Final = "example-resource.openai.azure.com"
     deployment: Final = "chat-deployment"
     route: Final = respx_mock.post(host=host).mock(
         return_value=Response(200, json={**CHAT_COMPLETION_PAYLOAD, "model": deployment})
@@ -345,6 +395,7 @@ async def test_azure_ai_chat_health_check_routes_openai_resource_base(
             "model": deployment,
             "custom_llm_provider": "azure_ai",
             "api_base": f"https://{host}{base_path}",
+            "api_version": api_version,
             "api_key": "azure-ai-test-key",
             "max_retries": 0,
         },
@@ -357,7 +408,7 @@ async def test_azure_ai_chat_health_check_routes_openai_resource_base(
     request: Final = route.calls.last.request
     assert request.url.path == expected_path
     assert request.url.query == expected_query
-    assert request.headers["api-key"] == "azure-ai-test-key"
+    assert request.headers[expected_auth[0]] == expected_auth[1]
     assert json.loads(request.content)["model"] == deployment
 
 
