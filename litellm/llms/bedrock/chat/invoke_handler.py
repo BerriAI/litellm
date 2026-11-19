@@ -39,6 +39,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
 )
 from litellm.types.utils import (
+    ChatCompletionUsageBlock,
     Delta,
     ModelResponse,
     ModelResponseStream,
@@ -820,15 +821,15 @@ class AWSEventStreamDecoder:
         # meta mapping
         elif "generation" in chunk_data:
             text = chunk_data["generation"]  # bedrock.meta
-            # llama reports running totals on every event, not deltas - take them as they are
-            prompt_tokens: Final = chunk_data.get("prompt_token_count")
-            completion_tokens: Final = chunk_data.get("generation_token_count")
-            if prompt_tokens is not None and completion_tokens is not None:
-                usage = Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                )
+            # llama reports running totals, and only the first event carries prompt_token_count, not deltas - take
+            # them as they are, and keep reporting the completion count on later events
+            prompt_tokens: Final = chunk_data.get("prompt_token_count") or 0
+            completion_tokens: Final = chunk_data.get("generation_token_count") or 0
+            usage = ChatCompletionUsageBlock(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
             stop_reason = chunk_data.get("stop_reason")
             if stop_reason is not None:
                 is_finished = True

@@ -911,7 +911,8 @@ LLAMA_MODEL = "meta.llama3-1-8b-instruct-v1:0"
 LLAMA_STREAM_ENDPOINT = f"/model/{LLAMA_MODEL}/invoke-with-response-stream"
 LLAMA_CHUNKS = [
     {"generation": "Hello", "prompt_token_count": 25, "generation_token_count": 1, "stop_reason": None},
-    {"generation": " world", "prompt_token_count": 25, "generation_token_count": 2, "stop_reason": "stop"},
+    # bedrock carries prompt_token_count only on the first event; later events send it as null
+    {"generation": " world", "prompt_token_count": None, "generation_token_count": 2, "stop_reason": "stop"},
 ]
 
 
@@ -934,7 +935,7 @@ def test_llama_stream_collector_keeps_provider_usage(chunk_size: int):
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "Hello world"
     assert response.choices[0].finish_reason == "stop"
-    # llama sends running totals on every event, so these must not be summed up to 50 / 3
+    # llama sends running totals, and only the first event carries prompt_token_count - neither is summed up
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 2)
     assert response.usage.total_tokens == 27
 
