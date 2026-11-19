@@ -54,7 +54,7 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFER_PYDANTIC_BUILD
@@ -65,6 +65,7 @@ from litellm.proxy.db.token_auth import (
     parse_database_token_expiration,
     parse_iam_endpoint_from_url,
 )
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 
 PGBOUNCER_ENV_PREFIX: Final = "LITELLM_PGBOUNCER_"
 PGBOUNCER_POOLED_ENV_VAR: Final = "LITELLM_PGBOUNCER_POOLED_DATABASE_URL"
@@ -97,7 +98,7 @@ PGBOUNCER_SSLMODES: Final[frozenset[str]] = frozenset(
 )
 
 
-class PgBouncerSettings(BaseSettings):
+class PgBouncerSettings(LiteLLMBaseSettings):
     """``LITELLM_PGBOUNCER_*`` env vars, read once in the supervisor."""
 
     model_config = SettingsConfigDict(

@@ -16,13 +16,13 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.litellm_core_utils.oauth_token_exchange import TokenExchangeProfile
 from litellm.proxy.control_plane.audit.event import CONTROL_PLANE_ID
 from litellm.proxy.control_plane.auth.rbac import ADMIN_ROLE
-from litellm.types.llms.base_model import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel, LiteLLMBaseSettings
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
 DEFAULT_SESSION_TTL_SECONDS: Final = 12 * 60 * 60
@@ -170,7 +170,7 @@ _DATAPLANE_SPECS: Final = TypeAdapter(DataplaneSpecs)
 _YAML_DOCUMENT: Final = TypeAdapter(dict[str, object])
 
 
-class ControlPlaneSettings(BaseSettings):
+class ControlPlaneSettings(LiteLLMBaseSettings):
     model_config = SettingsConfigDict(
         frozen=True,
         env_prefix="CONTROL_PLANE_",

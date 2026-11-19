@@ -50,7 +50,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypeAlias, cast
 
 from pydantic import AliasChoices, BeforeValidator, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.proxy.db.pgbouncer import database_url_is_pooled
@@ -64,6 +64,7 @@ from litellm.proxy.db.token_auth import (
     mint_database_token,
     token_auth_flag_enabled,
 )
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 
 IamTokenAuthFlag = Annotated[bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=IAM_TOKEN_DB_AUTH_ENV_VAR))]
 AzureTokenAuthFlag = Annotated[
@@ -375,7 +376,7 @@ def unsupported_db_scheme_message(env_var: str, scheme: str) -> str:
     )
 
 
-class DatabaseURLSettings(BaseSettings):
+class DatabaseURLSettings(LiteLLMBaseSettings):
     """Discrete ``DATABASE_*`` env vars, loaded once at process start.
 
     Field names are internal; ``validation_alias`` pins each one to the exact

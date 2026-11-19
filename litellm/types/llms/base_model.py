@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm.constants import DEFER_PYDANTIC_BUILD
 
@@ -43,6 +44,27 @@ class LiteLLMBaseModel(BaseModel):
         model = type(self)
         if not model.__pydantic_complete__:
             model.model_rebuild(raise_errors=False)
+
+
+class LiteLLMBaseSettings(BaseSettings):
+    model_config = SettingsConfigDict(defer_build=DEFER_PYDANTIC_BUILD)
+
+    @classmethod
+    def model_rebuild(
+        cls,
+        *,
+        force: bool = False,
+        raise_errors: bool = True,
+        _parent_namespace_depth: int = 2,
+        _types_namespace: Mapping[str, object] | None = None,
+    ) -> bool | None:
+        with _SCHEMA_BUILD_LOCK:
+            return super().model_rebuild(
+                force=force,
+                raise_errors=raise_errors,
+                _parent_namespace_depth=0,
+                _types_namespace=_types_namespace,
+            )
 
 
 class LiteLLMFrozenBaseModel(

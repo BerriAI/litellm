@@ -3,7 +3,7 @@
 from typing import Final
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
 from litellm.constants import DEFER_PYDANTIC_BUILD
 from litellm.integrations.arize.arize import ArizeLogger as _V1ArizeLogger
@@ -13,6 +13,7 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers
+from litellm.types.llms.base_model import LiteLLMBaseSettings
 from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Arize routes an export to a project by the ``model_id`` resource attribute and
@@ -21,7 +22,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 ARIZE_DEFAULT_PROJECT: Final = "litellm"
 
 
-class _ArizeSettings(BaseSettings):
+class _ArizeSettings(LiteLLMBaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore", defer_build=DEFER_PYDANTIC_BUILD)
 
     # Standard OTLP headers env var, used as the fallback when no Arize
