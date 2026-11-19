@@ -6029,7 +6029,7 @@ async def test_follow_up_reads_the_stored_chain_only_from_the_provider_of_the_re
 
 
 @pytest.mark.asyncio
-async def test_follow_up_reads_the_stored_chain_within_the_timeout_of_the_request(
+async def test_follow_up_reads_the_stored_chain_with_the_timeout_and_extra_headers_of_the_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -6044,9 +6044,12 @@ async def test_follow_up_reads_the_stored_chain_within_the_timeout_of_the_reques
                 "custom_llm_provider": "openai",
                 "api_key": "sk-test",
                 "timeout": 7.5,
+                "extra_headers": {"x-gateway-auth": "gateway-secret"},
             }
         )
-    assert chain.calls[0].request.extensions["timeout"] == {"connect": 7.5, "read": 7.5, "write": 7.5, "pool": 7.5}
+    lookup: Final = chain.calls[0].request
+    assert lookup.extensions["timeout"] == {"connect": 7.5, "read": 7.5, "write": 7.5, "pool": 7.5}
+    assert lookup.headers["x-gateway-auth"] == "gateway-secret"
 
 
 @pytest.mark.asyncio
