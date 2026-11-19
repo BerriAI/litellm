@@ -13,10 +13,19 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.usage.token_details import (
+    CompletionTokensDetailsResult,
+    PromptTokensDetailsResult,
+    parse_completion_tokens_details,
+    parse_prompt_tokens_details,
+    token_detail_value,
+)
+from litellm.litellm_core_utils.usage.token_details import (
+    get_web_search_requests as get_web_search_requests,  # noqa: PLC0414  # re-export at the old path, tests import it
+)
 from litellm.rust_bridge._native import NativeReceipt
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
-    CacheCreationTokenDetails,
     CallTypes,
     CompletionTokensDetailsWrapper,
     CostPerToken,
@@ -27,7 +36,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     ServiceTier,
     Usage,
-    text_tokens_without_nested_reasoning,
 )
 from litellm.utils import get_model_info
 
@@ -87,14 +95,6 @@ _BATCH_KEY_SUFFIX: Final = "_batches"
 _NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
-def _get_token_detail_value(details: object, key: str) -> int | None:
-    if isinstance(details, dict):
-        value = details.get(key)
-    else:
-        value = getattr(details, key, None)
-    return value if isinstance(value, int) else None
-
-
 _IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-|\*)\d+")
 
 
@@ -106,36 +106,6 @@ def _requested_image_param(optional_params: Mapping[str, object] | None, key: st
 def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
     value: Final = _requested_image_param(optional_params, "size")
     return value.replace("*", "x") if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
-
-
-def get_web_search_requests(server_tool_use: object) -> int | None:
-    """
-    Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
-    that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
-    or any other object supporting attribute access.
-
-    Returns ``None`` when the value cannot be resolved — callers can
-    distinguish "absent" from "zero" using ``is None``.
-
-    See https://github.com/BerriAI/litellm/issues/26153 — ``stream_chunk_builder``
-    historically left this as a plain ``dict``, which broke direct attribute
-    access in cost calculation.
-    """
-    if server_tool_use is None:
-        return None
-    if isinstance(server_tool_use, dict):
-        return server_tool_use.get("web_search_requests")
-    return getattr(server_tool_use, "web_search_requests", None)
-
-
-def get_web_search_requests_from_usage(usage: Usage) -> int | None:
-    """Read ``web_search_requests`` from a ``Usage``'s ``server_tool_use``.
-
-    ``Usage`` deletes unset optional fields from ``__dict__`` (see
-    ``SafeAttributeModel``), so direct attribute access can raise
-    ``AttributeError``; ``getattr`` with a default is required here.
-    """
-    return get_web_search_requests(getattr(usage, "server_tool_use", None))
 
 
 def is_above_128k(tokens: float) -> bool:
@@ -263,172 +233,6 @@ def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: M
         return model_info
     resolved: Final[ModelInfo] = {**shared_model_info, **model_info}
     return resolved
-
-
-class PromptTokensDetailsResult(TypedDict):
-    cache_hit_tokens: int
-    cache_hit_audio_tokens: ReadOnly[int]
-
-    cached_text_tokens: ReadOnly[int]
-    cached_audio_tokens: ReadOnly[int]
-    cached_image_tokens: ReadOnly[int]
-    has_cached_tokens_details: ReadOnly[bool]
-    cache_creation_tokens: int
-    cache_creation_token_details: CacheCreationTokenDetails | None
-    text_tokens: int
-    audio_tokens: int
-    image_tokens: int
-    video_tokens: int
-    character_count: int
-    image_count: int
-    video_length_seconds: float
-    audio_length_seconds: float
-    query_count: int
-
-
-def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
-    cache_hit_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
-    cache_creation_tokens: Final = (
-        cast(
-            int | None,
-            getattr(usage.prompt_tokens_details, "cache_write_tokens", 0)
-            or getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
-        )
-        or 0
-    )
-    cache_creation_token_details: Final = (
-        cast(
-            CacheCreationTokenDetails | None,
-            getattr(usage.prompt_tokens_details, "cache_creation_token_details", None),
-        )
-        or None
-    )
-    cached_tokens_details: Final = getattr(usage.prompt_tokens_details, "cached_tokens_details", None)
-    cached_audio_tokens: Final = min(
-        _get_token_detail_value(cached_tokens_details, "audio_tokens") or 0, cache_hit_tokens
-    )
-    cached_text_tokens: Final = min(
-        _get_token_detail_value(cached_tokens_details, "text_tokens") or 0,
-        cache_hit_tokens - cached_audio_tokens,
-    )
-    cached_image_tokens: Final = min(
-        _get_token_detail_value(cached_tokens_details, "image_tokens") or 0,
-        cache_hit_tokens - cached_audio_tokens - cached_text_tokens,
-    )
-    text_tokens: Final = max(
-        (
-            cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
-            or 0  # default to prompt tokens, if this field is not set
-        )
-        - cached_text_tokens,
-        0,
-    )
-    audio_tokens: Final = max(
-        (cast(int | None, getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0) - cached_audio_tokens,
-        0,
-    )
-    image_tokens: Final = max(
-        (cast(int | None, getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0) - cached_image_tokens,
-        0,
-    )
-    video_tokens: Final = _coerce_token_count(getattr(usage.prompt_tokens_details, "video_tokens", 0))
-    character_count: Final = (
-        cast(
-            int | None,
-            getattr(usage.prompt_tokens_details, "character_count", 0),
-        )
-        or 0
-    )
-    image_count: Final = cast(int | None, getattr(usage.prompt_tokens_details, "image_count", 0)) or 0
-    video_length_seconds: Final = (
-        cast(
-            float | None,
-            getattr(usage.prompt_tokens_details, "video_length_seconds", 0),
-        )
-        or 0.0
-    )
-    audio_length_seconds: Final = (
-        cast(
-            float | None,
-            getattr(usage.prompt_tokens_details, "audio_length_seconds", 0),
-        )
-        or 0.0
-    )
-    query_count: Final = _coerce_token_count(getattr(usage.prompt_tokens_details, "query_count", 0))
-
-    return PromptTokensDetailsResult(
-        cache_hit_tokens=cache_hit_tokens,
-        cache_hit_audio_tokens=cached_audio_tokens,
-        cached_text_tokens=cached_text_tokens,
-        cached_audio_tokens=cached_audio_tokens,
-        cached_image_tokens=cached_image_tokens,
-        has_cached_tokens_details=cached_tokens_details is not None,
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_token_details=cache_creation_token_details,
-        text_tokens=text_tokens,
-        audio_tokens=audio_tokens,
-        image_tokens=image_tokens,
-        video_tokens=video_tokens,
-        character_count=character_count,
-        image_count=image_count,
-        video_length_seconds=float(video_length_seconds),
-        audio_length_seconds=float(audio_length_seconds),
-        query_count=query_count,
-    )
-
-
-class CompletionTokensDetailsResult(TypedDict):
-    audio_tokens: int
-    text_tokens: int
-    reasoning_tokens: int
-    image_tokens: int
-    video_tokens: int
-
-
-def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
-    audio_tokens: Final = (
-        cast(
-            int | None,
-            getattr(usage.completion_tokens_details, "audio_tokens", 0),
-        )
-        or 0
-    )
-    reported_text_tokens: Final = (
-        cast(
-            int | None,
-            getattr(usage.completion_tokens_details, "text_tokens", None),
-        )
-        or 0  # default to completion tokens, if this field is not set
-    )
-    reasoning_tokens: Final = (
-        cast(
-            int | None,
-            getattr(usage.completion_tokens_details, "reasoning_tokens", 0),
-        )
-        or 0
-    )
-    image_tokens: Final = (
-        cast(
-            int | None,
-            getattr(usage.completion_tokens_details, "image_tokens", 0),
-        )
-        or 0
-    )
-    video_tokens: Final = _coerce_token_count(getattr(usage.completion_tokens_details, "video_tokens", 0))
-    text_tokens: Final = text_tokens_without_nested_reasoning(
-        completion_tokens=usage.completion_tokens,
-        text_tokens=reported_text_tokens,
-        reasoning_tokens=reasoning_tokens,
-        other_modality_tokens=audio_tokens + image_tokens + video_tokens,
-    )
-
-    return CompletionTokensDetailsResult(
-        audio_tokens=audio_tokens,
-        text_tokens=text_tokens,
-        reasoning_tokens=reasoning_tokens,
-        image_tokens=image_tokens,
-        video_tokens=video_tokens,
-    )
 
 
 def get_modality_token_cost_key(
@@ -683,10 +487,6 @@ def generic_cost_per_token(
     )
 
 
-def _coerce_token_count(value: object) -> int:
-    return value if isinstance(value, int) and value > 0 else 0
-
-
 @dataclass(frozen=True, slots=True)
 class BilledTokenRates:
     """Per-token rates one request's usage bills at, after token tiers, off-peak windows and the
@@ -915,9 +715,9 @@ def calculate_image_response_cost_from_usage(
         # or an object; read it tolerantly like the output side below, so image
         # input tokens are priced at input_cost_per_image_token instead of
         # silently falling back to the text rate.
-        input_text_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
-        input_image_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
-        input_cached_tokens: Final = _get_token_detail_value(input_tokens_details, "cached_tokens") or 0
+        input_text_tokens: Final = token_detail_value(input_tokens_details, "text_tokens")
+        input_image_tokens: Final = token_detail_value(input_tokens_details, "image_tokens")
+        input_cached_tokens: Final = token_detail_value(input_tokens_details, "cached_tokens") or 0
         cached_details: Final[object] = (
             _IMAGE_TOKEN_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
             if isinstance(input_tokens_details, dict)
@@ -939,12 +739,12 @@ def calculate_image_response_cost_from_usage(
         else completion_tokens_details_attr
     )
 
-    text_tokens: Final = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
-    image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
-    audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
-    reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+    text_tokens: Final = token_detail_value(output_tokens_details, "text_tokens") or 0
+    image_tokens: Final = token_detail_value(output_tokens_details, "image_tokens") or 0
+    audio_tokens: Final = token_detail_value(output_tokens_details, "audio_tokens") or 0
+    reasoning_tokens: Final = token_detail_value(output_tokens_details, "reasoning_tokens") or 0
     has_output_modalities: Final = any(
-        _get_token_detail_value(output_tokens_details, modality) is not None
+        token_detail_value(output_tokens_details, modality) is not None
         for modality in ("text_tokens", "image_tokens", "audio_tokens")
     )
     unitemized_tokens: Final = max(completion_tokens - text_tokens - image_tokens - audio_tokens - reasoning_tokens, 0)

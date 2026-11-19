@@ -103,6 +103,34 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
 _LAX_BOOL: Final = TypeAdapter(bool)
 
 
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def object_mapping(value: object) -> Mapping[str, object] | None:
+    """``value`` as a str-keyed mapping, None for anything else. Vendor JSON arrives untyped, so this is the one place
+    that turns it into something the rest of the module can read without guessing."""
+    try:
+        return _OBJECT_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def object_items(value: object) -> tuple[object, ...]:
+    if isinstance(value, (str, bytes, Mapping)):
+        return ()
+    try:
+        return _OBJECT_ITEMS.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON object keys are str  # mutable-ok: the caller edits this dict in place
+    return isinstance(value, dict)
+
+
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, (dict, Mapping)) else None
 

@@ -19,9 +19,13 @@ from typing_extensions import TypeIs, assert_never  # noqa: TID251  # these are 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    as_object_list,
+    as_str_mapping,
+    is_str_keyed_dict,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     strip_litellm_internal_message_fields,

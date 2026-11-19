@@ -33,10 +33,6 @@ from litellm.integrations.datadog.datadog_mock_client import (
     should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (
-    extract_cache_creation_tokens,
-    extract_cache_read_tokens,
-)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     handle_any_messages_to_chat_completion_str_messages_conversion,
@@ -44,6 +40,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.usage.cache_tokens import (
+    extract_cache_creation_tokens,
+    extract_cache_read_tokens,
+)
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,

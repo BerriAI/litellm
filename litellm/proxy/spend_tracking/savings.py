@@ -418,10 +418,10 @@ def marks_gateway_injection(metadata: Mapping[str, object] | None, model_id: str
     return injected_deployment in (GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT, model_id)
 
 
-from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (  # noqa: E402  # re-export at the old path for existing importers
+from litellm.litellm_core_utils.usage.cache_tokens import (  # noqa: E402  # re-export at the old path for existing importers
     extract_cache_creation_tokens as extract_cache_creation_tokens,  # noqa: PLC0414  # explicit re-export marker
 )
-from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (  # noqa: E402  # re-export at the old path for existing importers
+from litellm.litellm_core_utils.usage.cache_tokens import (  # noqa: E402  # re-export at the old path for existing importers
     extract_cache_read_tokens as extract_cache_read_tokens,  # noqa: PLC0414  # explicit re-export marker
 )
 

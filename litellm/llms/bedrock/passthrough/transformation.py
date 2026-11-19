@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
+from litellm.litellm_core_utils.core_helpers import object_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
     LoggedPassthroughRequest,

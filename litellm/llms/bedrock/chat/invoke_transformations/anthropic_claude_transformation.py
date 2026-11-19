@@ -8,7 +8,7 @@ import litellm
 from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
+from litellm.litellm_core_utils.core_helpers import object_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )

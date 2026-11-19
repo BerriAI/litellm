@@ -19,6 +19,8 @@ from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
     chunk_usage,
     finite_cost,
+    object_items,
+    object_mapping,
     provider_reported_usage_cost,
     require_attributes,
     stamp_litellm_bill_on_usage,
@@ -29,13 +31,13 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_param,
     set_hidden_params,
 )
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
 from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
+from litellm.litellm_core_utils.usage.bedrock_guardrail_trace import BEDROCK_TRACE_FIELDS
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantContentValue,
