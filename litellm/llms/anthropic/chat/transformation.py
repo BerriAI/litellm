@@ -276,6 +276,58 @@ def non_string_message_field_error(messages: Sequence[object], error: Exception)
     return AnthropicError(status_code=400, message=invalid_type_message(*malformed_field))
 
 
+def _is_json_object(value: object) -> bool:
+    return isinstance(value, Mapping)
+
+
+def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
+    blocks: Final = parts_of(thinking_blocks)
+    match thinking_blocks:
+        case None:
+            return ()
+        case list() | tuple():
+            return tuple(
+                (f"messages[{index}].thinking_blocks[{position}]", block, "an object")
+                for position, block in enumerate(blocks)
+                if not _is_json_object(block)
+            )
+        case _:
+            return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
+
+
+def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicError | None:
+    assistant_turns: Final = (
+        (index, message) for index, message in enumerate(messages) if message_field(message, "role") == "assistant"
+    )
+    fault: Final = next(
+        chain.from_iterable(
+            _thinking_blocks_faults(index, message_field(message, "thinking_blocks"))
+            for index, message in assistant_turns
+        ),
+        None,
+    )
+    if fault is None:
+        return None
+    return AnthropicError(status_code=400, message=invalid_type_message(*fault))
+
+
+def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageValues:
+    thinking_blocks: Final = message_field(message, "thinking_blocks")
+    if message_field(message, "role") != "assistant" or not _thinking_blocks_faults(0, thinking_blocks):
+        return message
+    blocks: Final = parts_of(thinking_blocks)
+    match thinking_blocks:
+        case list() | tuple():
+            kept: Final = tuple(block for block in blocks if _is_json_object(block))
+            return cast(  # cast-ok: dict spread keeps message shape
+                AllMessageValues, {**message, "thinking_blocks": kept}
+            )
+        case _:
+            return cast(  # cast-ok: dropping one key keeps message shape
+                AllMessageValues, {key: value for key, value in message.items() if key != "thinking_blocks"}
+            )
+
+
 def _tool_type(tool: object) -> str | None:
     match tool:
         case {"type": str() as tool_type}:
@@ -2539,17 +2591,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        thinking_blocks_error: Final = None if drop_params else malformed_thinking_blocks_error(messages)
+        if thinking_blocks_error is not None:
+            raise thinking_blocks_error
+        replayable_messages: Final = (
+            [without_malformed_thinking_blocks(message) for message in messages] if drop_params else messages
+        )
         translated_messages: Final = (
             list(
                 AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
-                    messages,
+                    replayable_messages,
                     drop_params,
                     cache_control_count,
                     lambda: AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
                 )
             )
             if self.translates_prompt_cache_breakpoint(model)
-            else messages
+            else replayable_messages
         )
         capped_messages: Final = (
             list(

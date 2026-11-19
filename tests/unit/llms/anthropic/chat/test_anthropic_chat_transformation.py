@@ -11427,6 +11427,79 @@ def test_chat_transform_request_keeps_a_conversion_error_that_a_dropped_orphan_a
     assert "Invalid Message passed in {'role': 'bogus'" in raised.value.message
 
 
+_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "The user said hi.", "signature": "sig-1"}
+
+
+def _replayed_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello", "thinking_blocks": thinking_blocks},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+_MALFORMED_THINKING_BLOCKS: Final = (
+    pytest.param("abc", "messages[1].thinking_blocks", "a list", "str", id="string"),
+    pytest.param("", "messages[1].thinking_blocks", "a list", "str", id="empty_string"),
+    pytest.param(_REPLAYED_THINKING, "messages[1].thinking_blocks", "a list", "dict", id="unwrapped_block"),
+    pytest.param(0, "messages[1].thinking_blocks", "a list", "int", id="zero"),
+    pytest.param(["abc"], "messages[1].thinking_blocks[0]", "an object", "str", id="string_block"),
+    pytest.param(
+        [_REPLAYED_THINKING, 5], "messages[1].thinking_blocks[1]", "an object", "int", id="number_after_a_block"
+    ),
+)
+
+
+@pytest.mark.parametrize(("thinking_blocks", "field_path", "expected", "type_name"), _MALFORMED_THINKING_BLOCKS)
+@pytest.mark.parametrize("model", [UNFLAGGED_CLAUDE, FLAGGED_CLAUDE])
+def test_chat_transform_request_answers_400_naming_a_malformed_thinking_blocks(
+    local_model_cost_map, thinking_blocks: object, field_path: str, expected: str, type_name: str, model: str
+):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), model, _replayed_turn(thinking_blocks))
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for '{field_path}': expected {expected}, got {type_name}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("malformed", "well_formed"),
+    [
+        pytest.param(_replayed_turn("abc"), _replayed_turn(None), id="string"),
+        pytest.param(_replayed_turn(_REPLAYED_THINKING), _replayed_turn(None), id="unwrapped_block"),
+        pytest.param(
+            _replayed_turn([_REPLAYED_THINKING, "abc"]), _replayed_turn([_REPLAYED_THINKING]), id="string_after_a_block"
+        ),
+    ],
+)
+def test_chat_transform_request_drops_a_malformed_thinking_blocks_under_drop_params(
+    local_model_cost_map, malformed: list[dict[str, object]], well_formed: list[dict[str, object]]
+):
+    def converted(messages: list[dict[str, object]]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=messages,
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )["messages"]
+
+    assert converted(malformed) == converted(well_formed)
+
+
+def test_chat_transform_request_ignores_thinking_blocks_on_a_turn_it_never_replays(local_model_cost_map):
+    converted: Final = _chat_request(
+        AnthropicConfig(), UNFLAGGED_CLAUDE, [{"role": "user", "content": "Hi", "thinking_blocks": "abc"}]
+    )
+
+    assert (
+        converted["messages"]
+        == _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, [{"role": "user", "content": "Hi"}])["messages"]
+    )
+
+
 @pytest.mark.parametrize(
     ("later_turn", "real_cause"),
     [
