@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator, Mapping
 from datetime import datetime
@@ -82,14 +83,17 @@ async def _upload(logger: S3Logger, payload: Mapping[str, object], start_time: d
     await logger.flush_queue()
 
 
-def _failures() -> object:
-    return patch.object(s3_v2._Host, "callback_failed")
+@contextlib.contextmanager
+def _failures() -> Iterator[MagicMock]:
+    reported: Final = threading.Semaphore(0)
+    with patch.object(s3_v2._Host, "callback_failed", side_effect=reported.release) as failures:
+        failures.reported = reported
+        yield failures
 
 
 async def _reported(failures: MagicMock, count: int) -> None:
-    deadline: Final = time.monotonic() + 5
-    while failures.call_count < count and time.monotonic() < deadline:
-        await asyncio.sleep(0.005)
+    for _ in range(count):
+        _ = await asyncio.to_thread(failures.reported.acquire)
 
 
 def _uploaded(put: Received) -> dict[str, object]:
