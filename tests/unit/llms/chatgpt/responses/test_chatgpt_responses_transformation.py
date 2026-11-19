@@ -268,11 +268,11 @@ class TestChatGPTResponsesAPITransformation:
         }
 
     @pytest.mark.parametrize("parallel_tool_calls", [True, False])
-    def test_chatgpt_preserves_parallel_tool_calls(self, parallel_tool_calls):
+    def test_chatgpt_preserves_parallel_tool_calls(self, parallel_tool_calls: bool) -> None:
         """parallel_tool_calls is validated by the Codex backend and must not
         be dropped by the allowed-keys filter."""
-        config = ChatGPTResponsesAPIConfig()
-        request = config.transform_responses_api_request(
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
             model="chatgpt/gpt-5.3-codex",
             input="hi",
             response_api_optional_request_params={
@@ -284,14 +284,14 @@ class TestChatGPTResponsesAPITransformation:
 
         assert request["parallel_tool_calls"] is parallel_tool_calls
 
-    def test_chatgpt_responses_lite_restores_stripped_false(self):
+    def test_chatgpt_responses_lite_restores_stripped_false(self) -> None:
         """Regression: a Responses-Lite request (codex >= 0.144, gpt-5.6-*)
         carries parallel_tool_calls=false; dropping it made the backend
         reject every request with
         "X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls`
         to be false."."""
-        config = ChatGPTResponsesAPIConfig()
-        request = config.transform_responses_api_request(
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
             model="chatgpt/gpt-5.6-sol",
             input="hi",
             response_api_optional_request_params={
@@ -305,11 +305,11 @@ class TestChatGPTResponsesAPITransformation:
         assert request["parallel_tool_calls"] is False
         assert request["reasoning"]["context"] == "all_turns"
 
-    def test_chatgpt_responses_lite_forces_lite_contract(self):
+    def test_chatgpt_responses_lite_forces_lite_contract(self) -> None:
         """Under the Lite header the backend hard-rejects any other value,
         so true is normalized to false and reasoning.context is pinned."""
-        config = ChatGPTResponsesAPIConfig()
-        request = config.transform_responses_api_request(
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
             model="chatgpt/gpt-5.6-sol",
             input="hi",
             response_api_optional_request_params={
@@ -323,11 +323,11 @@ class TestChatGPTResponsesAPITransformation:
         assert request["parallel_tool_calls"] is False
         assert request["reasoning"] == {"effort": "high", "context": "all_turns"}
 
-    def test_chatgpt_responses_lite_normalizes_omitted_fields(self):
+    def test_chatgpt_responses_lite_normalizes_omitted_fields(self) -> None:
         """codex 0.144.x can omit the reasoning object entirely; the Lite
         validator rejects the omission the same way."""
-        config = ChatGPTResponsesAPIConfig()
-        request = config.transform_responses_api_request(
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
             model="chatgpt/gpt-5.6-sol",
             input="hi",
             response_api_optional_request_params={},
@@ -338,11 +338,11 @@ class TestChatGPTResponsesAPITransformation:
         assert request["parallel_tool_calls"] is False
         assert request["reasoning"] == {"context": "all_turns"}
 
-    def test_chatgpt_unrelated_headers_do_not_trigger_lite_normalization(self):
+    def test_chatgpt_unrelated_headers_do_not_trigger_lite_normalization(self) -> None:
         """Ordinary outbound headers (auth etc.) without the Lite marker must
         leave the request untouched."""
-        config = ChatGPTResponsesAPIConfig()
-        request = config.transform_responses_api_request(
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
             model="chatgpt/gpt-5.6-sol",
             input="hi",
             response_api_optional_request_params={},
@@ -354,9 +354,9 @@ class TestChatGPTResponsesAPITransformation:
         assert "reasoning" not in request
 
     @pytest.mark.parametrize("header_value", ["false", "0", "no", ""])
-    def test_chatgpt_responses_lite_falsy_header_is_ignored(self, header_value):
-        config = ChatGPTResponsesAPIConfig()
-        request = config.transform_responses_api_request(
+    def test_chatgpt_responses_lite_falsy_header_is_ignored(self, header_value: str) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
             model="chatgpt/gpt-5.6-sol",
             input="hi",
             response_api_optional_request_params={},

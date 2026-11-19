@@ -165,14 +165,20 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "max_output_tokens",
         }
 
-        filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
         service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
-        if service_tier is not None:
-            filtered["service_tier"] = service_tier
-        if is_codex_responses_lite_request(_OBJECT_DICT.validate_python(headers or {})):
-            filtered["parallel_tool_calls"] = False
-            filtered["reasoning"] = _responses_lite_reasoning(_OBJECT_DICT.validate_python(request).get("reasoning"))
-        return filtered
+        lite_overrides: Final = (
+            {
+                "parallel_tool_calls": False,
+                "reasoning": _responses_lite_reasoning(_OBJECT_DICT.validate_python(request).get("reasoning")),
+            }
+            if is_codex_responses_lite_request(_OBJECT_DICT.validate_python(headers or {}))
+            else {}
+        )
+        return {
+            **{k: v for k, v in request.items() if k in allowed_keys},
+            **({"service_tier": service_tier} if service_tier is not None else {}),
+            **lite_overrides,
+        }
 
     def transform_response_api_response(
         self,
