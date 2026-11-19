@@ -10,7 +10,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
-from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
+from litellm.litellm_core_utils.usage.token_details import get_web_search_requests_from_usage
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.types.utils import ModelInfo, SearchFreeRequests, StandardLoggingPayload, Usage
 

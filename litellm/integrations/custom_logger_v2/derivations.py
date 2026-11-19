@@ -450,7 +450,7 @@ def _response_usage(result: object) -> object:
         member(reported, "output_tokens"),
     ):
         return reported
-    from litellm.cost_calculator import get_usage_object
+    from litellm.litellm_core_utils.usage.usage_object import get_usage_object
 
     converted: Final = get_usage_object(result)
     return reported if converted is None else converted

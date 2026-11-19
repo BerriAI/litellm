@@ -299,7 +299,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        from litellm.cost_calculator import BaseTokenUsageProcessor
+        from litellm.litellm_core_utils.usage.token_usage_processors import BaseTokenUsageProcessor
         from litellm.types.utils import Usage
 
         response_text: Final = raw_response.text.strip()

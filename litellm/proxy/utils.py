@@ -74,13 +74,13 @@ from litellm.constants import (
     TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
-from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
     strip_bug_report_notice,
 )
+from litellm.litellm_core_utils.usage.token_usage_processors import BaseTokenUsageProcessor
 from litellm.proxy._types import (
     CommonProxyErrors,
     ProxyErrorTypes,

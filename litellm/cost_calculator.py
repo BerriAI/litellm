@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
 
 from httpx import Response
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -95,10 +95,6 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
-    InteractionsUsageObjectTransformation,
-    TranscriptionUsageObjectTransformation,
-)
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
@@ -107,6 +103,27 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.litellm_core_utils.usage.token_usage_processors import (
+    BaseTokenUsageProcessor as BaseTokenUsageProcessor,  # noqa: PLC0414  # re-export at the old path, tests import it
+)
+from litellm.litellm_core_utils.usage.token_usage_processors import (
+    RealtimeAPITokenUsageProcessor as RealtimeAPITokenUsageProcessor,  # noqa: PLC0414  # re-export, tests import it
+)
+from litellm.litellm_core_utils.usage.token_usage_processors import (
+    ResponsesWebSocketTokenUsageProcessor,
+    translation_session_seconds,
+)
+from litellm.litellm_core_utils.usage.usage_object import (
+    decisions_usage,
+    extraction_usage,
+    get_usage_object,
+    is_known_usage_object,
+    usage_from_model,
+)
+from litellm.litellm_core_utils.usage.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
+    TranscriptionUsageObjectTransformation,
+)
 from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 from litellm.llms.azure_ai.cost_calculator import (
     is_azure_model_router as azure_ai_is_model_router_name,
@@ -141,26 +158,21 @@ from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsUsage,
-    OpenAIDecisionCacheWriteTokensDetails,
     OpenAIDecisionResponse,
     OpenAIDecisionUsage,
 )
 from litellm.types.extraction import ExtractionResponse, ExtractionUsage
 from litellm.types.interactions import InteractionsAPIResponse
-from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
     OpenAIModerationResponse,
     OpenAIRealtimeStreamList,
-    OpenAIRealtimeStreamResponseBaseObject,
-    ResponseAPIUsage,
     ResponsesAPIResponse,
 )
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
-    CacheCreationTokenDetails,
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
@@ -1253,103 +1265,6 @@ def _extract_service_tier(source: object) -> str | None:
     return None
 
 
-def get_usage_object(
-    completion_response: object,
-) -> Usage | None:
-    usage_obj: Final = cast(
-        Usage | ResponseAPIUsage | dict | BaseModel,
-        (
-            completion_response.get("usage")
-            if isinstance(completion_response, dict)
-            else getattr(completion_response, "get", lambda x: None)("usage")
-        ),
-    )
-
-    if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
-        return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
-    if isinstance(completion_response, ExtractionResponse):
-        return _extraction_usage(completion_response.usage)
-    if isinstance(completion_response, HttpxBinaryResponseContent):
-        return completion_response.usage
-    if usage_obj is None:
-        return None
-    if isinstance(usage_obj, Usage):
-        return usage_obj
-    elif isinstance(usage_obj, dict) and litellm.AnthropicConfig.is_anthropic_usage_object(usage_obj):
-        return litellm.AnthropicConfig().calculate_usage(usage_object=usage_obj, reasoning_content=None)
-    elif (
-        usage_obj is not None
-        and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
-        and ResponseAPILoggingUtils.is_response_api_usage(usage_obj)
-    ):
-        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
-    elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj):
-        return TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
-            cast(
-                TranscriptionUsageDurationObject | TranscriptionUsageTokensObject,
-                usage_obj,
-            )
-        )
-    elif isinstance(usage_obj, dict) and InteractionsUsageObjectTransformation.is_interactions_usage_object(usage_obj):
-        return InteractionsUsageObjectTransformation.transform_interactions_usage_object(usage_obj)
-    elif isinstance(usage_obj, dict):
-        return Usage(**usage_obj)
-    elif isinstance(usage_obj, BaseModel):
-        return _usage_from_model(usage_obj)
-    else:
-        verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
-        return None
-
-
-class _DumpedUsageFields(TypedDict, total=False, extra_items=object):
-    pass
-
-
-def _dumped_usage_fields(usage_model: BaseModel) -> Mapping[str, object]:
-    return usage_model.model_dump()
-
-
-def _usage_from_model(usage_model: BaseModel) -> Usage:
-    return Usage(**_DumpedUsageFields(**_dumped_usage_fields(usage_model)))
-
-
-def _decisions_cache_write_lifetimes(
-    details: OpenAIDecisionCacheWriteTokensDetails | None,
-) -> CacheCreationTokenDetails | None:
-    if details is None:
-        return None
-    return CacheCreationTokenDetails(
-        ephemeral_30m_input_tokens=details.ttl_30m_tokens, ephemeral_12h_input_tokens=details.ttl_12h_tokens
-    )
-
-
-def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
-    match usage:
-        case DecisionsUsage():
-            return PromptTokensDetailsWrapper(
-                cached_tokens=usage.cached_tokens, cache_write_tokens=usage.cache_write_tokens
-            )
-        case OpenAIDecisionUsage():
-            return PromptTokensDetailsWrapper(
-                cached_tokens=usage.input_tokens_details.cached_tokens,
-                cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
-                cache_creation_token_details=_decisions_cache_write_lifetimes(
-                    usage.input_tokens_details.cache_write_tokens_details
-                ),
-            )
-        case _:
-            assert_never(usage)
-
-
-def _decisions_usage(usage: DecisionsUsage | OpenAIDecisionUsage) -> Usage:
-    return Usage(
-        prompt_tokens=usage.input_tokens,
-        completion_tokens=usage.output_tokens,
-        total_tokens=usage.input_tokens + usage.output_tokens,
-        prompt_tokens_details=_decisions_prompt_tokens_details(usage),
-    )
-
-
 def _get_transcription_usage_duration(completion_response: object) -> float | None:
     response_fields: Final = as_str_mapping(completion_response)
     usage_object: Final = (
@@ -1365,26 +1280,6 @@ def _get_transcription_usage_duration(completion_response: object) -> float | No
         usage_fields.get("seconds") if usage_fields is not None else attribute_or_none(usage_object, "seconds")
     )
     return normalized_audio_duration_seconds(seconds)
-
-
-def _extraction_usage(usage: ExtractionUsage) -> Usage:
-    return Usage(
-        prompt_tokens=usage.input_tokens,
-        completion_tokens=usage.output_tokens,
-        total_tokens=usage.input_tokens + usage.output_tokens,
-    )
-
-
-def _is_known_usage_objects(usage_obj):
-    """Returns True if the usage obj is a known Usage type"""
-    return (
-        isinstance(usage_obj, litellm.Usage)
-        or isinstance(usage_obj, ResponseAPIUsage)
-        or isinstance(usage_obj, DecisionsUsage)
-        or isinstance(usage_obj, OpenAIDecisionUsage)
-        or isinstance(usage_obj, ExtractionUsage)
-        or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
-    )
 
 
 def infer_call_type(call_type: CallTypesLiteral | None, completion_response: object) -> CallTypesLiteral | None:
@@ -1653,8 +1548,8 @@ def _with_known_usage(completion_response: object) -> None:
     if not _loop_reads_hidden_params(completion_response) or isinstance(completion_response, dict):
         return
     usage_obj: Final[object] = getattr(completion_response, "usage", None)
-    if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
-        setattr(completion_response, "usage", _usage_from_model(usage_obj))
+    if isinstance(usage_obj, BaseModel) and not is_known_usage_object(usage_obj=usage_obj):
+        setattr(completion_response, "usage", usage_from_model(usage_obj))
 
 
 @dataclass(frozen=True, slots=True)
@@ -2082,9 +1977,9 @@ def completion_cost(
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
-                        _usage = _decisions_usage(usage_obj).model_dump()
+                        _usage = decisions_usage(usage_obj).model_dump()
                     elif isinstance(usage_obj, ExtractionUsage):
-                        _usage = _extraction_usage(usage_obj).model_dump()
+                        _usage = extraction_usage(usage_obj).model_dump()
                     elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
@@ -3224,239 +3119,7 @@ def batch_cost_calculator(
     )
 
 
-_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
-
-
-def _attribute_value(obj: object, name: str) -> object:
-    return _ATTRIBUTE_VALUE.validate_python(getattr(obj, name))
-
-
-def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:
-    field_names: Final = list(type(prompt_tokens_details).model_fields)
-    if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
-        return field_names
-    return [attr for attr in field_names if attr != "cache_creation_tokens"]
-
-
-def _combine_cached_tokens_details(
-    current: CachedTokensDetails | None, new: CachedTokensDetails
-) -> CachedTokensDetails:
-    def _sum_optional(current_value: int | None, new_value: int | None) -> int | None:
-        if current_value is None and new_value is None:
-            return None
-        return (current_value or 0) + (new_value or 0)
-
-    return CachedTokensDetails(
-        text_tokens=_sum_optional(current.text_tokens if current is not None else None, new.text_tokens),
-        audio_tokens=_sum_optional(current.audio_tokens if current is not None else None, new.audio_tokens),
-        image_tokens=_sum_optional(current.image_tokens if current is not None else None, new.image_tokens),
-    )
-
-
-def _combine_prompt_tokens_details(
-    current: PromptTokensDetailsWrapper | None, new: PromptTokensDetailsWrapper
-) -> PromptTokensDetailsWrapper:
-    base: Final = current if current is not None else PromptTokensDetailsWrapper()
-    base_values: Final = MappingProxyType(
-        {attr: getattr(base, attr) for attr in type(base).model_fields if hasattr(base, attr)}
-    )
-    summed: Final = MappingProxyType(
-        {
-            attr: (getattr(base, attr, 0) or 0) + (getattr(new, attr) or 0)
-            for attr in _summable_prompt_token_fields(new)
-            if hasattr(new, attr) and isinstance(getattr(new, attr) or 0, (int, float))
-        }
-    )
-    new_cached_tokens_details: Final = getattr(new, "cached_tokens_details", None)
-    cached_tokens_details: Final = (
-        _combine_cached_tokens_details(getattr(base, "cached_tokens_details", None), new_cached_tokens_details)
-        if isinstance(new_cached_tokens_details, CachedTokensDetails)
-        else getattr(base, "cached_tokens_details", None)
-    )
-    return PromptTokensDetailsWrapper(
-        **MappingProxyType({**base_values, **summed, "cached_tokens_details": cached_tokens_details})
-    )
-
-
-class BaseTokenUsageProcessor:
-    @staticmethod
-    def combine_usage_objects(usage_objects: list[Usage]) -> Usage:
-        """
-        Combine multiple Usage objects into a single Usage object, checking model keys for nested values.
-        """
-        from litellm.types.utils import (
-            CompletionTokensDetailsWrapper,
-            Usage,
-        )
-
-        combined: Final = Usage()
-
-        # Sum basic token counts
-        for usage in usage_objects:
-            # Handle direct attributes by checking what exists in the model
-            for attr in dir(usage):
-                if not attr.startswith("_") and not callable(_attribute_value(usage, attr)):
-                    current_val = getattr(combined, attr, 0)
-                    new_val = getattr(usage, attr, 0)
-                    if (
-                        new_val is not None
-                        and isinstance(new_val, (int, float))
-                        and isinstance(current_val, (int, float))
-                    ):
-                        setattr(combined, attr, current_val + new_val)
-            if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-                combined.prompt_tokens_details = _combine_prompt_tokens_details(
-                    getattr(combined, "prompt_tokens_details", None), usage.prompt_tokens_details
-                )
-
-            # Handle nested completion_tokens_details
-            if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
-                if not hasattr(combined, "completion_tokens_details") or not combined.completion_tokens_details:
-                    combined.completion_tokens_details = CompletionTokensDetailsWrapper()
-
-                # Check what keys exist in the model's completion_tokens_details
-                # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-                for attr in type(usage.completion_tokens_details).model_fields:
-                    if not attr.startswith("_") and not callable(
-                        _attribute_value(usage.completion_tokens_details, attr)
-                    ):
-                        current_val = getattr(combined.completion_tokens_details, attr, 0) or 0
-                        new_val = getattr(usage.completion_tokens_details, attr, 0) or 0
-                        if isinstance(new_val, (int, float)):
-                            setattr(
-                                combined.completion_tokens_details,
-                                attr,
-                                current_val + new_val,
-                            )
-
-        return combined
-
-
-class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
-    @staticmethod
-    def collect_usage_from_realtime_stream_results(
-        results: OpenAIRealtimeStreamList,
-    ) -> list[Usage]:
-        """
-        Collect usage from realtime stream results
-        """
-        response_done_events: Final[list[OpenAIRealtimeStreamResponseBaseObject]] = cast(
-            list[OpenAIRealtimeStreamResponseBaseObject],
-            [result for result in results if result["type"] == "response.done"],
-        )
-        usage_objects: Final[list[Usage]] = []
-        for result in response_done_events:
-            usage_object = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
-                result["response"].get("usage", {})
-            )
-            usage_objects.append(usage_object)
-        return usage_objects
-
-    @staticmethod
-    def collect_and_combine_usage_from_realtime_stream_results(
-        results: OpenAIRealtimeStreamList,
-    ) -> Usage:
-        """
-        Collect and combine usage from realtime stream results
-        """
-        collected_usage_objects = RealtimeAPITokenUsageProcessor.collect_usage_from_realtime_stream_results(results)
-        combined_usage_object: Final = RealtimeAPITokenUsageProcessor.combine_usage_objects(collected_usage_objects)
-        return combined_usage_object
-
-    @staticmethod
-    def create_logging_realtime_object(
-        usage: Usage, results: OpenAIRealtimeStreamList
-    ) -> LiteLLMRealtimeStreamLoggingObject:
-        translated_input_seconds, _ = _translation_session_seconds(results)
-        return LiteLLMRealtimeStreamLoggingObject(
-            usage=usage.model_copy(update={"seconds": translated_input_seconds})
-            if translated_input_seconds > 0
-            else usage,
-            results=results,
-        )
-
-
-_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
-
-
-class _ResponsesWsEventResponse(LiteLLMBaseModel):
-    id: str | None = None
-    usage: Mapping[str, object] | None = None
-    service_tier: str | None = None
-
-
-class _ResponsesWsEvent(LiteLLMBaseModel):
-    type: str = ""
-    response: _ResponsesWsEventResponse | None = None
-
-
-def _billable_responses_ws_events(
-    results: Sequence[Mapping[str, object]],
-) -> tuple[tuple[Mapping[str, object], _ResponsesWsEventResponse], ...]:
-    return tuple(
-        (result, event.response)
-        for result in results
-        if (event := _ResponsesWsEvent.model_validate(result)).type in _RESPONSES_WS_BILLABLE_EVENT_TYPES
-        and event.response is not None
-        and event.response.usage is not None
-    )
-
-
-class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
-    @staticmethod
-    def collect_usage_from_responses_ws_results(
-        results: Sequence[Mapping[str, object]],
-    ) -> tuple[Usage, ...]:
-        return tuple(
-            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)
-            for _, response in _billable_responses_ws_events(results)
-            if response.usage is not None
-        )
-
-    @staticmethod
-    def partition_results_by_service_tier(
-        results: Sequence[Mapping[str, object]],
-    ) -> Mapping[str | None, tuple[Mapping[str, object], ...]]:
-        billable: Final = _billable_responses_ws_events(results)
-        tiers: Final = dict.fromkeys(response.service_tier for _, response in billable)
-        return MappingProxyType(
-            {tier: tuple(result for result, response in billable if response.service_tier == tier) for tier in tiers}
-        )
-
-    @staticmethod
-    def collect_and_combine_usage_from_responses_ws_results(
-        results: Sequence[Mapping[str, object]],
-    ) -> Usage:
-        collected_usage_objects: Final = ResponsesWebSocketTokenUsageProcessor.collect_usage_from_responses_ws_results(
-            results
-        )
-        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(list(collected_usage_objects))
-
-    @staticmethod
-    def response_id_from_responses_ws_results(results: Sequence[Mapping[str, object]]) -> str | None:
-        response_ids: Final = tuple(
-            response.id for _, response in _billable_responses_ws_events(results) if response.id
-        )
-        return response_ids[-1] if response_ids else None
-
-    @staticmethod
-    def create_logging_object(
-        results: Sequence[Mapping[str, object]], litellm_model_name: str | None = None
-    ) -> LiteLLMRealtimeStreamLoggingObject:
-        tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(results)
-        logging_object: Final = LiteLLMRealtimeStreamLoggingObject(
-            id=ResponsesWebSocketTokenUsageProcessor.response_id_from_responses_ws_results(results),
-            usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(results),
-            results=cast(OpenAIRealtimeStreamList, list(results)),  # cast-ok: raw WS frames, unvalidated field
-            service_tier=next(iter(tier_partition)) if len(tier_partition) == 1 else None,
-        )
-        if litellm_model_name is not None:
-            logging_object.hidden_params = {"litellm_model_name": litellm_model_name}
-        return logging_object
-
-
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
-_TRANSLATION_CLOSED_EVENT_TYPE: Final = "session.closed"
 
 
 class _LiveResponsePayload(BaseModel):
@@ -3870,31 +3533,10 @@ def handle_realtime_stream_cost_calculation(
     return total_cost
 
 
-def _translation_session_seconds(results: OpenAIRealtimeStreamList) -> tuple[float, float]:
-    usage_events: Final = tuple(
-        usage
-        for result in results
-        if (event := as_str_mapping(result)) is not None
-        and event.get("type") == _TRANSLATION_CLOSED_EVENT_TYPE
-        and (usage := as_str_mapping(event.get("usage"))) is not None
-    )
-    input_seconds: Final = sum(
-        seconds
-        for usage in usage_events
-        if (seconds := normalized_audio_duration_seconds(usage.get("input_seconds"))) is not None
-    )
-    output_seconds: Final = sum(
-        output_duration
-        for usage in usage_events
-        if (output_duration := normalized_audio_duration_seconds(usage.get("output_seconds"))) is not None
-    )
-    return float(input_seconds), float(output_seconds)
-
-
 def _translation_use(
     results: OpenAIRealtimeStreamList, custom_llm_provider: str, model_names: Sequence[str | None]
 ) -> tuple[float, float, _SessionRows]:
-    input_seconds, output_seconds = _translation_session_seconds(results)
+    input_seconds, output_seconds = translation_session_seconds(results)
     rows: Final = (
         tuple(
             _declared_rates(_lookup_model_info_or_none(model, custom_llm_provider))
