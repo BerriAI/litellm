@@ -4540,6 +4540,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "struct-field-names-as-array",
  "strum",
 ]
 
