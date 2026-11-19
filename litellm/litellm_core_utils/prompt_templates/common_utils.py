@@ -414,9 +414,6 @@ def _message_with_text_only_content_as_str(message: AllMessageValues) -> AllMess
 def handle_messages_with_text_only_content_lists_as_str(
     messages: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...]:
-    """
-    Returns new messages with each all-text content list joined into one string, one line per part
-    """
     return tuple(_message_with_text_only_content_as_str(message) for message in messages)
 
 
