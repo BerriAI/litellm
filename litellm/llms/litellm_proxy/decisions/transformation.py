@@ -59,9 +59,6 @@ class _LiteLLMProxyHop(BaseDecisionsConfig):
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return "api_base is required for the LiteLLM proxy, set api_base or LITELLM_PROXY_API_BASE"
 
-    def missing_api_key_message(self, custom_llm_provider: str) -> str:
-        return "Missing API key for the LiteLLM proxy, set api_key or LITELLM_PROXY_API_KEY"
-
     def resolve_api_base(self, api_base: str | None) -> str | None:
         return BaseDecisionsConfig.resolve_api_base(self, api_base)
 
