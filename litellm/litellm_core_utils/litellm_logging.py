@@ -67,12 +67,8 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.cost_calculator import (
-    BaseTokenUsageProcessor,
-    RealtimeAPITokenUsageProcessor,
-    ResponsesWebSocketTokenUsageProcessor,
     declared_cost_map_pricing,
     get_response_cost_from_hidden_params,
-    get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
 )
@@ -133,7 +129,9 @@ from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     has_attributes,
     is_expected_client_error,
+    is_str_keyed_dict,
     native_messages_reported_cost,
+    object_mapping,
     provider_reported_usage_cost,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -159,19 +157,13 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
-    bedrock_guardrail_trace,
     cost_breakdown_with_guardrail,
     guardrail_information_cost,
-    is_str_keyed_dict,
     native_bedrock_guardrail_information,
-    object_mapping,
     with_guardrail_entry,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
-)
-from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
-    InteractionsUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     diagnose_zero_cost,
@@ -198,6 +190,16 @@ from litellm.litellm_core_utils.served_output_texts import (
     overlay_served_output_texts,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.litellm_core_utils.usage.bedrock_guardrail_trace import bedrock_guardrail_trace
+from litellm.litellm_core_utils.usage.token_usage_processors import (
+    BaseTokenUsageProcessor,
+    RealtimeAPITokenUsageProcessor,
+    ResponsesWebSocketTokenUsageProcessor,
+)
+from litellm.litellm_core_utils.usage.usage_object import get_usage_object
+from litellm.litellm_core_utils.usage.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
@@ -3923,7 +3925,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 standard_logging_payload["response"] = response_dict  # rebind-ok: mirrors the transformed usage
         elif isinstance(result, TranscriptionResponse):
-            from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+            from litellm.litellm_core_utils.usage.usage_object_transformation import (
                 TranscriptionUsageObjectTransformation,
             )
 

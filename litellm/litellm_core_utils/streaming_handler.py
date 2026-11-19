@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
     has_attributes,
     json_contains,
+    object_items,
     provider_reported_usage_cost,
     require_attributes,
     stamp_litellm_bill_on_usage,
@@ -52,7 +53,6 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_param,
     stored_attribute,
 )
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )

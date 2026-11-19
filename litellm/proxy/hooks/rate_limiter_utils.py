@@ -10,8 +10,8 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
-from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.usage.token_usage_processors import ResponsesWebSocketTokenUsageProcessor
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
 

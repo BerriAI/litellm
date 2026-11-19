@@ -13,8 +13,8 @@ import httpx
 
 import litellm
 from litellm.constants import request_timeout
+from litellm.litellm_core_utils.core_helpers import is_str_keyed_dict
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_skills import (

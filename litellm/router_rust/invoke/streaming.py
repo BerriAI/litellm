@@ -641,7 +641,7 @@ def _apply_fallback_hidden_params_to_item(
 def _combine_fallback_usage(fallback_item: ModelResponseStream, complete_response_object_usage: Usage | None) -> None:
     """Merge partial-stream usage with fallback-stream usage on the chunk. A usage given as a plain
     dict comes out all-zero: ``combine_usage_objects`` reads token counts as attributes."""
-    from litellm.cost_calculator import BaseTokenUsageProcessor
+    from litellm.litellm_core_utils.usage.token_usage_processors import BaseTokenUsageProcessor
 
     usage: Final = cast("Usage | None", getattr(fallback_item, "usage", None))  # cast-ok: a chunk's usage
     usage_objects: Final = [usage] if usage is not None else []
@@ -804,7 +804,7 @@ def _build_completion_continuation_input(
 
 def _price_cut_partial(cut_stream: CustomStreamWrapper, partial_response: object) -> "ContinuedPartial | None":
     """Price the cut stream's partial, plus any partial it inherited, before a fallback can reuse its logging."""
-    from litellm.cost_calculator import BaseTokenUsageProcessor
+    from litellm.litellm_core_utils.usage.token_usage_processors import BaseTokenUsageProcessor
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
 
     cut_logging: Final = cut_stream.logging_obj

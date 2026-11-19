@@ -11,9 +11,8 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, map_finish_reason, object_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
