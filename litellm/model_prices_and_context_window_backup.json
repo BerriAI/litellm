@@ -105246,6 +105246,36 @@
         ],
         "supports_vision": true
     },
+    "fal_ai/speridlabs/iris-z": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "fal bills $0.01 per ensemble member, reported in the x-fal-billable-units response header. The per-image price covers the default ensemble_size of 1 when the header is absent"
+        },
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.01,
+        "output_cost_per_image": 0.01,
+        "source": "https://fal.ai/models/speridlabs/iris-z",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/speridlabs/iris-z/small": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "fal bills $0.01 per ensemble member, reported in the x-fal-billable-units response header. The per-image price covers the default ensemble_size of 1 when the header is absent"
+        },
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.01,
+        "output_cost_per_image": 0.01,
+        "source": "https://fal.ai/models/speridlabs/iris-z/small",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
     "fal_ai/speridlabs/iris-z/depth-to-image": {
         "litellm_provider": "fal_ai",
         "metadata": {
