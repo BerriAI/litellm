@@ -175,8 +175,8 @@ async def _discard_auth_code(code: str) -> None:
 @with_service_target(_AUTH_CODES_TARGET)
 async def _reserve_auth_code_slot(user_id: str) -> Literal["ok", "user_limit", "store_full", "unavailable"]:
     """Whether ``user_id`` may be issued another pending code. In memory the whole dict is capped;
-    with the shared store each user gets an atomic per-window counter, and a store that cannot
-    count refuses (fail closed)."""
+    with the shared store each user gets an atomic per-window count of codes not yet redeemed, and
+    a store that cannot count refuses (fail closed)."""
     shared: Final = _shared_code_store()
     if shared is None:
         return "ok" if len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE else "store_full"
@@ -188,6 +188,18 @@ async def _reserve_auth_code_slot(user_id: str) -> Literal["ok", "user_limit", "
         verbose_proxy_logger.warning("byok authorize: pending-code counter unavailable: %s", e)
         return "unavailable"
     return "ok" if issued <= _AUTH_CODES_PER_USER_MAX else "user_limit"
+
+
+@with_service_target(_AUTH_CODES_TARGET)
+async def _release_auth_code_slot(user_id: str) -> None:
+    """Give a redeemed code's slot back to ``user_id``'s current window. An expired window stays gone."""
+    shared: Final = _shared_code_store()
+    if shared is None:
+        return
+    try:
+        await shared.async_increment_if_present(_AUTH_CODE_USER_WINDOW_PREFIX + user_id, -1)
+    except Exception as e:  # noqa: BLE001  # the window expires with its TTL, so a missed release only delays one slot
+        verbose_proxy_logger.warning("byok token: pending-code slot not released: %s", e)
 
 
 async def _claim_auth_code(code: str) -> "ClaimOutcome":
@@ -1096,6 +1108,7 @@ async def byok_token(
         case _:
             assert_never(claim)
     await _discard_auth_code(code)
+    await _release_auth_code_slot(record["user_id"])
 
     # Persist the BYOK credential
     if prisma_client is not None:

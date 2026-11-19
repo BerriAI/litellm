@@ -2023,6 +2023,14 @@ class _SharedStore:
         self.counts[key] = self.counts.get(key, 0) + value
         return self.counts[key]
 
+    async def async_increment_if_present(self, key: str, value: int) -> int | None:
+        if self._fails("increment_if_present", key):
+            raise ConnectionError("redis down")
+        if key not in self.counts:
+            return None
+        self.counts[key] += value
+        return self.counts[key]
+
 
 class _CredentialTable:
     def __init__(self) -> None:
@@ -2152,11 +2160,16 @@ async def test_a_store_fault_during_redemption_is_retryable_and_keeps_the_code(
     assert _stored_credential(credentials) == "sk-supersecretkey"
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [("delete", _SHARED_CODE), ("increment_if_present", _SHARED_WINDOW)],
+    ids=["record delete", "slot release"],
+)
 @pytest.mark.asyncio
-async def test_a_failed_delete_after_the_claim_still_stores_the_key_and_issues_a_token(
-    client: TestClient, salted: None
+async def test_a_failed_cleanup_after_the_claim_still_stores_the_key_and_issues_a_token(
+    client: TestClient, salted: None, fault: tuple[str, str]
 ) -> None:
-    shared: Final = _SharedStore(down={("delete", _SHARED_CODE)})
+    shared: Final = _SharedStore(down={fault})
     credentials: Final = _CredentialTable()
     with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
         code: Final = _issued_code()
@@ -2189,6 +2202,41 @@ def test_one_user_at_the_shared_pending_code_cap_does_not_block_other_users(clie
     assert refused.status_code == 429
     assert len(shared.values) == _AUTH_CODES_PER_USER_MAX + 1
     assert other.status_code == 302
+
+
+@pytest.mark.asyncio
+async def test_finished_connects_do_not_count_toward_the_pending_code_cap(client: TestClient, salted: None) -> None:
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
+
+    shared: Final = _SharedStore()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        finished: Final = [
+            (await _redeem(_issued_code("busy-user"), _CredentialTable())).status_code
+            for _ in range(_AUTH_CODES_PER_USER_MAX + 5)
+        ]
+        pending: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        refused: Final = _authorize_as("busy-user")
+    assert finished == [200] * (_AUTH_CODES_PER_USER_MAX + 5)
+    assert pending == [302] * _AUTH_CODES_PER_USER_MAX
+    assert refused.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_redeeming_a_code_after_its_window_expired_does_not_lend_the_user_an_extra_slot(
+    client: TestClient, salted: None
+) -> None:
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_PER_USER_MAX
+
+    shared: Final = _SharedStore()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code: Final = _issued_code("busy-user")
+        shared.counts.pop(_SHARED_WINDOW + "busy-user")
+        redeemed: Final = await _redeem(code, _CredentialTable())
+        pending: Final = [_authorize_as("busy-user").status_code for _ in range(_AUTH_CODES_PER_USER_MAX)]
+        refused: Final = _authorize_as("busy-user")
+    assert redeemed.status_code == 200
+    assert pending == [302] * _AUTH_CODES_PER_USER_MAX
+    assert refused.status_code == 429
 
 
 def test_no_shared_code_is_issued_when_the_pending_code_counter_is_unavailable(
