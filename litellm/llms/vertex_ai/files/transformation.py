@@ -1013,7 +1013,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     Example Vertex jsonl
     {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
     """
-    entry_body: Final = openai_entry.get("body")
+    entry_body: Final = as_str_mapping(openai_entry.get("body"))
     model: Final = batch_model or (str(entry_body.get("model") or "") if isinstance(entry_body, dict) else "")
     is_anthropic_model: Final = is_vertex_anthropic_batch_model(model)
     if _is_embeddings_batch_entry(openai_entry):
@@ -1065,7 +1065,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             "request": _with_json_schema_config_in_its_own_column(
                 vertex_request_body,
                 drop_params=drops_unsupported_params(
-                    chat_request_body.get("drop_params", deployment_params.get("drop_params"))
+                    entry_body.get("drop_params", deployment_params.get("drop_params"))
                 ),
             )
         },

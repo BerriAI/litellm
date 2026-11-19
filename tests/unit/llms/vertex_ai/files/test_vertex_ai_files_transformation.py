@@ -2555,6 +2555,26 @@ def test_drop_params_drops_json_schema_annotations_bigquery_refuses(
     assert _uploaded_json_schema(config, deployment, _ANNOTATED_ANSWER_SCHEMA, **body) == dict(_ANSWER_SCHEMA)
 
 
+def test_a_responses_row_drop_params_drops_json_schema_annotations_bigquery_refuses(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = _responses_entry(
+        {
+            "model": "gemini-2.5-flash",
+            "input": "hi",
+            "drop_params": True,
+            "text": {"format": {"type": "json_schema", "name": "answer", "schema": dict(_ANNOTATED_ANSWER_SCHEMA)}},
+        }
+    )
+
+    (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(_uploaded_rows(config, _GEMINI_DEPLOYMENT, [entry]))
+
+    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ] == dict(_ANSWER_SCHEMA)
+
+
 @pytest.mark.parametrize(
     ("schema", "key"),
     [
