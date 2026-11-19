@@ -2,6 +2,7 @@ import { apiClient } from "@/components/networking";
 import { type DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
+import type { CustomerRateLimits } from "./CustomerRateLimits";
 import {
   resolveCustomerHierarchy,
   type CustomerHierarchyScope as CustomerUsageScope,
@@ -31,6 +32,7 @@ export interface CustomerUsageEntity {
   budgetLimits: components["schemas"]["BudgetLimit"][];
   budgetResetAt: string | null;
   budgetUsage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+  rateLimits?: CustomerRateLimits;
 }
 
 export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerActivityPages> {
@@ -58,6 +60,7 @@ interface CustomerUsageRequest {
   yearStartDate: string;
   yearEndDate: string;
   signal?: AbortSignal;
+  appId?: string | null;
 }
 
 const PREFIX = "/management/v1";
@@ -70,8 +73,11 @@ const ID_FILTER: Record<Collection, string> = {
   customer_members: "customer_member_ids",
 };
 
+export const isCustomerUsageIdentifier = (id: string): boolean => id.length > 0 && !id.includes(",");
+
 const assertIdentifiers = (ids: readonly string[]) => {
-  if (ids.some((id) => !id || id.includes(","))) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
+  if (ids.some((id) => !isCustomerUsageIdentifier(id)))
+    throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
 };
 
 const batches = async <T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<R[]> => {
@@ -123,7 +129,11 @@ const descendants = async (scope: ResolvedScope, request: CustomerUsageRequest) 
   };
 };
 
-const activityPages = async (resource: Collection, ids: readonly string[], request: CustomerUsageRequest) => {
+const activityPages = async (
+  resource: Collection,
+  ids: readonly string[],
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId">,
+) => {
   assertIdentifiers(ids);
   const pages: DailyActivityAggregatedResponse[] = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
@@ -134,6 +144,7 @@ const activityPages = async (resource: Collection, ids: readonly string[], reque
         start_date: request.startDate,
         end_date: request.endDate,
         [ID_FILTER[resource]]: ids.join(","),
+        ...(request.appId ? { app_id: request.appId } : {}),
         page,
         page_size: PAGE_SIZE,
       },
@@ -143,6 +154,62 @@ const activityPages = async (resource: Collection, ids: readonly string[], reque
     if (!result.metadata.has_more && page >= result.metadata.total_pages) return pages;
   }
   throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
+};
+
+const organizationActivityTotals = async (
+  organizationId: string,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId">,
+) => {
+  const result = await apiClient.get<DailyActivityAggregatedResponse>(
+    `${PREFIX}/customer_organizations/daily/activity/aggregated`,
+    {
+      accessToken: request.accessToken,
+      signal: request.signal,
+      query: {
+        start_date: request.startDate,
+        end_date: request.endDate,
+        customer_org_id: organizationId,
+        ...(request.appId ? { app_id: request.appId } : {}),
+      },
+    },
+  );
+  if (!result.metadata) throw new Error(i18n.t("customerPortal.analytics.incompletePages"));
+  return { ...result, metadata: result.metadata };
+};
+
+export const customerChildSpendCall = async ({
+  organizationId,
+  kind,
+  entities,
+  ...request
+}: Pick<
+  CustomerUsageRequest,
+  "accessToken" | "monthStartDate" | "monthEndDate" | "yearStartDate" | "yearEndDate" | "signal"
+> & {
+  organizationId: string;
+  kind: "teams" | "members";
+  entities: readonly CustomerUsageEntity[];
+}) => {
+  const ids = entities.map((item) => item.id).filter(isCustomerUsageIdentifier);
+  if (ids.length === 0) return { monthly: [], yearly: [], organizationSpend: 0 };
+  if (!organizationId) throw new Error(i18n.t("customerPortal.analytics.invalidIdentifier"));
+  const resource = kind === "teams" ? "customer_teams" : "customer_members";
+  const monthRequest = { ...request, startDate: request.monthStartDate, endDate: request.monthEndDate };
+  const yearRequest = { ...request, startDate: request.yearStartDate, endDate: request.yearEndDate };
+  const [monthlyPages, yearlyPages, organizationActivity] = await Promise.all([
+    activityPages(resource, ids, monthRequest),
+    activityPages(resource, ids, yearRequest),
+    organizationActivityTotals(organizationId, monthRequest),
+  ]);
+  const monthly = mergeCustomerActivityPages(monthlyPages);
+  const yearly = mergeCustomerActivityPages(yearlyPages);
+  const labels = new Map(entities.map((item) => [item.id, item.label]));
+  const options = { unassignedLabel: "" };
+  return {
+    monthly: customerEntityRankings(monthly.results, labels, monthly.metadata, options),
+    yearly: customerEntityRankings(yearly.results, labels, yearly.metadata, options),
+    organizationSpend: organizationActivity.metadata.total_spend,
+  };
 };
 
 interface ActivityJob {
@@ -158,7 +225,7 @@ const chunkJobs = (resource: Collection, dimension: ActivityJob["dimension"], id
     ids: ids.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
   }));
 
-const entity = (id: string, record: Organization | Team | Member): CustomerUsageEntity => {
+export const customerUsageEntity = (id: string, record: Organization | Team | Member): CustomerUsageEntity => {
   const budget = "effective_budget" in record ? record.effective_budget : record.budget;
   return {
     id,
@@ -169,6 +236,9 @@ const entity = (id: string, record: Organization | Team | Member): CustomerUsage
     budgetLimits: budget?.budget_limits ?? [],
     budgetResetAt: record.budget_reset_at ?? null,
     budgetUsage: record.budget_usage,
+    ...(budget?.tpm_limit != null || budget?.rpm_limit != null
+      ? { rateLimits: { tpm_limit: budget.tpm_limit, rpm_limit: budget.rpm_limit } }
+      : {}),
   };
 };
 
@@ -246,7 +316,10 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
   };
   const activity = await batches(jobs, async (job) => ({
     dimension: job.dimension,
-    pages: await activityPages(job.resource, job.ids, requests[job.dimension]),
+    pages:
+      job.dimension === "monthlyOrganization"
+        ? [await organizationActivityTotals(request.scope.org, monthRequest)]
+        : await activityPages(job.resource, job.ids, requests[job.dimension]),
   }));
   const primary = mergeCustomerActivityPages(
     activity.filter((result) => result.dimension === "scope").flatMap((result) => result.pages),
@@ -285,9 +358,9 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
   );
   return {
     ...primary,
-    organization: entity(selected.organization.customer_org_id, selected.organization),
-    team: selected.team ? entity(selected.team.customer_team_id, selected.team) : null,
-    member: selected.member ? entity(selected.member.customer_member_id, selected.member) : null,
+    organization: customerUsageEntity(selected.organization.customer_org_id, selected.organization),
+    team: selected.team ? customerUsageEntity(selected.team.customer_team_id, selected.team) : null,
+    member: selected.member ? customerUsageEntity(selected.member.customer_member_id, selected.member) : null,
     teams: customerEntityRankings(teamDays, teamLabels, primary.metadata, {
       unassignedLabel: i18n.t("customerPortal.analytics.unassignedTeam"),
       onlyEntityId: selected.member ? selected.team?.customer_team_id : undefined,
@@ -303,7 +376,7 @@ export const customerHierarchyUsageCall = async (request: CustomerUsageRequest):
       selected.member ? selected.team?.customer_team_id : undefined,
     ),
     memberResults: customerEntityDailyData(primary.results, memberDays, memberLabels),
-    memberBudgets: children.members.map((member) => entity(member.customer_member_id, member)),
+    memberBudgets: children.members.map((member) => customerUsageEntity(member.customer_member_id, member)),
     monthlyOrganizationSpend: monthlyOrganization.metadata.total_spend,
     monthlyMembers: customerEntityRankings(monthlyMemberDays, memberLabels, monthlyOrganization.metadata, {
       unassignedLabel: i18n.t("customerPortal.analytics.unassignedMember"),

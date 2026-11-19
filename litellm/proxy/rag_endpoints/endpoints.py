@@ -52,11 +52,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_managed_resource_id,
     detect_content_type_from_filename,
     explicit_request_credentials,
-    get_team_provider_deployment,
     is_base64_encoded_unified_file_id,
     managed_file_copy_on_deployment,
+    model_less_team_deployment,
     provider_file_id_from_managed_id,
-    team_deployment_the_caller_may_use,
+    team_deployment_as_the_caller_reaches_it,
 )
 from litellm.proxy.rag_endpoints.upload_security import (
     MAX_UPLOAD_SIZE_BYTES,
@@ -381,7 +381,7 @@ def _with_request_credentials(
     return MappingProxyType({**team_credentials, **explicit_request_credentials(request_data)})
 
 
-def _team_provider_deployment(
+async def _team_provider_deployment(
     effective_config: Mapping[str, object],
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
@@ -392,11 +392,7 @@ def _team_provider_deployment(
     if _store_provider(effective_config) != _TEAM_CREDENTIAL_PROVIDER:
         return None
 
-    return get_team_provider_deployment(
-        llm_router=llm_router,
-        user_api_key_dict=user_api_key_dict,
-        custom_llm_provider=_TEAM_CREDENTIAL_PROVIDER,
-    )
+    return await model_less_team_deployment(llm_router, user_api_key_dict, _TEAM_CREDENTIAL_PROVIDER)
 
 
 def _team_provider_credentials(deployment: TeamProviderDeployment | None) -> Mapping[str, object]:
@@ -783,6 +779,8 @@ async def parse_rag_ingest_request(
     # api_base is also blocked: a user-controlled base URL causes the server
     # to send its configured provider credentials to an attacker endpoint.
     _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS: Final = {
+        "fallbacks",
+        "_vector_store_fallback_plan",
         "vertex_credentials",
         "vertex_ai_credentials",
         "aws_access_key_id",
@@ -921,7 +919,7 @@ async def rag_ingest(
         forwarded_credentials: Final = _forwarded_store_credentials(
             base, _with_body_drop_params(request_data, await _rag_ingest_body(request))
         )
-        team_deployment: Final = _team_provider_deployment(base, llm_router, user_api_key_dict)
+        team_deployment: Final = await _team_provider_deployment(base, llm_router, user_api_key_dict)
         merged_vector_store_config: Final = {
             **_team_provider_credentials(team_deployment),
             **forwarded_credentials,
@@ -947,8 +945,8 @@ async def rag_ingest(
 
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         credential_deployment: Final = None if forwarded_credentials else team_deployment
-        upload_deployment: Final = await team_deployment_the_caller_may_use(
-            credential_deployment, llm_router, user_api_key_dict
+        upload_deployment: Final = await team_deployment_as_the_caller_reaches_it(
+            credential_deployment, _TEAM_CREDENTIAL_PROVIDER, llm_router, user_api_key_dict
         )
         ingest_file_id: Final = await _provider_file_id_for_ingest(
             file_id, credential_deployment, managed_files_obj, user_api_key_dict
@@ -1179,7 +1177,7 @@ async def rag_query(
         )
         team_credentials: Final = _with_request_credentials(
             _team_provider_credentials(
-                _team_provider_deployment(effective_vector_store_config, llm_router, user_api_key_dict)
+                await _team_provider_deployment(effective_vector_store_config, llm_router, user_api_key_dict)
             ),
             _with_body_drop_params(request_data, data),
         )

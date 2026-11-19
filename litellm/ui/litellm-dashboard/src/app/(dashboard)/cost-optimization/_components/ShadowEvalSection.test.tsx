@@ -547,6 +547,7 @@ describe("ShadowEvalSection", () => {
       duration_days: 7,
       max_budget: 10,
       judge_model: "prod-judge",
+      skip_same_model: false,
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
@@ -577,6 +578,7 @@ describe("ShadowEvalSection", () => {
       duration_days: 7,
       max_budget: 10,
       judge_model: "prod-judge",
+      skip_same_model: false,
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
@@ -645,6 +647,7 @@ describe("ShadowEvalSection", () => {
       duration_days: 7,
       max_budget: 10,
       judge_model: "prod-judge",
+      skip_same_model: false,
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
@@ -680,6 +683,7 @@ describe("ShadowEvalSection", () => {
       duration_days: 7,
       max_budget: 10,
       judge_model: "prod-judge",
+      skip_same_model: false,
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
