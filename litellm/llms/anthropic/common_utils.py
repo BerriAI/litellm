@@ -447,6 +447,25 @@ def is_claude_code_billing_header(text: object) -> bool:
     return fields is not None and {"cc_version", "cc_entrypoint"} <= {key for key, _ in fields}
 
 
+def system_without_claude_code_billing_header(
+    system: object,
+) -> str | list[object] | None:  # mutable-ok: translated API system blocks
+    if isinstance(system, str):
+        first_line, _, remainder = system.partition("\n")
+        return remainder if is_claude_code_billing_header(first_line) else system
+    blocks: Final = as_object_list(system)
+    if blocks is None:
+        return None
+    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
+    if (
+        first_block is not None
+        and first_block.get("type") == "text"
+        and is_claude_code_billing_header(first_block.get("text"))
+    ):
+        return list(blocks[1:])
+    return list(blocks)
+
+
 def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
     if isinstance(system, str):
         return (system,)

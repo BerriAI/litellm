@@ -419,6 +419,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
 )
 from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.context_management.inference_view import (
     InferenceRequestView,
     InferenceRequestViewError,
@@ -16356,11 +16357,18 @@ async def _gateway_request_view(
 ) -> InferenceRequestView | InferenceRequestViewError | None:
     match route:
         case Target.CHAT_COMPLETIONS:
-            return await _bridged_request_view(
+            view: Final = await _bridged_request_view(
                 messages, system, tools, messages_format, edits, deployment, fallback_model
+            )
+            return (
+                replace(view, system=system_without_claude_code_billing_header(view.system))
+                if isinstance(view, InferenceRequestView) and messages_format == "anthropic"
+                else view
             )
         case Target.RESPONSES if edits is not None:
             return await _responses_request_view(messages, system, tools, edits, deployment, fallback_model)
+        case Target.RESPONSES:
+            return InferenceRequestView(messages=messages, system=system_without_claude_code_billing_header(system))
         case _:
             return None
 
