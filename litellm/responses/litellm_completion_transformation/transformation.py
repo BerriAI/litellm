@@ -900,6 +900,8 @@ def _empty_user_turn(last_input_item: object, text: str) -> GenericChatCompletio
 def _last_input_item(input_items: str | ResponseInputParam) -> object:
     if isinstance(input_items, str):
         return {"role": "user", "content": input_items}
+    if isinstance(input_items, dict):
+        return input_items
     return input_items[-1] if input_items else None
 
 
@@ -1601,7 +1603,12 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
-        dumped_input: Final = with_compaction_items_as_params(input)
+        input_items: Final = (
+            cast(ResponseInputParam, [input])  # cast-ok: the bridge accepts single objects absent from SDK list types
+            if isinstance(input, dict)
+            else input
+        )
+        dumped_input: Final = with_compaction_items_as_params(input_items)
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
         sent_input: Final = _without_item_keys(
             read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)

@@ -351,32 +351,35 @@ def _map_openai_exception(
             body=dict(cyber_policy_body),
         )
     # custom_llm_provider is openai, make it OpenAI
-    message = get_error_message(error_obj=original_exception)
-    if message is None:
-        if hasattr(original_exception, "message"):
-            message = original_exception.message
-        else:
-            message = str(original_exception)
-
-    if message is not None and isinstance(
-        message, str
-    ):  # done to prevent user-confusion. Relevant issue - https://github.com/BerriAI/litellm/issues/1414
-        message = message.replace("OPENAI", custom_llm_provider.upper())
-        message = message.replace(
-            "openai.OpenAIError",
-            f"{custom_llm_provider}.{custom_llm_provider}Error",
+    initial_message: Final = get_error_message(error_obj=original_exception)
+    provider_message: Final = (
+        initial_message
+        if initial_message is not None
+        else original_exception.message
+        if hasattr(original_exception, "message")
+        else str(original_exception)
+    )
+    normalized_message: Final = (
+        provider_message.replace("OPENAI", custom_llm_provider.upper()).replace(
+            "openai.OpenAIError", f"{custom_llm_provider}.{custom_llm_provider}Error"
         )
+        if provider_message is not None and isinstance(provider_message, str)
+        else provider_message
+    )
     if custom_llm_provider == "openai":
         exception_provider = "OpenAI" + "Exception"
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
     copilot_app_hint: Final = _github_copilot_custom_app_hint(custom_llm_provider, request_kwargs)
-    if (
-        copilot_app_hint is not None
-        and getattr(original_exception, "status_code", None) in (400, 401, 403)
-        and "model_not_supported" not in error_str
-    ):
-        message = f"{message} {copilot_app_hint}"  # rebind-ok: add the custom App hint
+    message: Final = (
+        f"{normalized_message} {copilot_app_hint}"
+        if (
+            copilot_app_hint is not None
+            and getattr(original_exception, "status_code", None) in (400, 401, 403)
+            and "model_not_supported" not in error_str
+        )
+        else normalized_message
+    )
 
     if ExceptionCheckers.is_error_str_rate_limit(
         error_str, status_code=getattr(original_exception, "status_code", None)
@@ -2686,6 +2689,26 @@ def _is_guardrail_block(original_exception: Exception) -> bool:
     return is_guardrail_intervention(original_exception)
 
 
+PROVIDER_ORIGIN_STATUS_ATTRIBUTE: Final = "litellm_provider_origin_status"
+
+
+def _attach_provider_origin_status(mapped: BaseException, original_exception: object) -> None:
+    """Keeps the HTTP status the provider itself answered with next to the mapped error, whose public
+    ``status_code`` may differ (an Anthropic 529 maps to a 500). A status litellm made up is not kept."""
+    status: Final = getattr(original_exception, "status_code", None)
+    if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
+        return
+    if getattr(original_exception, "status_code_is_synthesized", False):
+        return
+    setattr(mapped, PROVIDER_ORIGIN_STATUS_ATTRIBUTE, status)
+
+
+def provider_origin_status(error: BaseException) -> int | None:
+    """The provider's own HTTP status for an error mapped from its response, or None when litellm raised it."""
+    status: Final = getattr(error, PROVIDER_ORIGIN_STATUS_ATTRIBUTE, None)
+    return status if isinstance(status, int) and not isinstance(status, bool) else None
+
+
 def exception_type(
     model,
     original_exception,
@@ -3036,12 +3059,14 @@ def exception_type(
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)
             _attach_debug_info(e, request_debug_info)
+            _attach_provider_origin_status(e, mappable_exception)
             raise e
         else:
             for error_type in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, error_type):
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     _attach_debug_info(e, request_debug_info)
+                    _attach_provider_origin_status(e, mappable_exception)
                     raise e  # it's already mapped
             raised_exc: Final = APIConnectionError(
                 message=f"{original_exception}\n{redact_string(traceback.format_exc())}",

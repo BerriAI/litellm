@@ -20,15 +20,22 @@ queries next to ported ones. These invariants hold until Prisma is gone:
   its final interface, since the Rust gateway will pass `database_connection_pool_limit` straight to SQLx.
 """
 
-from collections.abc import Mapping
+import os
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 RUST_RESERVED_CONNECTIONS: Final = 2
 MIN_CONNECTION_LIMIT: Final = 2
 RUST_WRITER_CONNECTIONS_ENV_VAR: Final = "LITELLM_RUST_WRITER_DATABASE_CONNECTIONS"
 RUST_READER_CONNECTIONS_ENV_VAR: Final = "LITELLM_RUST_READER_DATABASE_CONNECTIONS"
+configure_pool_budget_from_settings: Final[ContextVar[bool]] = ContextVar(
+    "configure_pool_budget_from_settings", default=False
+)
 
 
 class UnsplittableConnectionLimit(ValueError):
@@ -79,6 +86,58 @@ def rust_connections(environ: Mapping[str, str]) -> RustConnections:
     return RustConnections(
         writer=_share(environ, RUST_WRITER_CONNECTIONS_ENV_VAR), reader=_share(environ, RUST_READER_CONNECTIONS_ENV_VAR)
     )
+
+
+def _capped_prisma_url(url: str, limit: int) -> str:
+    parsed: Final = urlsplit(url)
+    pairs: Final = tuple(parse_qsl(parsed.query, keep_blank_values=True))
+    pins: Final = tuple(_whole_number(value) for key, value in pairs if key == "connection_limit")
+    tighter_pins: Final = tuple(pin for pin in pins if pin is not None and 0 < pin <= limit)
+    if len(pins) == len(tighter_pins) == 1:
+        return url
+    other: Final = tuple((key, value) for key, value in pairs if key != "connection_limit")
+    return urlunsplit(parsed._replace(query=urlencode((*other, ("connection_limit", min((limit, *tighter_pins)))))))
+
+
+def _configured_pool_env(limit: object, environ: Mapping[str, str]) -> Mapping[str, str]:
+    writer_url: Final = environ.get("DATABASE_URL")
+    if limit is None or not writer_url:
+        return MappingProxyType({})
+    if not isinstance(limit, (str, int, float)):
+        raise UnsplittableConnectionLimit("database_connection_pool_limit", limit)
+    budget: Final = ConnectionBudget.of("database_connection_pool_limit", limit)
+    reader_url: Final = environ.get("DATABASE_URL_READ_REPLICA")
+    reader: Final = (
+        {
+            "DATABASE_URL_READ_REPLICA": _capped_prisma_url(reader_url, budget.python),
+            RUST_READER_CONNECTIONS_ENV_VAR: str(budget.rust),
+        }
+        if reader_url
+        else {}
+    )
+    return MappingProxyType(
+        {
+            "DATABASE_URL": _capped_prisma_url(writer_url, budget.python),
+            RUST_WRITER_CONNECTIONS_ENV_VAR: str(budget.rust),
+            **reader,
+        }
+    )
+
+
+@contextmanager
+def with_configured_connection_budget(limit: object) -> Generator[None, None, None]:
+    """Set the worker environment because Prisma and SQLx read it independently during startup."""
+    updates: Final = _configured_pool_env(limit, os.environ)
+    previous: Final = tuple((key, os.environ.get(key)) for key in updates)
+    os.environ.update(updates)
+    try:
+        yield
+    finally:
+        for key, value in previous:
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _share(environ: Mapping[str, str], name: str) -> int:

@@ -3,12 +3,13 @@ use std::{ffi::OsString, time::Duration};
 use litellm_gateway_forward::{Error, Settings};
 use rstest::rstest;
 
-const COMPLETE: [(&str, &str); 5] = [
+const COMPLETE: [(&str, &str); 6] = [
     ("LITELLM_FORWARD_UPSTREAM", "http://127.0.0.1:53211"),
     ("LITELLM_FORWARD_HOST", "0.0.0.0"),
     ("LITELLM_FORWARD_PORT", "4000"),
     ("LITELLM_FORWARD_UPSTREAM_KEEPALIVE", "2"),
     ("LITELLM_FORWARD_SHUTDOWN_DRAIN", "40"),
+    ("LITELLM_FORWARD_CONFIG", "/etc/litellm/config.yaml"),
 ];
 
 fn parse(variables: &[(&str, &str)]) -> Result<Option<Settings>, Error> {
@@ -43,8 +44,16 @@ fn reads_every_variable() {
             port: 4000,
             upstream_keepalive: Duration::from_secs(2),
             shutdown_drain: Duration::from_secs(40),
+            config: Some("/etc/litellm/config.yaml".into()),
         })
     );
+}
+
+#[rstest]
+fn an_empty_config_means_python_loads_no_local_file() {
+    let settings = parse(&with("LITELLM_FORWARD_CONFIG", "")).unwrap().unwrap();
+
+    assert_eq!(settings.config, None);
 }
 
 #[rstest]
@@ -57,6 +66,7 @@ fn without_an_upstream_the_gateway_is_not_forwarding() {
 #[case::port("LITELLM_FORWARD_PORT")]
 #[case::upstream_keepalive("LITELLM_FORWARD_UPSTREAM_KEEPALIVE")]
 #[case::shutdown_drain("LITELLM_FORWARD_SHUTDOWN_DRAIN")]
+#[case::config("LITELLM_FORWARD_CONFIG")]
 fn a_missing_variable_fails_naming_it(#[case] variable: &str) {
     let error = parse(&without(variable)).unwrap_err();
 

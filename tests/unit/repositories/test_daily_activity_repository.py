@@ -676,6 +676,7 @@ async def test_customer_team_page_returns_loaded_metrics_and_retains_count_on_em
         "gateway_injected_caching_savings_spend": 0.125,
         "autorouter_savings_spend": 0.0,
         "guardrail_spend": 0.0,
+        "customer_margin_spend": 0.0,
         "total_response_time_ms": 10,
         "timed_requests": 1,
         "created_at": "2026-01-01T00:00:00Z",

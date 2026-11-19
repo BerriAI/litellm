@@ -715,7 +715,7 @@ def add_guardrail_response_to_standard_logging_object(
     return standard_logging_object
 
 
-def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict[str, object]:
     """Process a single callback and return its data with environment variables"""
     env_vars: Final = CustomLogger.get_callback_env_vars(_callback)
 

@@ -55,7 +55,15 @@ describe("planCustomerBudgetGroups", () => {
       [
         { ...rows[0], name: "Legacy", monthlyBudget: "0", yearlyBudget: "" },
         { ...rows[1], name: "Standard", capPolicy: "pause_allow_increase" },
-        { id: "new", name: " New ", monthlyBudget: "30", yearlyBudget: "300", capPolicy: "pause_until_reset" },
+        {
+          id: "new",
+          name: " New ",
+          monthlyBudget: "30",
+          yearlyBudget: "300",
+          tpm: "",
+          rpm: "",
+          capPolicy: "pause_until_reset",
+        },
       ],
       "new",
     );
@@ -119,7 +127,70 @@ describe("planCustomerBudgetGroups", () => {
   it("should still require a limit for a newly created group", () => {
     const rows = customerBudgetGroupRows(organization);
     expect(
-      planCustomerBudgetGroups(organization, [...rows, { ...rows[1], id: "new", name: "New" }], "standard"),
+      planCustomerBudgetGroups(organization, [...rows, { ...rows[1], id: "new", name: "New", rpm: "" }], "standard"),
     ).toEqual({ ok: false, error: "groupLimitRequired" });
+  });
+
+  it("changes rates without resubmitting spend windows or touching other groups", () => {
+    const rows = customerBudgetGroupRows(organization);
+    const result = planCustomerBudgetGroups(
+      organization,
+      [{ ...rows[0], tpm: "50000", rpm: "0" }, { ...rows[1], rpm: "" }, rows[2]],
+      "standard",
+    );
+    expect(result).toEqual({
+      ok: true,
+      changed: true,
+      body: {
+        expected_revision: organization.budget_groups_revision,
+        default_budget_template: "Standard",
+        default_budgets: [
+          { budget_id: "standard", name: "Standard", tpm_limit: 50000, rpm_limit: 0 },
+          { budget_id: "legacy", name: "Legacy", rpm_limit: null },
+          { budget_id: "rate", name: "Rate only" },
+        ],
+      },
+    });
+  });
+
+  it("allows a new rate-only organization group without a spend budget", () => {
+    const result = planCustomerBudgetGroups(
+      organization,
+      [
+        ...customerBudgetGroupRows(organization),
+        {
+          id: "new",
+          name: "Rate plan",
+          monthlyBudget: "",
+          yearlyBudget: "",
+          tpm: "",
+          rpm: "60",
+          capPolicy: "pause_until_reset",
+        },
+      ],
+      "",
+      false,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      body: {
+        default_budgets: [
+          { budget_id: "standard", name: "Standard" },
+          { budget_id: "legacy", name: "Legacy" },
+          { budget_id: "rate", name: "Rate only" },
+          { name: "Rate plan", budget_limits: [], rpm_limit: 60 },
+        ],
+      },
+    });
+  });
+
+  it.each(["-1", "0.5", "Infinity", "9007199254740992"])("rejects invalid group rates %s", (value) => {
+    const rows = customerBudgetGroupRows(organization);
+    for (const field of ["tpm", "rpm"] as const) {
+      expect(
+        planCustomerBudgetGroups(organization, [{ ...rows[0], [field]: value }, ...rows.slice(1)], "standard"),
+      ).toEqual({ ok: false, error: "invalidRateLimit" });
+    }
   });
 });

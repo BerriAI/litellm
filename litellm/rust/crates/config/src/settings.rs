@@ -71,6 +71,7 @@ pub struct GeneralSettings {
     pub max_queued_requests_per_worker: Option<u64>,
     pub admission_queue_timeout_seconds: f64,
     pub master_key: Option<SecretValue>,
+    pub litellm_license: Option<SecretValue>,
     pub database_url: Option<SecretValue>,
     pub tracing: Option<TracingSettings>,
     pub database_connection_pool_limit: Option<u64>,
@@ -86,7 +87,7 @@ pub struct GeneralSettings {
     pub database_disable_prepared_statements: bool,
     pub max_parallel_requests: Option<u64>,
     pub global_max_parallel_requests: Option<u64>,
-    pub max_request_size_mb: Option<u64>,
+    pub max_request_size_mb: Option<f64>,
     pub max_response_size_mb: Option<u64>,
     pub proxy_config_reload_interval_seconds: u64,
     pub background_health_checks: Option<bool>,
@@ -141,6 +142,7 @@ impl Default for GeneralSettings {
             max_queued_requests_per_worker: None,
             admission_queue_timeout_seconds: 1.0,
             master_key: None,
+            litellm_license: None,
             database_url: None,
             tracing: None,
             database_connection_pool_limit: Some(10),
@@ -254,6 +256,8 @@ pub struct LiteLlmSettings {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::GeneralSettings;
     use crate::JwtAuthSettings;
 
@@ -273,5 +277,17 @@ mod tests {
     fn unset_text_flags_are_false() {
         let general: GeneralSettings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!general.allow_requests_on_db_unavailable && !general.enforce_rbac);
+    }
+
+    #[rstest]
+    #[case::int(serde_json::json!(1), 1.0)]
+    #[case::fraction(serde_json::json!(0.5), 0.5)]
+    fn a_request_size_limit_is_an_int_or_a_float(
+        #[case] limit: serde_json::Value,
+        #[case] expected: f64,
+    ) {
+        let settings: GeneralSettings =
+            serde_json::from_value(serde_json::json!({"max_request_size_mb": limit})).unwrap();
+        assert_eq!(settings.max_request_size_mb, Some(expected));
     }
 }
