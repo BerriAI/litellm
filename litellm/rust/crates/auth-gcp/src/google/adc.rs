@@ -10,7 +10,9 @@ use serde_json::{Map, Value};
 use super::{
     Login,
     builders::{self, build},
-    credentials::{CredentialsFile, ExternalAccountInfo, ImpersonatedInfo, Unparsed},
+    credentials::{
+        CredentialsFile, CredentialsType, ExternalAccountInfo, ImpersonatedInfo, Unparsed,
+    },
     environment::GoogleEnvironment,
     failure::{GoogleLoginFailure, PythonException},
     legacy,
@@ -18,7 +20,6 @@ use super::{
 use crate::{GcpTokenSource, identity::SdkCredentials};
 
 const MISSING_CREDENTIALS: &str = "No application default credentials were found. Set GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth application-default login`.";
-const VALID_TYPES: &str = "authorized_user, service_account, external_account, external_account_authorized_user, impersonated_service_account";
 const CLOUD_RESOURCE_MANAGER: &str = "https://cloudresourcemanager.{universe_domain}/v1/projects/";
 const DEFAULT_UNIVERSE_DOMAIN: &str = "googleapis.com";
 
@@ -92,12 +93,12 @@ fn impersonated(
         .service_account_impersonation_url
         .as_deref()
         .ok_or_else(unusable)?;
-    match source.kind.as_deref() {
-        Some("authorized_user" | "service_account") => build(
+    match CredentialsType::named(source.kind.as_deref()) {
+        Some(CredentialsType::AuthorizedUser | CredentialsType::ServiceAccount) => build(
             SdkCredentials::Impersonated(info.sdk.clone()),
             PythonException::DefaultCredentials,
         ),
-        Some("external_account_authorized_user") => build(
+        Some(CredentialsType::ExternalAccountAuthorizedUser) => build(
             legacy::impersonating_external_account_authorized_user(
                 &source.external_authorized_user,
                 url,
@@ -188,8 +189,19 @@ fn load_credentials_from_file(
 
 fn invalid_type(file: &str) -> GoogleLoginFailure {
     default_failure(format!(
-        "The file {file} does not have a valid type, expected one of {VALID_TYPES}."
+        "The file {file} does not have a valid type, expected one of {}.",
+        valid_types()
     ))
+}
+
+/// The types google-auth's `default()` lists as valid, which leave out `gdch_service_account`.
+fn valid_types() -> String {
+    <CredentialsType as strum::VariantArray>::VARIANTS
+        .iter()
+        .filter(|kind| **kind != CredentialsType::GdchServiceAccount)
+        .map(|kind| <&'static str>::from(*kind))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The credentials a file holds, by the type it declares.
@@ -283,4 +295,19 @@ pub(crate) async fn default_credentials(
         _ => project,
     };
     Ok(Login { project, ..found })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn the_valid_types_are_listed_as_google_auth_lists_them() {
+        assert_eq!(
+            valid_types(),
+            "authorized_user, service_account, external_account, external_account_authorized_user, impersonated_service_account"
+        );
+    }
 }

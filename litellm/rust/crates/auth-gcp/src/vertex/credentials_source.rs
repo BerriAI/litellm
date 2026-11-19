@@ -10,7 +10,7 @@ use crate::{
     google::{
         GoogleLoginFailure, PythonException, UnusableFile,
         credentials::{
-            AuthorizedUserInfo, BoundedRead, CredentialsFile, ExternalAccountInfo,
+            AuthorizedUserInfo, BoundedRead, CredentialsFile, CredentialsType, ExternalAccountInfo,
             MAX_CREDENTIALS_FILE_CHARACTERS, ServiceAccountInfo, Unparsed, read_bounded,
         },
     },
@@ -38,8 +38,8 @@ impl ExplicitCredentials {
             Ok(CredentialsFile::ExternalAccount(account)) => Ok(Self::ExternalAccount(account)),
             Err(Unparsed::Field(error))
                 if matches!(
-                    info.get("type").and_then(Value::as_str),
-                    Some("authorized_user" | "external_account")
+                    CredentialsType::declared_by(&info),
+                    Some(CredentialsType::AuthorizedUser | CredentialsType::ExternalAccount)
                 ) =>
             {
                 Err(error)

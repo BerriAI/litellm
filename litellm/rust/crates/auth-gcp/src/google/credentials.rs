@@ -132,6 +132,37 @@ pub(crate) struct SourceCredentials {
     pub(crate) external_authorized_user: ExternalAuthorizedUserInfo,
 }
 
+/// The `type` a credentials file declares, as google-auth spells it.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
+)]
+pub(crate) enum CredentialsType {
+    #[strum(serialize = "authorized_user")]
+    AuthorizedUser,
+    #[strum(serialize = "service_account")]
+    ServiceAccount,
+    #[strum(serialize = "external_account")]
+    ExternalAccount,
+    #[strum(serialize = "external_account_authorized_user")]
+    ExternalAccountAuthorizedUser,
+    #[strum(serialize = "impersonated_service_account")]
+    ImpersonatedServiceAccount,
+    #[strum(serialize = "gdch_service_account")]
+    GdchServiceAccount,
+}
+
+impl CredentialsType {
+    /// The type `info` declares, `None` when it declares none or one google-auth does not know.
+    pub(crate) fn declared_by(info: &Map<String, Value>) -> Option<Self> {
+        Self::named(info.get("type").and_then(Value::as_str))
+    }
+
+    /// The type `kind` names, `None` when it is absent or not one google-auth knows.
+    pub(crate) fn named(kind: Option<&str>) -> Option<Self> {
+        kind.and_then(|kind| kind.parse().ok())
+    }
+}
+
 /// A credentials file, by the `type` it declares.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -300,6 +331,22 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::authorized_user(json!({"type": "authorized_user"}), Some(CredentialsType::AuthorizedUser))]
+    #[case::impersonated(json!({"type": "impersonated_service_account"}), Some(CredentialsType::ImpersonatedServiceAccount))]
+    #[case::unknown(json!({"type": "something_else"}), None)]
+    #[case::not_text(json!({"type": 1}), None)]
+    #[case::untyped(json!({}), None)]
+    fn the_declared_type_is_read_by_its_google_auth_spelling(
+        #[case] info: Value,
+        #[case] expected: Option<CredentialsType>,
+    ) {
+        let Value::Object(info) = info else {
+            unreachable!("every case is an object")
+        };
+        assert_eq!(CredentialsType::declared_by(&info), expected);
+    }
 
     #[rstest]
     fn credentials_file_json_debug_never_shows_a_secret() {
