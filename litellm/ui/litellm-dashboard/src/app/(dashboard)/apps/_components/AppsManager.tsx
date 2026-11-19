@@ -23,7 +23,8 @@ import {
   type AppResource,
 } from "./appForms";
 import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources, loadApps } from "./appApi";
-import { applicationRows } from "./applications";
+import { applicationRows, grantedApplicationRows } from "./applications";
+import { useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
@@ -49,7 +50,9 @@ export default function AppsManager() {
   });
   const [selected, setSelected] = useQueryState("app", parseAsString);
   const resource = resources.data?.find((row) => row.resource_id === selected);
-  if (isLoading) return <p role="status">{t("apps.loading")}</p>;
+  const granted = useGrantedApps();
+  if (isLoading || (!canManage && granted.apps.isLoading)) return <p role="status">{t("apps.loading")}</p>;
+  if (!canManage && granted.hasGrant) return <GrantedApps apps={granted.apps.data ?? []} />;
   if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
   if (selected && [definition, resources].some((query) => query.isLoading))
     return <p role="status">{t("apps.loading")}</p>;
@@ -85,6 +88,21 @@ export default function AppsManager() {
       )}
       <section className={resourceType ? "border-t pt-6" : undefined}>
         <AppDefinitionSetting />
+      </section>
+    </main>
+  );
+}
+
+function GrantedApps({ apps }: { apps: readonly App[] }) {
+  const { t } = useTranslation();
+  return (
+    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
+      <header>
+        <h1 className="text-lg font-semibold">{t("apps.title")}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t("apps.grantedHint")}</p>
+      </header>
+      <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
+        <ApplicationsTable rows={grantedApplicationRows(apps)} loading={false} searching={false} />
       </section>
     </main>
   );

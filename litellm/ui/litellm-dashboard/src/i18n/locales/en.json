@@ -22,6 +22,7 @@
       }
     },
     "settingsTitle": "Applications",
+    "grantedHint": "The applications you have been given access to, with their spend and budget.",
     "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
     "alias": "App",
     "edit": "Edit",

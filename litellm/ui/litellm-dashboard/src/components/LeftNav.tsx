@@ -90,6 +90,7 @@ import {
   rolesWithWriteAccess,
   proxyAdminTierRoles,
 } from "../utils/roles";
+import { useGrantedApps } from "@/app/(dashboard)/apps/_components/useGrantedApps";
 import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
@@ -127,6 +128,7 @@ export interface MenuVisibilityContext {
   isViewOnly: boolean;
   isOrgAdmin: boolean;
   isTeamAdmin: boolean;
+  hasAppGrant?: boolean;
   enabledPagesInternalUsers?: string[] | null;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
@@ -176,6 +178,7 @@ const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityCon
 
 const menuItemIsVisible = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean => {
   if (item.children && item.children.length === 0) return false;
+  if (item.key === "apps" && context.hasAppGrant) return true;
   if (item.key === "llm-playground" && context.isViewOnly) return false;
   const adminVisibility = adminPageVisibility(item, context, isAdmin);
   if (adminVisibility !== null) return adminVisibility;
@@ -641,6 +644,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   }
 
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
+  const { hasGrant: hasAppGrant } = useGrantedApps();
 
   const visibleGroups = useMemo(() => {
     const context: MenuVisibilityContext = {
@@ -648,6 +652,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       isViewOnly,
       isOrgAdmin,
       isTeamAdmin,
+      hasAppGrant,
       enabledPagesInternalUsers,
       disableAgentsForInternalUsers,
       allowAgentsForTeamAdmins,
@@ -662,6 +667,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
     disableAgentsForInternalUsers,
     disableVectorStoresForInternalUsers,
     enabledPagesInternalUsers,
+    hasAppGrant,
     isOrgAdmin,
     isTeamAdmin,
     isViewOnly,
