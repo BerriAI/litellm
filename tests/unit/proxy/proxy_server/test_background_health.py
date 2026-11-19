@@ -779,6 +779,14 @@ async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_
     ) == [(served, None, "healthy"), ("opus", "exact", "healthy")]
 
 
+def _ignore_call(*_a: object, **_kw: object) -> None:
+    return None
+
+
+def _no_filter_kwargs(_general_settings: object) -> dict[str, object]:
+    return {}
+
+
 class _RegistryUnavailableRouter:
     def registry(self) -> NoReturn:
         raise RuntimeError("registry unavailable")
@@ -831,12 +839,14 @@ async def test_run_background_health_check_hands_public_model_groups_to_the_db_s
         return ([], [], {})
 
     scheduled: Final[dict[str, object]] = {}
+
+    def _record_schedule(*_a: object, **kw: object) -> None:
+        scheduled.update(kw)
+
     monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
-    monkeypatch.setattr(
-        proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: scheduled.update(kw)
-    )
-    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
-    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _record_schedule)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", _no_filter_kwargs)
 
     async def _stop_sleep(_seconds: float) -> NoReturn:
         raise asyncio.CancelledError()
@@ -885,11 +895,15 @@ async def test_run_background_health_check_warns_only_when_model_groups_match_no
         return ([], [], {})
 
     warnings: Final[list[str]] = []
+
+    def _record_warning(msg: str, *_a: object) -> None:
+        warnings.append(msg)
+
     monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
-    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
-    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
-    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
-    monkeypatch.setattr(proxy_server.verbose_proxy_logger, "warning", lambda msg, *a: warnings.append(msg))
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _ignore_call)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", _no_filter_kwargs)
+    monkeypatch.setattr(proxy_server.verbose_proxy_logger, "warning", _record_warning)
 
     async def _stop_sleep(_seconds: float) -> NoReturn:
         raise asyncio.CancelledError()

@@ -19,7 +19,6 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 
 if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 
 logger: Final = logging.getLogger(__name__)
@@ -425,14 +424,20 @@ def _is_probe_tuning(key: str) -> bool:
     return key in ("id", "mode", "base_model") or (key.startswith("health_check_") and key != "health_check_timeout")
 
 
+def _as_mapping(value: object) -> Mapping[str, object]:
+    try:
+        return _MODEL_INFO_ADAPTER.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
 def _wildcard_probe(public_name: str, row: Mapping[str, object]) -> Mapping[str, object]:
-    params: Final = row.get("litellm_params")
-    info: Final = row.get("model_info")
+    info: Final = _as_mapping(row.get("model_info"))
     return {
         **row,
         "model_name": public_name,
-        "litellm_params": dict(params) if isinstance(params, Mapping) else {},
-        "model_info": {k: v for k, v in info.items() if not _is_probe_tuning(k)} if isinstance(info, Mapping) else {},
+        "litellm_params": dict(_as_mapping(row.get("litellm_params"))),
+        "model_info": {k: v for k, v in info.items() if not _is_probe_tuning(k)},
     }
 
 
@@ -491,8 +496,13 @@ WaitForDeadline: TypeAlias = Callable[
 ]
 
 
+_PROBE_RESULT_ADAPTER: Final = TypeAdapter(
+    tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...], object]
+)
+
+
 async def _probe_one(deployment: Mapping[str, object], details: bool | None) -> tuple[_Endpoints, _Endpoints]:
-    healthy, unhealthy, _ = await _perform_health_check([deployment], details)
+    healthy, unhealthy, _ = _PROBE_RESULT_ADAPTER.validate_python(await _perform_health_check([deployment], details))
     return healthy, unhealthy
 
 
@@ -582,8 +592,7 @@ async def _probe_outcomes_by_deadline(
 
 
 def _probe_copy(probe: Mapping[str, object]) -> Mapping[str, object]:
-    params: Final = probe.get("litellm_params")
-    return {**probe, "litellm_params": dict(params) if isinstance(params, Mapping) else {}}
+    return {**probe, "litellm_params": dict(_as_mapping(probe.get("litellm_params")))}
 
 
 def _one_probe_per_group(probes: Sequence[_WildcardProbe]) -> tuple[tuple[str, Mapping[str, object]], ...]:
@@ -613,11 +622,12 @@ def _row_per_name_and_group(probes: Sequence[_WildcardProbe]) -> tuple[Mapping[s
     )
 
 
-async def _save_wildcard_probes(
-    prisma_client: "PrismaClient", checked_by: str, scope: WildcardProbeScope, timeout_seconds: float
-) -> None:
-    from litellm.proxy.health_endpoints._health_endpoints import save_background_health_checks_to_db
+SaveProbeRows: TypeAlias = Callable[[_Endpoints, _Endpoints, _Endpoints, float], Awaitable[bool]]
 
+
+async def _save_wildcard_probes(
+    save_probe_rows: SaveProbeRows, scope: WildcardProbeScope, timeout_seconds: float
+) -> None:
     try:
         probes: Final = _public_wildcard_probes(scope.public_names, scope.router, scope.model_groups)
         if not probes:
@@ -625,26 +635,23 @@ async def _save_wildcard_probes(
         groups: Final = _one_probe_per_group(probes)
         probe_start: Final = time.time()
         outcomes: Final = await _probe_outcomes_by_deadline(scope, tuple(c for _, c in groups), timeout_seconds)
-    except Exception as e:
-        logger.warning("background_health_check_wildcard_probe_failed error=%r", e)
+    except Exception:
+        logger.exception("background_health_check_wildcard_probe_failed")
         return
     if not outcomes:
         return
     keyed: Final = tuple((_group_key_of(probe, groups), outcome) for probe, outcome in outcomes)
-    await save_background_health_checks_to_db(
-        prisma_client,
-        list(_row_per_name_and_group(probes)),
-        list(chain.from_iterable(_keyed_by_group(healthy, key) for key, (healthy, _) in keyed)),
-        list(chain.from_iterable(_keyed_by_group(unhealthy, key) for key, (_, unhealthy) in keyed)),
+    await save_probe_rows(
+        _row_per_name_and_group(probes),
+        tuple(chain.from_iterable(_keyed_by_group(healthy, key) for key, (healthy, _) in keyed)),
+        tuple(chain.from_iterable(_keyed_by_group(unhealthy, key) for key, (_, unhealthy) in keyed)),
         probe_start,
-        checked_by=checked_by,
     )
 
 
 async def save_then_probe_public_wildcards(
     save_regular_rows: Callable[[], Awaitable[bool]],
-    prisma_client: "PrismaClient",
-    checked_by: str,
+    save_probe_rows: SaveProbeRows,
     scope: WildcardProbeScope | None,
 ) -> bool:
     """Save the cycle's rows, then probe public wildcard models in what is left of the interval.
@@ -661,7 +668,7 @@ async def save_then_probe_public_wildcards(
             "background_health_check_wildcard_probes_skipped no time left in the %ss interval", scope.deadline_seconds
         )
         return persisted
-    await _save_wildcard_probes(prisma_client, checked_by, scope, remaining)
+    await _save_wildcard_probes(save_probe_rows, scope, remaining)
     return persisted
 
 

@@ -5127,7 +5127,23 @@ def _schedule_background_health_check_db_save(
         start_time,
         checked_by=checked_by,
     )
-    save_then_probe: Final = partial(save_then_probe_public_wildcards, save, prisma_client, checked_by, wildcard_scope)
+
+    async def save_probe_rows(
+        probe_rows: Sequence[Mapping[str, object]],
+        probe_healthy: Sequence[Mapping[str, object]],
+        probe_unhealthy: Sequence[Mapping[str, object]],
+        probe_start_time: float,
+    ) -> bool:
+        return await save_background_health_checks_to_db(
+            prisma_client,
+            list(probe_rows),
+            list(probe_healthy),
+            list(probe_unhealthy),
+            probe_start_time,
+            checked_by=checked_by,
+        )
+
+    save_then_probe: Final = partial(save_then_probe_public_wildcards, save, save_probe_rows, wildcard_scope)
     asyncio.create_task(_window_gated_health_check_db_save(save_then_probe, pod_lock_manager, lock_ttl))
 
 
@@ -5434,8 +5450,8 @@ async def _run_background_health_check():
                     public_names=tuple(litellm.public_model_groups or ()),
                     router=llm_router,
                     model_groups=scoped_model_groups,
-                    details=details_bool,
-                    max_concurrency=health_check_concurrency,
+                    details=details_bool is not False,
+                    max_concurrency=health_check_concurrency if isinstance(health_check_concurrency, int) else None,
                     deadline_seconds=health_check_interval,
                 )
                 if llm_router is not None

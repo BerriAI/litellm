@@ -20,6 +20,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.health_check import (
+    SaveProbeRows,
     WaitForDeadline,
     _same_health_check_model,
     update_litellm_params_for_health_check,
@@ -1172,6 +1173,7 @@ def test_chatgpt_health_check_model_comparison_does_not_access_credentials(
     )
 
 
+_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _WILDCARD_SERVED: Final = "bedrock/us.anthropic.claude-opus-4-8"
 _EXACT: Final = "bedrock/us.anthropic.claude-sonnet-4-6"
 _ALIAS: Final = "bedrock/fast"
@@ -1206,8 +1208,8 @@ def test_public_wildcard_probe_deployments_probes_only_names_a_wildcard_alone_se
     assert probes[0]["litellm_params"]["aws_region_name"] == "us-east-1"
     assert "id" not in probes[0]["model_info"]
     assert probes[0]["model_info"]["health_check_timeout"] == 120
-    probe_request: Final = update_litellm_params_for_health_check(
-        dict(probes[0]["model_info"]), dict(probes[0]["litellm_params"])
+    probe_request: Final = _MAPPING_ADAPTER.validate_python(
+        update_litellm_params_for_health_check(dict(probes[0]["model_info"]), dict(probes[0]["litellm_params"]))
     )
     assert probe_request["model"] == _WILDCARD_SERVED.removeprefix("bedrock/")
 
@@ -1268,6 +1270,20 @@ def _openai_wildcard_router(
     )
 
 
+def _probe_row_saver(prisma_client: MagicMock) -> SaveProbeRows:
+    async def save(
+        rows: Sequence[Mapping[str, object]],
+        healthy: Sequence[Mapping[str, object]],
+        unhealthy: Sequence[Mapping[str, object]],
+        start_time: float,
+    ) -> bool:
+        return await save_background_health_checks_to_db(
+            prisma_client, list(rows), list(healthy), list(unhealthy), start_time, checked_by="pod-1"
+        )
+
+    return save
+
+
 def _recording_prisma() -> MagicMock:
     client: Final = MagicMock()
     client.db.query_raw = AsyncMock(return_value=[])
@@ -1303,8 +1319,7 @@ async def _save_then_probe(
     )
     return await save_then_probe_public_wildcards(
         regular_save,
-        prisma_client,
-        "pod-1",
+        _probe_row_saver(prisma_client),
         scope if wait_for_deadline is None else replace(scope, wait_for_deadline=wait_for_deadline),
     )
 
@@ -1366,8 +1381,7 @@ class _FakeProbe:
 
     async def __call__(self, deployment: Mapping[str, object], details: bool | None) -> _ProbeEndpoints:
         name: Final = str(deployment["model_name"])
-        params: Final = deployment["litellm_params"]
-        assert isinstance(params, Mapping)
+        params: Final = _MAPPING_ADAPTER.validate_python(deployment["litellm_params"])
         self.calls.append(name)
         self.in_flight += 1
         self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
@@ -1408,7 +1422,9 @@ async def _save_then_probe_with(
         deadline_seconds=60,
         probe_one=probe,
     )
-    return await save_then_probe_public_wildcards(regular_save, prisma_client, "pod-1", replace(scope, **scope_changes))
+    return await save_then_probe_public_wildcards(
+        regular_save, _probe_row_saver(prisma_client), replace(scope, **scope_changes)
+    )
 
 
 def _saved_model_names(prisma_client: MagicMock) -> list[str]:
@@ -1509,7 +1525,7 @@ async def test_save_then_probe_public_wildcards_bounds_concurrent_probes():
 @pytest.mark.parametrize(
     "failing_models,expected",
     [
-        (frozenset(), ("healthy", None)),
+        (frozenset[str](), ("healthy", None)),
         (frozenset({"openai/gpt-5.5"}), ("unhealthy", "upstream rejected the probe")),
     ],
 )
