@@ -147,6 +147,7 @@ fn must_forward(name: &header::HeaderName) -> bool {
             | "api-key"
             | "x-api-key"
             | "litellm-api-key"
+            | "x-litellm-api-key"
             | "forwarded"
             | PEER_HEADER
     ) || name.as_str().starts_with("content-")

@@ -21,7 +21,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
 )
-from litellm.repositories.table_repositories import JWTKeyMappingRepository
+from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
 
 router: Final = APIRouter()
 
