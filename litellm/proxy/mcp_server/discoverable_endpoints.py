@@ -1066,20 +1066,22 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
+    prior_scopes: Final = (prior_grant.get("scopes") if prior_grant is not None else None) or ()
+    metadata: Final = (
+        OAuthMetadata.model_validate(server.authorization_server_metadata)
+        if server.authorization_server_metadata is not None and (prior_grant is not None or scope is not None)
+        else None
+    )
+    requestable: Final = frozenset((*(server.scopes or ()), *((metadata.scopes_supported if metadata else None) or ())))
     kept_scope: Final = (
-        None if prior_grant is None or asks_for_wildcard(scope) else " ".join(prior_grant.get("scopes") or ())
+        None
+        if prior_grant is None or asks_for_wildcard(scope)
+        else " ".join(name for name in prior_scopes if not requestable or requestable.issuperset(name.split(",")))
     )
     refused_scope: Final = " ".join(prior_grant.get("needs_scopes") or ()) if prior_grant is not None else None
     merged_scope: Final = union_scopes(union_scopes(kept_scope, refused_scope), scope)
     selected_scope: Final = (
-        get_client_metadata_scopes(
-            merged_scope,
-            None,
-            OAuthMetadata.model_validate(server.authorization_server_metadata)
-            if server.authorization_server_metadata is not None
-            else None,
-            ["authorization_code", "refresh_token"],
-        )
+        get_client_metadata_scopes(merged_scope, None, metadata, ["authorization_code", "refresh_token"])
         if merged_scope is not None
         else None
     )

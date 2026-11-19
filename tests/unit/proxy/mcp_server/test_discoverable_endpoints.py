@@ -15082,6 +15082,10 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
         (["repo"], ["gist"], "repo", "repo gist"),
         (["repo"], [""], "repo", "repo"),
         (["logs_read_data"], ["admin"], "mcp_all", "admin mcp_all"),
+        (["api://app/tools.read"], None, "tools.read", "tools.read"),
+        (["api://app/tools.read", "tools.read"], None, "tools.write", "tools.read tools.write"),
+        (["tools.read,tools.list"], None, "tools.read", "tools.read,tools.list tools.read"),
+        (["tools.read,api://app/tools.write"], None, "tools.read", "tools.read"),
     ],
 )
 async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(
@@ -15102,7 +15106,9 @@ async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcar
 
     _, signing_key = jwt_oauth_identity
     monkeypatch.setenv("LITELLM_SALT_KEY", "scope-grant-test-salt")
-    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client", "scopes": ["tools.read"]})
+    server = _cimd_oauth_server().model_copy(
+        update={"client_id": "scope-client", "scopes": ["tools.read", "tools.list", "repo"]}
+    )
     global_mcp_server_manager.registry[server.server_id] = server
     credential = db.encrypt_value_helper(
         json.dumps(
