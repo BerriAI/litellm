@@ -5322,7 +5322,12 @@ class RecordingScanCountGuardrail(CustomGuardrail):
         return inputs
 
 
-class FirstTextOnlyGuardrail(PersimmonTextMaskingGuardrail):
+class OneEndTextGuardrail(PersimmonTextMaskingGuardrail):
+    def scans_each_text_separately(self) -> bool:
+        return False
+
+
+class FirstTextReturningGuardrail(PersimmonTextMaskingGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -5335,7 +5340,12 @@ class FirstTextOnlyGuardrail(PersimmonTextMaskingGuardrail):
         return {**inputs, "texts": [first_text.replace("persimmon", "[MASKED]")]}
 
 
-class LastTextOnlyGuardrail(PersimmonTextMaskingGuardrail):
+class FirstTextOnlyGuardrail(FirstTextReturningGuardrail):
+    def scans_each_text_separately(self) -> bool:
+        return False
+
+
+class LastTextOnlyGuardrail(OneEndTextGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -5364,12 +5374,12 @@ class CallRecordingGuardrail(CustomGuardrail):
         return inputs
 
 
-class OneCallRecordingGuardrail(CallRecordingGuardrail):
+class PerTextRecordingGuardrail(CallRecordingGuardrail):
     def scans_each_text_separately(self) -> bool:
-        return True
+        return False
 
 
-class LastTextScanningGuardrail(PersimmonTextMaskingGuardrail):
+class LastTextScanningGuardrail(OneEndTextGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -6551,8 +6561,18 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert guardrail.calls[1] == {"texts": ["a persimmon"], "model": "test-model"}
 
     @pytest.mark.asyncio
-    async def test_each_distinct_reasoning_text_gets_its_own_call_by_default(self) -> None:
+    async def test_distinct_reasoning_texts_share_one_call_by_default(self) -> None:
         guardrail: Final = CallRecordingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
+        )
+
+        assert [call["texts"] for call in guardrail.calls] == [["a fig", "a plum"]]
+
+    @pytest.mark.asyncio
+    async def test_each_distinct_reasoning_text_gets_its_own_call_with_a_guardrail_that_reads_one_text(self) -> None:
+        guardrail: Final = PerTextRecordingGuardrail()
 
         await OpenAIResponsesHandler().process_output_response(
             {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
@@ -6561,16 +6581,12 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert [call["texts"] for call in guardrail.calls] == [["a fig"], ["a plum"]]
 
     @pytest.mark.asyncio
-    async def test_distinct_reasoning_texts_share_one_call_with_a_guardrail_that_scans_each_text_separately(
-        self,
-    ) -> None:
-        guardrail: Final = OneCallRecordingGuardrail()
+    async def test_a_guardrail_that_returns_fewer_texts_than_it_got_still_masks_every_reasoning_text(self) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a fig", "a persimmon")]}
 
-        await OpenAIResponsesHandler().process_output_response(
-            {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
-        )
+        await OpenAIResponsesHandler().process_output_response(response, FirstTextReturningGuardrail())
 
-        assert [call["texts"] for call in guardrail.calls] == [["a fig", "a plum"]]
+        assert [part["text"] for part in response["output"][0]["summary"]] == ["a fig", "a [MASKED]"]
 
     @pytest.mark.asyncio
     async def test_a_guardrail_that_reads_only_the_last_text_still_masks_every_reasoning_text(self) -> None:

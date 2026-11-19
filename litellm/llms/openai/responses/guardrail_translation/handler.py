@@ -33,8 +33,9 @@ import copy
 import json
 import time
 import uuid
-from collections.abc import Collection, Iterable, Iterator, Mapping, MutableSequence, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Iterator, Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, TypeVar, Union, cast, runtime_checkable
@@ -229,6 +230,32 @@ def _reasoning_text_inputs(texts: Sequence[str], model: object) -> GenericGuardr
         if isinstance(model, str) and model
         else GenericGuardrailAPIInputs(texts=list(texts))
     )
+
+
+async def _guardrailed_reasoning_texts(
+    texts: tuple[str, ...],
+    model: object,
+    guardrail_to_apply: "CustomGuardrail",
+    litellm_logging_obj: "LiteLLMLoggingObj | None",
+    request_data: dict[str, object],
+) -> Sequence[str]:
+    guardrailed: Final = await guardrail_to_apply.apply_guardrail(
+        inputs=_reasoning_text_inputs(texts, model),
+        request_data=request_data,
+        input_type="response",
+        logging_obj=litellm_logging_obj,
+    )
+    return guardrailed.get("texts") or texts
+
+
+async def _scan_reasoning_batch(
+    batch: tuple[str, ...], scan: Callable[[tuple[str, ...]], Awaitable[Sequence[str]]]
+) -> tuple[str, ...]:
+    texts: Final = await scan(batch)
+    if len(texts) == len(batch) or len(batch) == 1:
+        return tuple(texts[: len(batch)])
+    single_texts: Final = await asyncio.gather(*(scan((text,)) for text in batch))
+    return tuple(guardrailed[0] for guardrailed in single_texts)
 
 
 def _response_reasoning_texts(response: object) -> tuple[tuple[_ReasoningTextPosition, str], ...]:
@@ -1622,7 +1649,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 tool_calls_to_check=tool_calls_to_check,
             )
 
-        reasoning_texts: Final = _response_reasoning_texts(response) if guardrail_to_apply.scans_reasoning() else ()
+        reasoning_texts: Final = _response_reasoning_texts(response)
         reasoning_in_answer_call: Final = guardrail_to_apply.scans_all_response_texts_in_one_call()
         if reasoning_in_answer_call:
             texts_to_check.extend(text for _, text in reasoning_texts)
@@ -1753,12 +1780,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                     tool_calls_to_check=tool_calls_to_check,
                 )
 
-            scans_reasoning: Final = guardrail_to_apply.scans_reasoning()
-            reasoning_texts: Final = _response_reasoning_texts(response_obj) if scans_reasoning else ()
+            reasoning_texts: Final = _response_reasoning_texts(response_obj)
             reasoning_in_answer_call: Final = guardrail_to_apply.scans_all_response_texts_in_one_call()
             reasoning_outside_envelope: Final = (
                 _reasoning_streamed_outside_envelope(responses_so_far, reasoning_texts)
-                if scans_reasoning and not reasoning_in_answer_call
+                if not reasoning_in_answer_call
                 else ()
             )
             answer_outside_envelope: Final = (
@@ -1949,24 +1975,17 @@ class OpenAIResponsesHandler(BaseTranslation):
             if guardrail_to_apply.scans_each_text_separately()
             else tuple((text,) for text in distinct_texts)
         )
-        model: Final = stream_item_field(response, "model")
-        guardrailed_batches: Final = await asyncio.gather(
-            *(
-                guardrail_to_apply.apply_guardrail(
-                    inputs=_reasoning_text_inputs(batch, model),
-                    request_data=request_data,
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
-                for batch in batches
-            )
+        scan: Final = partial(
+            _guardrailed_reasoning_texts,
+            model=stream_item_field(response, "model"),
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            request_data=request_data,
         )
-        rewritten_texts: Final = tuple(
-            chain.from_iterable(
-                guardrailed.get("texts") or batch for batch, guardrailed in zip(batches, guardrailed_batches)
-            )
+        guardrailed_batches: Final = await asyncio.gather(*(_scan_reasoning_batch(batch, scan) for batch in batches))
+        rewrites: Final = MappingProxyType(
+            dict(zip(distinct_texts, chain.from_iterable(guardrailed_batches), strict=True))
         )
-        rewrites: Final = MappingProxyType(dict(zip(distinct_texts, rewritten_texts, strict=True)))
         await self._apply_guardrail_responses_to_output(
             response=response,
             responses=tuple(rewrites[text] for _, text in reasoning_texts),

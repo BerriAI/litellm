@@ -194,7 +194,7 @@ def _judge_router(overall_score: float) -> MagicMock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
-async def test_a_responses_reply_with_reasoning_is_judged_on_its_answer_alone(stream: bool):
+async def test_a_responses_reply_is_judged_once_on_its_answer_and_reasoning(stream: bool):
     from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 
     router: Final = _judge_router(90.0)
@@ -220,7 +220,7 @@ async def test_a_responses_reply_with_reasoning_is_judged_on_its_answer_alone(st
     judged: Final = [call.kwargs["messages"][1]["content"] for call in router.acompletion.call_args_list]
     assert len(judged) == 1
     assert "Use option A" in judged[0]
-    assert "I weigh two options" not in judged[0]
+    assert "I weigh two options" in judged[0]
 
 
 @pytest.mark.parametrize("mode", [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call])

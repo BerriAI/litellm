@@ -1353,9 +1353,6 @@ class CustomGuardrail(CustomLogger):
         return False
 
     def scans_each_text_separately(self) -> bool:
-        return False
-
-    def scans_reasoning(self) -> bool:
         return True
 
     def structured_messages_cover_full_request(self) -> bool:

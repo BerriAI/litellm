@@ -138,9 +138,6 @@ class _StreamRewriteObserver(CustomGuardrail):
     def scans_each_text_separately(self) -> bool:
         return self.inner.scans_each_text_separately()
 
-    def scans_reasoning(self) -> bool:
-        return self.inner.scans_reasoning()
-
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
 
