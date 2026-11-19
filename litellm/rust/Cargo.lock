@@ -5100,6 +5100,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-standard-logging"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "litellm-starlette"
 version = "0.1.0"
 dependencies = [
