@@ -379,12 +379,15 @@ class AppStore:
         )
         return await self.response(row) if row is not None else None
 
-    async def list(self, offset: int, limit: int) -> tuple[App, ...]:
+    async def list(self, offset: int, limit: int, app_ids: frozenset[str] | None = None) -> tuple[App, ...]:
         definition: Final = await self.definition()
         if definition.resource_type is None:
             return ()
         rows: Final = await self.apps.find_many(
-            where={"resource_type": definition.resource_type.value},
+            where={
+                "resource_type": definition.resource_type.value,
+                **({} if app_ids is None else {"app_id": {"in": sorted(app_ids)}}),
+            },
             skip=offset,
             take=limit,
             order={"app_id": "asc"},
@@ -631,7 +634,9 @@ class AppStore:
             return AppMemberBudgetSource.APP_DEFAULT
         return AppMemberBudgetSource.NONE
 
-    async def get_member(self, app_id: str, customer_member_id: str) -> AppMember | AppFailure:
+    async def get_member(
+        self, app_id: str, customer_member_id: str, known_to_app_only: bool = False
+    ) -> AppMember | AppFailure:
         app: Final = await self.get(app_id)
         if isinstance(app, AppFailure):
             return app
@@ -648,6 +653,8 @@ class AppStore:
                 }
             },
         )
+        if known_to_app_only and row is None and organization is None:
+            return AppFailure(404, "Customer member not found.")
         member: Final = (
             AppMember.model_validate(row.model_dump())
             if row is not None

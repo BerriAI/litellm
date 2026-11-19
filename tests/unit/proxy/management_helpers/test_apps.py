@@ -129,6 +129,10 @@ class AppDatabase(Database):
         self.litellm_teamtable: Final = AppTable("team_id", self)
         self.litellm_projecttable = AppTable("project_id", self)
         self.litellm_verificationtoken = AppTable("token", self)
+        self.litellm_usertable: Final = AppTable("user_id", self)
+        self.litellm_organizationtable: Final = AppTable("organization_id", self)
+        self.litellm_organizationmembership: Final = AppTable("organization_id", self)
+        self.litellm_objectpermissiontable: Final = AppTable("object_permission_id", self)
 
     @asynccontextmanager
     async def tx(self) -> AsyncGenerator["AppDatabase", None]:

@@ -38071,6 +38071,8 @@ export interface components {
             agent_access_groups?: string[] | null;
             /** Agents */
             agents?: string[] | null;
+            /** Apps */
+            apps?: string[] | null;
             /** Blocked Tools */
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
@@ -38109,6 +38111,8 @@ export interface components {
              * @default []
              */
             agents: string[] | null;
+            /** Apps */
+            apps?: string[] | null;
             /**
              * Blocked Tools
              * @default []

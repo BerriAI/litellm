@@ -22,6 +22,21 @@
       }
     },
     "settingsTitle": "Applications",
+    "internalAccess": {
+      "title": "Internal Access",
+      "hint": "Choose which applications a team, user or organization can view in Customer Management. They see those applications, their customers and usage, read-only. A user gets every application granted to them, their teams and their organizations.",
+      "kinds": {
+        "team": "Team",
+        "user": "User",
+        "organization": "Organization"
+      },
+      "apps": "Applications they can view",
+      "appsPlaceholder": "Select applications",
+      "save": "Save access",
+      "saved": "Access updated",
+      "saveFailed": "Access was not saved. Try again."
+    },
+    "grantedHint": "The applications you have been given access to, with their spend and budget.",
     "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
     "alias": "App",
     "edit": "Edit",

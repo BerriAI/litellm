@@ -10,7 +10,6 @@ import { ErrorState } from "@/components/shared/ErrorState";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "../../hooks/useAuthorized";
-import { isProxyAdminRole } from "@/utils/roles";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
@@ -23,7 +22,8 @@ import {
   type AppResource,
 } from "./appForms";
 import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources, loadApps } from "./appApi";
-import { applicationRows } from "./applications";
+import { applicationRows, grantedApplicationRows } from "./applications";
+import { readsEveryApp, useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
@@ -33,24 +33,40 @@ const APPLICATIONS_PAGE_SIZE = 25;
 
 export default function AppsManager() {
   const { t } = useTranslation();
-  const { accessToken, userRole, isLoading } = useAuthorized();
-  const canManage = Boolean(accessToken && isProxyAdminRole(userRole));
-  const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition, enabled: canManage });
+  const { accessToken, userRole, isViewOnly, isLoading } = useAuthorized();
+  if (isLoading) return <p role="status">{t("apps.loading")}</p>;
+  return accessToken && readsEveryApp(userRole, isViewOnly) ? <ManagedApps /> : <GranteeApps />;
+}
+
+function GranteeApps() {
+  const { t } = useTranslation();
+  const granted = useGrantedApps();
+  if (granted.apps.isLoading) return <p role="status">{t("apps.loading")}</p>;
+  if (granted.hasGrant) return <GrantedApps apps={granted.apps.data ?? []} />;
+  if (!granted.failed) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
+  return (
+    <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6">
+      <ErrorState message={extractProxyErrorMessage(granted.apps.error)} onRetry={() => void granted.apps.refetch()} />
+    </main>
+  );
+}
+
+function ManagedApps() {
+  const { t } = useTranslation();
+  const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition });
   const resourceType = definition.data?.resource_type ?? null;
   const resources = useQuery({
     queryKey: appResourcesKey(resourceType),
     queryFn: () => loadAppResources(resourceType!),
-    enabled: canManage && resourceType !== null,
+    enabled: resourceType !== null,
   });
   const apps = useQuery({
     queryKey: ["apps", resourceType],
     queryFn: () => loadApps(),
-    enabled: canManage && resourceType !== null,
+    enabled: resourceType !== null,
   });
   const [selected, setSelected] = useQueryState("app", parseAsString);
   const resource = resources.data?.find((row) => row.resource_id === selected);
-  if (isLoading) return <p role="status">{t("apps.loading")}</p>;
-  if (!canManage) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
   if (selected && [definition, resources].some((query) => query.isLoading))
     return <p role="status">{t("apps.loading")}</p>;
   if (selected && resource)
@@ -85,6 +101,21 @@ export default function AppsManager() {
       )}
       <section className={resourceType ? "border-t pt-6" : undefined}>
         <AppDefinitionSetting />
+      </section>
+    </main>
+  );
+}
+
+function GrantedApps({ apps }: { apps: readonly App[] }) {
+  const { t } = useTranslation();
+  return (
+    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
+      <header>
+        <h1 className="text-lg font-semibold">{t("apps.title")}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t("apps.grantedHint")}</p>
+      </header>
+      <section className="rounded-lg border bg-card" aria-label={t("apps.list.title")}>
+        <ApplicationsTable rows={grantedApplicationRows(apps)} loading={false} searching={false} />
       </section>
     </main>
   );
