@@ -8072,13 +8072,25 @@ async def test_add_litellm_data_to_request_stamps_used_client_oauth_token(path, 
     async def metadata_for(client_headers: dict) -> dict:
         request_mock = _make_request_mock(path, {"Content-Type": "application/json", **client_headers})
         updated = await add_litellm_data_to_request(
-            data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+            data={
+                "model": "anthropic-claude",
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}},
+                "litellm_metadata": {
+                    "used_client_oauth_token": True,
+                    "claude_subscription_usage": {"is_overage": False},
+                },
+            },
             request=request_mock,
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
             proxy_config=MagicMock(),
             general_settings={"forward_client_headers_to_llm_api": True},
             version="test-version",
         )
+        other_metadata = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        assert "used_client_oauth_token" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated[metadata_variable_name]
         return updated[metadata_variable_name]
 
     def spend_log_row_metadata(request_metadata: dict) -> dict:

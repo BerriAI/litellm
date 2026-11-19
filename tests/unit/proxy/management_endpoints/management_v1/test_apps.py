@@ -11,6 +11,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1.apps import get_app_store, router
 from litellm.proxy.management_helpers.apps import AppStore
+from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope
 from tests.unit.proxy.management_helpers.test_apps import (
     AppDatabase,
     profile,
@@ -32,6 +33,30 @@ def client(
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, user_id="admin")
     app.dependency_overrides[get_app_store] = lambda: store
     return TestClient(app), store
+
+
+@pytest.mark.parametrize("invalid", ("missing", "private", "organization", "app_organization", "conflicting"))
+def test_app_presets_reject_unrelated_or_conflicting_assignments(invalid: str) -> None:
+    http, store = client()
+    assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 200
+    app: Final = http.post("/management/v1/apps", json={"resource_id": "chat"}).json()
+    scopes: Final = {
+        "organization": BudgetGroupScope.ORGANIZATION,
+        "app_organization": BudgetGroupScope.APP_ORGANIZATION,
+        "conflicting": BudgetGroupScope.APP,
+    }
+    group: Final = (
+        asyncio.run(profile(store, "Standard", 10, scopes[invalid]))
+        if invalid in scopes
+        else asyncio.run(store.customers.create_budget(Budget(max_budget=10), "admin"))
+        if invalid == "private"
+        else "missing"
+    )
+    body: Final = {"budget_id": group, **({"budget": {"max_budget": 5}} if invalid == "conflicting" else {})}
+    rejected: Final = http.patch(f"/management/v1/apps/{app['app_id']}", json=body)
+    assert rejected.status_code == 422, rejected.text
+    assert http.post("/management/v1/apps", json={"resource_id": "search", **body}).status_code == 422
+    assert http.get(f"/management/v1/apps/{app['app_id']}").json()["budget_id"] is None
 
 
 GRANT_ROUTES: Final = ("user", "team", "organization")

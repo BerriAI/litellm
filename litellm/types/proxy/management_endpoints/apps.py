@@ -51,6 +51,11 @@ class AppSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     budget: Budget | None = None
+    budget_id: str | None = Field(
+        default=None,
+        description="Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. "
+        "Send budget instead to create a private custom budget, preserving the preset's untouched limits.",
+    )
     default_tier_budget_id: str | None = None
     default_customer_member_budget: Budget | None = None
     auto_create_customers: bool | None = Field(
@@ -70,6 +75,12 @@ class AppSettings(BaseModel):
             "uses the gateway-wide customer surcharge."
         ),
     )
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "AppSettings":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a preset or a custom budget")
+        return self
 
 
 class AppPatch(AppSettings):

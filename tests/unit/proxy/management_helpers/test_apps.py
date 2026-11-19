@@ -393,17 +393,20 @@ async def test_shared_profile_edits_are_inherited_without_pooling_app_spend(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("assignment", ("default", "customer"))
+@pytest.mark.parametrize("assignment", ("default", "customer", "app"))
 async def test_profiles_in_use_by_apps_cannot_be_removed(
     app_store: tuple[AppDatabase, AppStore, App], assignment: str
 ) -> None:
     database, store, app = app_store
-    group: Final = await profile(store, "Standard", 10)
-    if assignment == "default":
+    scope: Final = BudgetGroupScope.APP if assignment == "app" else BudgetGroupScope.ORGANIZATION
+    group: Final = await profile(store, "Standard", 10, scope)
+    if assignment == "app":
+        await store.patch(app.app_id, AppPatch(budget_id=group), "admin")
+    elif assignment == "default":
         await store.patch(app.app_id, AppPatch(default_tier_budget_id=group), "admin")
     else:
         await store.put_organization(app.app_id, "org", AppOrganizationPut(tier_budget_id=group), "admin")
-    groups: Final = await store.customers.get_budget_groups(None)
+    groups: Final = await store.customers.get_budget_groups(None, scope=scope)
     assert not isinstance(groups, Failure)
     rejected: Final = await store.customers.configure_templates(
         None,
@@ -413,9 +416,45 @@ async def test_profiles_in_use_by_apps_cannot_be_removed(
             default_budget_template=None,
         ),
         "admin",
+        scope=scope,
     )
     assert rejected == Failure(ErrorCode.TEMPLATE_IN_USE)
     assert group in database.litellm_budgettable.rows
+
+
+@pytest.mark.asyncio
+async def test_app_presets_stay_linked_until_customized_without_changing_other_apps(
+    app_store: tuple[AppDatabase, AppStore, App],
+) -> None:
+    database, store, app = app_store
+    group: Final = await profile(store, "App Standard", 10, BudgetGroupScope.APP)
+    await store.customers.update_budget(group, Budget(rpm_limit=4, budget_duration="1mo"), "admin")
+    linked: Final = await store.patch(app.app_id, AppPatch(budget_id=group), "admin")
+    second: Final = await store.create(AppCreate(resource_id="search", budget_id=group), "admin")
+    assert isinstance(linked, App) and isinstance(second, App) and linked.budget_id == second.budget_id == group
+    await store.customers.update_budget(group, Budget(max_budget=20), "admin")
+    loaded: Final = await store.get(app.app_id)
+    other: Final = await store.get(second.app_id)
+    expected: Final = Budget(max_budget=20, rpm_limit=4, budget_duration="1mo", allowed_models=())
+    assert isinstance(loaded, App) and isinstance(other, App) and loaded.budget == other.budget == expected
+    unchanged: Final = await store.patch(app.app_id, AppPatch(customer_margin=0.1), "admin")
+    assert isinstance(unchanged, App) and unchanged.budget_id == group
+    forked: Final = await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=30)), "admin")
+    assert isinstance(forked, App) and forked.budget_id is not None and forked.budget_id != group
+    assert forked.budget == expected.model_copy(update={"max_budget": 30})
+    assert await store.budget(group) == expected
+    preset_row: Final = database.litellm_budgettable.rows[group].model_dump()
+    custom_row: Final = database.litellm_budgettable.rows[forked.budget_id].model_dump()
+    assert custom_row["budget_reset_at"] == preset_row["budget_reset_at"]
+    cleared: Final = await store.patch(app.app_id, AppPatch(budget=Budget(max_budget=None)), "admin")
+    assert isinstance(cleared, App) and cleared.budget_id == forked.budget_id
+    assert cleared.budget == expected.model_copy(update={"max_budget": None})
+    restored: Final = await store.patch(app.app_id, AppPatch(budget_id=group), "admin")
+    assert isinstance(restored, App) and restored.budget_id == group and await store.budget(forked.budget_id) is None
+    unlimited: Final = await store.patch(app.app_id, AppPatch(budget_id=None), "admin")
+    assert isinstance(unlimited, App) and unlimited.budget_id is None and unlimited.budget is None
+    await store.patch(second.app_id, AppPatch(budget_id=None), "admin")
+    assert await store.budget(group) == expected
 
 @pytest.mark.asyncio
 async def test_member_override_is_scoped_and_can_return_to_the_org_default(
@@ -738,7 +777,7 @@ async def test_app_custom_policy_survives_edits_grants_and_expiry(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope", tuple(BudgetGroupScope))
+@pytest.mark.parametrize("scope", (BudgetGroupScope.ORGANIZATION, BudgetGroupScope.APP_ORGANIZATION))
 async def test_app_org_custom_forks_shared_profile_and_expiry_restores_private_budget(
     app_store: tuple[AppDatabase, AppStore, App], scope: BudgetGroupScope
 ) -> None:

@@ -3626,6 +3626,7 @@ async def view_spend_logs(
             prisma_client, user_api_key_dict, route="/spend/logs"
         )
         organization_filter: Final[Mapping[str, object]] = MappingProxyType(
+            # bounded-ok: the organizations one caller administers, one membership row per organization
             {"organization_id": {"in": list(organization_ids)}} if organization_ids is not None else {}
         )
         if (
