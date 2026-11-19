@@ -181,7 +181,7 @@ _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
-_STRIPPED_FROM_CONFIGURED_PASS_THROUGH_BODY: Final = _METADATA_KEYS | frozenset(("litellm_logging_obj",))
+_KEPT_IN_CONFIGURED_PASS_THROUGH_BODY: Final = frozenset(("id",))
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
@@ -677,12 +677,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body[k] for k in types_utils.all_litellm_params if k in _parsed_body}
         )
-        stripped_from_upstream_body: Final = (
-            litellm_keys_in_body.keys() & _STRIPPED_FROM_CONFIGURED_PASS_THROUGH_BODY
+        kept_in_upstream_body: Final = (
+            _KEPT_IN_CONFIGURED_PASS_THROUGH_BODY
             if request_dispatched_to_pass_through_endpoint(request)
-            else litellm_keys_in_body.keys()
+            else frozenset[str]()
         )
-        for key in stripped_from_upstream_body:
+        for key in litellm_keys_in_body.keys() - kept_in_upstream_body:
             _parsed_body.pop(key)
         kept_out_of_litellm_params: Final = (
             _KEPT_OUT_OF_LITELLM_PARAMS

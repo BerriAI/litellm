@@ -6692,7 +6692,7 @@ async def test_custom_pass_through_preserves_json_rpc_request_id(request_id: int
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("guardrails_config", [None, {"pii-guard": {}}], ids=["no-guardrail", "guardrail-on-the-route"])
-async def test_custom_pass_through_keeps_litellm_metadata_out_of_the_upstream_body(
+async def test_custom_pass_through_forwards_only_the_id_among_litellm_fields(
     guardrails_config: dict[str, object] | None,
 ) -> None:
     guardrail: Final = CustomGuardrail(guardrail_name="pii-guard", event_hook=GuardrailEventHooks.pre_call)
@@ -6703,6 +6703,10 @@ async def test_custom_pass_through_keeps_litellm_metadata_out_of_the_upstream_bo
         "params": {},
         "metadata": {"note": "never scanned by the guardrail"},
         "litellm_metadata": {"tags": ["team-a"]},
+        "tags": ["team-a"],
+        "guardrails": ["pii-guard"],
+        "num_retries": 2,
+        "litellm_session_id": "session-1",
     }
 
     with patch.object(litellm, "callbacks", [guardrail]):
@@ -6711,6 +6715,28 @@ async def test_custom_pass_through_keeps_litellm_metadata_out_of_the_upstream_bo
         )
 
     assert upstream_body == {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}}
+
+
+class _ResponseBlockingGuardrail(CustomGuardrail):
+    async def async_post_call_success_hook(
+        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
+        raise HTTPException(status_code=400, detail="response blocked")
+
+
+@pytest.mark.asyncio
+async def test_custom_pass_through_client_guardrails_field_cannot_skip_the_route_post_call_guardrail() -> None:
+    guardrail: Final = _ResponseBlockingGuardrail(
+        guardrail_name="response-guard", event_hook=GuardrailEventHooks.post_call
+    )
+    body: Final = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}, "guardrails": []}
+
+    with patch.object(litellm, "callbacks", [guardrail]), pytest.raises(ProxyException) as blocked:
+        await _relay_through_pass_through(
+            body, "http://upstream.test/mcp", guardrails_config={"response-guard": {}}, custom_endpoint=True
+        )
+
+    assert (blocked.value.message, blocked.value.code) == ("response blocked", "400")
 
 
 _MESSAGES_BODY: Final = MappingProxyType(
