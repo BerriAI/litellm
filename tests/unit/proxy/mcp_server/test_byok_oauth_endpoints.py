@@ -2338,6 +2338,55 @@ def test_an_oversized_api_key_is_rejected_before_a_code_is_issued(client: TestCl
     assert resp.status_code == 400
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("code_challenge", "c" * 129),
+        ("client_id", "c" * 8193),
+        ("server_id", "s" * 8193),
+        ("redirect_uri", "http://127.0.0.1:3000/callback?pad=" + "p" * 8192),
+    ],
+    ids=["code_challenge", "client_id", "server_id", "redirect_uri"],
+)
+def test_an_oversized_authorize_field_is_rejected_before_anything_reaches_the_shared_store(
+    client: TestClient, salted: None, field: str, value: str
+) -> None:
+    form: Final = {
+        "client_id": "user-123",
+        "redirect_uri": "http://127.0.0.1:3000/callback",
+        "code_challenge": _make_challenge(_VERIFIER),
+        "code_challenge_method": "S256",
+        "state": "st",
+        "server_id": "server-xyz",
+        "api_key": "sk-user-key",
+    }
+    shared: Final = _SharedStore()
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        resp: Final = client.post("/v1/mcp/oauth/authorize", data={**form, field: value}, follow_redirects=False)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "authorization request field is too long"
+    assert shared.values == {}
+    assert shared.counts == {}
+
+
+def test_authorize_fields_at_their_length_limits_still_get_a_code(client: TestClient) -> None:
+    callback: Final = "http://127.0.0.1:3000/callback?pad="
+    resp: Final = client.post(
+        "/v1/mcp/oauth/authorize",
+        data={
+            "client_id": "c" * 8192,
+            "redirect_uri": callback + "p" * (8192 - len(callback)),
+            "code_challenge": "c" * 128,
+            "code_challenge_method": "S256",
+            "state": "st",
+            "server_id": "s" * 8192,
+            "api_key": "sk-user-key",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+
 def test_a_full_in_memory_code_store_refuses_new_codes_without_redis(client: TestClient) -> None:
     from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODES_MAX_SIZE
 

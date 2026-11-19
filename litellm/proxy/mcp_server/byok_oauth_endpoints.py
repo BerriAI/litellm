@@ -77,6 +77,9 @@ _AUTH_CODE_TTL_SECONDS: Final = 300
 _AUTH_CODES_MAX_SIZE: Final = 1000
 _AUTH_CODES_PER_USER_MAX: Final = 20
 _MAX_API_KEY_LENGTH: Final = 8192
+# RFC 7636 caps a PKCE challenge at 128 characters, and an S256 one is always 43.
+_MAX_CODE_CHALLENGE_LENGTH: Final = 128
+_MAX_FORM_FIELD_LENGTH: Final = 8192
 
 router: Final = APIRouter(tags=["mcp"])
 
@@ -979,6 +982,10 @@ async def byok_authorize_post(
 
     if len(api_key) > _MAX_API_KEY_LENGTH:
         raise HTTPException(status_code=400, detail="api_key is too long")
+    if len(code_challenge) > _MAX_CODE_CHALLENGE_LENGTH or (
+        max(len(client_id), len(server_id), len(redirect_uri)) > _MAX_FORM_FIELD_LENGTH
+    ):
+        raise HTTPException(status_code=400, detail="authorization request field is too long")
 
     if code_challenge_method != "S256":
         raise HTTPException(status_code=400, detail="Only S256 code_challenge_method is supported")
