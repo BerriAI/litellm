@@ -3500,6 +3500,12 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
+class ClaudeSubscriptionUsage(TypedDict):
+    is_overage: ReadOnly[bool]
+    status: ReadOnly[str | None]
+    overage_status: ReadOnly[str | None]
+
+
 class StandardLoggingKubernetesPodRouting(TypedDict):
     service_host: ReadOnly[str]
     pod_ip: ReadOnly[str]
@@ -3587,6 +3593,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     team_alias: str | None
     team_id: str | None
     used_client_oauth_token: ReadOnly[bool | None]
+    claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool]]
 
 
