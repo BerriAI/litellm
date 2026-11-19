@@ -123427,5 +123427,27 @@
         "supports_video_input": false,
         "supports_vision": true,
         "supports_web_search": false
+    },
+    "fal_ai/ideogram/v4.6": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default medium quality, 2K or below (up to 4,194,304 pixels); very low is $0.008, low $0.03 and high $0.10 at 2K or below, and above 2K low is $0.06, medium $0.12 and high $0.20, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://fal.ai/models/ideogram/v4.6",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/ideogram/v4.6/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default medium quality, 2K or below (up to 4,194,304 pixels); very low is $0.008, low $0.03 and high $0.22 at 2K or below, and above 2K low is $0.06, medium $0.20 and high $0.60, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://fal.ai/models/ideogram/v4.6/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
     }
 }
