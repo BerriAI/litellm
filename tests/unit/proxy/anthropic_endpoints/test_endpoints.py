@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
@@ -27,6 +28,129 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
+
+
+@pytest.mark.parametrize("placement_source", ["request", "deployment", "router"])
+@pytest.mark.parametrize(
+    ("forwarded", "wire_params", "cacheable"),
+    [
+        ({}, {}, False),
+        ({"store": False}, {"store": False}, True),
+        ({"store": True}, {"store": True}, False),
+        ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, False),
+        (
+            {"store": False, "previous_response_id": "resp_prior"},
+            {"store": False, "previous_response_id": "resp_prior"},
+            False,
+        ),
+        ({"store": False, "conversation": "conv_prior"}, {"store": False}, False),
+        ({"store": False, "extra_body": {"truncation": "auto"}}, {"store": False, "truncation": "auto"}, False),
+        (
+            {"store": False, "extra_body": {"previous_response_id": "resp_prior"}},
+            {"store": False, "previous_response_id": "resp_prior"},
+            False,
+        ),
+        (
+            {"store": False, "extra_body": {"conversation": "conv_prior"}},
+            {"store": False, "conversation": "conv_prior"},
+            False,
+        ),
+        ({"extra_body": {"store": False}}, {"store": False}, True),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, True),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
+        ({"store": False, "extra_body": {"store": None}}, {"store": None}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, True),
+    ],
+)
+def test_openai_messages_count_and_generation_use_the_same_system_placement(
+    monkeypatch: pytest.MonkeyPatch,
+    forwarded: dict[str, object],
+    wire_params: dict[str, object],
+    cacheable: bool,
+    placement_source: str,
+) -> None:
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-placement",
+                    "litellm_params": {
+                        "model": "openai/gpt-6.2-sol",
+                        "api_key": "sk-test",
+                        **(forwarded if placement_source == "deployment" else {}),
+                    },
+                }
+            ],
+            default_litellm_params=forwarded if placement_source == "router" else {},
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    payload: Final = {
+        "model": "count-placement",
+        "messages": [{"role": "user", "content": "hi"}],
+        "system": "Be brief.",
+        **(forwarded if placement_source == "request" else {}),
+    }
+    response_body: Final = {
+        "id": "resp_qa",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_qa",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "QA_OK", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 15, "output_tokens": 1, "total_tokens": 16},
+    }
+    with respx.mock(assert_all_called=True) as upstream:
+        generation: Final = upstream.post("https://api.openai.com/v1/responses").respond(200, json=response_body)
+        counting: Final = upstream.post("https://api.openai.com/v1/responses/input_tokens").respond(
+            200, json={"input_tokens": 15}
+        )
+        client: Final = TestClient(app)
+        generated: Final = client.post("/v1/messages", json={**payload, "max_tokens": 32})
+        counted: Final = client.post("/v1/messages/count_tokens", json=payload)
+    assert generated.status_code == 200, generated.text
+    assert counted.status_code == 200, counted.text
+    system_item: Final = {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Be brief."}],
+    }
+    user_item: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    counted_body: Final = {
+        "model": "gpt-6.2-sol",
+        "input": [system_item, user_item] if cacheable else [user_item],
+        **({} if cacheable else {"instructions": "Be brief."}),
+    }
+    assert json.loads(counting.calls[0].request.content) == counted_body
+    assert json.loads(generation.calls[0].request.content) == {
+        **counted_body,
+        "max_output_tokens": 32,
+        "include": ["reasoning.encrypted_content"],
+        **wire_params,
+    }
 
 
 class TestAnthropicEndpoints(unittest.TestCase):

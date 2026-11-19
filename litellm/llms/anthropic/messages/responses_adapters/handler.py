@@ -257,6 +257,26 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+RESPONSES_SYSTEM_PLACEMENT_PARAMS: Final = (
+    "store",
+    "truncation",
+    "previous_response_id",
+    "conversation",
+    "extra_body",
+    "additional_drop_params",
+)
+
+
+def preserve_system_instructions(forwarded_kwargs: Mapping[str, object]) -> bool:
+    caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    dropped_params: Final = as_object_list(forwarded_kwargs.get("additional_drop_params")) or ()
+    top_level_store: Final = None if "store" in dropped_params else forwarded_kwargs.get("store")
+    return caller_extra_body.get("store", top_level_store) is not False or any(
+        params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
+        for params in (forwarded_kwargs, caller_extra_body)
+    )
+
+
 def _build_responses_kwargs(
     *,
     max_tokens: int,
@@ -331,6 +351,7 @@ def _build_responses_kwargs(
     if output_format:
         request_data["output_format"] = output_format
 
+    caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,
@@ -339,7 +360,18 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        preserve_system_instructions=preserve_system_instructions(forwarded_kwargs),
     )
+
+    caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
+    system_instructions: Final = responses_kwargs.get("instructions")
+    if isinstance(system_instructions, str) and isinstance(caller_instructions, str):
+        combined_instructions: Final = (
+            f"{system_instructions}\n{caller_instructions}" if caller_instructions else system_instructions
+        )
+        responses_kwargs["instructions"] = combined_instructions
+        if "instructions" in caller_extra_body:
+            responses_kwargs["extra_body"] = {**caller_extra_body, "instructions": combined_instructions}
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
