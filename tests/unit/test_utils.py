@@ -6688,6 +6688,15 @@ def test_addressed_response_id_never_reaches_the_provider():
     )
 
 
+@pytest.mark.parametrize("litellm_params", [{"foo": 1}, "x", None])
+def test_top_level_litellm_params_never_reaches_the_provider(litellm_params: object):
+    non_default: Final = get_non_default_completion_params(
+        {"a_real_provider_specific_param": 1, "litellm_params": litellm_params}
+    )
+
+    assert non_default == {"a_real_provider_specific_param": 1}
+
+
 def test_bedrock_batch_params_never_reach_the_provider():
     """A Bedrock managed-batch deployment carries aws_batch_role_arn / s3_* /
     bedrock_tags in its litellm_params, and the same deployment also serves chat.
