@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from typing_extensions import TypedDict, Unpack
 
@@ -147,7 +147,7 @@ class FocusLogger(CustomLogger):
 
         # Use exact type match to exclude subclasses like VantageLogger,
         # which have their own dedicated scheduling method.
-        focus_loggers: Final[list[CustomLogger]] = [
+        focus_loggers: Final[list[FocusLogger]] = [
             cb
             for cb in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=FocusLogger)
             if type(cb) is FocusLogger
@@ -156,7 +156,7 @@ class FocusLogger(CustomLogger):
             verbose_logger.debug("No Focus export logger registered; skipping scheduler")
             return
 
-        focus_logger: Final = cast(FocusLogger, focus_loggers[0])
+        focus_logger: Final = focus_loggers[0]
         trigger_kwargs: Final = focus_logger._build_scheduler_trigger()
         scheduler.add_job(
             focus_logger.initialize_focus_export_job,
