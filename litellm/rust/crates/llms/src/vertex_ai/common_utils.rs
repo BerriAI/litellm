@@ -1,5 +1,6 @@
 use litellm_auth_gcp::google::{GoogleLoginFailure, PythonException};
 use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION};
+use litellm_model_catalog::Catalog;
 use litellm_python_compat::urllib::urlsplit;
 
 use crate::Error;
@@ -100,6 +101,27 @@ pub fn vertex_region(location: Option<String>, supported_regions: &[String]) -> 
     }
 }
 
+/// The model map's `supported_regions` for a Claude on Vertex AI model, read under the
+/// `vertex_ai/` key Python's `VertexBase.get_vertex_region` looks up.
+pub fn supported_regions(catalog: &Catalog, model: &str) -> Vec<String> {
+    let key = format!(
+        "vertex_ai/{}",
+        model.strip_prefix("vertex_ai/").unwrap_or(model)
+    );
+    catalog
+        .get(&key)
+        .and_then(|fields| fields.get("supported_regions"))
+        .and_then(serde_json::Value::as_array)
+        .map(|regions| {
+            regions
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -143,6 +165,25 @@ mod tests {
     #[case::digit_after_letter("u1")]
     fn a_location_python_accepts_is_accepted(#[case] location: &str) {
         assert!(get_vertex_base_url(location).is_ok());
+    }
+
+    const CATALOG: &str = r#"{
+        "vertex_ai/claude-regional": {"supported_regions": ["us-east5", 7, "europe-west1"]},
+        "claude-regional": {"supported_regions": ["asia-east1"]},
+        "vertex_ai/claude-listed-oddly": {"supported_regions": "us-east5"}
+    }"#;
+
+    #[rstest]
+    #[case::bare_model("claude-regional", &["us-east5", "europe-west1"])]
+    #[case::prefixed_model("vertex_ai/claude-regional", &["us-east5", "europe-west1"])]
+    #[case::not_a_list("claude-listed-oddly", &[])]
+    #[case::unlisted("claude-elsewhere", &[])]
+    fn supported_regions_are_read_under_the_vertex_ai_key(
+        #[case] model: &str,
+        #[case] expected: &[&str],
+    ) {
+        let catalog = Catalog::parse(CATALOG.as_bytes()).unwrap().value;
+        assert_eq!(supported_regions(&catalog, model), expected);
     }
 
     #[rstest]
