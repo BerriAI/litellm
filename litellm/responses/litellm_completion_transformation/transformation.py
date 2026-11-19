@@ -120,6 +120,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    ChatCompletionToolReferenceObject,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     IncompleteDetails,
@@ -479,7 +480,7 @@ def _attribute_fields(value: object) -> dict[str, object]:
 
 
 def tool_output_to_chat_content(
-    output: object,
+    output: object, *, keep_tool_references: bool = False
 ) -> str | list[ToolMessageContentPart]:
     if output is None:
         return ""
@@ -503,6 +504,11 @@ def tool_output_to_chat_content(
                     text_acc.append(txt)
                     if txt:
                         normalized_blocks.append({"type": "text", "text": txt})
+            elif keep_tool_references and part_type == "tool_reference":
+                if isinstance(tool_name := part.get("tool_name"), str) and tool_name:
+                    normalized_blocks.append(
+                        ChatCompletionToolReferenceObject(type="tool_reference", tool_name=tool_name)
+                    )
             elif (media := decode_responses_media(part)) is not None:
                 normalized_blocks.append(media)
 
@@ -2830,7 +2836,7 @@ class LiteLLMCompletionResponsesConfig:
         if not call_id:
             return []
 
-        tool_content: Final = tool_output_to_chat_content(tool_call_output.get("output"))
+        tool_content: Final = tool_output_to_chat_content(tool_call_output.get("output"), keep_tool_references=True)
         output_cache_control: Final = _input_item_cache_control(tool_call_output)
         tool_output_message: Final = (
             ChatCompletionToolMessage(role="tool", content=tool_content, tool_call_id=str(call_id))
