@@ -21,6 +21,7 @@ from litellm.proxy.pass_through_endpoints.vector_store_fallbacks import (
     NativeSearchProvider,
     TargetRequestBuilder,
     VectorStorePassthroughPlan,
+    retargeted_request,
     send_with_vector_store_fallbacks,
     set_passthrough_fallback_plan,
 )
@@ -181,6 +182,23 @@ async def test_opensearch_resigns_each_target_and_keeps_physical_index() -> None
     assert "Credential=backup-aws-key/" in seen[1].headers["authorization"]
     assert seen[0].content == seen[1].content
     assert response.json() == {"hits": []}
+
+
+@pytest.mark.parametrize(
+    ("client_url", "expected"),
+    [
+        ("https://primary/search", "https://backup/search?api-version=1"),
+        ("https://primary/search?q=water", "https://backup/search?q=water"),
+    ],
+)
+def test_retargeted_request_copies_only_a_present_client_query(client_url: str, expected: str) -> None:
+    retargeted: Final = retargeted_request(
+        httpx.Request("GET", client_url, headers={"api-key": "primary", "accept": "application/json"}),
+        "https://backup/search?api-version=1",
+        {"api-key": "backup"},
+    )
+    assert str(retargeted.url) == expected
+    assert (retargeted.headers["api-key"], retargeted.headers["accept"]) == ("backup", "application/json")
 
 
 @pytest.mark.asyncio
