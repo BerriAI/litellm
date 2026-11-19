@@ -86,7 +86,8 @@ OPENAI_MODEL = "openai/gpt-5.6"
 VERTEX_CACHE_TTL: Final = "300s"
 VERTEX_COLD_CALL_ATTEMPTS: Final = 8
 VERTEX_COLD_CALL_PAUSE_SECONDS: Final = 15.0
-VERTEX_MINIMUM_CACHED_TOKENS: Final = 1024
+# model_prices_and_context_window.json, vertex_ai/gemini-3.8-flash prompt_cache_min_tokens, verified 2026-11-19
+VERTEX_MINIMUM_CACHED_TOKENS: Final = 4096
 CACHED_SHARE_OF_PROMPT: Final = 0.9
 VERTEX_CACHE_REJECTION_MARKER: Final = "minimum token count to start explicit caching"
 

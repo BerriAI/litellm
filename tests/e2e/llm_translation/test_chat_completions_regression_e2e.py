@@ -484,8 +484,7 @@ class TestVertexChatCompletions:
                             content=f"Reply with the single word pong. {unique_marker()}",
                         )
                     ],
-                    max_tokens=128,
-                    reasoning_effort="none",
+                    max_tokens=1024,
                 ),
             )
         )
@@ -588,8 +587,7 @@ class TestVertexChatCompletions:
                         content=f"Count from 1 to 5, one number per line. {unique_marker()}",
                     )
                 ],
-                max_tokens=128,
-                reasoning_effort="none",
+                max_tokens=1024,
                 stream=True,
             ),
         )

@@ -175,7 +175,7 @@ class TestBedrockGuardrail:
         # model: ask it to echo the word verbatim. The word in the prompt itself
         # is not scanned in this mode.
         prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
-        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128))
+        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=1024))
 
         match result:
             case UnknownApiError(status_code=status, body=body):
