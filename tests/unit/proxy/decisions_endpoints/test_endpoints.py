@@ -6,11 +6,12 @@ import gzip
 import json
 import random
 import sys
-from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Final, Literal
 
+import httpx
 import pytest
 import respx
 from fastapi import FastAPI
@@ -2256,6 +2257,93 @@ def test_a_multipart_body_naming_a_model_outside_the_key_is_refused_by_auth(
 
     assert response.status_code == 403, response.text
     assert "jev" in response.text
+    assert not upstream.called
+
+
+def _serve_cached_key(monkeypatch: pytest.MonkeyPatch, user_key: str, cached_key: UserAPIKeyAuth) -> None:
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=cached_key)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
+
+
+async def _status_and_whether_the_body_was_read(multipart: httpx.Request, user_key: str) -> tuple[int, bool]:
+    body_read: Final = asyncio.Event()
+    payload: Final = multipart.read()
+
+    async def body() -> AsyncIterator[bytes]:
+        body_read.set()
+        yield payload
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy") as proxy:
+        response: Final = await proxy.post(
+            multipart.url.path,
+            content=body(),
+            headers={
+                **_IMAGES_HEADER,
+                "content-type": multipart.headers["content-type"],
+                "authorization": f"Bearer {user_key}",
+            },
+        )
+    return response.status_code, body_read.is_set()
+
+
+def test_a_blocked_key_is_refused_before_its_multipart_body_is_read(
+    client: TestClient,
+    typesafe_router: None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_key: Final = "sk-blocked"
+    _serve_cached_key(monkeypatch, user_key, UserAPIKeyAuth(token=hash_token(user_key), blocked=True))
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_IMAGE_RESPONSE)
+    multipart: Final = httpx.Request(
+        "POST", "http://proxy/v1/systemone", files=_multipart(_IMAGE_REQUEST, ("asset-0", _PNG, "image/png"))
+    )
+
+    status_code, body_read = asyncio.run(_status_and_whether_the_body_was_read(multipart, user_key))
+
+    assert (status_code, body_read) == (401, False)
+    assert not upstream.called
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.key_aliases: tuple[str | None, ...] = ()
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        self.key_aliases = (*self.key_aliases, user_api_key_dict.key_alias)
+
+
+def test_a_malformed_multipart_body_is_refused_with_its_parse_error_and_logged_against_its_key(
+    client: TestClient,
+    typesafe_router: None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_key: Final = "sk-image-uploads"
+    _serve_cached_key(monkeypatch, user_key, UserAPIKeyAuth(token=hash_token(user_key), key_alias="image-uploads"))
+    recorder: Final = _FailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_IMAGE_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        content=b"--xyz\r\nnot a header\r\n\r\n{}\r\n--xyz--\r\n",
+        headers={"content-type": "multipart/form-data; boundary=xyz", "authorization": f"Bearer {user_key}"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "invalid character" in response.json()["error"]["message"]
+    assert recorder.key_aliases == ("image-uploads",)
     assert not upstream.called
 
 

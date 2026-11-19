@@ -1926,6 +1926,18 @@ async def _reject_from_headers_before_reading_body(
         raise proxy_exception_from_http_exception(failure, dict(failure.headers or {}))
 
 
+async def run_pre_body_auth_checks(
+    request: Request, api_key: str | None, custom_litellm_key_header: str | None
+) -> None:
+    _ensure_parent_otel_span_on_request_state(request)
+    await _reject_from_headers_before_reading_body(
+        request=request,
+        api_key=api_key,
+        custom_litellm_key_header=custom_litellm_key_header,
+        route=get_request_route(request=request),
+    )
+
+
 async def _record_unparsable_body_failure(
     user_api_key_dict: UserAPIKeyAuth,
     body_parse_exception: ProxyException,
@@ -3485,12 +3497,11 @@ async def user_api_key_auth(
     # body. _read_request_body can raise ProxyException for malformed JSON;
     # without this, that path leaves no span for the exception handler to
     # close, and the trace never reaches the backend.
-    _ensure_parent_otel_span_on_request_state(request)
+    await run_pre_body_auth_checks(
+        request=request, api_key=api_key, custom_litellm_key_header=custom_litellm_key_header
+    )
 
     route: Final[str] = get_request_route(request=request)
-    await _reject_from_headers_before_reading_body(
-        request=request, api_key=api_key, custom_litellm_key_header=custom_litellm_key_header, route=route
-    )
     request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
     phase_event("litellm.request.body_parsed")
     ## CHECK IF ROUTE IS ALLOWED

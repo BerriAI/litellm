@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request, Response, Security
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData, UploadFile
@@ -13,7 +13,14 @@ from starlette.datastructures import FormData, UploadFile
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.llms.base_llm.decisions.transformation import without_raw_prompt_cache_breakpoints
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy._types import ProxyException
+from litellm.proxy.auth.user_api_key_auth import (
+    UserAPIKeyAuth,
+    api_key_header,
+    custom_litellm_key_header,
+    run_pre_body_auth_checks,
+    user_api_key_auth,
+)
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -151,6 +158,7 @@ _FORM_REQUEST_PART: Final = "request"
 @dataclass(frozen=True, slots=True)
 class _FormBody:
     data: Mapping[str, object]
+    files: Mapping[str, UploadFile]
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +200,17 @@ async def _inline_asset(asset: Mapping[str, object], files: Mapping[str, UploadF
     }
 
 
-async def _with_inlined_assets(
+async def _inlined_form_data(form_body: _FormBody) -> Mapping[str, object]:
+    if len(form_body.files) == 0:
+        return form_body.data
+    assets: Final = _form_assets(form_body.data.get("assets"))
+    return {
+        **form_body.data,
+        "assets": {name: await _inline_asset(asset, form_body.files) for name, asset in assets.items()},
+    }
+
+
+def _paired_form_body(
     body: Mapping[str, object], parts: tuple[tuple[str, UploadFile | str], ...]
 ) -> _FormBody | _InvalidFormBody:
     assets: Final = _form_assets(body.get("assets"))
@@ -205,10 +223,7 @@ async def _with_inlined_assets(
     text_parts: Final = sorted(name for name, value in parts if isinstance(value, str))
     if len(text_parts) > 0:
         return _InvalidFormBody(f"the asset parts {text_parts} must be sent as files, with a filename")
-    if len(claimed) == 0:
-        return _FormBody(body)
-    files: Final = {name: value for name, value in parts if isinstance(value, UploadFile)}
-    return _FormBody({**body, "assets": {name: await _inline_asset(asset, files) for name, asset in assets.items()}})
+    return _FormBody(body, {name: value for name, value in parts if isinstance(value, UploadFile)})
 
 
 async def _form_body(form: FormData) -> _FormBody | _InvalidFormBody:
@@ -220,13 +235,21 @@ async def _form_body(form: FormData) -> _FormBody | _InvalidFormBody:
         body: Final = _REQUEST_DATA_ADAPTER.validate_json(await _part_bytes(request_parts[0]))
     except ValidationError as error:
         return _InvalidFormBody(f"the `{_FORM_REQUEST_PART}` part must be a JSON object: {error}")
-    return await _with_inlined_assets(body, tuple((name, value) for name, value in items if name != _FORM_REQUEST_PART))
+    return _paired_form_body(body, tuple((name, value) for name, value in items if name != _FORM_REQUEST_PART))
 
 
-async def _systemone_form_body(request: Request) -> _SystemOneFormBody:
+async def _systemone_form_body(
+    request: Request,
+    api_key: Annotated[str | None, Security(api_key_header)],
+    custom_key_header: Annotated[str | None, Security(custom_litellm_key_header)],
+) -> _SystemOneFormBody:
     if not is_form_content_type(request.headers.get("content-type", "")):
         return None
-    await read_request_body(request)
+    await run_pre_body_auth_checks(request=request, api_key=api_key, custom_litellm_key_header=custom_key_header)
+    try:
+        await read_request_body(request)
+    except ProxyException as unreadable:
+        return _InvalidFormBody(unreadable.message)
     form_body: Final = await _form_body(await request.form())
     if isinstance(form_body, _FormBody):
         safe_set_request_parsed_body(request, form_body.data)
@@ -250,8 +273,8 @@ async def _request_body(
     request: Request, form_body: _SystemOneFormBody, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
 ) -> Mapping[str, object]:
     match form_body:
-        case _FormBody(data=form_data):
-            return form_data
+        case _FormBody():
+            return await _inlined_form_data(form_body)
         case _InvalidFormBody(message=message):
             raise await _invalid_request(
                 raw_data={}, error=message, user_api_key_dict=user_api_key_dict, api_name=api_name

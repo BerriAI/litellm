@@ -1282,6 +1282,34 @@ class TestReadRequestBodyFormParseFailure:
             await read_request_body(mock_request)
         assert str(exc_info.value.code) == "400"
 
+    @pytest.mark.asyncio
+    async def test_a_malformed_form_body_fails_with_its_parse_error_on_every_read(self):
+        delivered: Final = asyncio.Event()
+
+        async def receive() -> Message:
+            if delivered.is_set():
+                return {"type": "http.disconnect"}
+            delivered.set()
+            return {"type": "http.request", "body": b"--xyz\r\nnot a header\r\n\r\n{}\r\n--xyz--\r\n"}
+
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/systemone",
+                "headers": [(b"content-type", b"multipart/form-data; boundary=xyz")],
+            },
+            receive,
+        )
+
+        with pytest.raises(ProxyException) as first_read:
+            await read_request_body(request)
+        with pytest.raises(ProxyException) as second_read:
+            await read_request_body(request)
+
+        assert "invalid character" in first_read.value.message
+        assert (second_read.value.code, second_read.value.message) == (first_read.value.code, first_read.value.message)
+
 
 class TestGetRequestBody:
     @pytest.mark.asyncio

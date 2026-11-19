@@ -254,7 +254,22 @@ def _reraise_request_size_error(error: Exception) -> None:
         raise error
 
 
+_FORM_PAYLOAD_FAILURE_SCOPE_KEY: Final = "litellm_form_payload_failure"
+
+
+def _invalid_form_payload(reason: str) -> ProxyException:
+    return ProxyException(
+        message=f"Invalid form payload: {reason}",
+        type="invalid_request_error",
+        param="request_body",
+        code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
 async def _read_form_data(request: Request) -> FormData:
+    earlier_failure: Final[object] = request.scope.get(_FORM_PAYLOAD_FAILURE_SCOPE_KEY)
+    if isinstance(earlier_failure, str):
+        raise _invalid_form_payload(earlier_failure)
     try:
         form_data: Final = await request.form()
         _mark_body_received(_declared_content_length(request.headers))
@@ -269,12 +284,8 @@ async def _read_form_data(request: Request) -> FormData:
         # banned-param checks must see the same body the handler
         # acts on.
         verbose_proxy_logger.error("Invalid form payload: %s", e)
-        raise ProxyException(
-            message=f"Invalid form payload: {e}",
-            type="invalid_request_error",
-            param="request_body",
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        request.scope[_FORM_PAYLOAD_FAILURE_SCOPE_KEY] = str(e)  # rebind-ok: per-request cache the second read needs
+        raise _invalid_form_payload(str(e))
     return form_data
 
 
