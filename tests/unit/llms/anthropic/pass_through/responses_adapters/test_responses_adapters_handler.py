@@ -97,6 +97,45 @@ def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
             {
                 "store": False,
                 "previous_response_id": "resp_previous",
+                "extra_body": {"previous_response_id": None},
+                "instructions": "Caller prompt",
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": "conv_previous",
+                "extra_body": {"conversation": None},
+                "instructions": "Caller prompt",
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": "conv_previous",
+                "extra_body": {"previous_response_id": None},
+                "instructions": "Caller prompt",
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {"store": False, "extra_body": {"conversation": "conv_previous"}, "instructions": "Caller prompt"},
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "previous_response_id": "resp_previous",
                 "additional_drop_params": ["previous_response_id"],
                 "instructions": "Caller prompt",
             },

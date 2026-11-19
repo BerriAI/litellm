@@ -69,11 +69,9 @@ def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
     extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
     dropped: Final = drop_policy(request_params).additional_drop_params
     top_level: Final = {key: request_params.get(key) for key in SYSTEM_PLACEMENT_PARAMS if key not in dropped}
-    truncation: Final = extra_body.get("truncation", top_level.get("truncation"))
-    return (
-        extra_body.get("store", top_level.get("store")) is not False
-        or truncation == "auto"
-        or any(params.get("previous_response_id") or params.get("conversation") for params in (top_level, extra_body))
+    effective: Final = {**top_level, **extra_body}
+    return effective.get("store") is not False or bool(
+        effective.get("previous_response_id") or effective.get("conversation") or effective.get("truncation") == "auto"
     )
 
 
