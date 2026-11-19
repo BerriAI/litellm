@@ -681,7 +681,7 @@ class TestCallToolRestApiVirtualTools:
     def _get_call_fn(self) -> Any:
         from litellm.proxy.mcp_server.rest_endpoints import router
 
-        endpoint = next(
+        endpoint: Final = next(
             r.endpoint
             for r in router.routes
             if hasattr(r, "path") and r.path.endswith("/tools/call") and hasattr(r, "methods") and "POST" in r.methods

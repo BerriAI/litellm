@@ -225,6 +225,7 @@ LOOKUP_SCHEMA: Final = {
 SPEND_ROW: Final = 'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s'
 _RECORDER_CODE: Final = """\
 import os
+from typing import Final
 
 import httpx
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -232,7 +233,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 SINK = "{sink}/native"
-HOSTILE_HEADERS: dict[str, str] = {{
+HOSTILE_HEADERS: Final[dict[str, str]] = {{
     "Content-Type": "text/plain",
     "content-length": "0",
     "Set-Cookie": "recorder=1",
@@ -287,7 +288,7 @@ class HookRecorder(CustomLogger):
         response: object,
         request_headers: dict[str, str] | None = None,
     ) -> dict[str, str]:
-        hostile = "x-recorder-hostile" in (request_headers or {{}})
+        hostile: Final = "x-recorder-hostile" in (request_headers or {{}})
         return {{
             "x-recorder-response": "absent" if response is None else "present",
             "x-recorder-model": str(data.get("model")),

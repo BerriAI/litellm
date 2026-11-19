@@ -5367,12 +5367,11 @@ async def test_rest_tool_call_drops_unsafe_and_non_string_callback_response_head
     try:
         if succeeds:
             assert [item.text for item in (await call).content] == ["filtered-result"]
-            sent: Final = dict(response.headers)
+            assert dict(response.headers) == {**Response().headers, "x-callback-trace": "trace-1"}
         else:
             with pytest.raises(HTTPException) as error:
                 await call
             assert (error.value.status_code, error.value.detail["error"]) == (400, "missing_parameter")
-            sent = dict(error.value.headers or {})
+            assert error.value.headers == {"x-callback-trace": "trace-1"}
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("filtered-")
-    assert sent == {**(Response().headers if succeeds else {}), "x-callback-trace": "trace-1"}
