@@ -9,11 +9,13 @@ parsing. Each tool is one ``apply_guardrail`` call, mirroring the MCP ``tools/li
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NoReturn
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 from litellm.proxy.mcp_server.utils import (
     MAX_STRUCTURED_CONTENT_SCAN_DEPTH,
@@ -32,24 +34,33 @@ _TOOLS: Final = TypeAdapter(tuple[object, ...])
 _TOOL_DEFINITION_FIELDS: Final = ("tools", "functions")
 
 
-def _blocked(reason: str) -> HTTPException:
-    return HTTPException(status_code=400, detail={"error": f"Content blocked: {reason}"})
+@dataclass(frozen=True, slots=True)
+class _ToolNotScanned:
+    reason: str
 
 
-def _description_leaves(tool: object) -> tuple[tuple[JSONLeafPath, str], ...]:
+def _raise_public(failure: _ToolNotScanned) -> NoReturn:
+    match failure:
+        case _ToolNotScanned(reason=reason):
+            raise HTTPException(status_code=400, detail={"error": f"Content blocked: {reason}"})
+        case _:
+            assert_never(failure)
+
+
+def _description_leaves(tool: object) -> tuple[tuple[JSONLeafPath, str], ...] | _ToolNotScanned:
     leaves: Final = json_string_leaves(tool)
     if leaves is None:
-        raise _blocked(
+        return _ToolNotScanned(
             f"a tool definition exceeds the maximum nesting depth of {MAX_STRUCTURED_CONTENT_SCAN_DEPTH} "
             "and cannot be scanned by the configured guardrail"
         )
     return tuple((path, text) for path, text in leaves if path[-1:] == ("description",) and text.strip())
 
 
-def _masked_texts(guarded: GenericGuardrailAPIInputs, scanned: int) -> Sequence[str] | None:
+def _masked_texts(guarded: GenericGuardrailAPIInputs, scanned: int) -> Sequence[str] | _ToolNotScanned | None:
     masked: Final = guarded.get("texts")
     if masked is not None and len(masked) != scanned:
-        raise _blocked("the guardrail returned a different number of tool descriptions than it was given")
+        return _ToolNotScanned("the guardrail returned a different number of tool descriptions than it was given")
     return masked
 
 
@@ -67,14 +78,17 @@ async def scanned_request_tools(
 ) -> Mapping[str, tuple[object, ...]]:
     """Each tool definition field (``tools``, legacy ``functions``) whose descriptions were masked.
 
-    A guardrail blocks by raising, which surfaces as the usual pre_call HTTP 400.
+    A guardrail blocks by raising, which surfaces as the usual pre_call HTTP 400; a tool that
+    cannot be scanned is rejected the same way.
     """
     if guardrail.scan_tool_descriptions_as_text is not True:
         return MappingProxyType({})
     limiter: Final = asyncio.Semaphore(_MAX_CONCURRENT_TOOL_SCANS)
 
-    async def scanned(tool: object) -> object:
+    async def scanned(tool: object) -> object | _ToolNotScanned:
         leaves: Final = _description_leaves(tool)
+        if isinstance(leaves, _ToolNotScanned):
+            return leaves
         if not leaves:
             return tool
         async with limiter:
@@ -85,15 +99,23 @@ async def scanned_request_tools(
                 logging_obj=logging_obj,
             )
         masked: Final = _masked_texts(guarded, len(leaves))
+        if isinstance(masked, _ToolNotScanned):
+            return masked
         if masked is None:
             return tool
         replacements: Final = {path: new for (path, old), new in zip(leaves, masked) if new != old}
         return with_json_string_leaves(tool, replacements) if replacements else tool
 
-    async def scanned_field(field: str) -> tuple[str, tuple[object, ...]] | None:
+    async def scanned_field(field: str) -> tuple[str, tuple[object, ...]] | _ToolNotScanned | None:
         tools: Final = _request_tools(request_data, field)
         results: Final = tuple(await asyncio.gather(*(scanned(tool) for tool in tools)))
+        failure: Final = next((result for result in results if isinstance(result, _ToolNotScanned)), None)
+        if failure is not None:
+            return failure
         return None if all(new is old for new, old in zip(results, tools)) else (field, results)
 
     fields: Final = await asyncio.gather(*(scanned_field(field) for field in _TOOL_DEFINITION_FIELDS))
-    return MappingProxyType(dict(field for field in fields if field is not None))
+    failure: Final = next((field for field in fields if isinstance(field, _ToolNotScanned)), None)
+    if failure is not None:
+        _raise_public(failure)
+    return MappingProxyType(dict(field for field in fields if isinstance(field, tuple)))
