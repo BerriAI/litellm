@@ -10,6 +10,7 @@ from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -58,7 +59,16 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses generateContent API for Gemini models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: list[str] = ["n", "size"]
+    SUPPORTED_PARAMS: list[str] = [
+        "n",
+        "size",
+        "aspect_ratio",
+        "aspectRatio",
+        "image_size",
+        "imageSize",
+        "imageConfig",
+        "image_config",
+    ]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -73,14 +83,50 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:
-        request_count: Final[Mapping[str, object]] = (
-            {"n": image_edit_optional_params["n"]} if "n" in image_edit_optional_params else {}
-        )
-        if "size" not in image_edit_optional_params:
-            return dict(request_count)
+        supported_params: Final = self.get_supported_openai_params(model)
+        mapped: dict[str, object] = {}
 
-        size: Final = image_edit_optional_params.get("size")
-        return {**request_count, **(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})}
+        for k, v in image_edit_optional_params.items():
+            if k in supported_params:
+                if k == "n":
+                    mapped["n"] = v
+                elif k == "size":
+                    continue
+                elif k in ("aspectRatio", "aspect_ratio"):
+                    mapped["aspectRatio"] = v
+                elif k in ("imageSize", "image_size"):
+                    mapped["imageSize"] = v
+                elif k in ("imageConfig", "image_config"):
+                    if isinstance(v, dict):
+                        mapped["imageConfig"] = v
+                    elif not drop_params:
+                        raise litellm.UnsupportedParamsError(
+                            message=f"imageConfig must be a dict, got {type(v).__name__}",
+                            model=model,
+                        )
+                    else:
+                        verbose_logger.warning("imageConfig must be a dict, got %s — ignoring.", type(v).__name__)
+                else:
+                    mapped[k] = v
+            elif not drop_params:
+                raise litellm.UnsupportedParamsError(
+                    message=f"{model} does not support {k}. Set drop_params=True to drop it.",
+                    model=model,
+                )
+
+        if "size" in image_edit_optional_params:
+            size_val = image_edit_optional_params["size"]
+            mapped_size = map_vertex_image_size(size_val, model)
+            if mapped_size is None:
+                if not drop_params:
+                    raise litellm.UnsupportedParamsError(
+                        message=f"Unsupported size {size_val} for model {model}",
+                        model=model,
+                    )
+                mapped_size = {"aspectRatio": "1:1"}
+            mapped.update(mapped_size)
+
+        return mapped
 
     def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
         return image_request_count(image_edit_optional_request_params.get("n"), model=model, llm_provider="vertex_ai")
@@ -198,11 +244,28 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         contents: Final[dict[str, object]] = {"role": "USER", "parts": parts}
 
         # Add image-specific configuration
-        image_config: Final = {
-            field: image_edit_optional_request_params[param]
-            for param, field in (("aspectRatio", "aspect_ratio"), ("imageSize", "image_size"))
-            if param in image_edit_optional_request_params
-        }
+        image_config: dict[str, object] = {}
+        raw_image_config: Final = (
+            image_edit_optional_request_params.get("imageConfig")
+            or image_edit_optional_request_params.get("image_config")
+        )
+        if isinstance(raw_image_config, dict):
+            for k, v in raw_image_config.items():
+                if k in ("aspectRatio", "aspect_ratio"):
+                    image_config["aspect_ratio"] = v
+                elif k in ("imageSize", "image_size"):
+                    image_config["image_size"] = v
+                else:
+                    image_config[k] = v
+
+        for param, field in (
+            ("aspectRatio", "aspect_ratio"),
+            ("aspect_ratio", "aspect_ratio"),
+            ("imageSize", "image_size"),
+            ("image_size", "image_size"),
+        ):
+            if param in image_edit_optional_request_params:
+                image_config[field] = image_edit_optional_request_params[param]
 
         generation_config: Final[dict[str, object]] = {
             key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
