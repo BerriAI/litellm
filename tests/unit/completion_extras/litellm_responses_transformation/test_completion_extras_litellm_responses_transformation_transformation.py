@@ -5492,6 +5492,39 @@ def test_chained_turn_keeps_leading_system_strings_in_instructions(continuation:
 
 
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
+def test_store_false_with_conversation_keeps_system_prompt_in_input(location: str) -> None:
+    conversation: Final = {"conversation": "conv_prior"}
+    optional: Final = {
+        "store": False,
+        **(
+            conversation if location == "optional" else {"extra_body": conversation} if location == "extra_body" else {}
+        ),
+    }
+    params: Final = {
+        "custom_llm_provider": "openai",
+        **(
+            conversation
+            if location == "litellm"
+            else {"extra_body": conversation}
+            if location == "litellm_extra_body"
+            else {}
+        ),
+    }
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        params,
+        optional,
+    )
+    assert request["store"] is False
+    assert "instructions" not in request
+    assert request["input"] == [
+        _system_input_item("Be brief."),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+@pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
 def test_auto_truncation_keeps_system_prompt_in_instructions(location: str) -> None:
     truncation: Final = {"truncation": "auto"}
     optional: Final = (
@@ -5525,9 +5558,83 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> No
         {"custom_llm_provider": "openai"},
         {"instructions": "Caller instructions", **continuation},
     )
-    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
-    if not continuation:
-        assert request["input"][0] == _system_input_item("Be brief.")
+    assert request["instructions"] == "Be brief.\nCaller instructions"
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize(
+    ("params", "optional", "system_in_input"),
+    [
+        ({}, {}, False),
+        ({}, {"store": True}, False),
+        ({}, {"store": False}, True),
+        ({}, {"extra_body": {"store": False}}, True),
+        ({}, {"store": False, "extra_body": {"store": True}}, False),
+        ({}, {"store": True, "extra_body": {"store": False}}, True),
+        ({"extra_body": {"store": False}}, {"store": True}, True),
+        ({"extra_body": {"store": True}}, {"store": False}, False),
+        ({"store": False}, {}, False),
+    ],
+)
+def test_system_placement_uses_effective_upstream_store(
+    params: dict[str, object], optional: dict[str, object], system_in_input: bool
+) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai", **params},
+        copy.deepcopy(optional),
+    )
+    upstream_store: Final = request.get("extra_body", {}).get("store", request.get("store"))
+    assert (upstream_store is False) == system_in_input
+    assert request.get("instructions") == (None if system_in_input else "Be brief.")
+    assert request["input"] == [
+        *([_system_input_item("Be brief.")] if system_in_input else []),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_store"),
+    [
+        ({"store": False, "additional_drop_params": ["store"]}, None),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, None),
+        ({"store": False}, False),
+    ],
+)
+def test_chat_store_drops_preserve_upstream_forwarding(params: dict[str, object], expected_store: bool | None) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").respond(
+            200,
+            json={
+                "id": "resp_store_drop",
+                "object": "response",
+                "created_at": 1789788253,
+                "status": "completed",
+                "model": "gpt-6.2-sol",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_store_drop",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+            },
+        )
+        litellm.completion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            **copy.deepcopy(params),
+        )
+    body: Final = json.loads(upstream.calls.last.request.content)
+    assert body.get("store") is expected_store
+    assert ("store" in body) == (expected_store is not None)
+    assert body.get("instructions") == (None if expected_store is False else "Be brief.")
+    assert [item["role"] for item in body["input"]] == (["system", "user"] if expected_store is False else ["user"])
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
@@ -5597,6 +5704,7 @@ def test_system_input_is_limited_to_openai_family_bridges(provider: str | None, 
         "gpt-6.2-sol",
         [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
         {"custom_llm_provider": provider},
+        {"store": False},
     )
     assert request.get("instructions") == (None if system_in_input else "Be brief.")
     assert request["input"] == [

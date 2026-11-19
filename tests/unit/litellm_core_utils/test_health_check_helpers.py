@@ -946,6 +946,11 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
     result: Final = await ahealth_check(model_params, prompt="test from litellm")
 
     assert expected_error in result["error"], result["error"]
+    assert result["error"] == str(result["exception"])
+    assert "Traceback" not in result["error"]
+    assert "stack trace" not in result["error"]
+    assert ahealth_check.__code__.co_filename not in result["error"]
+    assert 'File "' not in result["error"]
     assert "Missing `mode`" not in result["error"]
     assert "raw_request_typed_dict" in result
 

@@ -22,9 +22,28 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.endpoints import _count_tokens_body_options
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.proxy_server import _deployment_with_request_count_settings
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
+
+
+def test_count_tokens_carries_placement_settings_into_the_deployment() -> None:
+    settings: Final = {
+        "store": False,
+        "truncation": "auto",
+        "previous_response_id": "resp_prior",
+        "conversation": "conv_prior",
+        "extra_body": {"store": True},
+        "additional_drop_params": ["store"],
+        "drop_params": False,
+    }
+    options: Final = _count_tokens_body_options(settings, False)
+    deployment: Final = _deployment_with_request_count_settings(
+        {"litellm_params": {"api_key": "sk-test", "store": True}}, options["request_litellm_params"]
+    )
+    assert deployment == {"litellm_params": {"api_key": "sk-test", **settings}}
 
 
 class TestAnthropicEndpoints(unittest.TestCase):
