@@ -71,11 +71,19 @@ def _truncate_base64_source_data(data: str) -> str:
     return f"[base64_data truncated: {format_base64_size(len(data))}]"
 
 
+def _keep_text(text: str) -> str:
+    return text
+
+
 def _truncate_dict_string(
-    container: Mapping[str, object], key: str, value: str, truncate_data_uris: Callable[[str], str]
+    container: Mapping[str, object],
+    key: str,
+    value: str,
+    truncate_data_uris: Callable[[str], str],
+    truncate_source_data: Callable[[str], str],
 ) -> str:
     if key == "data" and container.get("type") == "base64":
-        return _truncate_base64_source_data(value)
+        return truncate_source_data(value)
     return truncate_data_uris(value)
 
 
@@ -93,6 +101,7 @@ def _truncate_base64_in_string(value: str) -> str:
 def _truncate_base64_in_value(
     value: str | dict[str, object] | list[object] | None,
     truncate_data_uris: Callable[[str], str],
+    truncate_source_data: Callable[[str], str],
 ) -> str | dict[str, object] | list[object] | None:
     """Iteratively truncate base64 data URIs and Anthropic base64 sources in a JSON-like value (str/list/dict).
 
@@ -117,7 +126,7 @@ def _truncate_base64_in_value(
         if isinstance(container, dict):
             for k, v in container.items():
                 if isinstance(v, str):
-                    container[k] = _truncate_dict_string(container, k, v, truncate_data_uris)
+                    container[k] = _truncate_dict_string(container, k, v, truncate_data_uris, truncate_source_data)
                 elif isinstance(v, dict):
                     copy: dict[str, object] | list[object] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
@@ -151,15 +160,21 @@ def truncate_base64_in_messages(
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
-    return _copy_messages(messages, _truncate_base64_in_string)
+    return _copy_messages(messages, _truncate_base64_in_string, _truncate_base64_source_data)
+
+
+def truncate_base64_data_uris_in_messages(messages: Sequence[object]) -> object:
+    """Return a copy of *messages* with long base64 data URIs shortened and Anthropic base64 source ``data`` kept whole."""
+    return _copy_messages(list(messages), _truncate_base64_in_string, _keep_text)
 
 
 def _copy_messages(
     messages: str | dict[str, object] | list[object],  # mutable-ok: same contract as truncate_base64_in_messages
     truncate_data_uris: Callable[[str], str],
+    truncate_source_data: Callable[[str], str],
 ) -> str | dict[str, object] | list[object] | None:  # mutable-ok: same contract as truncate_base64_in_messages
     try:
-        return _truncate_base64_in_value(messages, truncate_data_uris)
+        return _truncate_base64_in_value(messages, truncate_data_uris, truncate_source_data)
     except Exception as e:
         verbose_logger.debug("Failed to truncate base64 in messages: %s", e)
         return messages
@@ -206,7 +221,7 @@ async def truncate_base64_in_messages_async(
     if total_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
         return truncate_base64_in_messages(messages)
     if total_chars < BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS and _is_few_plain_strings(leaves):
-        return _copy_messages(messages, lambda text: text)
+        return _copy_messages(messages, _keep_text, _truncate_base64_source_data)
     return await asyncio.to_thread(truncate_base64_in_messages, messages)
 
 
