@@ -226,6 +226,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
                 )
             )
             async with db_span("insert_spend_logs", "LiteLLM_SpendLogs"):
+                await transaction.execute_raw("SET LOCAL default_toast_compression = lz4")
                 for group in groups:
                     await transaction.query_raw(*spend_log_insert_statement(group))
         return len(accepted)
