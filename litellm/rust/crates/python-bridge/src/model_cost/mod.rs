@@ -157,8 +157,26 @@ impl NativeModelCostMap {
         }
     }
 
-    /// Fetches and reads the document on the shared runtime, off the GIL, and installs nothing. The result is a
+    /// Fetches and reads the document on a throwaway runtime, off the GIL, and installs nothing. The result is a
     /// `CostMapRefreshed`, a `NativeFetchFailed` or a `NativeRejected`
+    fn refresh_blocking(
+        &self,
+        py: Python<'_>,
+        source: PyRef<'_, NativeCostMapSource>,
+        policy: PyRef<'_, NativeFetchPolicy>,
+    ) -> PyResult<Py<PyAny>> {
+        let (remote, policy, limits) = (source.0.clone(), policy.0, self.limits);
+        let logger = crate::logger::capture(py);
+        let refreshed = litellm_host_python::release_gil(py, move || {
+            logger.scope(|| {
+                let source = remote.unpooled(policy)?;
+                litellm_host_python::run_isolated(refresh(&source, limits)).map_err(PyErr::from)
+            })
+        })?;
+        Outcome(refreshed).into_pyobject(py).map(Bound::unbind)
+    }
+
+    /// `refresh_blocking` on the shared runtime with a pooled client, for workers after the fork
     fn refresh<'py>(
         &self,
         py: Python<'py>,

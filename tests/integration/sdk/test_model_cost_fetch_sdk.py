@@ -10,6 +10,7 @@ from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 from typing import Final, Literal
 from urllib.parse import urlsplit
 
@@ -33,6 +34,8 @@ from litellm.litellm_core_utils.model_cost_table import publish
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
+_REFRESH_THREAD: Final = "litellm-model-cost-map-refresh"
+_RELEASE_URL: Final = "LIT_TEST_RELEASE_URL"
 _BUNDLED: Final = GetModelCostMap.read_local_model_cost_map_bytes()
 _IMPORTED_MODEL_COST_INPUTS: Final = model_cost_inputs.snapshot()
 
@@ -93,6 +96,55 @@ def _serving(*replies: _Reply, tls: ssl.SSLContext | None = None) -> Generator[_
         yield _Server(url=f"{wire.url}/cost.json", received=received)
 
 
+@dataclass(frozen=True, slots=True)
+class _Held:
+    url: str
+    release_url: str
+    release: threading.Event
+
+
+@contextmanager
+def _holding(body: bytes) -> Generator[_Held]:
+    """Sends the headers of ``/cost.json`` and holds its body until ``release`` is set or ``/release`` is fetched."""
+    release: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/release":
+            release.set()
+            return Reply()
+        return Reply(chunks=(body,), gate_before_first=release)
+
+    with wire_server(respond) as wire:
+        try:
+            yield _Held(url=f"{wire.url}/cost.json", release_url=f"{wire.url}/release", release=release)
+        finally:
+            release.set()
+
+
+def _await_refresh() -> None:
+    """Waits for a boot load's background refresh. One that is no longer listed has already ended."""
+    for thread in threading.enumerate():
+        if thread.name == _REFRESH_THREAD:
+            thread.join(timeout=60)
+            assert not thread.is_alive()
+
+
+def _boot_load(url: str, max_attempts: int = 3) -> Mapping[str, object]:
+    """The live table once the boot load's background refresh has ended."""
+    litellm.get_model_cost_map(url=url, max_attempts=max_attempts)
+    _await_refresh()
+    return litellm.model_cost
+
+
+_AWAIT_REFRESH: Final = f"""
+import threading
+for thread in threading.enumerate():
+    if thread.name == {_REFRESH_THREAD!r}:
+        thread.join(timeout=60)
+        assert not thread.is_alive()
+"""
+
+
 @pytest.fixture(autouse=True)
 def isolated_model_cost() -> Iterator[None]:
     inputs: Final = model_cost_inputs.snapshot()
@@ -101,6 +153,7 @@ def isolated_model_cost() -> Iterator[None]:
     model_cost_inputs.restore(_IMPORTED_MODEL_COST_INPUTS)
     publish(rows)
     yield
+    _await_refresh()
     model_cost_inputs.restore(inputs)
     rows.clear()
     rows.update(entries)
@@ -129,7 +182,7 @@ def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_boot_load_installs_the_served_document_and_records_its_provenance():
     body: Final = _document_with(**{"lit-boot-model": {"litellm_provider": "openai", "mode": "chat"}})
     with _serving(_Reply(body=body, headers={"ETag": '"v1"'})) as server:
-        rows: Final = litellm.get_model_cost_map(url=server.url)
+        rows: Final = _boot_load(server.url)
 
     assert "lit-boot-model" in rows
     assert FALLBACK_GENERALIZATIONS_KEY not in rows
@@ -156,7 +209,7 @@ def test_boot_load_installs_the_served_document_and_records_its_provenance():
 )
 def test_boot_load_falls_back_to_the_bundled_document(reply: _Reply, fallback_reason: str):
     with _serving(reply) as server:
-        rows: Final = litellm.get_model_cost_map(url=server.url, max_attempts=1)
+        rows: Final = _boot_load(server.url, max_attempts=1)
 
     assert "gpt-4o" in rows
     assert get_model_cost_map_provenance() == {"source_revision": _blob_id(_BUNDLED), "etag": None}
@@ -173,7 +226,7 @@ def _rows_loaded_through(load: Literal["boot", "reload", "register_model"], url:
     """The rows ``load`` produced from ``url``: the boot load's return value, or the live table after the others."""
     match load:
         case "boot":
-            return litellm.get_model_cost_map(url=url, max_attempts=1)
+            return _boot_load(url, max_attempts=1)
         case "reload":
             assert isinstance(asyncio.run(refetch_model_cost_map(url=url, max_attempts=1)), ModelCostMapReloaded)
             return litellm.model_cost
@@ -193,14 +246,13 @@ def test_every_load_follows_a_redirect_to_the_document(load: Literal["boot", "re
 
 
 @pytest.mark.usefixtures("remote_source", "own_model_cost")
-def test_boot_load_transient_failure_serves_the_bundled_map_then_installs_the_remote_one_in_the_background():
+def test_boot_load_retries_a_transient_failure_in_the_background_and_installs_the_remote_map():
     body: Final = _document_with(**{"lit-retried-model": {"litellm_provider": "openai", "mode": "chat"}})
     with _serving(_Reply(status=503, body=b"busy", headers={"Retry-After": "0"}), _Reply(body=body)) as server:
         rows: Final = litellm.get_model_cost_map(url=server.url)
         assert "lit-retried-model" not in rows
         booted_at: Final = get_model_cost_map_loaded_at()
-        retry: Final = next(t for t in threading.enumerate() if t.name == "litellm-model-cost-map-retry")
-        retry.join(timeout=30)
+        _await_refresh()
 
     assert server.requests == 2
     assert "lit-retried-model" in litellm.model_cost
@@ -218,9 +270,8 @@ def test_boot_load_transient_failure_serves_the_bundled_map_then_installs_the_re
 @pytest.mark.usefixtures("remote_source")
 def test_boot_load_does_not_retry_a_final_failure():
     with _serving(_Reply(status=404, body=b"missing")) as server:
-        litellm.get_model_cost_map(url=server.url)
+        _boot_load(server.url)
 
-    assert not any(t.name == "litellm-model-cost-map-retry" for t in threading.enumerate())
     assert server.requests == 1
 
 
@@ -242,7 +293,7 @@ def test_boot_load_serves_the_bundled_map_without_fetching(
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
     with _serving(_Reply()) as server:
-        rows: Final = litellm.get_model_cost_map(url=server.url)
+        rows: Final = _boot_load(server.url)
 
     assert server.requests == 0
     assert "gpt-4o" in rows
@@ -251,10 +302,11 @@ def test_boot_load_serves_the_bundled_map_without_fetching(
 
 
 def test_importing_litellm_loads_the_map_litellm_model_cost_map_url_names():
-    script: Final = """
+    script: Final = f"""
 import os
 import litellm
 assert litellm.model_cost_map_url == os.environ["LITELLM_MODEL_COST_MAP_URL"], litellm.model_cost_map_url
+{_AWAIT_REFRESH}
 assert "lit-env-url-model" in litellm.model_cost
 """
     body: Final = _document_with(**{"lit-env-url-model": {"litellm_provider": "openai", "mode": "chat"}})
@@ -274,10 +326,11 @@ assert "lit-env-url-model" in litellm.model_cost
 
 @pytest.mark.skipif(sys.platform != "linux", reason="fork is the default start method only on Linux")
 def test_importing_litellm_with_a_remote_source_leaves_the_process_free_to_fork():
-    script: Final = """
+    script: Final = f"""
 import os
 import litellm
 from litellm.rust_bridge._native import process_state_started, reserve_process_for_forking
+{_AWAIT_REFRESH}
 assert "lit-fork-model" in litellm.model_cost
 assert not process_state_started()
 reserve_process_for_forking()
@@ -292,6 +345,128 @@ assert os.waitstatus_to_exitcode(status) == 0
     with _serving(_Reply(body=body)) as server:
         result: Final = run_child_interpreter(
             script, env={**environment, "LITELLM_MODEL_COST_MAP_URL": server.url}, timeout=120
+        )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_boot_load_serves_the_bundled_map_while_the_remote_one_downloads_then_installs_it():
+    body: Final = _document_with(**{"lit-lazy-model": {"litellm_provider": "openai", "mode": "chat"}})
+    with _holding(body) as held:
+        rows: Final = litellm.get_model_cost_map(url=held.url)
+        assert "gpt-4o" in rows
+        assert "lit-lazy-model" not in rows
+        booting: Final = get_model_cost_map_source_info()
+        assert (booting["source"], booting["url"], booting["fallback_reason"]) == ("local", held.url, None)
+        booted_at: Final = get_model_cost_map_loaded_at()
+        held.release.set()
+        _await_refresh()
+
+    assert "lit-lazy-model" in litellm.model_cost
+    assert get_model_cost_map_provenance()["source_revision"] == _blob_id(body)
+    source: Final = get_model_cost_map_source_info()
+    assert (source["source"], source["url"], source["fallback_reason"]) == ("remote", held.url, None)
+    refreshed_at: Final = get_model_cost_map_loaded_at()
+    assert booted_at is not None and refreshed_at is not None and refreshed_at > booted_at
+
+
+@pytest.mark.usefixtures("remote_source")
+@pytest.mark.parametrize(
+    ("reply", "installed", "source"),
+    [
+        (
+            _Reply(body=_document_with(**{"lit-uwsgi-model": {"litellm_provider": "openai", "mode": "chat"}})),
+            True,
+            "remote",
+        ),
+        (_Reply(status=503, body=b"busy", headers={"Retry-After": "0"}), False, "local"),
+    ],
+    ids=["served", "unavailable"],
+)
+def test_boot_load_under_uwsgi_fetches_once_before_returning(
+    monkeypatch: pytest.MonkeyPatch, reply: _Reply, installed: bool, source: str
+):
+    monkeypatch.setitem(sys.modules, "uwsgi", ModuleType("uwsgi"))
+    with _serving(reply) as server:
+        rows: Final = litellm.get_model_cost_map(url=server.url)
+        requests_at_return: Final = server.requests
+        _await_refresh()
+
+    assert ("lit-uwsgi-model" in rows) is installed
+    assert "gpt-4o" in rows
+    assert (requests_at_return, server.requests) == (1, 1)
+    assert get_model_cost_map_source_info()["source"] == source
+
+
+def _environment_for_a_remote_load() -> Mapping[str, str]:
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"}
+    }
+
+
+def test_importing_litellm_does_not_wait_for_the_remote_map_and_serves_it_once_it_arrives():
+    script: Final = f"""
+import os
+import urllib.request
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info
+assert "gpt-4o" in litellm.model_cost
+assert "lit-lazy-model" not in litellm.model_cost
+assert get_model_cost_map_source_info()["source"] == "local"
+urllib.request.urlopen(os.environ[{_RELEASE_URL!r}]).read()
+{_AWAIT_REFRESH}
+assert "lit-lazy-model" in litellm.model_cost
+assert get_model_cost_map_source_info()["source"] == "remote"
+assert litellm.get_model_info("lit-lazy-model")["litellm_provider"] == "openai"
+assert "lit-lazy-model" in litellm.open_ai_chat_completion_models
+assert "lit-lazy-model" in litellm.model_list
+assert "lit-lazy-model" in litellm.model_list_set
+assert litellm.get_llm_provider("lit-lazy-model")[1] == "openai"
+"""
+    body: Final = _document_with(**{"lit-lazy-model": {"litellm_provider": "openai", "mode": "chat"}})
+    with _holding(body) as held:
+        result: Final = run_child_interpreter(
+            script,
+            env={
+                **_environment_for_a_remote_load(),
+                "LITELLM_MODEL_COST_MAP_URL": held.url,
+                _RELEASE_URL: held.release_url,
+            },
+            timeout=120,
+        )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="fork is the default start method only on Linux")
+def test_a_process_forked_while_the_remote_map_downloads_refreshes_its_own_copy():
+    script: Final = f"""
+import os
+import urllib.request
+import litellm
+from litellm.rust_bridge._native import reserve_process_for_forking
+reserve_process_for_forking()
+pid = os.fork()
+if pid == 0:
+    urllib.request.urlopen(os.environ[{_RELEASE_URL!r}]).read()
+{_AWAIT_REFRESH.replace(chr(10), chr(10) + "    ")}
+    os._exit(0 if "lit-forked-model" in litellm.model_cost else 1)
+_, status = os.waitpid(pid, 0)
+assert os.waitstatus_to_exitcode(status) == 0
+"""
+    body: Final = _document_with(**{"lit-forked-model": {"litellm_provider": "openai", "mode": "chat"}})
+    with _holding(body) as held:
+        result: Final = run_child_interpreter(
+            script,
+            env={
+                **_environment_for_a_remote_load(),
+                "LITELLM_MODEL_COST_MAP_URL": held.url,
+                _RELEASE_URL: held.release_url,
+            },
+            timeout=120,
         )
 
     assert result.returncode == 0, result.stderr
@@ -389,7 +564,7 @@ def test_a_cli_process_that_booted_on_the_bundled_map_still_fetches_on_reload(
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     monkeypatch.setattr(sys, "argv", [argv0])
     with _serving(_Reply()) as server:
-        litellm.get_model_cost_map(url=server.url)
+        _boot_load(server.url)
         booted_requests: Final = server.requests
         result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
 
@@ -504,7 +679,7 @@ def test_a_boot_load_ignores_litellm_ssl_verify_because_it_runs_before_settings_
     context, _ = _self_signed(tmp_path)
     monkeypatch.setattr(litellm, "ssl_verify", False)
     with _serving(_Reply(), tls=context) as server:
-        litellm.get_model_cost_map(url=server.url, max_attempts=1)
+        _boot_load(server.url, max_attempts=1)
 
     assert server.requests == 0
     source: Final = get_model_cost_map_source_info()
@@ -560,7 +735,7 @@ def test_an_s3_load_signs_for_the_region_and_reaches_the_endpoint_the_environmen
         monkeypatch.setenv(name, str(tmp_path / value) if name == "AWS_CONFIG_FILE" else value)
     with _serving(_Reply()) as server:
         monkeypatch.setenv(endpoint_variable, server.url.removesuffix("/cost.json"))
-        litellm.get_model_cost_map(url="s3://lit-prices/maps/cost.json", max_attempts=1)
+        _boot_load("s3://lit-prices/maps/cost.json", max_attempts=1)
 
     assert [urlsplit(target).path for target in server.targets] == ["/lit-prices/maps/cost.json"]
     assert f"/{region}/s3/aws4_request" in server.authorizations[0]
@@ -615,7 +790,7 @@ def test_a_gs_load_reaches_an_emulator_host_given_without_a_scheme(
     with gcs(_Reply()) as server:
         emulator: Final = os.environ["STORAGE_EMULATOR_HOST"]
         monkeypatch.setenv("STORAGE_EMULATOR_HOST", emulator.removeprefix("http://"))
-        litellm.get_model_cost_map(url=server.url, max_attempts=1)
+        _boot_load(server.url, max_attempts=1)
 
     assert server.targets == [_GCS_OBJECT_TARGET]
     assert get_model_cost_map_source_info()["source"] == "remote"
@@ -624,7 +799,7 @@ def test_a_gs_load_reaches_an_emulator_host_given_without_a_scheme(
 @pytest.mark.usefixtures("remote_source")
 def test_a_gs_boot_load_records_the_remote_source(gcs: Callable[[_Reply], AbstractContextManager[_Server]]):
     with gcs(_Reply()) as server:
-        litellm.get_model_cost_map(url=server.url)
+        _boot_load(server.url)
 
     source: Final = get_model_cost_map_source_info()
     assert (source["source"], source["url"], source["fallback_reason"]) == ("remote", _GCS_URL, None)
@@ -636,7 +811,7 @@ def test_a_gs_boot_load_refused_by_storage_falls_back_without_a_retry(
     gcs: Callable[[_Reply], AbstractContextManager[_Server]], status: int
 ):
     with gcs(_Reply(status=status, body=b"refused")) as server:
-        litellm.get_model_cost_map(url=server.url, max_attempts=3)
+        _boot_load(server.url, max_attempts=3)
 
     assert server.requests == 1
     source: Final = get_model_cost_map_source_info()
@@ -741,8 +916,6 @@ def test_register_model_url_fetch_uses_single_attempt(monkeypatch: pytest.Monkey
     threads_after: Final = {thread.name for thread in threading.enumerate()}
     requests: Final = [request.target for request in peer.drain()]
     assert requests == ["/custom_pricing.json"]
-    assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
-    assert not any(
-        thread.name == "litellm-model-cost-map-retry" and thread.is_alive() for thread in threading.enumerate()
-    )
+    assert not (threads_after - threads_before) & {_REFRESH_THREAD}
+    assert not any(thread.name == _REFRESH_THREAD and thread.is_alive() for thread in threading.enumerate())
     assert litellm.model_cost.keys() >= before.keys()

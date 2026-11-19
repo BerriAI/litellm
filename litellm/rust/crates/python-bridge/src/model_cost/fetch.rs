@@ -64,25 +64,17 @@ impl NativeCostMapSource {
         }))
     }
 
-    /// Fetches on a throwaway runtime with a client of its own. `resume_from` continues a fetch whose first attempt
-    /// failed retryably
-    #[pyo3(signature = (policy, resume_from = None))]
+    /// Fetches on a throwaway runtime with a client of its own
     fn fetch_blocking(
         &self,
         py: Python<'_>,
         policy: PyRef<'_, NativeFetchPolicy>,
-        resume_from: Option<PyRef<'_, NativeFetchFailed>>,
     ) -> PyResult<Py<PyAny>> {
-        let resumed = resume_from.map(|failed| failed.0.clone());
         let (remote, policy) = (self.0.clone(), policy.0);
         let logger = crate::logger::capture(py);
         let fetched = litellm_host_python::release_gil(py, move || {
             logger.scope(|| {
                 let source = remote.unpooled(policy)?;
-                let source = match resumed {
-                    Some(failed) => source.resuming(failed),
-                    None => source,
-                };
                 litellm_host_python::run_isolated(source.fetch()).map_err(PyErr::from)
             })
         })?;
@@ -242,7 +234,7 @@ mod tests {
             let source = NativeCostMapSource::new(py, url, false).unwrap();
             let policy =
                 Bound::new(py, NativeFetchPolicy::new(3, 30.0, 5.0, 2.0).unwrap()).unwrap();
-            let outcome = source.fetch_blocking(py, policy.borrow(), None).unwrap();
+            let outcome = source.fetch_blocking(py, policy.borrow()).unwrap();
             let fetched = outcome.bind(py).cast::<NativeFetched>().unwrap().get();
             assert_eq!(fetched.body.bind(py).as_bytes(), b"{}");
             assert_eq!(fetched.etag.as_deref(), Some("\"v1\""));
