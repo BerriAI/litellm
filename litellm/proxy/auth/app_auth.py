@@ -77,12 +77,12 @@ async def resolve_app_hierarchy(
     authenticated: UserAPIKeyAuth,
 ) -> CustomerHierarchyAuth | None:
     import litellm
-    from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.proxy_server import get_current_spend, user_api_key_cache
 
     assertion: Final = selected_app_assertion(headers)
     if prisma_client is None:
         return hierarchy
-    store: Final = AppStore(prisma_client.db)
+    store: Final = AppStore(prisma_client.db, cache=user_api_key_cache)
     definition: Final = await store.definition()
     if definition.resource_type is None:
         return hierarchy
