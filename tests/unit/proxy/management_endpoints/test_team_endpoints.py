@@ -831,7 +831,7 @@ async def test_new_team_persists_tpd_limit(mock_db_client, mock_admin_auth):
 
 
 @pytest.mark.asyncio
-async def test_new_team_persists_max_parallel_requests(mock_db_client, mock_admin_auth):
+async def test_new_team_persists_max_parallel_requests(mock_db_client, mock_admin_auth: UserAPIKeyAuth):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
