@@ -65,12 +65,12 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 
 - Main's stored breakdown raises on an unreadable speed or geo value, which fails the candidate when a logging object is attached. Rust leaves those uplifts out of the breakdown rates instead
 - A call whose web search price main would read off the served model's row answers `NotPorted`
-- A Live, xAI or translation rate written as a numeric string bills, where main skipped a value that was not a number
+- Every price a row lists reads by one rule, `UnitPrice`'s: a number or a numeric string is that price, and anything else, a bool included, is unlisted. So a Live, xAI or translation rate written as a numeric string bills, where main skipped a value that was not a number
 - A batch line whose cached and written tokens exceed its prompt tokens bills no uncached input, where main's half-price path billed a negative amount (`_half_price_prompt_cost`)
 - A negative or non-numeric configured agent, MCP tool or Prompt Shield price fails the call's pricing instead of billing a negative amount, and a guardrail row whose `guardrail_cost_per_unit` lists a negative rate prices none of its counters, where main billed the negative rate. An MCP tool listed with a null price fails too, where main returned `None`
 - The breakdown bills unattributed writes and 5m/30m writes as one `CacheTtl::Default` count. Main multiplies each count by the rate separately, so the two can differ in the last bit when a call reports both
 - A row billed by the second is read off the row the provider branch looked up, where main read `cached_get_model_info_helper(model, provider)` first. The two differ only for a Databricks legacy endpoint name, a Fireworks AI size bucket and a Vertex AI name with a provider prefix, whose rows price tokens
 - `custom_cost_per_token` with a cache rate key set to `null` bills that cache at the input rate, where main raised multiplying by `None`
-- Perplexity reads `search_queries_cost_per_query` only when it is a number, where main also read a breakdown or a numeric string there
+- Perplexity reads `search_queries_cost_per_query` only when it is a price by that rule, where main also read a breakdown there, a bool as 1.0 and any other value it could not cast as 0.0
 - A Decisions call whose row has neither a `_decisions` price nor a per-request price bills its provider branch on the row `cached_get_model_info_helper` found, where main looked the row up again in that branch. The two are the same row for the providers that serve Decisions
 - A TypeSafe pass-through call bills its registry row through `generic_cost_per_token` with the row's `_decisions` prices, where main multiplied the input and output tokens by the two flat rates and skipped a row whose rates were not numbers. The two differ only for a registry row with bands or a zero output rate beside an image output rate

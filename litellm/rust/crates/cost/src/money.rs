@@ -249,6 +249,7 @@ mod tests {
     #[case::negative(serde_json::json!(-1), None)]
     #[case::word(serde_json::json!("free"), None)]
     #[case::boolean(serde_json::json!(true), None)]
+    #[case::null(serde_json::json!(null), None)]
     fn unit_price_reads_numbers_and_numeric_strings(
         #[case] written: serde_json::Value,
         #[case] expected: Option<f64>,

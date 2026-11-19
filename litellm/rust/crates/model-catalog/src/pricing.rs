@@ -17,6 +17,7 @@ use litellm_cost::row::{
 };
 use litellm_python_compat::number::{float_of, int_of};
 use litellm_python_compat::truthy::json_truthy;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::lower::BilledPrices;
@@ -195,10 +196,12 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
             .map(Into::into),
         legacy_search_query_rate: fields
             .get("search_queries_cost_per_query")
-            .filter(|rate| rate.is_number())
-            .and_then(|rate| float_of(rate).ok())
-            .and_then(UnitPrice::new),
+            .and_then(price_of),
     }
+}
+
+fn price_of(value: &Value) -> Option<UnitPrice> {
+    UnitPrice::deserialize(value).ok()
 }
 
 /// `get_provider_specific_geo_multiplier` and `get_provider_specific_speed_multiplier` read the entry with `float()`
@@ -969,14 +972,29 @@ mod tokens_parity {
     #[case::override_generic_residency_location("override_generic_residency_location")]
     #[case::override_per_second("override_per_second")]
     fn a_token_call_costs_what_main_charged(#[case] name: &str) {
+        let case = fixture_case(name);
+        let expected: (f64, f64) = parsed(&case["expected"]);
+        assert_eq!(sides(&case), expected);
+    }
+
+    fn fixture_case(name: &str) -> Value {
         let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
-        let case = fixture["cases"]
+        fixture["cases"]
             .as_array()
             .unwrap()
             .iter()
             .find(|case| case["name"] == name)
-            .unwrap_or_else(|| panic!("no fixture case {name}"));
-        let expected: (f64, f64) = parsed(&case["expected"]);
-        assert_eq!(sides(case), expected);
+            .unwrap_or_else(|| panic!("no fixture case {name}"))
+            .clone()
+    }
+
+    #[rstest]
+    fn a_legacy_search_rate_written_as_text_bills_like_the_number() {
+        let case = fixture_case("perplexity_legacy_search_rate");
+        let mut written_as_text = case.clone();
+        written_as_text["row"]["search_queries_cost_per_query"] =
+            json!(case["row"]["search_queries_cost_per_query"].to_string());
+
+        assert_eq!(sides(&written_as_text), sides(&case));
     }
 }
