@@ -2692,6 +2692,9 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
     if isinstance(litellm_call_id, str):
         response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
+    if litellm.include_litellm_headers is False:
+        for name in tuple(name for name in response.headers if name.startswith("x-litellm-")):
+            del response.headers[name]
     return response
 
 
