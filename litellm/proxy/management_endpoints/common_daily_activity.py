@@ -251,6 +251,12 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.total_tokens += prompt_tokens + completion_tokens
     existing_metrics.cache_read_input_tokens += record.cache_read_input_tokens or 0
     existing_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens or 0
+    cache_cost: Final[object] = getattr(record, "cache_cost", None)
+    priced_cache_tokens: Final[object] = getattr(record, "priced_cache_tokens", None)
+    if isinstance(cache_cost, (int, float)):
+        existing_metrics.cache_cost += cache_cost  # rebind-ok: accumulates in place
+    if isinstance(priced_cache_tokens, int):
+        existing_metrics.priced_cache_tokens += priced_cache_tokens  # rebind-ok: accumulates in place
     existing_metrics.compression_saved_tokens += record.compression_saved_tokens or 0
     existing_metrics.compression_savings_spend += record.compression_savings_spend or 0
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
@@ -739,6 +745,8 @@ def sum_spend_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
         completion_tokens=sum(metric.completion_tokens for metric in metrics),
         cache_read_input_tokens=sum(metric.cache_read_input_tokens for metric in metrics),
         cache_creation_input_tokens=sum(metric.cache_creation_input_tokens for metric in metrics),
+        cache_cost=sum(metric.cache_cost for metric in metrics),
+        priced_cache_tokens=sum(metric.priced_cache_tokens for metric in metrics),
         compression_saved_tokens=sum(metric.compression_saved_tokens for metric in metrics),
         compression_savings_spend=sum(metric.compression_savings_spend for metric in metrics),
         prompt_caching_savings_spend=sum(metric.prompt_caching_savings_spend for metric in metrics),
@@ -771,6 +779,8 @@ def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
         total_tokens=prompt_tokens + completion_tokens,
         cache_read_input_tokens=record.cache_read_input_tokens or 0,
         cache_creation_input_tokens=record.cache_creation_input_tokens or 0,
+        cache_cost=record.cache_cost or 0.0,
+        priced_cache_tokens=record.priced_cache_tokens or 0,
         compression_saved_tokens=record.compression_saved_tokens or 0,
         compression_savings_spend=record.compression_savings_spend or 0,
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
@@ -1058,6 +1068,8 @@ async def get_daily_activity(
                 total_failed_requests=metadata_metrics.failed_requests,
                 total_cache_read_input_tokens=metadata_metrics.cache_read_input_tokens,
                 total_cache_creation_input_tokens=metadata_metrics.cache_creation_input_tokens,
+                total_cache_cost=metadata_metrics.cache_cost,
+                total_priced_cache_tokens=metadata_metrics.priced_cache_tokens,
                 total_compression_saved_tokens=metadata_metrics.compression_saved_tokens,
                 total_compression_savings_spend=metadata_metrics.compression_savings_spend,
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
@@ -1269,6 +1281,8 @@ async def get_daily_activity_aggregated(
                 total_failed_requests=aggregated["totals"].failed_requests,
                 total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
                 total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                total_cache_cost=aggregated["totals"].cache_cost,
+                total_priced_cache_tokens=aggregated["totals"].priced_cache_tokens,
                 total_compression_saved_tokens=aggregated["totals"].compression_saved_tokens,
                 total_compression_savings_spend=aggregated["totals"].compression_savings_spend,
                 total_prompt_caching_savings_spend=aggregated["totals"].prompt_caching_savings_spend,

@@ -2254,7 +2254,7 @@ async def _impersonate_or_raise(
             param=IMPERSONATE_USER_HEADER,
             code=403,
         )
-    if not RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=actor, request=request):
+    if not RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=actor, request=request):
         raise ProxyException(
             message=f"key {actor_label(actor)} is not allowed to impersonate on route {route}",
             type=ProxyErrorTypes.auth_error,

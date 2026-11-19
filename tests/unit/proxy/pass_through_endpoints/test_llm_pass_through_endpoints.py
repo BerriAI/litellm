@@ -49,6 +49,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     _fal_target,
@@ -11903,7 +11904,7 @@ class TestOpenSearchProxyRoute:
 
         key: Final = "sk-opensearch-model-limited-writer"
         grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
-        cache: Final = DualCache()
+        cache: Final = UserApiKeyCache()
         cache.set_cache(
             key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
         )

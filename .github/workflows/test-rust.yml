@@ -10,6 +10,9 @@ on:
     branches:
       - main
       - "litellm_**"
+      - "rc/**"
+      - "stable/**"
+      - "lts/**"
     paths:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"

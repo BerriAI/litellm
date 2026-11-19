@@ -37,8 +37,11 @@ litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
 serde.workspace = true
+strum.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal", "sync"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6.11", features = ["catch-panic", "cors", "decompression-gzip", "decompression-zstd", "metrics", "propagate-header", "request-id", "set-header"] }
 uuid.workspace = true
 
 [dev-dependencies]
@@ -47,5 +50,7 @@ litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tower = { version = "0.5", features = ["util"] }
+flate2 = "1.1.10"
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 wiremock.workspace = true
+zstd = "0.14.4"

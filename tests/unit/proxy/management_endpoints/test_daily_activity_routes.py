@@ -818,6 +818,8 @@ def test_search_folds_each_entity_key_across_days(
                     "completion_tokens": 10,
                     "cache_read_input_tokens": 0,
                     "cache_creation_input_tokens": 2,
+                    "cache_cost": 0.0,
+                    "priced_cache_tokens": 0,
                     "compression_saved_tokens": 4,
                     "compression_savings_spend": 0.2,
                     "prompt_caching_savings_spend": 0.4,
