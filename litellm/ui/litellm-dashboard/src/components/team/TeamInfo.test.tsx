@@ -2741,7 +2741,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
   const teamBudgetAlertMetadata = (payload: Record<string, unknown>) =>
     wireBody(payload).metadata as Record<string, unknown>;
 
-  it("resends the stored team budget alerts, including an entry the rows cannot show, when they are untouched", async () => {
+  it("saves visible team budget alerts without resending invalid hidden entries", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditorWithTeamBudgetAlerts(user);
 
@@ -2750,7 +2750,6 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(metadata.max_budget_alert_emails).toStrictEqual({
       "50": ["finance@test.com"],
       "90": ["lead@test.com"],
-      bogus: ["x@test.com"],
     });
     expect(metadata.cost_center).toBe("eng");
   });
@@ -2773,7 +2772,6 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       "50": ["a@test.com", "b@test.com"],
       "90": ["lead@test.com"],
       "75": ["c@test.com"],
-      bogus: ["x@test.com"],
     };
     expect(metadata.max_budget_alert_emails).toStrictEqual(expectedAlerts);
     expect(metadata.cost_center).toBe("eng");
@@ -2791,6 +2789,21 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(metadata).not.toHaveProperty("max_budget_alert_emails");
     expect(metadata.cost_center).toBe("eng");
   });
+
+  it.each(["invalid", { bogus: ["x@test.com"], "101": ["x@test.com"] }])(
+    "removes malformed stored team alerts so an empty editor can save (%j)",
+    async (stored) => {
+      const user = userEvent.setup({ delay: null });
+      await openEditorWithTeamBudgetAlerts(user, {
+        metadata: { cost_center: "eng", max_budget_alert_emails: stored },
+      });
+
+      const metadata = teamBudgetAlertMetadata(await save(user));
+
+      expect(metadata).not.toHaveProperty("max_budget_alert_emails");
+      expect(metadata.cost_center).toBe("eng");
+    },
+  );
 
   it("warns only when percentage alerts, a soft budget and legacy recipients are all configured", async () => {
     const user = userEvent.setup({ delay: null });

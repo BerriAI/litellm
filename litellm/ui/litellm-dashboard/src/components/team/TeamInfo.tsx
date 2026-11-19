@@ -131,7 +131,6 @@ import TeamMembersComponent from "./TeamMemberTab";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import {
   budgetAlertEmailsFromRows,
-  budgetAlertEmailsMetadata,
   budgetAlertRowsFromMetadata,
   budgetAlertRowsSchema,
   KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
@@ -1101,11 +1100,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
           ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
           : {};
-      const maxBudgetAlertEmailsMetadata = budgetAlertEmailsMetadata(
-        budgetAlertEmailsFromRows(values.max_budget_alert_emails ?? []),
-        KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
-        info.metadata,
-      );
+      const maxBudgetAlertEmails = budgetAlertEmailsFromRows(values.max_budget_alert_emails ?? []);
+      const maxBudgetAlertEmailsMetadata =
+        Object.keys(maxBudgetAlertEmails).length > 0 ? { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: maxBudgetAlertEmails } : {};
       const storedRequireTraceIdMetadata =
         info.metadata && Object.prototype.hasOwnProperty.call(info.metadata, "require_trace_id")
           ? { require_trace_id: info.metadata.require_trace_id }
