@@ -41,8 +41,10 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     validate_budget_duration,
 )
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    Failure,
     PrismaRecord,
     budget_limit_json,
+    delete_unattached_customer_budget,
     organization_budget_group_ids,
 )
 from litellm.proxy.management_helpers.utils import validate_budget_windows_update
@@ -493,6 +495,11 @@ async def delete_budget(
             },
         )
 
-    response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
+    response: Final = await delete_unattached_customer_budget(BudgetRepository(prisma_client).table, data.id)
+    if isinstance(response, Failure):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "Budget is attached to a customer or app. Remove it through the owning entity."},
+        )
 
     return response
