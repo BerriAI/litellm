@@ -1,7 +1,8 @@
-//! LiteLLM's explicit AWS login for an external account, Python's
-//! `VertexAIAwsWifAuth.credentials_from_explicit_aws`: a GetCallerIdentity request signed with the
-//! AWS credentials LiteLLM resolves from the file's own `aws_*` keys, serialized as the subject
-//! token Google's Rust SDK exchanges at STS.
+//! LiteLLM's explicit AWS login for an external account: workload identity federation with AWS
+//! as the identity provider, Python's `VertexAIAwsWifAuth.credentials_from_explicit_aws`. AWS
+//! vouches for the caller through a GetCallerIdentity request signed with the AWS credentials
+//! LiteLLM resolves from the file's own `aws_*` keys. That signed request, serialized as the
+//! subject token, is what Google's Rust SDK exchanges at Google's STS for a Google access token.
 
 use std::{sync::Arc, time::SystemTime};
 
@@ -24,7 +25,7 @@ use crate::{
 };
 
 /// An external account in `vertex_credentials` with LiteLLM's own `aws_*` keys, which Python's
-/// `_credentials_from_json` signs in with through `aws`.
+/// `_credentials_from_json` signs in with through `aws`, AWS acting as the identity provider.
 pub(crate) fn explicit_aws_login(
     info: &ExternalAccountInfo,
     environment: &Arc<dyn GoogleEnvironment>,
