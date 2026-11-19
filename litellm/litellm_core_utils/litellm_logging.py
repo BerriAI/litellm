@@ -680,8 +680,9 @@ def _resolve_mantle_region_for_cost(
     model: str | None = None,
 ) -> str | None:
     if custom_llm_provider == "bedrock" and model is not None and model.removeprefix("bedrock/").startswith("mantle/"):
-        region: Final = (litellm_params or MappingProxyType({})).get("aws_region_name")
-        return region if isinstance(region, str) and region else None
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        return BaseAWSLLM().get_aws_region_name(dict(litellm_params or MappingProxyType({})), model=model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_region

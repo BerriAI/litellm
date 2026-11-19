@@ -10870,9 +10870,18 @@ def test_resolve_mantle_region_for_cost(monkeypatch):
             "us-gov-west-1",
             "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5",
         ),
+        (
+            "bedrock/mantle/anthropic.claude-sonnet-5-5",
+            None,
+            "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5",
+        ),
     ],
 )
-def test_mantle_response_cost_uses_served_region(model: str, region: str, pricing_key: str) -> None:
+def test_mantle_response_cost_uses_served_region(
+    model: str, region: str | None, pricing_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "us-gov-west-1")
+
     def respond(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -10888,7 +10897,7 @@ def test_mantle_response_cost_uses_served_region(model: str, region: str, pricin
         )
 
     with httpx.Client(transport=httpx.MockTransport(respond)) as client:
-        response = litellm.completion(
+        response: Final = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "hi"}],
             aws_region_name=region,
@@ -10897,8 +10906,8 @@ def test_mantle_response_cost_uses_served_region(model: str, region: str, pricin
             client=HTTPHandler(client=client),
         )
 
-    row = litellm.model_cost[pricing_key]
-    expected_cost = 1000000 * (row["input_cost_per_token"] + row["output_cost_per_token"])
+    row: Final = litellm.model_cost[pricing_key]
+    expected_cost: Final[float] = 1000000 * (row["input_cost_per_token"] + row["output_cost_per_token"])
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
