@@ -1559,6 +1559,61 @@ def test_get_response_for_spend_logs_payload_keeps_a_long_compaction_summary_who
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message["content"]
 
 
+def test_stored_response_keeps_an_anthropic_web_search_ciphertext_whole_for_previous_response_id_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    monkeypatch.setattr(proxy_server, "general_settings", {"redact_tokens_in_spend_logs": True})
+    token_shaped: Final = "AKIAIOSFODNN7EXAMPLE"
+    ciphertext_half: Final = "EqYBCioIBhgCIiQ5" * (MAX_STRING_LENGTH_PROMPT_IN_DB // 16)
+    ciphertext: Final = f"{ciphertext_half}/{token_shaped}+{ciphertext_half}=="
+    title: Final = f"{token_shaped} " + "Weather in Paris " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 17)
+    filler: Final = "detail " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 7)
+    payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "response": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": f"{filler}Paris is sunny today.{filler}",
+                            "provider_specific_fields": {
+                                "web_search_results": [
+                                    {
+                                        "type": "web_search_tool_result",
+                                        "tool_use_id": "srvtoolu_01",
+                                        "content": [
+                                            {
+                                                "type": "web_search_result",
+                                                "url": "https://example.com/paris-weather",
+                                                "title": title,
+                                                "encrypted_content": ciphertext,
+                                                "page_age": "2 days ago",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                ]
+            }
+        },
+    )
+
+    message: Final = json.loads(_get_response_for_spend_logs_payload(payload))["choices"][0]["message"]
+    stored_result: Final = message["provider_specific_fields"]["web_search_results"][0]["content"][0]
+
+    assert stored_result["encrypted_content"] == ciphertext
+    assert stored_result["title"].startswith(f"{REDACTED_BY_LITELM_STRING} Weather in Paris")
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_result["title"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message["content"]
+
+
 def test_stored_request_keeps_only_the_summary_of_a_long_claude_compaction_input_item(monkeypatch: pytest.MonkeyPatch):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 

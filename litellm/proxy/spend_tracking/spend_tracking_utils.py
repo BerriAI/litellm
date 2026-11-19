@@ -1618,9 +1618,9 @@ def _compaction_summary_for_db(summary: str) -> str:
 
 
 def _bounded_compaction_summary(
-    parent: Mapping[str, object], key: str, value: object, keep_compaction_blocks: bool
+    parent: Mapping[str, object], key: str, value: object, keep_replay_blocks: bool
 ) -> str | None:
-    if not keep_compaction_blocks or not isinstance(value, str) or parent.get("type") != "compaction":
+    if not keep_replay_blocks or not isinstance(value, str) or parent.get("type") != "compaction":
         return None
     if key == "content":
         return _compaction_summary_for_db(value)
@@ -1628,12 +1628,23 @@ def _bounded_compaction_summary(
     return None if summary is None else with_compaction_summary(value, _compaction_summary_for_db(summary))
 
 
+def _is_web_search_result_ciphertext(
+    parent: Mapping[str, object], key: str, value: object, keep_replay_blocks: bool
+) -> bool:
+    return (
+        keep_replay_blocks
+        and key == "encrypted_content"
+        and isinstance(value, str)
+        and parent.get("type") == "web_search_result"
+    )
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
-    keep_compaction_blocks: bool = False,
+    keep_replay_blocks: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1658,7 +1669,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_compaction_blocks
+                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_replay_blocks
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
@@ -1669,7 +1680,9 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _stored_value(key: str, value: object) -> object:
         if mask_credentials and _is_request_body_credential(key, value):
             return REDACTED_BY_LITELM_STRING
-        bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_compaction_blocks)
+        if _is_web_search_result_ciphertext(request_body, key, value, keep_replay_blocks):
+            return value
+        bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_replay_blocks)
         if bounded_summary is not None:
             return bounded_summary
         return _sanitize_value(value, mask_credentials and not _is_spend_log_content(request_body, key))
@@ -2320,7 +2333,7 @@ def _get_response_for_spend_logs_payload(
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
-            {"response": response_obj}, keep_compaction_blocks=True
+            {"response": response_obj}, keep_replay_blocks=True
         )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
