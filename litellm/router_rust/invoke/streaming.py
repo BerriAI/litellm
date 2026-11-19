@@ -1669,7 +1669,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             ):
                 if not response_id_exposed and background_stream_can_release(item):
                     response_id_exposed = True
-                if not response_id_exposed and _responses_stream_holds_event(item, len(held)):
+                if not output_started and not response_id_exposed and _responses_stream_holds_event(item, len(held)):
                     held = (*held, item)
                     continue
                 for held_event in held:
@@ -1832,7 +1832,7 @@ async def _responses_recover_stream_error(
                 retried if isinstance(retried, Exception) else e, e.model or "", e.llm_provider
             )
     async with contextlib.aclosing(
-        _responses_fallback_attempt(attempt, last_error, source_iterator, adopt_headers, held)
+        _responses_fallback_attempt(attempt, last_error, source_iterator, adopt_headers, held, output_started)
     ) as fallback_stream:
         async for fallback_item in fallback_stream:
             yield fallback_item
@@ -1891,11 +1891,14 @@ async def _responses_fallback_attempt(
     source_iterator: "BaseResponsesAPIStreamingIterator",
     adopt_headers: Callable[[object], _Prepared],
     held: tuple[object, ...],
+    output_started: bool,
 ) -> AsyncGenerator[object, None]:
     """Re-enters the fallback walk for a mid-stream Responses error. The primary's held lifecycle events
     reach the client only when no fallback lands."""
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ResponsesContinuationSeam
 
+    if output_started and _mid_stream_error_before_output(e):
+        _raise_original_mid_stream_error(e)
     continued: Final = _responses_continuation_request(attempt, e, source_iterator)
     seam: Final = ResponsesContinuationSeam(e.generated_content if continued is not None else "")
     partial_usage: Final = _extract_partial_responses_usage(source_iterator)
