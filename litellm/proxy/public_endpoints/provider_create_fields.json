@@ -1736,6 +1736,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Gnani",
+    "provider_display_name": "Gnani",
+    "litellm_provider": "gnani",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.vachana.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "Gnani API Key",
+        "placeholder": null,
+        "tooltip": "Supports Prisma v3 and v2.5 Speech-to-Text on /v1/audio/transcriptions.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "gnani/prisma-v3.0"
+  },
+  {
     "provider": "Google_AI_Studio",
     "provider_display_name": "Google AI Studio",
     "litellm_provider": "gemini",

@@ -1341,7 +1341,7 @@
     },
     "gnani": {
       "display_name": "Gnani (`gnani`)",
-      "url": "https://github.com/BerriAI/litellm/blob/main/litellm/llms/gnani/README.md",
+      "url": "https://docs.litellm.ai/docs/providers/gnani",
       "endpoints": {
         "chat_completions": false,
         "responses": false,
