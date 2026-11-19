@@ -16,6 +16,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
@@ -72,6 +73,10 @@ def _budgeted_token() -> UserAPIKeyAuth:
         "default_fallbacks",
         "request_fallbacks",
         "request_models",
+        "router_settings_override",
+        "user_config",
+        "key_settings",
+        "team_settings",
     ],
 )
 async def test_only_forwarded_subscription_oauth_skips_budget_hold(
@@ -111,6 +116,23 @@ async def test_only_forwarded_subscription_oauth_skips_budget_hold(
     )
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(proxy_server, "llm_router", router if operator else None)
+    identity: Final = _budgeted_token().model_copy(
+        update={
+            **({"router_settings": {"fallbacks": [{"claude": ["paid"]}]}} if fallback == "key_settings" else {}),
+            **({"team_id": "oauth-budget-team"} if fallback == "team_settings" else {}),
+        }
+    )
+    if fallback == "team_settings":
+        cache: Final = UserApiKeyCache()
+        cache.set_cache(
+            key="team_id:oauth-budget-team",
+            value=LiteLLM_TeamTableCachedObj(
+                team_id="oauth-budget-team",
+                router_settings={"fallbacks": [{"claude": ["paid"]}]},
+            ),
+        )
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
     result = await reserve_budget_for_request(
         request_body={
             "model": "claude",
@@ -118,11 +140,17 @@ async def test_only_forwarded_subscription_oauth_skips_budget_hold(
             "max_tokens": 1,
             **({"fallbacks": ["paid"]} if fallback == "request_fallbacks" else {}),
             **({"models": ["claude", "paid"]} if fallback == "request_models" else {}),
+            **(
+                {"router_settings_override": {"fallbacks": [{"claude": ["paid"]}]}}
+                if fallback == "router_settings_override"
+                else {}
+            ),
+            **({"user_config": {"fallbacks": [{"claude": ["paid"]}]}} if fallback == "user_config" else {}),
             "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}},
         },
         route=route,
         llm_router=router,
-        valid_token=_budgeted_token(),
+        valid_token=identity,
         team_object=None,
         user_object=None,
         prisma_client=None,

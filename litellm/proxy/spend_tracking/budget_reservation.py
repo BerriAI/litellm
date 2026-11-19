@@ -355,8 +355,23 @@ async def _forwards_subscription_oauth(
         return await anthropic_route_uses_client_oauth(request, valid_token)
     if route not in ("/messages", "/v1/messages", "/chat/completions", "/v1/chat/completions"):
         return False
+    if request_body.get("user_config") is not None:
+        return False
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+    from litellm.proxy.route_llm_request import router_settings_override_updates
+
+    hierarchical_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    effective_request: Final = MappingProxyType(
+        {
+            **request_body,
+            **({"router_settings_override": hierarchical_settings} if hierarchical_settings is not None else {}),
+        }
+    )
+    override_updates: Final = router_settings_override_updates(effective_request)
     if any(
-        field in request_body
+        field in request_body or field in override_updates
         for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "models", "model_list")
     ):
         return False
