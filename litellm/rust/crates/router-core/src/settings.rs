@@ -3,10 +3,12 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use litellm_router_types::RoutingStrategy;
+
 use crate::{
     config::{
         AllowedFailsPolicy, DEFAULT_COOLDOWN_TIME, PluginSpec, RetryPolicy, RouterConfig,
-        RouterDynamicConfig, RoutingStrategy,
+        RouterDynamicConfig,
     },
     error::AttemptError,
 };

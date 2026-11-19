@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
+import { BudgetUsageProgress } from "@/components/shared/BudgetUsageProgress";
+import { budgetUsageColor } from "@/components/shared/budgetUsageColor";
 import { formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
-import { cn } from "@/lib/cva.config";
 import { CUSTOMER_BUDGET_LABELS, customerBudgetPeriod, type CustomerBudgetUsage } from "./customerBudgetUsage";
 
 function budgetPercentage(spend: number, limit: number | null): number {
@@ -47,8 +48,8 @@ export default function CustomerBudgetSpend({
 }) {
   const { t } = useTranslation();
   const value = `${spend === null ? t("customerPortal.analytics.unknownSpend") : formatUsd(spend)} / ${limit === null ? noLimitLabel ?? t("customerPortal.analytics.noLimit") : formatUsd(limit)}`;
-  const atLimit = limit !== null && spend !== null && spend >= limit;
   const percentage = budgetPercentage(spend ?? 0, limit);
+  const color = budgetUsageColor(percentage);
   const balance =
     limit === null || spend === null
       ? null
@@ -62,32 +63,18 @@ export default function CustomerBudgetSpend({
         <span className="whitespace-nowrap font-medium">{value}</span>
         {balance !== null && (
           <span
-            className={cn(
-              "whitespace-nowrap rounded px-1.5 py-0.5 text-xs",
-              atLimit
-                ? "bg-destructive/10 text-destructive"
-                : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-            )}
+            className="whitespace-nowrap rounded px-1.5 py-0.5 text-xs"
+            style={{
+              backgroundColor: `color-mix(in oklab, ${color} 12%, transparent)`,
+              color: `color-mix(in oklab, ${color} 60%, var(--foreground))`,
+            }}
           >
             {balance}
           </span>
         )}
       </div>
       {limit !== null && spend !== null && (
-        <div
-          role="progressbar"
-          aria-label={label}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percentage}
-          aria-valuetext={`${value}, ${balance}`}
-          className="h-1 overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className={cn("h-full rounded-full", atLimit ? "bg-destructive" : "bg-emerald-500")}
-            style={{ width: `${percentage}%` }}
-          />
-        </div>
+        <BudgetUsageProgress percentage={percentage} label={label} valueText={`${value}, ${balance}`} />
       )}
     </div>
   );

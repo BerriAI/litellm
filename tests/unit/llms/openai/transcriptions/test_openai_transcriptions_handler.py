@@ -5,6 +5,7 @@ import httpx
 import pytest
 from openai import AsyncOpenAI, OpenAI
 
+import litellm
 from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from litellm.types.utils import TranscriptionResponse
 
@@ -69,3 +70,40 @@ async def test_async_audio_transcriptions_records_provider_response_headers():
         )
 
     _assert_headers_recorded(response, logging_obj)
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_groq_transcription_looks_up_the_catalog_rate(use_async: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "groq/whisper-large-v3-turbo"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, "litellm_provider": "groq", "mode": "audio_transcription"},
+    )
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"text": "hello", "duration": 12.0, "language": "en"})
+    )
+    audio: Final = ("audio.wav", b"riff-bytes", "audio/wav")
+    if use_async:
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            response = await litellm.atranscription(
+                model=model,
+                file=audio,
+                response_format="verbose_json",
+                client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+                api_key="transport-only",
+            )
+    else:
+        with httpx.Client(transport=transport) as http_client:
+            response = litellm.transcription(
+                model=model,
+                file=audio,
+                response_format="verbose_json",
+                client=OpenAI(api_key="transport-only", http_client=http_client),
+                api_key="transport-only",
+            )
+
+    assert litellm.completion_cost(
+        completion_response=response, model=model, call_type="transcription"
+    ) == pytest.approx(0.12)

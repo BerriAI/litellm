@@ -9,6 +9,7 @@ _MIGRATIONS: Final = Path(__file__).parents[4] / "litellm/proxy-extras/litellm_p
 _OLD_LEDGER: Final = _MIGRATIONS / "20261027000000_add_accounting_ledger_tables/migration.sql"
 _SPEND_LOG_DELIVERY: Final = _MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql"
 _DROP: Final = _MIGRATIONS / "20261104010000_drop_accounting_event_tables/migration.sql"
+_DROP_DELIVERY_ID_DEFAULT: Final = _MIGRATIONS / "20261104020000_spendlogs_delivery_id_drop_default/migration.sql"
 _DROPPED: Final = (
     "AccountingDeliveryTarget",
     "AccountingEventKind",
@@ -51,8 +52,8 @@ def test_drop_removes_the_old_ledger_and_keeps_spend_log_deliveries(old_states: 
                 (f"event-{index}", state),
             )
         connection.execute(
-            'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, state, accounting_payload, is_batch) '
-            "VALUES ('request', 'pending', '{}', false)"
+            'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, state, accounting_payload, is_batch) '
+            "VALUES ('request', 'request', 'pending', '{}', false)"
         )
 
         _apply(connection, _DROP)
@@ -62,3 +63,56 @@ def test_drop_removes_the_old_ledger_and_keeps_spend_log_deliveries(old_states: 
         assert connection.execute('SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
             ("request", "pending")
         ]
+
+
+def _deliveries(connection: psycopg.Connection[tuple[object, ...]]) -> list[tuple[object, ...]]:
+    return connection.execute(
+        'SELECT delivery_id, request_id FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
+    ).fetchall()
+
+
+def _insert_delivery(connection: psycopg.Connection[tuple[object, ...]], request_id: str) -> None:
+    connection.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch) '
+        "VALUES (%s, %s, '{}', false)",
+        (f"delivery-{request_id}", request_id),
+    )
+
+
+def test_delivery_table_stores_application_ids_without_database_uuid_generation() -> None:
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        _apply(connection, _OLD_LEDGER)
+        _apply(connection, _SPEND_LOG_DELIVERY)
+
+        _insert_delivery(connection, "request")
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch) '
+                "VALUES ('no-id', '{}', false)"
+            )
+
+        assert _deliveries(connection) == [("delivery-request", "request")]
+
+
+def test_drop_default_keeps_deliveries_written_under_the_database_generated_id() -> None:
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        _apply(connection, _OLD_LEDGER)
+        _apply(connection, _SPEND_LOG_DELIVERY)
+        connection.execute(
+            'ALTER TABLE "LiteLLM_SpendLogDelivery" ALTER COLUMN "delivery_id" SET DEFAULT gen_random_uuid()::text'
+        )
+        connection.execute(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch) '
+            "VALUES ('existing', '{}', false)"
+        )
+        existing: Final = _deliveries(connection)
+
+        _apply(connection, _DROP_DELIVERY_ID_DEFAULT)
+        _insert_delivery(connection, "new")
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch) '
+                "VALUES ('no-id', '{}', false)"
+            )
+
+        assert _deliveries(connection) == [*existing, ("delivery-new", "new")]

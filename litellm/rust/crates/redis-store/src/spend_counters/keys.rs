@@ -8,6 +8,12 @@ pub enum CustomerScope {
     Team,
     #[strum(serialize = "customer_member")]
     Member,
+    #[strum(serialize = "app")]
+    App,
+    #[strum(serialize = "app_customer_org")]
+    AppOrganization,
+    #[strum(serialize = "app_customer_member")]
+    AppMember,
 }
 
 /// One budget's spend counter. `parse` and `key` round-trip `main`'s `spend:*` keys exactly.
@@ -34,6 +40,10 @@ pub enum SpendCounter {
         window: String,
     },
     User(String),
+    UserWindow {
+        user_id: String,
+        window: String,
+    },
     EndUser(String),
     Org(String),
     Tag(String),
@@ -43,6 +53,9 @@ pub enum SpendCounter {
     CustomerOrg(String),
     CustomerTeam(String),
     CustomerMember(String),
+    App(String),
+    AppCustomerOrg(String),
+    AppCustomerMember(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +85,7 @@ impl SpendCounter {
                 format!("spend:{scope}:{entity_id}:window:{window}")
             }
             Self::User(id) => format!("spend:user:{id}"),
+            Self::UserWindow { user_id, window } => format!("spend:user_window:{user_id}:{window}"),
             Self::EndUser(id) => format!("spend:end_user:{id}"),
             Self::Org(id) => format!("spend:org:{id}"),
             Self::Tag(name) => format!("spend:tag:{name}"),
@@ -81,6 +95,9 @@ impl SpendCounter {
             Self::CustomerOrg(id) => format!("spend:customer_org:{id}"),
             Self::CustomerTeam(id) => format!("spend:customer_team:{id}"),
             Self::CustomerMember(id) => format!("spend:customer_member:{id}"),
+            Self::App(id) => format!("spend:app:{id}"),
+            Self::AppCustomerOrg(id) => format!("spend:app_customer_org:{id}"),
+            Self::AppCustomerMember(id) => format!("spend:app_customer_member:{id}"),
         }
     }
 
@@ -112,6 +129,9 @@ impl SpendCounter {
                     CustomerScope::Organization => Self::CustomerOrg(id.to_owned()),
                     CustomerScope::Team => Self::CustomerTeam(id.to_owned()),
                     CustomerScope::Member => Self::CustomerMember(id.to_owned()),
+                    CustomerScope::App => Self::App(id.to_owned()),
+                    CustomerScope::AppOrganization => Self::AppCustomerOrg(id.to_owned()),
+                    CustomerScope::AppMember => Self::AppCustomerMember(id.to_owned()),
                 }),
             };
         }
@@ -136,6 +156,15 @@ impl SpendCounter {
                 }
             }
             "user" => Self::User(id.to_owned()),
+            "user_window" => match id.rsplit_once(':') {
+                Some((user_id, window)) if !user_id.is_empty() && !window.is_empty() => {
+                    Self::UserWindow {
+                        user_id: user_id.to_owned(),
+                        window: window.to_owned(),
+                    }
+                }
+                _ => return Err(invalid()),
+            },
             "end_user" => Self::EndUser(id.to_owned()),
             "org" => Self::Org(id.to_owned()),
             "tag" => Self::Tag(id.to_owned()),
@@ -158,6 +187,16 @@ mod tests {
     #[case::lifetime_organization("spend:customer_org:tenant:lifetime")]
     #[case::period_team("spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00")]
     #[case::lifetime_member("spend:customer_member:user@example.com:lifetime")]
+    #[case::app("spend:app:application:lifetime")]
+    #[case::app_organization("spend:app_customer_org:application:org:lifetime")]
+    #[case::app_member("spend:app_customer_member:application:member:lifetime")]
+    #[case::app_window("spend:app:application:window:1mo@2026-11-01T00:00:00+00:00")]
+    #[case::app_org_window(
+        "spend:app_customer_org:application%3Aorg:window:1mo@2026-11-01T00:00:00+00:00"
+    )]
+    #[case::app_member_window(
+        "spend:app_customer_member:application%3Amember:window:12mo@2026-01-01T00:00:00+00:00"
+    )]
     fn customer_counter_keys_round_trip(#[case] key: &str) {
         assert_eq!(
             SpendCounter::parse(key).expect("customer counter").key(),

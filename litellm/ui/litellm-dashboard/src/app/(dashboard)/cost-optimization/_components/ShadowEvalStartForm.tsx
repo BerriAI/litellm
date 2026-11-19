@@ -225,6 +225,7 @@ const buildStartBody = (inputs: StartBodyInputs) => ({
   duration_days: inputs.durationDays,
   max_budget: inputs.maxBudget,
   judge_model: inputs.judgeModel,
+  skip_same_model: false,
 });
 
 export const StartForm: React.FC = () => {

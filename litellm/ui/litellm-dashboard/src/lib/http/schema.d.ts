@@ -1019,7 +1019,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Resolve or dismiss matching open alerts
+         * @description Update all matching open saved alerts, including unloaded pages. Only gateway admins can write.
+         */
+        patch: operations["update_open_alerts_alerts_patch"];
         trace?: never;
     };
     "/alerts/monitoring": {
@@ -1572,6 +1576,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/shadow_eval/rubric/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Shadow Eval Rubric
+         * @description Start a shadow eval whose judge, besides picking the better response, grades each
+         *     response from 1 (fails the rubric's criteria) to 5 (fully meets them). Everything
+         *     else matches /auto_router/shadow_eval/start, and the job's preference results stay
+         *     on the regular job endpoints. Read grades from
+         *     /auto_router/shadow_eval/{job_id}/rubric_results.
+         *
+         *     Disabled unless LITELLM_SHADOW_EVAL_RUBRIC_ENABLED=true. Each worker process reads
+         *     its own environment, so a change applies only once every worker is redeployed or
+         *     restarted with it. A worker without rubric support ignores the setting and samples a
+         *     rubric job as a preference-only job, so enable it only after every API and sampling
+         *     worker sharing the database runs a version with this route. Workers with the setting
+         *     off neither start nor sample rubric jobs.
+         *
+         *     Rolling back to a version without rubric support is not zero-downtime for rubric
+         *     jobs. Before any older worker starts: apply the setting off to every upgraded worker,
+         *     stop every running rubric job with /auto_router/shadow_eval/{job_id}/stop, and wait
+         *     until every upgraded worker's in-flight evaluations have finished, for example by
+         *     draining or stopping those workers. The roughly 10 second job cache expiry alone does
+         *     not guarantee that drain.
+         */
+        post: operations["start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval/start": {
         parameters: {
             query?: never;
@@ -1629,6 +1671,28 @@ export interface paths {
          * @description One job with derived counts, judge spend, latest error, and stratified results.
          */
         get: operations["get_shadow_eval_job_auto_router_shadow_eval__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}/rubric_results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shadow Eval Rubric Results
+         * @description A rubric job's grades: graded and ungraded turn counts and the joint distribution
+         *     of (real_grade, shadow_grade), overall and per router arm. A job started without a
+         *     rubric is a 404 here.
+         */
+        get: operations["get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2205,7 +2269,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
-        post: operations["new_budget_endpoint_budget_new_post"];
+        post: operations["new_budget_budget_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2265,7 +2329,7 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
-        post: operations["update_budget_endpoint_budget_update_post"];
+        post: operations["update_budget_budget_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4024,6 +4088,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/nvidia_nim/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Nim Models
+         * @description List upstream NIM models using a saved credential or submitted connection settings.
+         *
+         *     Requires a proxy administrator. Returns model IDs only, without asserting inference access,
+         *     pricing or capabilities. Upstream failures return unavailable so the UI can use its catalog.
+         */
+        post: operations["discover_nim_models_credentials_nvidia_nim_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/user_connections": {
         parameters: {
             query?: never;
@@ -4144,6 +4231,26 @@ export interface paths {
          * @description Begin a GitHub device flow for the calling user's connection to a per-user credential.
          */
         post: operations["start_user_connection_credentials__credential_name__user_connection_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor-cli/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cursor Cli Passthrough
+         * @description Forward the signed-in Cursor CLI's agent session using a separate x-litellm-api-key. Set network.useHttp1ForAgent to true in the CLI's cli-config.json, then run `agent --agent-endpoint https://YOUR_PROXY/cursor-cli --header "x-litellm-api-key: Bearer YOUR_KEY"`. Leave --endpoint unchanged. Login, bootstrap and model discovery stay direct to Cursor. Use an unrestricted virtual key or master key. JWT and custom-auth credentials are unsupported. Keys bound to LiteLLM agents are unsupported. Model restrictions, token limits, spend budgets and content guardrails are unsupported. Configured moderation, content guardrails or policy-engine rules disable this relay, even when not selected by this request. Request limits count RPCs, not agent sessions. Allow overlapping stream and append calls. Logs describe HTTP transport status, not the agent's outcome. The client owns login and token refresh.
+         */
+        post: operations["cursor_cli_passthrough_cursor_cli__endpoint__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4553,7 +4660,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -5232,7 +5339,7 @@ export interface paths {
         };
         /**
          * End User Info
-         * @description Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+         * @description [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
          *
          *     Parameters:
          *     - end_user_id (str, required): The unique identifier for the end-user
@@ -6197,6 +6304,27 @@ export interface paths {
          * @description Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
          */
         get: operations["get_mcp_tool_search_settings_get_mcp_tool_search_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/reference_exchange_rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Exchange Rates
+         * @description ECB euro foreign exchange reference rates as USD per unit of each currency, with USD at 1. They estimate a USD
+         *     total in another currency for display and are not settlement quotes. Refreshes from the ECB feed when due.
+         */
+        get: operations["reference_exchange_rates_get_reference_exchange_rates_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8620,6 +8748,8 @@ export interface paths {
          *         - key: str - The key identifier (token) to update
          *         - budget_id: Optional[str] - Budget ID associated with the key
          *         - max_budget: Optional[float] - Max budget for key
+         *         - budget_duration: Optional[str] - Budget reset period, or null to stop resetting
+         *         - user_id: Optional[str] - Owner user ID, or null to remove the owner
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
@@ -9548,6 +9678,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Apps */
+        get: operations["list_apps_management_v1_apps_get"];
+        put?: never;
+        /**
+         * Create App
+         * @description Configure budget policy for an existing resource of the gateway app type. Proxy admins only.
+         */
+        post: operations["create_app_management_v1_apps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/definition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Definition */
+        get: operations["get_app_definition_management_v1_apps_definition_get"];
+        /** Put App Definition */
+        put: operations["put_app_definition_management_v1_apps_definition_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Resources */
+        get: operations["list_app_resources_management_v1_apps_resources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App */
+        get: operations["get_app_management_v1_apps__app_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch App */
+        patch: operations["patch_app_management_v1_apps__app_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}/customer_members/{customer_member_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Member */
+        get: operations["get_app_member_management_v1_apps__app_id__customer_members__customer_member_id__get"];
+        /** Put App Member */
+        put: operations["put_app_member_management_v1_apps__app_id__customer_members__customer_member_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Organization */
+        get: operations["get_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__get"];
+        /** Put App Organization */
+        put: operations["put_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/budgets": {
         parameters: {
             query?: never;
@@ -9683,7 +9923,7 @@ export interface paths {
         };
         /**
          * List Customer Members
-         * @description List customer members with page-number pagination and resolved budgets. Proxy admins only.
+         * @description List customer members with page-number pagination and resolved budgets. search filters by customer member ID or alias before paginating. Proxy admins only.
          */
         get: operations["list_customer_members_management_v1_customer_members_get"];
         put?: never;
@@ -9707,7 +9947,7 @@ export interface paths {
         };
         /**
          * Customer Member Daily Activity
-         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. Proxy admins only.
+         * @description Get paginated daily customer member activity with model, provider, key and member breakdowns. Filters accept comma-separated member IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_member_daily_activity_management_v1_customer_members_daily_activity_get"];
         put?: never;
@@ -9761,9 +10001,33 @@ export interface paths {
         head?: never;
         /**
          * Update Customer Member
-         * @description Update a customer member and its budgets. Proxy admins only.
+         * @description Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the same organization, with the first team as default. Identity, budget counters and historical usage are retained. Historical usage stays attributed to the original team. Proxy admins only.
          */
         patch: operations["update_customer_member_management_v1_customer_members__customer_member_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/customer_organization_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Organization Budget Groups
+         * @description List reusable organization budget groups and their revision. Proxy admins only.
+         */
+        get: operations["get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure Customer Organization Budget Groups
+         * @description Save the complete organization budget group list with its expected_revision. default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch"];
         trace?: never;
     };
     "/management/v1/customer_organizations": {
@@ -9799,7 +10063,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity
-         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. Proxy admins only.
+         * @description Get paginated daily customer organization activity with model, provider, key and organization breakdowns. Filters accept comma-separated organization IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_management_v1_customer_organizations_daily_activity_get"];
         put?: never;
@@ -9819,7 +10083,7 @@ export interface paths {
         };
         /**
          * Customer Organization Daily Activity Aggregated
-         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
+         * @description Get complete daily usage totals for up to 100 customer organizations in one response. Uses shared SQL daily-spend aggregation with per-organization breakdowns. Dates are inclusive UTC days, limited to 400 days. Model/API-key/app filters apply before aggregation. Provide either customer_org_ids or customer_org_id for one exact ID, including commas or whitespace. Key breakdowns show the top key; totals include every key. No raw-row pagination is required. Budget counters are returned separately by organization reads. Proxy admins only.
          */
         get: operations["customer_organization_daily_activity_aggregated_management_v1_customer_organizations_daily_activity_aggregated_get"];
         put?: never;
@@ -9934,8 +10198,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Customer Portal Limits
-         * @description Get customer portal free-tier limits and current capacity. Proxy admins only.
+         * Get Customer Management Limits
+         * @description Get Customer Management free-tier limits and current capacity. Proxy admins only.
          */
         get: operations["get_customer_portal_limits_management_v1_customer_portal_limits_get"];
         put?: never;
@@ -9979,7 +10243,7 @@ export interface paths {
         };
         /**
          * Customer Team Daily Activity
-         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. Proxy admins only.
+         * @description Get paginated daily customer team activity with model, provider, key and team breakdowns. Filters accept comma-separated team IDs. app_id narrows usage without changing global budgets. Proxy admins only.
          */
         get: operations["customer_team_daily_activity_management_v1_customer_teams_daily_activity_get"];
         put?: never;
@@ -10064,6 +10328,46 @@ export interface paths {
          * @description The distinct internal users appearing in spend logs the caller can read.
          */
         get: operations["list_spend_log_users_management_v1_spend_logs_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/teams/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Team Members
+         * @description One team's members, paged, sortable and filterable. Readable by whoever can read the team
+         *     through `/team/info`: proxy admins and admin viewers, a key of the team, its members, and
+         *     admins of its organization. An unknown team is a 404.
+         *
+         *     Each row is a roster entry (`user_id`, `user_email`, `user_alias`, `role`) with the fields
+         *     `/team/info` reports for that member in `team_memberships` (`spend`, `total_spend`,
+         *     `budget_id`, `litellm_budget_table`, `budget_source`). `/team/info` returns the whole roster
+         *     on every call; this route reads one page of it.
+         *
+         *     `sort` takes a comma-separated list of `user_id`, `user_email`, `user_alias`, `role`, `spend`,
+         *     `total_spend`, `max_budget` (the member's own limit, else the team default), `budget_reset_at`
+         *     or `position` (roster order, the default and the tiebreaker), each optionally prefixed with `-`
+         *     for descending. `q` is a case-insensitive substring match on `user_id`, `user_email` and
+         *     `user_alias`. `page_size` defaults to 50 and is capped at 100. Filters are
+         *     `filter[role][eq|in]` and `filter[user_id][eq|in]`. `in` splits its value on commas, so name a `user_id`
+         *     that contains a comma with `eq`.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=jane&sort=-spend&filter[role][eq]=user'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *     ```
+         */
+        get: operations["list_team_members_management_v1_teams__team_id__members_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16297,7 +16601,7 @@ export interface paths {
         put?: never;
         /**
          * Import Skill
-         * @description Import a public skills.sh or GitHub skill as a portable snapshot.
+         * @description Register a source reference, or import a public skills.sh/GitHub URL as a portable snapshot.
          */
         post: operations["import_skill_skill_hub_skills_import_post"];
         delete?: never;
@@ -16340,7 +16644,7 @@ export interface paths {
         get: operations["get_skill_skill_hub_skills__name__get"];
         /**
          * Replace Skill Metadata
-         * @description Replace registry metadata, preserving files. Members submit an immutable proposal for admin review.
+         * @description Update supplied registry fields. Omitted metadata is retained, null clears it, and version defaults to a bump.
          */
         put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
         post?: never;
@@ -16444,7 +16748,7 @@ export interface paths {
         get?: never;
         /**
          * Replace Skill Archive
-         * @description Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp.
+         * @description Replace files and refresh their inherited description, retaining registry overrides and other metadata.
          */
         put: operations["replace_skill_archive_skill_hub_skills__name__upload_put"];
         post?: never;
@@ -16503,7 +16807,7 @@ export interface paths {
         };
         /**
          * Download Skill Version
-         * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
+         * @description Download a retained skill ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
         put?: never;
@@ -16591,7 +16895,7 @@ export interface paths {
         get: operations["get_submission_skill_hub_submissions__submission_id__get"];
         /**
          * Edit Submission
-         * @description Replace a pending proposal's metadata, preserving files. Only its original submitting user may edit.
+         * @description Update supplied proposal metadata. Omit/null version uses automatic versioning on approval.
          */
         put: operations["edit_submission_skill_hub_submissions__submission_id__put"];
         post?: never;
@@ -16630,7 +16934,7 @@ export interface paths {
         };
         /**
          * Download Submission
-         * @description Download an owned proposal as a private portable ZIP. Legacy nonportable archives return 404.
+         * @description Download an owned proposal as a private ZIP, preserving legacy packages without portable frontmatter.
          */
         get: operations["download_submission_skill_hub_submissions__submission_id__archive_get"];
         put?: never;
@@ -18192,6 +18496,7 @@ export interface paths {
          *
          *     Parameters:
          *     - team_id: str - Required. The unique identifier of the team to get info on.
+         *     - include_members: bool - Optional, default true. Pass false to get the team's settings without its roster.
          *
          *     ```
          *     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here'     --header 'Authorization: Bearer your_api_key_here'
@@ -18844,7 +19149,10 @@ export interface paths {
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
-         *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - langfuse_span_scope: For langfuse_otel, "full" sends the whole request trace,
+         *           "llm_only" sends only model-call spans.
+         *           Omitted follows LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE (default "full"), also configurable as
+         *           callback_settings.otel.langfuse_destination_span_scope.
          *         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
          *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
          *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
@@ -20189,7 +20497,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
-         *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
          *     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
          *     Returns:
          *     - key: (str) The generated api key for the user
@@ -20326,7 +20634,7 @@ export interface paths {
          *         - key_alias: Optional[str] - [NOT IMPLEMENTED].
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
-         *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *         - budget_limits: Optional[list] - Budget windows the user carries at the same time. Each window has a budget_duration and a max_budget, and whichever window runs out first blocks the user. Example - [{"budget_duration": "1h", "max_budget": 1.0}, {"budget_duration": "1mo", "max_budget": 100.0}].
          */
         post: operations["user_update_user_update_post"];
         delete?: never;
@@ -27695,7 +28003,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * Id
              * @description Opaque alert ID, also used as a pagination cursor.
@@ -27711,7 +28019,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27721,9 +28029,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -27747,6 +28054,28 @@ export interface components {
              * @description Inclusive start of the observed window, normalized to UTC milliseconds.
              */
             window_start: string;
+        };
+        /** AlertBulkResult */
+        AlertBulkResult: {
+            /**
+             * Updated
+             * @description Number of open saved alerts changed.
+             */
+            updated: number;
+        };
+        /** AlertBulkUpdate */
+        AlertBulkUpdate: {
+            /**
+             * Status
+             * @description Status to apply to every matching open saved alert.
+             * @enum {string}
+             */
+            status: "resolved" | "dismissed";
+            /**
+             * Type
+             * @description Only update this category, or all saved alerts if omitted.
+             */
+            type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
         };
         /** AlertHistoryPoint */
         AlertHistoryPoint: {
@@ -27790,6 +28119,28 @@ export interface components {
              * @default true
              */
             model_deprecations_enabled: boolean;
+            /**
+             * @description Effective built-in thresholds. Only Enterprise admins can edit them.
+             * @default {
+             *       "latency": {
+             *         "minimum_increase": 500,
+             *         "multiplier": 3
+             *       },
+             *       "reliability": {
+             *         "minimum_increase": 0.02,
+             *         "multiplier": 3
+             *       },
+             *       "spend": {
+             *         "minimum_increase": 50,
+             *         "multiplier": 3
+             *       },
+             *       "traffic": {
+             *         "minimum_increase": 1000,
+             *         "multiplier": 10
+             *       }
+             *     }
+             */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /** AlertMonitoringUpdate */
         AlertMonitoringUpdate: {
@@ -27798,6 +28149,24 @@ export interface components {
              * @description Enable or disable performance monitoring for this gateway.
              */
             enabled: boolean;
+        };
+        /** AlertThreshold */
+        AlertThreshold: {
+            /**
+             * Minimum Increase
+             * @description Minimum absolute increase above the baseline, in the metric's unit.
+             */
+            minimum_increase: number;
+            /**
+             * Multiplier
+             * @description Minimum multiple of the baseline.
+             */
+            multiplier: number;
+        };
+        /** AlertThresholdsUpdate */
+        AlertThresholdsUpdate: {
+            /** @description Replace the built-in performance thresholds. Enterprise only. */
+            thresholds: components["schemas"]["PerformanceAlertThresholds"];
         };
         /**
          * AlertType
@@ -27826,7 +28195,7 @@ export interface components {
              * Evidence
              * @description Small saved snapshot explaining the alert.
              */
-            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"];
+            evidence: components["schemas"]["MetricEvidence"] | components["schemas"]["DeprecationEvidence"] | components["schemas"]["PromptCacheEvidence"];
             /**
              * History
              * @description Current Usage values for the seven baseline days and observed day. Null if unavailable.
@@ -27852,7 +28221,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "gateway" | "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model" | "deployment";
             /**
              * Status
              * @description Current review status.
@@ -27862,9 +28231,8 @@ export interface components {
             /**
              * Type
              * @description Built-in alert category.
-             * @enum {string}
              */
-            type: "spend" | "traffic" | "latency" | "reliability" | "model_deprecation";
+            type: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache");
             /**
              * Updated At
              * Format: date-time
@@ -27989,12 +28357,206 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** App */
+        App: {
+            /** Alias */
+            alias: string;
+            /** App Id */
+            app_id: string;
+            /**
+             * Auto Create Customers
+             * @default true
+             */
+            auto_create_customers: boolean;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Customer Margin */
+            customer_margin?: number | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Default Customer Member Budget Id */
+            default_customer_member_budget_id?: string | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** AppCreate */
+        AppCreate: {
+            /**
+             * Auto Create Customers
+             * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
+             */
+            auto_create_customers?: boolean | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Customer Margin
+             * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
+             */
+            customer_margin?: number | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type?: components["schemas"]["AppResourceType"] | null;
+        };
+        /** AppDefinition */
+        AppDefinition: {
+            /**
+             * Auto Create Customers Without App
+             * @description Whether a request that belongs to no app may register a customer organization or member the proxy has never seen. When false, such a request is refused with 403.
+             * @default true
+             */
+            auto_create_customers_without_app: boolean;
+            resource_type?: components["schemas"]["AppResourceType"] | null;
+        };
+        /** AppDurationLimit */
+        AppDurationLimit: {
+            /** Budget Duration */
+            budget_duration: string;
+            /** Max Budget */
+            max_budget: number;
+            /** Reset At */
+            reset_at?: string | null;
+        };
+        /** AppMember */
+        AppMember: {
+            /** App Id */
+            app_id: string;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /** @default none */
+            budget_source: components["schemas"]["AppMemberBudgetSource"];
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Customer Member Id */
+            customer_member_id: string;
+            effective_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+        };
+        /**
+         * AppMemberBudgetSource
+         * @enum {string}
+         */
+        AppMemberBudgetSource: "member_override" | "customer_default" | "app_default" | "none";
+        /** AppMemberPut */
+        AppMemberPut: {
+            budget_override?: components["schemas"]["Budget"] | null;
+        };
+        /** AppOrganization */
+        AppOrganization: {
+            /** App Id */
+            app_id: string;
+            /** Budget Override Id */
+            budget_override_id?: string | null;
+            /**
+             * Budget Usage
+             * @description Recorded usage in each effective budget period. Lifetime spend is reported separately in spend.
+             */
+            budget_usage?: components["schemas"]["CustomerBudgetUsage"][] | null;
+            /** Customer Member Budget Id */
+            customer_member_budget_id?: string | null;
+            /** Customer Org Id */
+            customer_org_id: string;
+            effective_budget?: components["schemas"]["Budget"] | null;
+            effective_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Spend Reset Window */
+            spend_reset_window?: string | null;
+            /** Tier Budget Id */
+            tier_budget_id?: string | null;
+        };
+        /** AppOrganizationPut */
+        AppOrganizationPut: {
+            budget_override?: components["schemas"]["Budget"] | null;
+            customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Tier Budget Id */
+            tier_budget_id?: string | null;
+        };
+        /** AppPatch */
+        AppPatch: {
+            /**
+             * Auto Create Customers
+             * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
+             */
+            auto_create_customers?: boolean | null;
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Customer Margin
+             * @description Fraction added to the cost of every request this app makes for a customer, e.g. 0.02 adds 2%. It replaces the gateway-wide customer surcharge for this app, so 0 turns the surcharge off for it. Null uses the gateway-wide customer surcharge.
+             */
+            customer_margin?: number | null;
+            default_customer_member_budget?: components["schemas"]["Budget"] | null;
+            /** Default Tier Budget Id */
+            default_tier_budget_id?: string | null;
+        };
+        /** AppResource */
+        AppResource: {
+            /** Alias */
+            alias: string;
+            /** App Id */
+            app_id?: string | null;
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+        };
+        /**
+         * AppResourceType
+         * @enum {string}
+         */
+        AppResourceType: "team" | "project" | "virtual_key";
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
             /** Entities */
             entities?: components["schemas"]["PiiEntityType"][] | null;
             /** Guardrail Name */
             guardrail_name: string;
+            /**
+             * Images
+             * @description One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.
+             */
+            images?: string[] | null;
             /**
              * Input Type
              * @default request
@@ -28012,7 +28574,10 @@ export interface components {
             } | null;
             /** @default standard */
             response_format: components["schemas"]["GuardrailResponseFormat"];
-            /** Text */
+            /**
+             * Text
+             * @default
+             */
             text: string;
         };
         /** ApplyGuardrailResponse */
@@ -29343,10 +29908,13 @@ export interface components {
             expected_revision: number;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
-            /** Version */
+            /**
+             * Version
+             * @description Explicit SemVer, or omit/send empty for automatic versioning on approval
+             */
             version?: string | null;
         };
         /** Body_image_edit_api_images_edits_post */
@@ -29393,7 +29961,7 @@ export interface components {
             expected_updated_at?: string | null;
             /**
              * File
-             * @description Replacement Agent Skills ZIP with the same declared skill name
+             * @description Replacement ZIP retaining the registered and declared skill names
              */
             file: string;
             /** Version */
@@ -29511,6 +30079,11 @@ export interface components {
              * @description Agent Skills ZIP with SKILL.md and optional supporting files
              */
             file: string;
+            /**
+             * Metadata
+             * @description Optional JSON registry metadata
+             */
+            metadata?: string | null;
             /** Version */
             version?: string | null;
         };
@@ -29681,6 +30254,18 @@ export interface components {
             soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** BudgetGroups */
+        BudgetGroups: {
+            /** Budget Groups Revision */
+            readonly budget_groups_revision: string;
+            /** Default Budget Template Id */
+            default_budget_template_id?: string | null;
+            /**
+             * Default Budgets
+             * @default []
+             */
+            default_budgets: components["schemas"]["OrganizationBudget"][];
         };
         /** BudgetGroupsUpdate */
         BudgetGroupsUpdate: {
@@ -30171,6 +30756,8 @@ export interface components {
          * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Key */
@@ -30182,6 +30769,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * BulkUpdateKeyResponse
@@ -31902,7 +32491,7 @@ export interface components {
             allow_unmanaged_response_ids?: boolean | null;
             /**
              * Allowed Client Side S3 Buckets
-             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches, and the buckets of the s3:// image and file URLs a non-admin key sends. Any other bucket is rejected unless client-side credentials are allowed
              */
             allowed_client_side_s3_buckets?: string[] | null;
             /**
@@ -31975,6 +32564,16 @@ export interface components {
              * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
              */
             custom_auth?: string | null;
+            /**
+             * Customer Member Id Header
+             * @description Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_member_id_header?: string | null;
+            /**
+             * Customer Org Alias Header
+             * @description Request header for the customer organization alias. Replaces x-litellm-customer-org-alias when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
+             */
+            customer_org_alias_header?: string | null;
             /**
              * Dangerously Permit Weak Or Unset Master Key
              * @description local development only: start even when master_key is unset, empty, or a publicly known default
@@ -32140,6 +32739,11 @@ export interface components {
              * @description for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)
              */
             infer_model_from_keys?: boolean | null;
+            /**
+             * Key Expiry Alert Days
+             * @description Email a key's owner once when the key has this many days or fewer left before it expires. Applies to every key with an expiry date and an owner email, including existing keys. A key's metadata.key_expiry_alert_days overrides it. Off unless set.
+             */
+            key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
             /**
@@ -33454,31 +34058,8 @@ export interface components {
             /** Window Start */
             window_start?: string | null;
         };
-        /**
-         * CustomerHierarchyAuth
-         * @description The levels a request is charged to. A request that named only an organization alias has no team or member.
-         */
         CustomerHierarchyAuth: {
-            /** Customer Member Alias */
-            customer_member_alias?: string | null;
-            /** Customer Member Id */
-            customer_member_id?: string | null;
-            /** Customer Org Alias */
-            customer_org_alias?: string | null;
-            /** Customer Org Id */
-            customer_org_id: string;
-            /** Customer Team Alias */
-            customer_team_alias?: string | null;
-            /** Customer Team Id */
-            customer_team_id?: string | null;
-            /** Scopes */
-            scopes: components["schemas"]["CustomerScopeAuth"][];
-            /**
-             * Team Scopes
-             * @description Every team the member belongs to, in parent_team_ids order; scopes holds the selected one
-             * @default []
-             */
-            team_scopes: components["schemas"]["CustomerScopeAuth"][];
+            [key: string]: unknown;
         };
         /** CustomerMember */
         CustomerMember: {
@@ -33595,7 +34176,7 @@ export interface components {
              * Budget Limits
              * @default []
              */
-            budget_limits: components["schemas"]["BudgetLimit"][];
+            budget_limits: (components["schemas"]["BudgetLimit"] | components["schemas"]["AppDurationLimit"])[];
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Cap Policy */
@@ -33606,7 +34187,7 @@ export interface components {
              * Key
              * @enum {string}
              */
-            key: "customer_org" | "customer_team" | "customer_member";
+            key: "customer_org" | "customer_team" | "customer_member" | "app" | "app_customer_org" | "app_customer_member";
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -33750,6 +34331,11 @@ export interface components {
              */
             total_autorouter_savings_spend: number;
             /**
+             * Total Cache Cost
+             * @default 0
+             */
+            total_cache_cost: number;
+            /**
              * Total Cache Creation Input Tokens
              * @default 0
              */
@@ -33775,6 +34361,12 @@ export interface components {
              */
             total_compression_savings_spend: number;
             /**
+             * Total Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in total_spend
+             * @default 0
+             */
+            total_customer_margin_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -33794,6 +34386,11 @@ export interface components {
              * @default 1
              */
             total_pages: number;
+            /**
+             * Total Priced Cache Tokens
+             * @default 0
+             */
+            total_priced_cache_tokens: number;
             /**
              * Total Prompt Caching Savings Spend
              * @default 0
@@ -34432,7 +35029,7 @@ export interface components {
          * EmailEvent
          * @enum {string}
          */
-        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
+        EmailEvent: "Model Deprecations" | "Performance Alerts" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Virtual Key Expiring" | "Soft Budget Crossed" | "Max Budget Alert";
         /** EmailEventSettings */
         EmailEventSettings: {
             /** Enabled */
@@ -35969,6 +36566,8 @@ export interface components {
         };
         /** ImportSkillRequest */
         ImportSkillRequest: {
+            /** @description Optional registry name and metadata overrides */
+            metadata?: components["schemas"]["SkillHubUpload"] | null;
             /**
              * Path
              * @description Repository-relative skill directory
@@ -36651,6 +37250,13 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
+        /** ListResponse[TeamMemberListItem] */
+        ListResponse_TeamMemberListItem_: {
+            /** Data */
+            data: components["schemas"]["TeamMemberListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /** ListResponse[Team] */
         ListResponse_Team_: {
             /** Data */
@@ -37005,6 +37611,8 @@ export interface components {
             id?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -37905,6 +38513,14 @@ export interface components {
             fireworks_forward_user_id?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Github Copilot App Id */
+            github_copilot_app_id?: string | number | null;
+            /** Github Copilot App Installation Id */
+            github_copilot_app_installation_id?: string | number | null;
+            /** Github Copilot App Private Key */
+            github_copilot_app_private_key?: string | null;
+            /** Github Copilot App Private Key Ref */
+            github_copilot_app_private_key_ref?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
@@ -38651,6 +39267,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38743,6 +39361,8 @@ export interface components {
             allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -38886,6 +39506,8 @@ export interface components {
             expires?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -40873,6 +41495,11 @@ export interface components {
             budget_override?: components["schemas"]["Budget"] | null;
             /** Budget Override Expires At */
             budget_override_expires_at?: string | null;
+            /**
+             * Parent Team Ids
+             * @description Replace the member's teams within its existing organization. First team is the default. Omit to keep current teams. Member identity, budgets and historical usage are retained.
+             */
+            parent_team_ids?: string[];
         };
         /** MemberUpsert */
         MemberUpsert: {
@@ -42477,6 +43104,32 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** NimModelDiscoveryConnection */
+        NimModelDiscoveryConnection: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Api Key */
+            api_key?: string | null;
+        };
+        /** NimModelDiscoveryRequest */
+        NimModelDiscoveryRequest: {
+            /** Credential Name */
+            credential_name?: string | null;
+            credential_values?: components["schemas"]["NimModelDiscoveryConnection"] | null;
+        };
+        /** NimModelDiscoveryResponse */
+        NimModelDiscoveryResponse: {
+            /**
+             * Models
+             * @default []
+             */
+            models: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "unavailable";
+        };
         /** NoulAnswer */
         NoulAnswer: {
             /** Noul */
@@ -42563,6 +43216,21 @@ export interface components {
             /** Value */
             value: string | boolean;
         };
+        /** OpenAIDecisionCacheWriteTokensDetails */
+        OpenAIDecisionCacheWriteTokensDetails: {
+            /**
+             * Ttl 12H Tokens
+             * @default 0
+             */
+            ttl_12h_tokens: number;
+            /**
+             * Ttl 30M Tokens
+             * @default 0
+             */
+            ttl_30m_tokens: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** OpenAIDecisionInputTokensDetails */
         OpenAIDecisionInputTokensDetails: {
             /**
@@ -42570,6 +43238,7 @@ export interface components {
              * @default 0
              */
             cache_write_tokens: number;
+            cache_write_tokens_details?: components["schemas"]["OpenAIDecisionCacheWriteTokensDetails"] | null;
             /**
              * Cached Tokens
              * @default 0
@@ -42810,6 +43479,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -42900,6 +43574,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -42945,6 +43624,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Default Budget Template Id */
             default_budget_template_id?: string | null;
         };
@@ -42993,6 +43677,11 @@ export interface components {
             /** Alias */
             alias?: string | null;
             budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Organization budget group ID. Null clears it; omit to keep it.
+             */
+            budget_id?: string | null;
             /** Customer Org Id */
             customer_org_id?: string | null;
             /** Default Budget Template */
@@ -43012,6 +43701,11 @@ export interface components {
             readonly budget_groups_revision: string;
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Is Shared
+             * @description Whether budget_id references a reusable organization group
+             */
+            budget_is_shared?: boolean | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /**
@@ -43745,6 +44439,41 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /** PerformanceAlertThresholds */
+        PerformanceAlertThresholds: {
+            /**
+             * @description Average response-time increase in milliseconds over the previous seven-day weighted average.
+             * @default {
+             *       "minimum_increase": 500,
+             *       "multiplier": 3
+             *     }
+             */
+            latency: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Error-rate increase as a fraction, e.g. 0.02 is two percentage points.
+             * @default {
+             *       "minimum_increase": 0.02,
+             *       "multiplier": 3
+             *     }
+             */
+            reliability: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Spend increase in USD over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 50,
+             *       "multiplier": 3
+             *     }
+             */
+            spend: components["schemas"]["AlertThreshold"];
+            /**
+             * @description Request increase over the previous seven-day daily average.
+             * @default {
+             *       "minimum_increase": 1000,
+             *       "multiplier": 10
+             *     }
+             */
+            traffic: components["schemas"]["AlertThreshold"];
         };
         /**
          * PiiAction
@@ -44655,6 +45384,46 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCacheEvidence */
+        PromptCacheEvidence: {
+            /**
+             * Config Fingerprint
+             * @description Cache-relevant deployment settings.
+             */
+            config_fingerprint: string;
+            /**
+             * Consecutive Misses
+             * @description Observed requests that reported no cache read or write, not necessarily consecutive.
+             */
+            consecutive_misses: number;
+            /**
+             * Prefix Fingerprint
+             * @description Keyed hash of the cached prefix.
+             */
+            prefix_fingerprint: string;
+            /**
+             * Proven Write Tokens
+             * @description Tokens the proving cache write stored.
+             */
+            proven_write_tokens: number;
+            /**
+             * Provider
+             * @description Provider that served the requests.
+             * @constant
+             */
+            provider: "anthropic";
+            /**
+             * Provider Model
+             * @description Model the provider served.
+             */
+            provider_model: string;
+            /**
+             * Ttl Seconds
+             * @description Cache lifetime of the prefix's breakpoint.
+             * @constant
+             */
+            ttl_seconds: 300;
+        };
         /** PromptCacheOptions */
         PromptCacheOptions: {
             /** Comparison Response Id */
@@ -45152,6 +45921,23 @@ export interface components {
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
         };
+        /** ReferenceExchangeRates */
+        ReferenceExchangeRates: {
+            /**
+             * Rate Date
+             * Format: date
+             */
+            rate_date: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "ecb";
+            /** Usd Per Unit */
+            usd_per_unit: {
+                [key: string]: number;
+            };
+        };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
             /** Access Group Ids */
@@ -45589,6 +46375,11 @@ export interface components {
              */
             context_window_escalation_buffer: number;
             /**
+             * Conversation Header
+             * @description Request header whose value names the application conversation for session_affinity, deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. A request without a usable value (header missing, empty, or a redacted credential header, and any SDK call without proxy request headers) gets no conversation-based reuse from this router and never falls back to its session_id. A separately enabled Router-level session_affinity pre-call check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. Unset keeps the session_id behavior
+             */
+            conversation_header?: string | null;
+            /**
              * Custom Dimensions
              * @description Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
              * @default []
@@ -45644,6 +46435,11 @@ export interface components {
              * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
              */
             fallback_tier?: string | null;
+            /**
+             * Heuristic First Max Context Tokens
+             * @description Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. Unset preserves the local shortcut. Existing session and user-turn pins still take precedence.
+             */
+            heuristic_first_max_context_tokens?: number | null;
             /**
              * Heuristic First Max Tier
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', the predicted tier must meet its success threshold. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
@@ -48354,6 +49150,24 @@ export interface components {
             message: string;
         };
         /**
+         * ShadowEvalGradePair
+         * @description How many judged turns gave the real and shadow responses this pair of grades.
+         */
+        ShadowEvalGradePair: {
+            /**
+             * Real Grade
+             * @description Grade of the response the caller actually received, 1 to 5
+             */
+            real_grade: number;
+            /**
+             * Shadow Grade
+             * @description Grade of the duplicated response nobody was served, 1 to 5
+             */
+            shadow_grade: number;
+            /** Turn Count */
+            turn_count: number;
+        };
+        /**
          * ShadowEvalJobResponse
          * @description A shadow-eval job over one or more targets, each with its own budget and stop state;
          *     status is derived from stopped_by, the targets' stop and budget state, and ends_at,
@@ -48422,8 +49236,19 @@ export interface components {
              * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
              */
             router_names: string[];
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
             /** Shadow Percentage */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Status
              * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
@@ -48553,6 +49378,158 @@ export interface components {
              * @description Sampled requests the pipeline declined to spend on: no database to record into, an over-budget key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job crosses max_budget lands here rather than vanishing from coverage)
              */
             withheld_count?: number | null;
+        };
+        /**
+         * ShadowEvalRubricJobResponse
+         * @description A rubric shadow eval job: the regular job view plus the rubric it grades against.
+         */
+        ShadowEvalRubricJobResponse: {
+            /** Baseline Model */
+            baseline_model?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /**
+             * Error Count
+             * @description Sampled attempts that errored; detail endpoint only
+             */
+            error_count?: number | null;
+            /** Job Id */
+            job_id: string;
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Judge Spend
+             * @description Judge cost so far; detail endpoint only
+             */
+            judge_spend?: number | null;
+            /**
+             * Judged Count
+             * @description Verdicts recorded; detail endpoint only
+             */
+            judged_count?: number | null;
+            /**
+             * Last Error
+             * @description Most recent attempt error; detail endpoint only
+             */
+            last_error?: string | null;
+            /**
+             * Models
+             * @description Model groups the sampled traffic is narrowed to; empty means every model the targets use
+             * @default []
+             */
+            models: string[];
+            /** @description Stratified verdicts; detail endpoint only */
+            results?: components["schemas"]["ShadowEvalResult"] | null;
+            /**
+             * Router Name
+             * @description The first router, kept for callers that predate router_names; derived so the
+             *     two fields can never disagree.
+             */
+            readonly router_name: string;
+            /**
+             * Router Names
+             * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria both responses are graded against, as stored at start
+             */
+            rubric: string;
+            /**
+             * Rubric Version
+             * @description The grading contract (prompt, anchors, 1-5 scale) the job runs under
+             */
+            rubric_version: number;
+            /**
+             * Same Model Skipped Count
+             * @description Sampled requests skipped because baseline_model's own model group served them, summed over targets; detail endpoint only and reported even before any turn is judged. None when coverage counts are unknown for any target
+             */
+            same_model_skipped_count?: number | null;
+            /** Shadow Percentage */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Whether this reverse job skips samples that baseline_model's own model group served
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Status
+             * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
+             *     backfills it for every job that displayed stopped when the column arrived, so the
+             *     pre-column population is closed), completion is the window passing or every target
+             *     spending its budget, and anything else is running. The all-targets-stamped fallback
+             *     covers only stops written by pre-column pods during a rolling deploy.
+             * @enum {string}
+             */
+            readonly status: "running" | "completed" | "stopped";
+            /**
+             * Stopped By
+             * @description The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled by migration for jobs that displayed stopped when the column arrived; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
+             */
+            stopped_by?: string | null;
+            /**
+             * Targets
+             * @description The targets whose traffic this job evaluates, and only theirs, each with its own budget
+             */
+            targets: components["schemas"]["ShadowEvalJobTargetResponse"][];
+        };
+        /**
+         * ShadowEvalRubricResultResponse
+         * @description A rubric job's grades so far. Error attempts are excluded, like the job's preference results.
+         */
+        ShadowEvalRubricResultResponse: {
+            /**
+             * By Router
+             * @description One slice per router arm, ordered by router name, each graded against the same real responses
+             */
+            by_router: components["schemas"]["ShadowEvalRubricSlice"][];
+            /** Job Id */
+            job_id: string;
+            /** @description Every arm together. A judged turn is one (request, router arm) pair, so a multi-router job counts each real response once per arm; compare routers with by_router */
+            overall: components["schemas"]["ShadowEvalRubricSlice"];
+            /** Rubric */
+            rubric: string;
+            /** Rubric Version */
+            rubric_version: number;
+        };
+        /**
+         * ShadowEvalRubricSlice
+         * @description Rubric grades for one router arm, or for every arm together.
+         */
+        ShadowEvalRubricSlice: {
+            /**
+             * Grade Distribution
+             * @description Joint counts of (real_grade, shadow_grade) over graded turns, ordered by real then shadow grade, so turns where both responses were good or both were bad stay distinguishable
+             */
+            grade_distribution: components["schemas"]["ShadowEvalGradePair"][];
+            /**
+             * Graded Count
+             * @description Judged turns that carry both grades
+             */
+            graded_count: number;
+            /** Group */
+            group: string;
+            /**
+             * Ungraded Count
+             * @description Judged turns with a preference but no grades, such as turns a worker without rubric support judged. They are excluded from grade_distribution, never counted as low grades
+             */
+            ungraded_count: number;
         };
         /**
          * ShadowEvalSlice
@@ -48716,27 +49693,6 @@ export interface components {
              */
             tags: string[];
         };
-        /** SkillHubMetadata */
-        SkillHubMetadata: {
-            /** Description */
-            description?: string | null;
-            /** Domain */
-            domain?: string | null;
-            /**
-             * Expected Updated At
-             * @description Published updated_at read by the editor. A stale value returns 409
-             */
-            expected_updated_at?: string | null;
-            /** Keywords */
-            keywords?: string[] | null;
-            /** Namespace */
-            namespace?: string | null;
-            /**
-             * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
-             */
-            version?: string | null;
-        };
         /** SkillHubPendingSkill */
         SkillHubPendingSkill: {
             /**
@@ -48758,10 +49714,15 @@ export interface components {
         /** SkillHubProposal */
         SkillHubProposal: {
             agent_skill?: components["schemas"]["SkillHubAgentSkill"] | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -48777,6 +49738,40 @@ export interface components {
         };
         /** SkillHubPublication */
         SkillHubPublication: Record<string, never>;
+        /** SkillHubRegistration */
+        SkillHubRegistration: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Repository or HTTPS archive source reference
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
+        };
         /** SkillHubRejection */
         SkillHubRejection: {
             /** Expected Revision */
@@ -48822,6 +49817,9 @@ export interface components {
         SkillHubSkill: {
             /** Approved By */
             approved_by?: string | null;
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
             /** Content Url */
             content_url?: string | null;
             /** Created At */
@@ -48839,6 +49837,8 @@ export interface components {
             download_count?: number | null;
             /** Download Url */
             download_url?: string | null;
+            /** Homepage */
+            homepage?: string | null;
             /** Id */
             id: string;
             /** Keywords */
@@ -48924,9 +49924,22 @@ export interface components {
         };
         /** SkillHubSubmissionEdit */
         SkillHubSubmissionEdit: {
-            /** Description */
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
             description?: string | null;
-            /** Domain */
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
             domain?: string | null;
             /**
              * Expected Revision
@@ -48938,13 +49951,24 @@ export interface components {
              * @description Published updated_at read by the editor. A stale value returns 409
              */
             expected_updated_at?: string | null;
-            /** Keywords */
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
             keywords?: string[] | null;
-            /** Namespace */
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
             namespace?: string | null;
             /**
              * Version
-             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             * @description Explicit SemVer, or omit/null for automatic versioning on approval
              */
             version?: string | null;
         };
@@ -48964,6 +49988,85 @@ export interface components {
              * @description Revision read from the submission detail
              */
             expected_revision: number;
+        };
+        /** SkillHubUpdate */
+        SkillHubUpdate: {
+            /** @description Omit to preserve, null to clear */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Omit to preserve, null to clear
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Omit to preserve, null to clear the registry description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Omit to preserve, null to clear
+             */
+            domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
+            /**
+             * Homepage
+             * @description Omit to preserve, null to clear
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Omit to preserve, null or an empty list to clear
+             */
+            keywords?: string[] | null;
+            /**
+             * Namespace
+             * @description Omit to preserve, null to clear
+             */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Explicit replacement source reference. Omit/null to preserve the stored source and archive
+             */
+            source?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
+        };
+        /** SkillHubUpload */
+        SkillHubUpload: {
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /** Category */
+            category?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Homepage */
+            homepage?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Registry skill name
+             */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
         };
         /** SkillHubVersion */
         SkillHubVersion: {
@@ -49264,6 +50367,12 @@ export interface components {
              */
             autorouter_savings_spend: number;
             /**
+             * Cache Cost
+             * @description Recorded cache read and write cost in USD for customer usage
+             * @default 0
+             */
+            cache_cost: number;
+            /**
              * Cache Creation Input Tokens
              * @default 0
              */
@@ -49289,6 +50398,12 @@ export interface components {
              */
             compression_savings_spend: number;
             /**
+             * Customer Margin Spend
+             * @description Surcharge in USD added to requests made for a customer, already included in spend, so cost before the surcharge is spend - customer_margin_spend
+             * @default 0
+             */
+            customer_margin_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
@@ -49309,6 +50424,12 @@ export interface components {
              * @default 0
              */
             guardrail_spend: number;
+            /**
+             * Priced Cache Tokens
+             * @description Cache tokens with a recorded cost for customer usage
+             * @default 0
+             */
+            priced_cache_tokens: number;
             /**
              * Prompt Caching Savings Spend
              * @default 0
@@ -49563,6 +50684,99 @@ export interface components {
              * @description Percentage of each target's requests to duplicate through the router
              */
             shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
+            /**
+             * Team Ids
+             * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
+             * @default []
+             */
+            team_ids: string[];
+            /**
+             * User Ids
+             * @description Users whose traffic will be shadowed, matched on the user every authenticated request resolves to across all their teams: JWT requests carrying their subject claim and virtual keys they own
+             * @default []
+             */
+            user_ids: string[];
+        };
+        /**
+         * StartShadowEvalRubricRequest
+         * @description A shadow eval whose judge also grades each response from 1 to 5 against an operator rubric.
+         */
+        StartShadowEvalRubricRequest: {
+            /**
+             * Api Key Ids
+             * @description Hashed virtual keys whose traffic will be shadowed. Combined with team_ids and user_ids the job needs at least one target and at most 100, which also bounds every read the job's endpoints make. Each target carries its own max_budget spend budget, so one exhausting its budget leaves the others sampling.
+             * @default []
+             */
+            api_key_ids: string[];
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Duration Days
+             * @description How many days the job samples traffic before completing on its own
+             * @default 7
+             */
+            duration_days: number;
+            /**
+             * Judge Model
+             * @description Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes.
+             * @default anthropic/claude-sonnet-5
+             */
+            judge_model: string;
+            /**
+             * Max Budget
+             * @description Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window. Every router arm draws from the same per-target budget, so a multi-router job reaches it proportionally sooner
+             * @default 10
+             */
+            max_budget: number;
+            /**
+             * Models
+             * @description Model groups to narrow the sampled traffic to, matched on the group the caller requested and resolved through model_group_alias, so an alias and its target are one name. Empty samples every model the targets use. This ANDs with the targets: a job over a user and one model samples that user's requests on that model across every key they own, and none of their other traffic. Forward jobs only: a reverse job samples exactly the traffic its own router served, which no other model group can name
+             * @default []
+             */
+            models: string[];
+            /**
+             * Router Name
+             * @description The auto-router under evaluation, in either direction: the single-router spelling of router_names. Provide exactly one of the two fields
+             */
+            router_name?: string | null;
+            /**
+             * Router Names
+             * @description The auto-routers under evaluation, at most 4. Every sampled request runs through every router listed and each arm is judged independently against the same real response, so routers compare head-to-head on identical traffic. More than one router requires direction 'forward'. After validation this field always carries the full deduplicated set, whichever spelling the caller used
+             * @default []
+             */
+            router_names: string[];
+            /**
+             * Rubric
+             * @description The criteria the judge grades both responses against, in plain language, at most 4000 characters. Each response gets an integer grade on a fixed scale where 1 fails the criteria and 5 fully meets them. Stored unchanged with the job and never edited
+             */
+            rubric: string;
+            /**
+             * Shadow Percentage
+             * @description Percentage of each target's requests to duplicate through the router
+             */
+            shadow_percentage: number;
+            /**
+             * Skip Same Model
+             * @description Reverse jobs only. When true, a sampled request whose response came from baseline_model's own model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made or billed for it and it never counts toward win, tie, or error rates. Skips are reported as same_model_skipped_count. Different model group names stay distinct even when they share a provider model
+             * @default false
+             */
+            skip_same_model: boolean;
             /**
              * Team Ids
              * @description Teams whose traffic will be shadowed, matched on the team every authenticated request resolves to, so a team's JWT-auth and virtual-key traffic are both sampled
@@ -50335,6 +51549,38 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** TeamMemberListItem */
+        TeamMemberListItem: {
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Litellm Budget Table */
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Role */
+            role: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Team Id */
+            team_id: string;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /**
          * TeamMemberRef
          * @description One member, named by exactly one of `user_id` or `user_email`.
@@ -50860,6 +52106,7 @@ export interface components {
         };
         /** TokenCountRequest */
         TokenCountRequest: {
+            additional_drop_params?: components["schemas"]["JsonValue"];
             /** Contents */
             contents?: {
                 [key: string]: unknown;
@@ -53201,6 +54448,8 @@ export interface components {
             } | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Id */
+            key_id?: string | null;
             /** Key Name */
             key_name?: string | null;
             /** Key Rotation At */
@@ -53605,6 +54854,14 @@ export interface components {
         UserInfoV2Response: {
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Budget Limits Usage */
+            budget_limits_usage?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            } | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -54603,6 +55860,14 @@ export interface components {
             fireworks_forward_user_id?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Github Copilot App Id */
+            github_copilot_app_id?: string | number | null;
+            /** Github Copilot App Installation Id */
+            github_copilot_app_installation_id?: string | number | null;
+            /** Github Copilot App Private Key */
+            github_copilot_app_private_key?: string | null;
+            /** Github Copilot App Private Key Ref */
+            github_copilot_app_private_key_ref?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
@@ -56254,7 +57519,7 @@ export interface operations {
                 /** @description next_cursor from the preceding page. */
                 cursor?: string | null;
                 /** @description Alert category, or all performance alerts. */
-                type?: ("spend" | "traffic" | "latency" | "reliability" | "model_deprecation") | "performance" | null;
+                type?: ("spend" | "traffic" | "latency" | "reliability") | ("model_deprecation" | "prompt_cache") | "performance" | null;
             };
             header?: never;
             path?: never;
@@ -56269,6 +57534,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertViewPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_open_alerts_alerts_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertBulkUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertBulkResult"];
                 };
             };
             /** @description Validation Error */
@@ -56311,7 +57609,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"];
+                "application/json": components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"] | components["schemas"]["AlertThresholdsUpdate"];
             };
         };
         responses: {
@@ -57395,6 +58693,39 @@ export interface operations {
             };
         };
     };
+    start_shadow_eval_rubric_auto_router_shadow_eval_rubric_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartShadowEvalRubricRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_shadow_eval_auto_router_shadow_eval_start_post: {
         parameters: {
             query?: never;
@@ -57446,6 +58777,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shadow_eval_rubric_results_auto_router_shadow_eval__job_id__rubric_results_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalRubricResultResponse"];
                 };
             };
             /** @description Validation Error */
@@ -58485,7 +59847,7 @@ export interface operations {
             };
         };
     };
-    new_budget_endpoint_budget_new_post: {
+    new_budget_budget_new_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -58549,7 +59911,7 @@ export interface operations {
             };
         };
     };
-    update_budget_endpoint_budget_update_post: {
+    update_budget_budget_update_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -61269,6 +62631,39 @@ export interface operations {
             };
         };
     };
+    discover_nim_models_credentials_nvidia_nim_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NimModelDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NimModelDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_user_connections_credentials_user_connections_get: {
         parameters: {
             query?: never;
@@ -61476,6 +62871,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserConnectionStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cursor_cli_passthrough_cursor_cli__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: "agent.v1.AgentService/RunSSE" | "aiserver.v1.BidiService/BidiAppend";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/connect+proto": string;
+                "application/proto": string;
+            };
+        };
+        responses: {
+            /** @description Unchanged native Cursor response bytes, including streamed agent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/proto": string;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -62388,11 +63821,22 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -62405,6 +63849,17 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
@@ -62414,9 +63869,9 @@ export interface operations {
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -62429,6 +63884,19 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: ({
+                        /** Mode */
+                        mode?: string | null;
+                        /** Ttl */
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order
@@ -65010,6 +66478,33 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MCPToolSearchSettingsResponse"];
                 };
+            };
+        };
+    };
+    reference_exchange_rates_get_reference_exchange_rates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceExchangeRates"];
+                };
+            };
+            /** @description No ECB reference rate published in the last 7 days is available */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -68717,6 +70212,359 @@ export interface operations {
             };
         };
     };
+    list_apps_management_v1_apps_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_app_management_v1_apps_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_definition_management_v1_apps_definition_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDefinition"];
+                };
+            };
+        };
+    };
+    put_app_definition_management_v1_apps_definition_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_resources_management_v1_apps_resources_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                resource_type?: components["schemas"]["AppResourceType"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResource"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_management_v1_apps__app_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_app_management_v1_apps__app_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["App"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_member_management_v1_apps__app_id__customer_members__customer_member_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_member_management_v1_apps__app_id__customer_members__customer_member_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppMemberPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppMember"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppOrganization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_organization_management_v1_apps__app_id__customer_organizations__customer_org_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppOrganizationPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppOrganization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_budgets_management_v1_budgets_get: {
         parameters: {
             query?: never;
@@ -68908,6 +70756,10 @@ export interface operations {
                 page_size?: number;
                 parent_team_id?: string | null;
                 parent_org_id?: string | null;
+                /** @description Case-insensitive substring of the customer member ID or alias */
+                search?: string;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -68979,6 +70831,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_member_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69134,6 +70988,59 @@ export interface operations {
             };
         };
     };
+    get_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_customer_organization_budget_groups_management_v1_customer_organization_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_customer_organizations_management_v1_customer_organizations_get: {
         parameters: {
             query?: {
@@ -69212,6 +71119,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_org_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69252,6 +71161,8 @@ export interface operations {
                 customer_org_id?: string | null;
                 model?: string | null;
                 api_key?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69572,6 +71483,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 parent_org_id?: string | null;
+                /** @description Sort by displayed budget limit, with uncapped rows last. */
+                sort?: ("budget_asc" | "budget_desc") | null;
             };
             header?: never;
             path?: never;
@@ -69643,6 +71556,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_customer_team_ids?: string | null;
+                /** @description One app ID within the selected customer scope */
+                app_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -69835,6 +71750,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_team_members_management_v1_teams__team_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_TeamMemberListItem_"];
                 };
             };
             /** @description Validation Error */
@@ -77886,6 +79832,7 @@ export interface operations {
                 security_scan_passed?: boolean | null;
                 sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
                 sort_order?: "asc" | "desc";
+                enabled_only?: boolean;
             };
             header?: never;
             path?: never;
@@ -77922,7 +79869,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ImportSkillRequest"];
+                "application/json": components["schemas"]["SkillHubRegistration"] | components["schemas"]["ImportSkillRequest"];
             };
         };
         responses: {
@@ -78021,7 +79968,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SkillHubMetadata"];
+                "application/json": components["schemas"]["SkillHubUpdate"];
             };
         };
         responses: {
@@ -78965,7 +80912,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -79087,7 +81034,7 @@ export interface operations {
                 model_id?: string | null;
                 /** @description Filter logs by model group */
                 model_group?: string | null;
-                /** @description Filter logs by key alias */
+                /** @description Filter logs by exact key alias match */
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
@@ -80877,6 +82824,8 @@ export interface operations {
                 team_id?: string;
                 /** @description Limit the number of keys returned */
                 key_limit?: number | null;
+                /** @description Set to false to skip loading the roster: `team_info.members_with_roles` and `team_memberships` come back empty. Page through members with `GET /management/v1/teams/{team_id}/members` */
+                include_members?: boolean;
             };
             header?: never;
             path?: never;
@@ -83430,7 +85379,7 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
-                /** @description Include the caller's current admin MCP route permissions */
+                /** @description Include the caller's current admin MCP route permissions. An admin caller with no user_id gets empty keys and teams */
                 admin_mcp?: boolean;
                 /** @description Admin MCP tool to authorize for this caller */
                 mcp_tool?: string | null;
@@ -85316,11 +87265,22 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
                      */
                     input: string | {
                         /** Content */
                         content: string | ({
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /** Text */
                             text: string;
                             /**
@@ -85333,6 +87293,17 @@ export interface operations {
                             detail?: string | null;
                             /** Image Url */
                             image_url: string;
+                            prompt_cache_breakpoint?: ({
+                                /**
+                                 * Mode
+                                 * @constant
+                                 */
+                                mode: "explicit";
+                                /** Ttl */
+                                ttl?: string | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
                             /**
                              * Type
                              * @constant
@@ -85342,9 +87313,9 @@ export interface operations {
                         /**
                          * Role
                          * @default user
-                         * @constant
+                         * @enum {string}
                          */
-                        role?: "user";
+                        role?: "user" | "developer" | "system";
                         /**
                          * Type
                          * @default message
@@ -85357,6 +87328,19 @@ export interface operations {
                      * @description A decision model from the proxy model_list
                      */
                     model: string;
+                    /**
+                     * Prompt Cache Key
+                     * @description Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers
+                     */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: ({
+                        /** Mode */
+                        mode?: string | null;
+                        /** Ttl */
+                        ttl?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
                     /**
                      * Questions
                      * @description Predicate, choice and score questions. Answers come back in the same order

@@ -15,17 +15,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from fastapi import Request, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.types import Message
 
 import litellm
+import litellm.proxy.proxy_server as proxy_server
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
@@ -1123,6 +1126,71 @@ def _count_on_claude(
         "/v1/messages/count_tokens",
         json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}], **extra_body},
         headers=dict(headers),
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "preserve_instructions"),
+    [
+        ({}, True),
+        ({"store": True}, True),
+        ({"store": False}, False),
+        ({"extra_body": {"store": False}}, False),
+        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": True, "extra_body": {"store": False}}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"store": False, "truncation": "auto"}, True),
+        ({"store": False, "previous_response_id": "resp_prior"}, True),
+        ({"store": False, "conversation": "conv_prior"}, True),
+        ({"store": False, "extra_body": {"truncation": "auto"}}, True),
+        ({"store": False, "extra_body": {"previous_response_id": "resp_prior"}}, True),
+        ({"store": False, "extra_body": {"conversation": "conv_prior"}}, True),
+    ],
+)
+def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
+    monkeypatch: pytest.MonkeyPatch,
+    params: dict[str, object],
+    preserve_instructions: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {"model_name": "count-sol", "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "sk-test"}}
+            ]
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(messages_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    with respx.mock(assert_all_called=True) as upstream:
+        count: Final = upstream.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 10})
+        )
+        response: Final = TestClient(app).post(
+            "/v1/messages/count_tokens",
+            json={
+                "model": "count-sol",
+                "system": "Stable prefix",
+                "messages": [{"role": "user", "content": "hi"}],
+                **params,
+            },
+        )
+    assert response.status_code == 200, response.text
+    body: Final = json.loads(count.calls[0].request.content)
+    assert not {"truncation", "previous_response_id", "conversation"} & body.keys()
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    assert {key: body[key] for key in ("input", "instructions") if key in body} == (
+        {"instructions": "Stable prefix", "input": [user_input]}
+        if preserve_instructions
+        else {
+            "input": [
+                {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+                user_input,
+            ]
+        }
     )
 
 
