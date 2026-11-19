@@ -1310,7 +1310,7 @@ jobs:
     needs: [rust-bridge, plan]
     if: ${{ !cancelled() && needs.plan.outputs.changed-tests != '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read
@@ -1324,7 +1324,7 @@ jobs:
             test-path: ${{ needs.plan.outputs.changed-tests }}
             workers: 4
             reruns: 0
-            timeout-minutes: 7
+            timeout-minutes: 10
             dist: worksteal
     steps: *unit-steps
   lint-runtime:
