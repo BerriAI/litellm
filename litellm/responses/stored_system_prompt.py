@@ -5,6 +5,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
+import openai
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
@@ -73,14 +74,20 @@ def without_stored_instructions(request: Mapping[str, object]) -> Mapping[str, o
     try:
         listed: Final[object] = list_input_items(
             response_id=response_id,
+            after=None,
+            before=None,
+            include=None,
+            limit=20,
             order="asc",
+            extra_headers=None,
             custom_llm_provider=_text(request.get("custom_llm_provider")),
             timeout=_timeout(request.get("timeout")),
             api_key=request.get("api_key"),
             api_base=request.get("api_base"),
             api_version=request.get("api_version"),
+            **{"no-log": True},  # the listed stored messages must not reach logging callbacks
         )
-    except Exception as error:  # noqa: BLE001  # any failed lookup keeps the instructions
+    except (openai.OpenAIError, httpx.HTTPError) as error:
         verbose_logger.debug("Keeping instructions, the stored chain could not be read: %s", error)
         return request
     return _without_instructions(request, listed)
@@ -95,14 +102,20 @@ async def awithout_stored_instructions(request: Mapping[str, object]) -> Mapping
     try:
         listed: Final[object] = await alist_input_items(
             response_id=response_id,
+            after=None,
+            before=None,
+            include=None,
+            limit=20,
             order="asc",
+            extra_headers=None,
             custom_llm_provider=_text(request.get("custom_llm_provider")),
             timeout=_timeout(request.get("timeout")),
             api_key=request.get("api_key"),
             api_base=request.get("api_base"),
             api_version=request.get("api_version"),
+            **{"no-log": True},  # the listed stored messages must not reach logging callbacks
         )
-    except Exception as error:  # noqa: BLE001  # any failed lookup keeps the instructions
+    except (openai.OpenAIError, httpx.HTTPError) as error:
         verbose_logger.debug("Keeping instructions, the stored chain could not be read: %s", error)
         return request
     return _without_instructions(request, listed)

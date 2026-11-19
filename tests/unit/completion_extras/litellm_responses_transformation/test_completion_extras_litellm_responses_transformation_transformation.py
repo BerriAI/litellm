@@ -4348,6 +4348,69 @@ async def test_acompletion_follow_up_sends_the_system_prompt_only_when_the_store
     assert response.choices[0].message.content == "ok"
 
 
+class _FinishedCalls(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_types: Final[list[object]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types.append(kwargs.get("call_type"))
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types.append(kwargs.get("call_type"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_chain",
+    [
+        httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN)),
+        httpx.Response(404, json={"error": {"message": "Response not found", "type": "invalid_request_error"}}),
+    ],
+)
+@pytest.mark.parametrize("no_log", [False, True])
+async def test_acompletion_follow_up_never_logs_the_stored_chain_lookup_as_a_call(
+    stored_chain: httpx.Response, no_log: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    finished: Final = _FinishedCalls()
+    monkeypatch.setattr(litellm, "callbacks", [finished])
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(return_value=stored_chain)
+        router.post("https://api.openai.com/v1/responses").mock(return_value=httpx.Response(200, json=response_body))
+        await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "again"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            previous_response_id="resp_prior",
+            **({"no-log": True} if no_log else {}),
+        )
+        await asyncio.sleep(0.5)
+    assert finished.call_types == ([] if no_log else ["acompletion"])
+
+
 @pytest.mark.parametrize(
     ("content_block", "expected_content"),
     [
