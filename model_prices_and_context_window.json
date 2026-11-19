@@ -123444,5 +123444,29 @@
         "supports_audio_input": true,
         "supports_audio_output": true,
         "supports_function_calling": true
+    },
+    "fal_ai/ideogram/v4.6": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image at 2K or below (up to 4,194,304 pixels) is 8 units at very low quality, 30 at low, 60 at the default medium and 100 at high, and above 2K it is 60 units at low, 120 at medium and 200 at high. The per-image price is the default medium quality at 2K or below, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.001,
+        "output_cost_per_image": 0.06,
+        "source": "https://fal.ai/models/ideogram/v4.6",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/ideogram/v4.6/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image at 2K or below (up to 4,194,304 pixels) is 8 units at very low quality, 30 at low, 60 at the default medium and 220 at high, and above 2K it is 60 units at low, 200 at medium and 600 at high. The per-image price is the default medium quality at 2K or below, used when the header is absent"},
+        "mode": "image_generation",
+        "output_cost_per_billable_unit": 0.001,
+        "output_cost_per_image": 0.06,
+        "source": "https://fal.ai/models/ideogram/v4.6/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
     }
 }
