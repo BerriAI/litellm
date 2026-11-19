@@ -1051,6 +1051,80 @@ def test_finish_reason_with_holding_chunk_preserves_non_openai_attributes(
     assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
 
 
+def _usage_only_chunk(**extras: object) -> ModelResponseStream:
+    return ModelResponseStream.model_validate(
+        {
+            "id": "chatcmpl-usage-fields",
+            "created": 1742056047,
+            "model": None,
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30),
+            **extras,
+        }
+    )
+
+
+async def _stream_ending_with(usage_chunk: ModelResponseStream, sync_mode: bool) -> list[ModelResponseStream]:
+    def chunk(choices: list[StreamingChoices]) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-usage-fields", created=1742056047, model=None, object="chat.completion.chunk", choices=choices
+        )
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                chunk([StreamingChoices(index=0, delta=Delta(content="Hello!", role="assistant"))]),
+                chunk([StreamingChoices(finish_reason="stop", index=0, delta=Delta())]),
+                usage_chunk,
+            ]
+        ),
+        model="gpt-5.5",
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="usage-fields",
+            function_id="usage-fields",
+        ),
+        stream_options={"include_usage": True},
+    )
+    return list(response) if sync_mode else [chunk async for chunk in response]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_final_usage_chunk_keeps_provider_fields_from_usage_only_chunk(sync_mode: bool):
+    chunks: Final = await _stream_ending_with(_usage_only_chunk(provider_metrics={"energy_wh": 0.5}), sync_mode)
+
+    assert chunks[-1].usage is not None
+    assert chunks[-1].usage.total_tokens == 30
+    assert getattr(chunks[-1], "provider_metrics", None) == {"energy_wh": 0.5}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_final_usage_chunk_ignores_reserved_names_from_usage_only_chunk(sync_mode: bool):
+    usage_chunk: Final = _usage_only_chunk(
+        provider_metrics={"energy_wh": 0.5},
+        __dict__={"choices": [{"index": 0, "delta": {"content": "INJECTED"}}]},
+        _hidden_params={"injected": True},
+        hidden_params={"injected": True},
+        _response_ms="injected",
+    )
+
+    chunks: Final = await _stream_ending_with(usage_chunk, sync_mode)
+
+    assert all(isinstance(choice, StreamingChoices) and choice.delta.content is None for choice in chunks[-1].choices)
+    assert chunks[-1].usage is not None
+    assert getattr(chunks[-1], "provider_metrics", None) == {"energy_wh": 0.5}
+    assert "injected" not in chunks[-1]._hidden_params
+    assert getattr(chunks[-1], "_response_ms", None) != "injected"
+
+
 def test_set_response_id_propagation_empty_to_valid(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
