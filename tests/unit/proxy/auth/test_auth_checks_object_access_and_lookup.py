@@ -2313,7 +2313,6 @@ async def _common_checks_for_rag_query(
             "litellm.proxy.proxy_server.user_api_key_cache",
             UserApiKeyCache() if user_api_key_cache is None else user_api_key_cache,
         ),
-        patch.object(rust_database, "repository", RustAuthStores().by_kind().get),
     ):
         stores: Final = install_rust_auth_stores(monkeypatch)
         for permission_id, permission_row in permissions.items():
