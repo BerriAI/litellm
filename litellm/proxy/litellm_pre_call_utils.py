@@ -5065,6 +5065,18 @@ def _pin_where_a_configured_credential_authenticates(
     )
 
 
+def _pin_where_a_configured_oauth_token_authenticates(
+    providers: frozenset[str], user_profile_id: str | None
+) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(
+        custom_llm_provider=",".join(sorted(providers)),
+        extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+        claude_models_only=True,
+        configured_credential_headers=("authorization",),
+        configured_credential_prefix=f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}",
+    )
+
+
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
@@ -5134,6 +5146,9 @@ def add_provider_specific_headers_to_request(
                     native_anthropic_messages_only=False,
                 )
                 for provider, credential_headers in _CREDENTIAL_HEADERS_CHAT_SENDS_BESIDE_OR_OVER_A_CALLER_KEY.items()
+            ),
+            _pin_where_a_configured_oauth_token_authenticates(
+                frozenset() if sends_anthropic_bearer_oauth else caller_oauth_providers, user_profile_id
             ),
             ProviderSpecificHeader(
                 custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,

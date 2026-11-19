@@ -35,11 +35,15 @@ fn configures_a_listed_credential(
     configured_headers: &Map<String, Value>,
 ) -> bool {
     entry.configured_credential_headers.is_empty()
-        || configured_headers.keys().any(|configured| {
+        || configured_headers.iter().any(|(configured, value)| {
             entry
                 .configured_credential_headers
                 .iter()
                 .any(|credential| configured.eq_ignore_ascii_case(credential))
+                && (entry.configured_credential_prefix.is_empty()
+                    || value.as_str().is_some_and(|value| {
+                        value.starts_with(&entry.configured_credential_prefix)
+                    }))
         })
 }
 
@@ -219,6 +223,32 @@ mod tests {
             "custom_llm_provider": "anthropic",
             "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
             "configured_credential_headers": ["authorization", "x-api-key"]
+        }))
+        .unwrap();
+        assert_eq!(
+            Value::Object(get_provider_specific_headers(
+                Some(&pinned),
+                "anthropic",
+                "claude-haiku-5-5",
+                configured.as_object().unwrap()
+            )),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::configured_oauth_token(json!({"Authorization": "Bearer sk-ant-oat01-deployment"}), json!({"anthropic-user-profile-id": "uprof_pinned"}))]
+    #[case::configured_api_key_bearer(json!({"authorization": "Bearer sk-ant-deployment"}), json!({}))]
+    #[case::prefix_on_an_unlisted_header(json!({"x-api-key": "Bearer sk-ant-oat01-deployment"}), json!({}))]
+    fn a_configured_credential_prefix_applies_only_beside_a_matching_value(
+        #[case] configured: Value,
+        #[case] expected: Value,
+    ) {
+        let pinned: ProviderSpecificHeaders = serde_json::from_value(json!({
+            "custom_llm_provider": "anthropic",
+            "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+            "configured_credential_headers": ["authorization"],
+            "configured_credential_prefix": "Bearer sk-ant-oat"
         }))
         .unwrap();
         assert_eq!(

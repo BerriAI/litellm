@@ -15,6 +15,8 @@ pub struct ProviderSpecificHeader {
     pub yields_to_configured: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configured_credential_headers: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub configured_credential_prefix: String,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]

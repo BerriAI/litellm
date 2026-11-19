@@ -5042,6 +5042,7 @@ class ProviderSpecificHeader(TypedDict):
     non_claude_models_only: NotRequired[ReadOnly[bool]]
     yields_to_configured: NotRequired[ReadOnly[bool]]
     configured_credential_headers: NotRequired[ReadOnly[tuple[str, ...]]]
+    configured_credential_prefix: NotRequired[ReadOnly[str]]
 
 
 class SelectTokenizerResponse(TypedDict):
