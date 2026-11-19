@@ -35,6 +35,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -754,7 +755,7 @@ def add_guardrail_response_to_standard_logging_object(
     return standard_logging_object
 
 
-def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict[str, object]:
     """Process a single callback and return its data with environment variables"""
     env_vars: Final = CustomLogger.get_callback_env_vars(_callback)
 
@@ -885,6 +886,8 @@ def _encrypt_if_plaintext(key: str, value: object) -> object:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
         # this path; production always has a master key so encryption proceeds.
+        if fips_mode_active():
+            raise
         return value
 
 

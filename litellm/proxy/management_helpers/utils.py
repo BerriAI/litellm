@@ -6,7 +6,7 @@ from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Final, ParamSpec, Protocol, TypeVar
+from typing import Final, NoReturn, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -53,7 +53,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 _BUDGET_DATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -137,10 +137,14 @@ def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _Pri
 
 def reject_budget_windows(row: Mapping[str, object]) -> None:
     if row.get("budget_limits"):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Concurrent budget windows are currently supported only by customer hierarchies."},
-        )
+        raise_budget_windows_unsupported()
+
+
+def raise_budget_windows_unsupported() -> NoReturn:
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "Concurrent budget windows are currently supported only by customer hierarchies."},
+    )
 
 
 async def validate_scalar_budget_attachment(

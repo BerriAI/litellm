@@ -8,7 +8,7 @@ _apply_process_defaults()
 import threading
 import os
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import (
     Any,
     Callable,
@@ -861,7 +861,7 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             pass
         elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.add(key)
-        elif value.get("litellm_provider") == "bedrock_converse":
+        elif value.get("litellm_provider") == "bedrock_converse" and not is_bedrock_pricing_only_model(key):
             bedrock_converse_models.add(key)
         elif value.get("litellm_provider") == "deepinfra":
             deepinfra_models.add(key)
@@ -1214,7 +1214,7 @@ model_list = list(
 model_list_set = set(model_list)
 
 
-def _build_models_by_provider() -> dict:
+def _build_models_by_provider() -> dict[str, Collection[str]]:
     return {
         "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
         "text-completion-openai": open_ai_text_completion_models,
@@ -1352,7 +1352,7 @@ def _build_models_by_provider() -> dict:
     }
 
 
-models_by_provider: dict = _build_models_by_provider()
+models_by_provider: dict[str, Collection[str]] = _build_models_by_provider()
 
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {

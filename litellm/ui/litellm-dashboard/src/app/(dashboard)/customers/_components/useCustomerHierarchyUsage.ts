@@ -6,7 +6,6 @@ import {
   modelColorMap,
   overviewTotals,
   type Granularity,
-  type UsageMetric,
 } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
@@ -14,6 +13,7 @@ import type { DailyData } from "@/components/UsagePage/types";
 import { customerHierarchyUsageCall, type CustomerUsageScope } from "./customerUsageApi";
 import { rankCustomerModels, rankCustomerUsage } from "./customerUsageData";
 import { CUSTOMER_USAGE_DIMENSIONS, type CustomerUsageDimension } from "./CustomerUsageRankings";
+import { customerAppParsers } from "./CustomerHierarchyNavigation";
 import {
   calendarDate,
   customerPresetRange,
@@ -22,11 +22,15 @@ import {
   customerUsageDateParsers,
 } from "./customerUsageRange";
 
+const USAGE_METRICS = ["spend", "tokens", "cache", "requests"] as const;
+export type CustomerUsageMetric = (typeof USAGE_METRICS)[number];
+
 const usageParsers = {
+  ...customerAppParsers,
   org: parseAsString,
   team: parseAsString,
   member: parseAsString,
-  metric: parseAsStringLiteral(["spend", "tokens", "requests"] as const).withDefault("spend"),
+  metric: parseAsStringLiteral(USAGE_METRICS).withDefault("spend"),
   breakdown: parseAsStringLiteral(CUSTOMER_USAGE_DIMENSIONS).withDefault("models"),
   bucket: parseAsStringLiteral(["day", "week"] as const).withDefault("day"),
   search: parseAsString.withDefault(""),
@@ -55,7 +59,8 @@ export default function useCustomerHierarchyUsage() {
   const startDate = calendarDate(dateValue.from);
   const endDate = calendarDate(dateValue.to);
   const scope = params.org ? { org: params.org, team: params.team, member: params.member } : null;
-  const request = usageRequest(scope, accessToken, startDate, endDate);
+  const baseRequest = usageRequest(scope, accessToken, startDate, endDate);
+  const request = baseRequest ? { ...baseRequest, appId: params.app_id } : null;
   const month = customerPresetRange("month");
   const monthStartDate = calendarDate(month.from);
   const monthEndDate = calendarDate(month.to);
@@ -69,6 +74,7 @@ export default function useCustomerHierarchyUsage() {
       params.org,
       params.team,
       params.member,
+      params.app_id,
       startDate,
       endDate,
       monthStartDate,
@@ -85,12 +91,13 @@ export default function useCustomerHierarchyUsage() {
   const results = data?.results ?? EMPTY_RESULTS;
   const totals = useMemo(() => overviewTotals(data?.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA, null), [data]);
   const modelColors = useMemo(() => modelColorMap(results), [results]);
+  const rankingMetric = params.metric === "cache" ? "tokens" : params.metric;
   const rows = useMemo(
     () =>
       params.breakdown === "models"
-        ? rankCustomerModels(results, params.metric, totals)
-        : rankCustomerUsage(data?.[params.breakdown] ?? [], params.metric, totals),
-    [data, results, params.breakdown, params.metric, totals],
+        ? rankCustomerModels(results, rankingMetric, totals)
+        : rankCustomerUsage(data?.[params.breakdown] ?? [], rankingMetric, totals),
+    [data, results, params.breakdown, rankingMetric, totals],
   );
   const drillDown = (dimension: "teams" | "members", id: string) => {
     const patch = {
@@ -109,10 +116,12 @@ export default function useCustomerHierarchyUsage() {
     void setParams({ breakdown, search: null, usagePage: null });
   const selectOrganization = () => void setParams(ORGANIZATION_PATCH, { history: "push" });
   const selectTeam = () => void setParams(TEAM_PATCH, { history: "push" });
-  const setMetric = (metric: UsageMetric) => void setParams({ metric, usagePage: null });
+  const setMetric = (metric: CustomerUsageMetric) => void setParams({ metric, usagePage: null });
   const setBucket = (bucket: Granularity) => void setParams({ bucket });
   const setSearch = (search: string) => void setParams({ search, usagePage: null });
   const setPage = (usagePage: number) => void setParams({ usagePage });
+  const setApp = (app_id: string | null) =>
+    void setParams({ app_id, search: null, usagePage: null }, { history: "push" });
 
   return {
     params,
@@ -124,6 +133,7 @@ export default function useCustomerHierarchyUsage() {
     results,
     totals,
     modelColors,
+    rankingMetric,
     rows,
     drillDown,
     setDateRange,
@@ -134,5 +144,6 @@ export default function useCustomerHierarchyUsage() {
     setBucket,
     setSearch,
     setPage,
+    setApp,
   };
 }

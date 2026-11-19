@@ -229,30 +229,44 @@ class LoggingCallbackManager:
                 )
                 return callback
 
-            cached_logger = _generic_api_logger_cache.get(callback)
-            if (
-                isinstance(cached_logger, GenericAPILogger)
-                and cached_logger.endpoint == endpoint
-                and cached_logger.headers == headers
-                and cached_logger.event_types == event_types
-                and cached_logger.log_format == log_format
-                and cached_logger.max_retries == max_retries
-                and cached_logger.retry_delay == retry_delay
-                and cached_logger.timeout == timeout
-            ):
-                return cached_logger
+            with _callback_lists_lock:
+                cached_logger = _generic_api_logger_cache.get(callback)
+                if (
+                    isinstance(cached_logger, GenericAPILogger)
+                    and cached_logger.endpoint == GenericAPILogger.resolve_endpoint(endpoint)
+                    and cached_logger.headers == GenericAPILogger.resolve_headers(headers)
+                    and cached_logger.event_types == event_types
+                    and cached_logger.log_format == (log_format if log_format is not None else "json_array")
+                    and cached_logger.max_retries == max_retries
+                    and cached_logger.retry_delay == retry_delay
+                    and cached_logger.timeout == timeout
+                ):
+                    return cached_logger
 
-            new_logger = GenericAPILogger(
-                endpoint=endpoint,
-                headers=headers,
-                event_types=event_types,
-                log_format=log_format,
-                max_retries=max_retries,
-                retry_delay=retry_delay,
-                timeout=timeout,
-            )
-            _generic_api_logger_cache[callback] = new_logger
-            return new_logger
+                new_logger = GenericAPILogger(
+                    endpoint=endpoint,
+                    headers=headers,
+                    event_types=event_types,
+                    log_format=log_format,
+                    max_retries=max_retries,
+                    retry_delay=retry_delay,
+                    timeout=timeout,
+                )
+                if isinstance(cached_logger, GenericAPILogger):
+                    for callbacks in (
+                        litellm.callbacks,
+                        litellm.input_callback,
+                        litellm._async_input_callback,  # pyright: ignore[reportPrivateUsage]  # Manager owns callback lists.
+                        litellm.success_callback,
+                        litellm.failure_callback,
+                        litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # Manager owns callback lists.
+                        litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Manager owns callback lists.
+                        litellm.service_callback,
+                    ):
+                        callbacks[:] = [new_logger if entry is cached_logger else entry for entry in callbacks]
+                    cached_logger.shutdown(replacement=new_logger)
+                _generic_api_logger_cache[callback] = new_logger
+                return new_logger
 
         # Check if callback is in generic_api_compatible_callbacks.json
         from litellm.integrations.generic_api.generic_api_callback import (

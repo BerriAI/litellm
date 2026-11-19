@@ -109,6 +109,8 @@ struct Facts {
     #[pyo3(attribute)]
     has_db: bool,
     #[pyo3(attribute)]
+    db_configured: bool,
+    #[pyo3(attribute)]
     ui_login: bool,
     #[pyo3(attribute)]
     proxy_budget: bool,
@@ -130,6 +132,7 @@ impl AuthSettings {
             master_key: facts.master_key.map(MasterKey::new),
             premium: facts.premium,
             has_db: facts.has_db,
+            db_configured: facts.db_configured,
             ui_login: facts.ui_login,
             proxy_budget: facts.proxy_budget,
             metrics_require_auth: facts.metrics_require_auth,

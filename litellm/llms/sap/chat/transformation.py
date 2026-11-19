@@ -44,6 +44,7 @@ from .models import (
     SAPToolChatMessage,
     SAPUserMessage,
 )
+from .reasoning import normalize_reasoning_blocks
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -415,7 +416,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(
+            normalize_reasoning_blocks(raw_response.json()["final_result"], "message")
+        )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```

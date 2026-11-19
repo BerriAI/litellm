@@ -43,7 +43,7 @@ pub(crate) struct NativeParallelRequestLimiter {
 #[pyclass(frozen, name = "NativeParallelRequestLimiterState")]
 pub(crate) struct NativeParallelRequestLimiterState(Arc<LimiterState>);
 
-fn limiter_async<'py, T, F>(py: Python<'py>, operation: F) -> PyResult<Bound<'py, PyAny>>
+pub(crate) fn limiter_async<'py, T, F>(py: Python<'py>, operation: F) -> PyResult<Bound<'py, PyAny>>
 where
     T: for<'a> IntoPyObject<'a> + Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
@@ -58,7 +58,7 @@ where
     )
 }
 
-fn limiter_admission<'py, T, F>(
+pub(crate) fn limiter_admission<'py, T, F>(
     py: Python<'py>,
     in_memory: bool,
     operation: F,
@@ -107,7 +107,7 @@ fn encoded<T: serde::Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>
     to_py(py, &value)
 }
 
-fn python_clock(now: Py<PyAny>) -> litellm_callbacks_parallel_request_limiter::Now {
+pub(crate) fn python_clock(now: Py<PyAny>) -> litellm_callbacks_parallel_request_limiter::Now {
     Arc::new(move || {
         Python::attach(|py| {
             now.call0(py)
@@ -117,7 +117,7 @@ fn python_clock(now: Py<PyAny>) -> litellm_callbacks_parallel_request_limiter::N
     })
 }
 
-fn system_now() -> f64 {
+pub(crate) fn system_now() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs_f64())

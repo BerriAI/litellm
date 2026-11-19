@@ -266,6 +266,10 @@ class _CacheControls(Protocol):
     def get(self, key: str, default: bool, /) -> object: ...
 
 
+def _caching_requested(kwargs: Mapping[str, object]) -> bool:
+    return (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
+
+
 def _cache_reads_disabled(kwargs: Mapping[str, object]) -> bool:
     cache_controls: Final = require_attributes(kwargs.get("cache", {}), _CacheControls, "get")
     return cache_controls.get("no-cache", False) is True
@@ -425,6 +429,7 @@ class LLMCachingHandler:
             None
         """
         if not self.reads_cache(model=model, kwargs=kwargs):
+            self._remember_skipped_read_cache_key(original_function=original_function, kwargs=kwargs, args=args or ())
             return None
         args = args or ()
         final_embedding_cached_response: EmbeddingResponse | None = None
@@ -501,11 +506,7 @@ class LLMCachingHandler:
         if _is_response_cache_excluded(model=model, kwargs=kwargs):
             self.request_kwargs = _drop_logging_obj_from_kwargs(kwargs)
             return False
-        return (
-            (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
-        ) and (
-            not _cache_reads_disabled(kwargs)
-        )  # allow users to control returning cached responses from the completion function
+        return _caching_requested(kwargs) and not _cache_reads_disabled(kwargs)
 
     async def async_read_cache(
         self,
@@ -593,13 +594,19 @@ class LLMCachingHandler:
             )
             if new_kwargs.get("metadata") is None:
                 new_kwargs.pop("metadata", None)
+            if _cache_reads_disabled(new_kwargs):
+                self._remember_skipped_read_cache_key(original_function=original_function, kwargs=new_kwargs, args=())
+                return CachingHandlerResponse(cached_result=None)
+            self._remember_lookup_cache_key(new_kwargs)
             if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
-                new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
+                new_kwargs["cache_key"] = self.preset_cache_key or litellm.cache.get_cache_key(**new_kwargs)
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
             logging_obj.reset_caching_details()
             with response_cache_phase("get"):
-                cached_result = litellm.cache.get_cache(**_CacheCallKwargs(**new_kwargs))
+                cached_result = litellm.cache.get_cache(
+                    **_CacheCallKwargs(**new_kwargs, **self._known_cache_key_kwargs(new_kwargs))
+                )
             if is_response_without_output(cached_result):
                 verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")
                 return CachingHandlerResponse(cached_result=None)
@@ -661,6 +668,31 @@ class LLMCachingHandler:
         return CachingHandlerResponse(cached_result=cached_result)
 
     _sync_get_cache = sync_get_cache
+
+    def _remember_lookup_cache_key(self, call_kwargs: Mapping[str, object]) -> None:
+        cache: Final = litellm.cache
+        if cache is None or self.preset_cache_key is not None or cache.should_use_cache(**call_kwargs) is not True:
+            return
+        try:
+            self.preset_cache_key = _request_cache_key(call_kwargs) or cache.get_cache_key(
+                **{key: value for key, value in call_kwargs.items() if key != "cache_key"}
+            )
+        except Exception as key_error:  # noqa: BLE001  # like Cache.get_cache, an unkeyable request is just not cached
+            verbose_logger.debug("LiteLLM Cache: could not compute the cache key: %s", key_error)
+
+    def _remember_skipped_read_cache_key(
+        self, original_function: Callable[..., object], kwargs: Mapping[str, object], args: tuple[object, ...]
+    ) -> None:
+        if litellm.cache is None or not _caching_requested(kwargs) or not _cache_reads_disabled(kwargs):
+            return
+        call_kwargs: Final = {**kwargs, **convert_args_to_kwargs(original_function, args)}
+        if self.should_store_result_in_cache(original_function=original_function, kwargs=call_kwargs):
+            self._remember_lookup_cache_key(call_kwargs)
+
+    def _known_cache_key_kwargs(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        if self.preset_cache_key is None or "cache_key" in kwargs:
+            return {}
+        return {"cache_key": self.preset_cache_key}
 
     def handle_kwargs_input_list_or_str(self, kwargs: dict[str, object]) -> list[EmbeddingCacheInputElement]:
         """
@@ -1302,6 +1334,7 @@ class LLMCachingHandler:
         parent_otel_span: Final = get_parent_otel_span_from_kwargs(new_kwargs)
         new_kwargs["parent_otel_span"] = parent_otel_span
         # [OPTIONAL] ADD TO CACHE
+        lookup_cache_key: Final = self._known_cache_key_kwargs(new_kwargs)
         if self.should_store_result_in_cache(original_function=original_function, kwargs=new_kwargs):
             if (
                 isinstance(result, litellm.ModelResponse)
@@ -1326,10 +1359,13 @@ class LLMCachingHandler:
                             result_json,
                             dynamic_cache_object=self.dual_cache,
                             **new_kwargs,
+                            **lookup_cache_key,
                         )
                     )
             else:
-                create_cache_write_task(lambda: cache.async_add_cache(result, **_CacheCallKwargs(**new_kwargs)))
+                create_cache_write_task(
+                    lambda: cache.async_add_cache(result, **_CacheCallKwargs(**new_kwargs, **lookup_cache_key))
+                )
 
     def sync_set_cache(
         self,
@@ -1356,7 +1392,7 @@ class LLMCachingHandler:
 
         if self.should_store_result_in_cache(original_function=self.original_function, kwargs=new_kwargs):
             with response_cache_phase("set"):
-                litellm.cache.add_cache(result, **new_kwargs)
+                litellm.cache.add_cache(result, **new_kwargs, **self._known_cache_key_kwargs(new_kwargs))
 
         return
 

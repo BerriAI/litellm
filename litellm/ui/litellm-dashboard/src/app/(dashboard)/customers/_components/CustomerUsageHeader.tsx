@@ -1,4 +1,3 @@
-import type { ParseKeys } from "i18next";
 import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -17,12 +16,6 @@ interface CustomerUsageHeaderProps {
   onDateRangeChange: (value: DateRangePickerValue, preset: string | null) => void;
 }
 
-const scopeLabel = (scope: CustomerUsageScope): ParseKeys => {
-  if (scope.member) return "customerPortal.analytics.memberUsage";
-  if (scope.team) return "customerPortal.analytics.teamUsage";
-  return "customerPortal.analytics.organizationUsage";
-};
-
 function CustomerUsageBreadcrumbs({
   scope,
   data,
@@ -37,24 +30,22 @@ function CustomerUsageBreadcrumbs({
       className="mb-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
     >
       <a href={customersHref} className="hover:text-foreground">
-        {t("customerPortal.entities.organizations")}
+        {t("customerPortal.analytics.allCustomers")}
       </a>
-      <ChevronRight aria-hidden="true" className="size-3" />
-      <button type="button" className="hover:text-foreground" onClick={onOrganizationClick}>
-        {data?.organization.label ?? scope.org}
-      </button>
-      {scope.team && (
+      {(scope.team || scope.member) && (
+        <>
+          <ChevronRight aria-hidden="true" className="size-3" />
+          <button type="button" className="hover:text-foreground" onClick={onOrganizationClick}>
+            {data?.organization.label ?? scope.org}
+          </button>
+        </>
+      )}
+      {scope.member && scope.team && (
         <>
           <ChevronRight aria-hidden="true" className="size-3" />
           <button type="button" className="hover:text-foreground" onClick={onTeamClick}>
             {data?.team?.label ?? scope.team}
           </button>
-        </>
-      )}
-      {scope.member && (
-        <>
-          <ChevronRight aria-hidden="true" className="size-3" />
-          <span aria-current="page">{data?.member?.label ?? scope.member}</span>
         </>
       )}
     </nav>
@@ -82,11 +73,7 @@ export default function CustomerUsageHeader({
         onTeamClick={onTeamClick}
       />
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="mb-1 text-xs text-muted-foreground">{t(scopeLabel(scope))}</p>
-          <h1 className="text-2xl font-semibold tracking-tight">{label}</h1>
-          <p className="mt-1.5 text-sm text-muted-foreground">{t("customerPortal.analytics.subtitle")}</p>
-        </div>
+        <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight">{label}</h1>
         <AdvancedDatePicker
           value={dateValue}
           presetShortLabel={preset}
@@ -95,6 +82,8 @@ export default function CustomerUsageHeader({
           presets={customerUsagePresets}
           maxRangeDays={CUSTOMER_USAGE_MAX_RANGE_DAYS}
           onValueChange={onDateRangeChange}
+          compact
+          className="max-w-sm"
         />
       </div>
     </header>

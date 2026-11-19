@@ -95,6 +95,8 @@ PRISMA_SCHEMA = REPO_ROOT / "litellm" / "proxy" / "schema.prisma"
 # caller-set value while preserving the caller's other NODE_OPTIONS flags.
 NODE_HEAP_OPTION = "--max-old-space-size=8192"
 
+BASEDPYRIGHT_THREADS: Final = min(os.cpu_count() or 1, 4)
+
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
 
@@ -163,6 +165,7 @@ def typecheck_env_commands(env_dir: Path = TYPECHECK_ENV_DIR) -> tuple[tuple[str
         "uv",
         "sync",
         "--frozen",
+        "--no-install-project",
         *(("--python", python_pin) if python_pin else ()),
         *(flag for group in TYPECHECK_DEP_GROUPS for flag in ("--group", group)),
     )
@@ -223,6 +226,8 @@ def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -
             str(cwd / PYRIGHT_CONFIG.name),
             "--pythonpath",
             str(bin_dir / "python"),
+            "--threads",
+            str(BASEDPYRIGHT_THREADS),
         ],
         cwd=cwd,
         capture_output=True,

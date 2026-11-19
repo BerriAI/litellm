@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime
+from itertools import chain
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -25,7 +26,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _EMPTY_TEXT_PLACEHOLDER,
+    DEFAULT_USER_CONTINUE_MESSAGE,
+    EMPTY_TEXT_PLACEHOLDER,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
@@ -60,6 +62,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_anthropic_tool_use_id,
     sanitize_messages_for_tool_calling,
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
@@ -1083,6 +1086,34 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
     assert assistant_content == [{"text": "hello"}]
 
 
+CONVERSE_EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
+    "empty_user_message",
+    [
+        {"role": "user", "content": []},
+        {"role": "user", "content": None},
+        {"role": "user"},
+        {"role": "user", "content": ""},
+        {"role": "user", "content": [{"type": "text", "text": ""}]},
+    ],
+    ids=["empty-list", "null", "content-key-dropped", "empty-string", "empty-text-block"],
+)
+
+_CONVERSE_TOOL_CALL_TURN: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "tooluse_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+}
+
+
+async def _converse(messages: Sequence[Mapping[str, object]], use_async: bool) -> Sequence[Mapping[str, object]]:
+    model: Final = "us.anthropic.claude-opus-5-5"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=list(messages), model=model, llm_provider="bedrock"
+        )
+    return _bedrock_converse_messages_pt(messages=list(messages), model=model, llm_provider="bedrock")
+
+
 _HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
 
 
@@ -1092,6 +1123,7 @@ async def _converse_messages(
     base_model: str | None,
     use_async: bool,
     assistant_continue_message: str | None = None,
+    user_continue_message: ChatCompletionUserMessage | None = None,
 ) -> list[dict[str, object]]:
     return (
         await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1100,6 +1132,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
         if use_async
         else _bedrock_converse_messages_pt(
@@ -1108,6 +1141,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
     )
 
@@ -1118,6 +1152,271 @@ def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[s
         if placement == "thinking_blocks"
         else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_an_empty_trailing_user_turn(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, empty_user_message], use_async
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}]
+
+
+_ANSWERED_HISTORY: Final[tuple[dict[str, object], ...]] = (
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": "hello"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "blank_user_message",
+    [
+        {"role": "user", "content": "   "},
+        {"role": "user", "content": [{"type": "text", "text": " \n"}]},
+        {"role": "user", "content": [{"type": "guarded_text", "text": ""}]},
+    ],
+    ids=["whitespace-string", "whitespace-block", "empty-guarded-text"],
+)
+async def test_bedrock_converse_treats_a_blank_trailing_user_turn_as_empty(
+    use_async: bool, blank_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, blank_user_message], use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model",
+    ["us.amazon.nova-2-lite-v1:0", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", _HIDDEN_MODEL_ARN],
+    ids=["nova", "claude-with-prefill", "hidden-arn"],
+)
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_adds_no_placeholder_for_a_model_that_is_not_known_to_refuse_a_prefill(
+    use_async: bool, model: str, empty_user_message: dict[str, object]
+) -> None:
+    result: Final = await _converse_messages([*_ANSWERED_HISTORY, empty_user_message], model, None, use_async)
+
+    assert [message["role"] for message in result] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_reads_a_hidden_arn_model_from_base_model_for_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": None}],
+        _HIDDEN_MODEL_ARN,
+        "anthropic.claude-opus-5-5",
+        use_async,
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("model", "turns"),
+    [
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", (*_ANSWERED_HISTORY, {"role": "user", "content": "   "})),
+        (
+            "us.anthropic.claude-opus-5-5",
+            (
+                *_ANSWERED_HISTORY,
+                {"role": "user", "content": "   "},
+                {"role": "assistant", "content": "again"},
+                {"role": "user", "content": "more"},
+            ),
+        ),
+    ],
+    ids=["model-with-prefill", "before-later-turns"],
+)
+async def test_bedrock_converse_leaves_a_whitespace_string_alone_unless_it_ends_a_request_that_needs_the_placeholder(
+    use_async: bool, model: str, turns: Sequence[dict[str, object]]
+) -> None:
+    result: Final = await _converse_messages(list(turns), model, None, use_async)
+
+    assert {"text": "   "} in result[2]["content"]
+    assert not _carries_the_placeholder(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "marked_user_message",
+    [
+        {"role": "user", "content": "", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": None, "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}]},
+    ],
+    ids=["empty-string", "null", "empty-text-block"],
+)
+async def test_bedrock_converse_keeps_the_cache_mark_of_an_empty_trailing_user_turn(
+    use_async: bool, marked_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, marked_user_message], use_async)
+
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}, {"cachePoint": {"type": "default"}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_prefers_a_user_continue_message_over_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}],
+        "us.anthropic.claude-opus-5-5",
+        None,
+        use_async,
+        user_continue_message={"role": "user", "content": "go on"},
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": "go on"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_lets_modify_params_continue_an_empty_trailing_user_turn(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}], "us.anthropic.claude-opus-5-5", None, use_async
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": DEFAULT_USER_CONTINUE_MESSAGE["content"]}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "content", ["", "   ", [{"type": "text", "text": ""}]], ids=["empty-string", "whitespace-string", "empty-text-block"]
+)
+async def test_bedrock_converse_fills_a_blank_trailing_user_turn_under_a_guardrail(
+    use_async: bool, content: object
+) -> None:
+    guarded: Final = litellm.AmazonConverseConfig._convert_consecutive_user_messages_to_guarded_text(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": content}],
+        {"guardrailConfig": {"guardrailIdentifier": "guardrail", "guardrailVersion": "1"}},
+    )
+
+    result: Final = await _converse(guarded, use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("empty_user_first", [True, False], ids=["empty-user-then-tool", "tool-then-empty-user"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_empty_user_message_beside_a_tool_result_keeps_the_tool_result_only(
+    use_async: bool, empty_user_first: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    tool_result: Final = {"role": "tool", "tool_call_id": "tooluse_1", "content": "ok"}
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            *((empty_user_message, tool_result) if empty_user_first else (tool_result, empty_user_message)),
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+def _carries_the_placeholder(turns: Sequence[Mapping[str, object]]) -> bool:
+    blocks: Final = chain.from_iterable(turn["content"] for turn in turns)
+    return any(block.get("text") == EMPTY_TEXT_PLACEHOLDER for block in blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_adds_no_placeholder_for_an_empty_user_message_before_later_turns(
+    use_async: bool, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            empty_user_message,
+            {"role": "assistant", "content": "anything else?"},
+            {"role": "user", "content": "no"},
+        ],
+        use_async,
+    )
+
+    assert not _carries_the_placeholder(result)
+    assert result[-1] == {"role": "user", "content": [{"text": "no"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("tool_output", ["ok", ""], ids=["tool-output", "empty-tool-output"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_a_tool_result_right_after_its_tool_call_across_empty_turns(
+    use_async: bool, tool_output: str, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            empty_user_message,
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "tool_call_id": "tooluse_1", "content": tool_output},
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+_CONVERSE_UNSENDABLE_MEDIA_TURN: Final = {
+    "role": "user",
+    "content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}],
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "trailing_turns",
+    [
+        (_CONVERSE_UNSENDABLE_MEDIA_TURN,),
+        ({"role": "user", "content": ""}, _CONVERSE_UNSENDABLE_MEDIA_TURN),
+    ],
+    ids=["media-only", "empty-then-media"],
+)
+async def test_bedrock_converse_does_not_call_a_media_only_user_turn_empty(
+    use_async: bool, trailing_turns: tuple[Mapping[str, object], ...]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, *trailing_turns], use_async
+    )
+
+    assert not _carries_the_placeholder(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_adds_no_placeholder_before_a_leading_assistant_turn(use_async: bool) -> None:
+    result: Final = await _converse(
+        [{"role": "assistant", "content": "hello"}, {"role": "user", "content": "hi"}], use_async
+    )
+
+    assert [message["role"] for message in result] == ["assistant", "user"]
 
 
 @pytest.mark.asyncio
@@ -1646,7 +1945,7 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 @EMPTY_USER_MESSAGES
@@ -1750,7 +2049,7 @@ def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_use
 
     assert (
         result[-1]["content"]
-        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+        == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
     )
 
 
@@ -9677,3 +9976,174 @@ def test_wrong_type_template_field_in_requests_leaves_the_deployments_in_rotatio
     response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES, mock_response="Blue")
 
     assert response.choices[0].message.content == "Blue"
+
+
+def _history_with_concatenated_tool_arguments(
+    *payloads: dict[str, object], sibling_id: str = "call_1__concat_1", truncated_tail: str = ""
+) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "List files in /a and /b"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": _concatenated_json(*payloads) + truncated_tail},
+                },
+                {
+                    "id": sibling_id,
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": '{"path": "/c"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+        {"role": "tool", "tool_call_id": sibling_id, "content": "c.txt"},
+    ]
+
+
+_UNSPLIT_TURN_REUSING_CALL_1 = (
+    {"role": "user", "content": "List files in /z"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/z"}'}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "z.txt"},
+)
+
+
+async def _bedrock_converse_messages(messages: list[dict[str, object]], use_async: bool) -> list[dict[str, object]]:
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    if use_async:
+        return await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(messages, model, "bedrock")
+    return _bedrock_converse_messages_pt(messages, model, "bedrock")
+
+
+def _bedrock_tool_use_ids(message: dict[str, object]) -> list[str]:
+    return [block["toolUse"]["toolUseId"] for block in message["content"] if "toolUse" in block]
+
+
+def _bedrock_results_by_id(message: dict[str, object]) -> dict[str, object]:
+    return {
+        block["toolResult"]["toolUseId"]: block["toolResult"]["content"]
+        for block in message["content"]
+        if "toolResult" in block
+    }
+
+
+def test_anthropic_messages_pt_splits_concatenated_tool_arguments_and_answers_every_tool_use():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"})
+
+    _, assistant, tool_results = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    tool_uses = [block for block in assistant["content"] if block["type"] == "tool_use"]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = [block["id"] for block in tool_uses]
+    assert len(set(tool_use_ids)) == 3
+    results_by_id = {block["tool_use_id"]: block["content"] for block in tool_results["content"]}
+    assert results_by_id == {tool_use_ids[0]: "a.txt", tool_use_ids[1]: "a.txt", tool_use_ids[2]: "c.txt"}
+
+
+def test_anthropic_messages_pt_rejects_truncated_concatenated_tool_arguments():
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, truncated_tail='{"path": ')
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'ls'"):
+        anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_every_tool_use_split_from_concatenated_arguments(use_async: bool):
+    messages = _history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}, sibling_id="call_1_1")
+
+    _, assistant, tool_results = await _bedrock_converse_messages(messages, use_async)
+
+    tool_uses = [block["toolUse"] for block in assistant["content"] if "toolUse" in block]
+    assert [block["input"] for block in tool_uses] == [{"path": "/a"}, {"path": "/b"}, {"path": "/c"}]
+    tool_use_ids = _bedrock_tool_use_ids(assistant)
+    assert len(set(tool_use_ids)) == 3
+    assert _bedrock_results_by_id(tool_results) == {
+        tool_use_ids[0]: [{"text": "a.txt"}],
+        tool_use_ids[1]: [{"text": "a.txt"}],
+        tool_use_ids[2]: [{"text": "c.txt"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_copies_results_only_into_the_turn_that_split(use_async: bool):
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = await _bedrock_converse_messages(
+        messages, use_async
+    )
+
+    assert _bedrock_results_by_id(unsplit_results) == {_bedrock_tool_use_ids(unsplit_assistant)[0]: [{"text": "z.txt"}]}
+    assert set(_bedrock_results_by_id(split_results)) == set(_bedrock_tool_use_ids(split_assistant))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_rejects_more_split_tool_uses_than_the_cap(use_async: bool):
+    payloads = [{"path": f"/{index}"} for index in range(MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS + 1)]
+    messages = _history_with_concatenated_tool_arguments(*payloads)
+
+    with pytest.raises(litellm.BadRequestError, match="concatenated JSON argument objects"):
+        await _bedrock_converse_messages(messages, use_async)
+
+
+_CALL_1_SPLIT_IN_TWO = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {"id": "call.1", "type": "function", "function": {"name": "ls", "arguments": '{"path": "/a"}{"path": "/b"}'}}
+    ],
+}
+_CALL_1_REPEATED_IN_ONE_TURN = (
+    {"role": "user", "content": "List files in /a and /b"},
+    _CALL_1_SPLIT_IN_TWO,
+    _CALL_1_SPLIT_IN_TWO,
+    {"role": "tool", "tool_call_id": "call.1", "content": "a.txt"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_messages_pt_answers_a_split_call_repeated_in_one_turn(use_async: bool):
+    _, assistant, tool_results = await _bedrock_converse_messages(list(_CALL_1_REPEATED_IN_ONE_TURN), use_async)
+
+    assert set(_bedrock_results_by_id(tool_results)) == set(_bedrock_tool_use_ids(assistant))
+
+
+def test_anthropic_messages_pt_answers_a_split_call_with_an_unsanitized_id_repeated_in_one_turn():
+    _, assistant, tool_results = anthropic_messages_pt(
+        list(_CALL_1_REPEATED_IN_ONE_TURN), model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    tool_use_ids = {block["id"] for block in assistant["content"] if block["type"] == "tool_use"}
+    assert len(tool_use_ids) == 2
+    assert {block["tool_use_id"] for block in tool_results["content"]} == tool_use_ids
+
+
+def test_anthropic_messages_pt_copies_results_only_into_the_turn_that_split():
+    messages = [
+        *_UNSPLIT_TURN_REUSING_CALL_1,
+        *_history_with_concatenated_tool_arguments({"path": "/a"}, {"path": "/b"}),
+    ]
+
+    _, unsplit_assistant, unsplit_results, split_assistant, split_results = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assert [block["tool_use_id"] for block in unsplit_results["content"] if block["type"] == "tool_result"] == [
+        block["id"] for block in unsplit_assistant["content"] if block["type"] == "tool_use"
+    ]
+    assert {block["tool_use_id"] for block in split_results["content"]} == {
+        block["id"] for block in split_assistant["content"] if block["type"] == "tool_use"
+    }

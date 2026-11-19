@@ -359,10 +359,9 @@ def test_spend_log_routes_preserve_user_and_permitted_team_access(
         assert listed.status_code == 200, listed.text
         assert sorted(row["request_id"] for row in listed.json()["data"]) == list(expected), listed.text
         narrowed: Final = gateway.request("GET", "/spend/logs/ui", key=key, params={**filters, "user_id": other})
-        assert narrowed.status_code == 200, narrowed.text
-        assert [row["request_id"] for row in narrowed.json()["data"]] == (
-            [rows[1].request_id] if team_access else []
-        ), narrowed.text
+        assert narrowed.status_code == (200 if team_access else 403), narrowed.text
+        if team_access:
+            assert [row["request_id"] for row in narrowed.json()["data"]] == [rows[1].request_id], narrowed.text
         refused: Final = gateway.request("GET", f"/spend/logs/ui/{rows[4].request_id}", key=key)
         assert refused.status_code == 403, refused.text
         for caller_key, expected_id in ((key, rows[0].request_id), (other_key, rows[2].request_id)):
@@ -498,7 +497,11 @@ def _legacy_spend_rows(gateway: Gateway, key: str, params: dict[str, str]) -> li
     return TypeAdapter(list[dict[str, object]]).validate_python(response.json())
 
 
-def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway: Gateway) -> None:
+def _legacy_spend_status(gateway: Gateway, key: str, params: dict[str, str]) -> int:
+    return gateway.request("GET", "/spend/logs", key=key, params=params).status_code
+
+
+def test_legacy_spend_logs_refuse_internal_user_filters_outside_their_own_user(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         user_a: Final = scenario.user(user_role="internal_user")
@@ -516,17 +519,11 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
                 seconds=70,
             )
 
-        filtered: Final = _legacy_spend_rows(gateway, key_a, {"user_id": user_b})
-        assert filtered != [], filtered
-        assert {string_value(object_value(row)["user"]) for row in filtered} == {user_a}, filtered
-        assert request_b not in {string_value(object_value(row)["request_id"]) for row in filtered}
-        assert request_a in {string_value(object_value(row)["request_id"]) for row in filtered}
-
-        by_key: Final = _legacy_spend_rows(gateway, key_a, {"api_key": key_b})
-        assert by_key == [], by_key
+        filtered: Final = _legacy_spend_rows(gateway, key_a, {"user_id": user_a})
+        assert {string_value(object_value(row)["request_id"]) for row in filtered} == {request_a}, filtered
         hashed_key_b: Final = sha256(key_b.encode()).hexdigest()
-        by_hashed_key: Final = _legacy_spend_rows(gateway, key_a, {"api_key": hashed_key_b})
-        assert by_hashed_key == [], by_hashed_key
+        for foreign_filter in ({"user_id": user_b}, {"api_key": key_b}, {"api_key": hashed_key_b}):
+            assert _legacy_spend_status(gateway, key_a, foreign_filter) == 403, foreign_filter
 
         by_request: Final = _legacy_spend_rows(gateway, key_a, {"request_id": request_b})
         assert by_request == [], by_request
@@ -552,8 +549,7 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
             assert [
                 (string_value(object_value(row)["request_id"]), object_value(row)["user"]) for row in admin_by_key
             ] == [(request_b, user_b)], admin_by_key
-        summarized_by_key: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "true", "api_key": key_b})
-        assert sum(float(str(object_value(row)["spend"])) for row in summarized_by_key) == 0, summarized_by_key
+        assert _legacy_spend_status(gateway, key_a, {**window, "summarize": "true", "api_key": key_b}) == 403
         admin_summarized: Final = _legacy_spend_rows(
             gateway, gateway.key, {**window, "summarize": "true", "api_key": key_b}
         )

@@ -29,6 +29,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
+from litellm_enterprise.proxy.common_utils.managed_object_attribution import creator_billing_context
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
@@ -926,11 +927,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
         end_user_id: Final = user_api_key_dict.end_user_id if file_purpose == "response" else None
+        billing_context: Final = creator_billing_context(user_api_key_dict) if persist_attribution else None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
                 **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
                 **({"end_user_id": end_user_id} if end_user_id else {}),
+                **({"creator_billing_context": Json(dict(billing_context))} if billing_context is not None else {}),
             }
             if persist_attribution
             else {}

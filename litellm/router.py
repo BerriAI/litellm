@@ -50,6 +50,7 @@ from litellm.types.utils import GenericBudgetConfigType
 
 if TYPE_CHECKING:
     from litellm.router_rust.core import RustCore
+    from litellm.router_utils.dynamic_queue_router import DynamicQueueSettings
 
 
 # ``Router(...)``'s parameters, their defaults and its docstring: ``router_arguments`` binds a call
@@ -76,6 +77,7 @@ def _router_init(
     ## SCHEDULER ##
     polling_interval: float | None = None,
     default_priority: int | None = None,
+    dynamic_queue: "DynamicQueueSettings | Mapping[str, object] | None" = None,
     ## RELIABILITY ##
     num_retries: int | None = None,
     max_fallbacks: int | None = None,  # max fallbacks to try before exiting the call. Defaults to 5.
@@ -141,6 +143,7 @@ def _router_init(
         client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
         polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
         default_priority: (Optional[int]): the priority given to every chat or text completion request that sets no 'priority' of its own; '.acompletion()' and '.atext_completion()' queue it through the scheduler. Default is None.
+        dynamic_queue: (Optional[dict]): opt-in per-deployment queuing for async non-streaming chat completions, shared across workers through the router's Redis. A provider 429 or 529 congests the deployment the router picked, and later requests picked onto it wait for its turn in priority order. Keys: 'enabled' (False), 'queue_timeout' (seconds a request may wait in total across its attempts, default 30), 'max_waiting' (waiters per deployment, a whole number from 1 to 64, required when enabled). Enabled, it needs 'default_priority'; the scheduler admits every request as before, and a request it admits then waits in the queue only where an attempt goes out on a congested deployment. A request that runs out of queue time gets the usual timeout error and a full queue answers 503 with the code 'queue_full'; when the queue's Redis is unavailable, requests are routed as they would be without the queue. Default is None.
         num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
         timeout (Optional[float]): Timeout for requests. Defaults to None.
         default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.

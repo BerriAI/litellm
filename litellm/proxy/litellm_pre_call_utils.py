@@ -417,7 +417,11 @@ from litellm.proxy.pricing_currency import (
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
-from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
+from litellm.types.litellm_params import (
+    AGENTIC_LOOP_KWARG_NAMES,
+    PROMPT_MANAGEMENT_APPLIED_FIELD,
+    STREAM_USAGE_INJECTED_FIELD,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
@@ -533,6 +537,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "guardrail_scan_metadata",
     "routing_decision",
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
+    PROMPT_MANAGEMENT_APPLIED_FIELD,
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
@@ -878,6 +883,14 @@ def _key_or_team_allows_client_pricing_override(
     return _key_or_team_metadata_flag_is_true(
         user_api_key_dict=user_api_key_dict,
         metadata_key=_ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY,
+    )
+
+
+def client_pricing_fields_stripped_for(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+    return (
+        frozenset()
+        if _key_or_team_allows_client_pricing_override(user_api_key_dict)
+        else _CLIENT_PRICING_CONTROL_FIELDS
     )
 
 
@@ -1782,7 +1795,8 @@ def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
     """Names of the request fields through which the caller can change how the provider authenticates the call:
     ``api_key``, ``organization``, and ``headers``, ``extra_headers`` or a ``provider_specific_header`` entry's
     ``extra_headers`` that carry any header besides the key and user details the proxy adds under
-    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers."""
+    ``add_user_information_to_llm_headers`` and the ``anthropic-version`` and ``anthropic-beta`` headers.
+    """
     carried: Final = {
         "api_key": "api_key" in data,
         "extra_headers": _carries_a_caller_header(data.get("extra_headers")),
@@ -2103,7 +2117,7 @@ class LiteLLMProxyRequestSetup:
         # caller can supply any of those via the request body as well as the headers above.
         # A deliberately tiny value can force a 408 on every deployment in a fallback chain,
         # so this marker (never trusted verbatim from the client; stripped above) must cover
-        # every source cooldown_handlers._trigger_cooldown_for_failed_deployment needs to
+        # every source router_rust.surface.health.RustHealthCallbacks.blocked_failure_exempt needs to
         # distinguish from a real deployment health signal.
         if (
             header_timeout is not None
@@ -2278,14 +2292,22 @@ class LiteLLMProxyRequestSetup:
             user_api_key_org_alias=user_api_key_dict.organization_alias,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
-            user_api_key_customer_member_id=customer.customer_member_id if customer else None,
-            user_api_key_customer_team_id=customer.customer_team_id if customer else None,
+            user_api_key_customer_member_id=(customer.customer_member_id if customer else None),
+            user_api_key_customer_team_id=(customer.customer_team_id if customer else None),
             user_api_key_customer_org_id=customer.customer_org_id if customer else None,
-            user_api_key_customer_org_alias=customer.customer_org_alias if customer else None,
-            user_api_key_customer_team_alias=customer.customer_team_alias if customer else None,
-            user_api_key_customer_member_alias=customer.customer_member_alias if customer else None,
+            user_api_key_customer_org_alias=(customer.customer_org_alias if customer else None),
+            user_api_key_customer_team_alias=(customer.customer_team_alias if customer else None),
+            user_api_key_customer_member_alias=(customer.customer_member_alias if customer else None),
             user_api_key_customer_budget_scopes=customer_budget_scopes_metadata(customer),
-            user_api_key_customer_hierarchy=customer.model_dump(mode="json") if customer else None,
+            user_api_key_customer_hierarchy=(customer.model_dump(mode="json") if customer else None),
+            **(
+                {
+                    "user_api_key_app_id": customer.app_id,
+                    "user_api_key_app_alias": customer.app_alias,
+                }
+                if customer is not None and customer.app_id is not None and customer.app_alias is not None
+                else {}
+            ),
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(
@@ -2349,6 +2371,13 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
+        if any(key in data[_metadata_variable_name] for key in ("user_api_key_app_id", "user_api_key_app_alias")):
+            incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
+            data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
+                key: value
+                for key, value in incoming_metadata.items()
+                if key not in ("user_api_key_app_id", "user_api_key_app_alias")
+            }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
 
@@ -3834,6 +3863,10 @@ async def _resolve_user_provider_credentials_for_request(
 
     from .credential_endpoints.user_provider_credentials import aget_user_provider_credentials
 
+    secret_fields: Final = data.get("secret_fields")
+    if not isinstance(secret_fields, dict):
+        return
+    secret_fields["user_provider_credentials_user_id"] = user_id
     if prisma_client is None:
         return
     try:
@@ -3848,12 +3881,7 @@ async def _resolve_user_provider_credentials_for_request(
             "_resolve_user_provider_credentials_for_request: failed to load user provider credentials"
         )
         return
-
-    secret_fields: Final = data.get("secret_fields")
-    if not isinstance(secret_fields, dict):
-        return
     secret_fields["user_provider_credentials"] = RedactedDict(dict(connections))
-    secret_fields["user_provider_credentials_user_id"] = user_id
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:

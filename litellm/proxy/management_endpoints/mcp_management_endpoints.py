@@ -469,8 +469,11 @@ if MCP_AVAILABLE:
 
     def _build_mcp_registry_entry_for_server(server: MCPServer, base_url: str) -> _McpRegistryEntry:
         server_name: Final = _build_mcp_registry_server_name(server)
-        title: Final = server_name
-        description: Final = server_name
+        title: Final = server.server_name or server_name
+        stored_description: Final[object] = (server.mcp_info or {}).get("description")
+        description: Final = (
+            stored_description if isinstance(stored_description, str) and stored_description else server_name
+        )
         version: Final = DEFAULT_MCP_REGISTRY_VERSION
 
         server_prefix: Final = get_server_prefix(server)

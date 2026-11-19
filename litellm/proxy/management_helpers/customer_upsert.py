@@ -12,6 +12,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     ErrorCode,
     Failure,
     default_template_index,
+    organization_budget_group_ids,
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
@@ -133,7 +134,16 @@ async def upsert_organization(
     if alias_failure is not None:
         return alias_failure
     alias_unchanged: Final = "alias" not in patch.model_fields_set or existing.alias == patch.alias
-    budget_unchanged: Final = "budget" not in patch.model_fields_set or matches_patch(existing.budget, patch.budget)
+    group_ids: Final = (
+        await organization_budget_group_ids(store.config) if {"budget", "budget_id"} & patch.model_fields_set else ()
+    )
+    budget_unchanged: Final = (
+        existing.budget_id == patch.budget_id and patch.budget_id in group_ids
+        if patch.budget_id is not None
+        else existing.budget_id not in group_ids and matches_patch(existing.budget, patch.budget)
+        if "budget" in patch.model_fields_set
+        else "budget_id" not in patch.model_fields_set or existing.budget_id is None
+    )
     if alias_unchanged and budget_unchanged and templates_match(existing, payload, default_index):
         return OrganizationOutcome(
             OrganizationUpsertResponse.model_validate({**existing.model_dump(), "created": False}), existing.alias

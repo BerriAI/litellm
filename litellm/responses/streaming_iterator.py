@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -773,6 +774,7 @@ class BaseResponsesAPIStreamingIterator:
             "additional_headers": {**headers},
             "headers": {**raw_headers},
             **_stamped_bill_hidden_params(source),
+            **{key: source[key] for key in (AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,) if key in source},
             **existing,
         }
 

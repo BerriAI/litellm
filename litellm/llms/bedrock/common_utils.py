@@ -1616,6 +1616,14 @@ def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None)
     return not _is_claude_behind_any_region_prefix(_converse_target_model(model, base_model))
 
 
+def bedrock_converse_rejects_assistant_prefill(model: str, base_model: str | None) -> bool:
+    from litellm.utils import is_explicitly_disabled_factory
+
+    return is_explicitly_disabled_factory(
+        _converse_target_model(model, base_model), "bedrock", "supports_assistant_prefill"
+    )
+
+
 def _converse_target_model(model: str, base_model: str | None) -> str:
     if base_model is None or "." in get_bedrock_base_model(model):
         return model
@@ -1877,13 +1885,18 @@ def _bedrock_model_id_without_region(model: str) -> str:
     return regional_id if separator and region in get_all_bedrock_regions() else routed_id
 
 
-def bedrock_model_is_unknown(model: str) -> bool:
+def bedrock_model_is_in_catalog(model: str) -> bool:
     model_id: Final = _bedrock_model_id_without_region(model)
-    if "/" in model_id:
-        return False
     base: Final = get_bedrock_base_model(model_id)
     regional_ids: Final = (f"{region}.{base}" for region in get_bedrock_cross_region_inference_regions())
-    if any(_cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)):
+    return any(
+        _cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)
+    )
+
+
+def bedrock_model_is_unknown(model: str) -> bool:
+    model_id: Final = _bedrock_model_id_without_region(model)
+    if "/" in model_id or bedrock_model_is_in_catalog(model_id):
         return False
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 

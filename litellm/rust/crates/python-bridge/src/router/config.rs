@@ -276,7 +276,6 @@ pub(crate) fn parse_request(value: Value, model: Option<&str>) -> Result<RouterR
         cooldown_time: spec.cooldown_time,
         health_check_probe: spec.health_check_probe.unwrap_or(false),
         outcome_callbacks: spec.outcome_callbacks.unwrap_or_default(),
-        payload: None,
     })
 }
 
