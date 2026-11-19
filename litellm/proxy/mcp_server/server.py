@@ -2645,7 +2645,8 @@ if MCP_AVAILABLE:
             from litellm.proxy.utils import ProxyLogging
 
             callback_capabilities: Final = ProxyLogging.callback_capabilities()
-            if is_tool_call_request(body) and (
+            may_be_tool_call: Final = is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+            if may_be_tool_call and (
                 callback_capabilities.has_post_call_response_headers
                 or hook_subscribers(Hook.response_headers, litellm.callbacks, admit=Admit.every_entry).has_v2
             ):

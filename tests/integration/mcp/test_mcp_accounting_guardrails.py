@@ -838,3 +838,17 @@ def test_native_tool_call_carries_the_response_headers_a_v2_callback_merges(v2_h
     assert _texts(called.result["content"]) == ["found"], called.result
     assert called.headers["tools/call"].get("x-v2-header") == "v2-value", called.headers
     assert "x-v2-header" not in called.headers["tools/list"], called.headers
+
+
+def test_native_tool_call_with_a_body_past_the_routing_peek_carries_callback_response_headers(
+    hooks_rig: HooksRig, gateway: Gateway
+) -> None:
+    record: Final = "r" * 5000
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as hooked, gateway.scenario() as plain:
+        with_callback: Final = _native_lookup(hooks_rig.sibling, hooked, peer, record)
+        without_callback: Final = _native_lookup(gateway, plain, peer, record)
+        sent: Final = tuple(call["body"]["params"]["arguments"] for call in tool_calls(peer.drain()))
+    assert sent == ({"record": record}, {"record": record}), sent
+    assert with_callback.headers["tools/call"].get("x-custom-header") == "custom-value", with_callback.headers
+    assert with_callback.result == without_callback.result, with_callback.result
+    assert _texts(with_callback.result["content"]) == ["found"], with_callback.result
