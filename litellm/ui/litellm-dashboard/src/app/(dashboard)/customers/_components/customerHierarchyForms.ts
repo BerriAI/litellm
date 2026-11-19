@@ -176,6 +176,7 @@ const memberPatch = (
   member: Member,
   fields: CustomerHierarchyFields,
   initial: CustomerHierarchyFields,
+  organization?: Organization,
 ): PatchResult => {
   if (!fields.templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
   const alias = aliasChanges(member.alias, fields.alias);
@@ -185,8 +186,7 @@ const memberPatch = (
   if (templateChanged && fields.templateId && !changed)
     return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearLegacy } } };
   const templateSelection = templateChanged ? { budget_id: fields.templateId || null } : {};
-  if (!changed)
-    return { ok: true, patch: { kind: "member", body: { ...alias, ...templateSelection } } };
+  if (!changed) return { ok: true, patch: { kind: "member", body: { ...alias, ...templateSelection } } };
   if (!fields.budgetEnabled && initial.budgetEnabled && initial.overrideExpiry) {
     return {
       ok: true,
@@ -222,7 +222,11 @@ const memberPatch = (
     ...(clearLegacy.budget_override === null ? member.effective_budget : {}),
     ...budget,
   };
-  const selection = fields.budgetEnabled ? { budget: permanentBudget } : { budget_id: fields.templateId };
+  const preset =
+    organization?.default_budgets.find((template) => template.budget_id === fields.templateId)?.budget_id ??
+    organization?.default_budget_template_id;
+  if (!fields.budgetEnabled && !preset) return { ok: false, error: "budgetRequired" };
+  const selection = fields.budgetEnabled ? { budget: permanentBudget } : { budget_id: preset };
   return { ok: true, patch: { kind: "member", body: { ...alias, ...selection, ...clearLegacy } } };
 };
 
@@ -246,7 +250,7 @@ export const buildCustomerHierarchyPatch = (
   organization?: Organization,
 ): PatchResult => {
   const initial = customerHierarchyFields(entity, organization);
-  if (entity.kind === "member") return memberPatch(entity.record, fields, initial);
+  if (entity.kind === "member") return memberPatch(entity.record, fields, initial, organization);
   const aliasPatch = aliasChanges(entity.record.alias, fields.alias);
   const groupChanged = entity.kind === "organization" && fields.templateId !== initial.templateId;
   if (groupChanged && fields.templateId) {

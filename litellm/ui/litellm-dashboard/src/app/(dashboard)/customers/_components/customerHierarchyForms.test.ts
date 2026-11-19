@@ -322,9 +322,7 @@ describe("customer hierarchy settings payloads", () => {
       kind: "member",
       record: { ...member, budget_override_expires_at: null, budget_override: legacy, effective_budget: legacy },
     };
-    expect(
-      buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), maxBudget: "30" }),
-    ).toEqual({
+    expect(buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity), maxBudget: "30" })).toEqual({
       ok: true,
       patch: {
         kind: "member",
@@ -342,6 +340,31 @@ describe("customer hierarchy settings payloads", () => {
         },
       },
     });
+  });
+
+  it.each(["default-preset", null])("should disable a private budget using the default preset %s", (preset) => {
+    const entity: CustomerHierarchyEntity = {
+      kind: "member",
+      record: {
+        ...member,
+        budget_id: "private-budget",
+        budget: { max_budget: 8 },
+        budget_override: null,
+        budget_override_expires_at: null,
+      },
+    };
+    const org: Organization = {
+      ...organization,
+      default_budget_template_id: preset,
+      default_budgets: preset ? [{ budget_id: preset, name: "Default", max_budget: 50 }] : [],
+    };
+    expect(
+      buildCustomerHierarchyPatch(entity, { ...customerHierarchyFields(entity, org), budgetEnabled: false }, org),
+    ).toEqual(
+      preset
+        ? { ok: true, patch: { kind: "member", body: { budget_id: preset } } }
+        : { ok: false, error: "budgetRequired" },
+    );
   });
 
   it("should initialize a private permanent member budget", () => {
