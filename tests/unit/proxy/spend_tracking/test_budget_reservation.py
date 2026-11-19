@@ -623,6 +623,8 @@ def test_responses_routes_ignore_smaller_unforwarded_caps_when_max_output_tokens
         {"max_output_tokens": False},
         {"max_output_tokens": True},
         {"max_tokens": -50},
+        {"max_tokens": float("inf")},
+        {"max_tokens": "not-a-number"},
         {"max_completion_tokens": False},
     ],
 )
@@ -777,6 +779,74 @@ def test_bedrock_converse_inference_config_max_tokens_scales_cost() -> None:
     )
     assert low is not None and high is not None
     assert high > low
+
+
+@pytest.mark.parametrize(
+    ("route", "body", "inference_config_bounds_hold"),
+    [
+        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]}, False),
+        ("/chat/completions", {"messages": [{"role": "user", "content": "hi"}]}, False),
+        ("/v1/messages", {"messages": [{"role": "user", "content": "hi"}]}, False),
+        ("/v1/responses", {"input": "hi"}, False),
+        ("/bedrock/model/priced-model/converse", {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}, True),
+        (
+            "/bedrock/model/priced-model/converse-stream",
+            {"messages": [{"role": "user", "content": [{"text": "hi"}]}]},
+            True,
+        ),
+    ],
+)
+def test_inference_config_max_tokens_bounds_the_hold_only_on_bedrock_converse(
+    route: str,
+    body: dict[str, object],
+    inference_config_bounds_hold: bool,
+) -> None:
+    router: Final = _priced_responses_router()
+    uncapped: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", **body},
+        route=route,
+        llm_router=router,
+    )
+    capped: Final = estimate_request_max_cost(
+        request_body={"model": "priced-model", **body, "inferenceConfig": {"maxTokens": 1}},
+        route=route,
+        llm_router=router,
+    )
+    assert uncapped is not None and capped is not None
+    assert (capped < uncapped) is inference_config_bounds_hold
+
+
+def test_priced_model_the_provider_resolver_rejects_still_gets_a_full_hold(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "unresolvable/priced-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "input_cost_per_token": 0.0001,
+            "output_cost_per_token": 0.0002,
+            "max_output_tokens": 128000,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+    chat_uncapped: Final = estimate_request_max_cost(
+        request_body={"model": model, "messages": messages},
+        route="/v1/chat/completions",
+        llm_router=None,
+    )
+    chat_decoy: Final = estimate_request_max_cost(
+        request_body={"model": model, "messages": messages, "max_output_tokens": 1},
+        route="/v1/chat/completions",
+        llm_router=None,
+    )
+    responses_uncapped: Final = estimate_request_max_cost(
+        request_body={"model": model, "input": "hi"},
+        route="/v1/responses",
+        llm_router=None,
+    )
+    assert chat_uncapped is not None and responses_uncapped is not None
+    assert chat_decoy == pytest.approx(chat_uncapped)
 
 
 @pytest.mark.asyncio
