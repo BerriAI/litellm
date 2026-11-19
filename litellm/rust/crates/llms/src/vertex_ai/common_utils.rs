@@ -101,6 +101,10 @@ pub fn vertex_region(location: Option<String>, supported_regions: &[String]) -> 
     }
 }
 
+/// The params Python's `VertexBase.explicit_vertex_ai_location` reads an explicitly configured
+/// location from, in order. Cost tracking prices the regional uplift from the first.
+pub const EXPLICIT_LOCATION_PARAMS: [&str; 2] = ["vertex_location", "vertex_ai_location"];
+
 /// The model map's `supported_regions` for a Claude on Vertex AI model, read under the
 /// `vertex_ai/` key Python's `VertexBase.get_vertex_region` looks up.
 pub fn supported_regions(catalog: &Catalog, model: &str) -> Vec<String> {
