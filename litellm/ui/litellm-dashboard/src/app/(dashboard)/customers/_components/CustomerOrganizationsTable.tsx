@@ -123,6 +123,12 @@ export default function CustomerOrganizationsTable({
                           {organization.customer_org_id}
                         </p>
                       )}
+                      <a
+                        className="mt-1 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        href={`${usageHref(uiHref("customers/usage"), { org: organization.customer_org_id, from: startDate, to: endDate })}#app-budgets`}
+                      >
+                        {t("apps.organizationTitle")}
+                      </a>
                     </div>
                   </div>
                 </TableCell>
@@ -145,7 +151,7 @@ export default function CustomerOrganizationsTable({
                     )}
                   </div>
                 </TableCell>
-                <CustomerBudgetLimitCell limit={budgetLimit} />
+                <CustomerBudgetLimitCell limit={budgetLimit} rateLimits={organization.budget} />
                 <TableCell className="px-4">
                   <div className="flex items-center gap-3">
                     <div
