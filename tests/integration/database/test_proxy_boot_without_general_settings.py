@@ -12,7 +12,7 @@ from integration._support.process import DB_PUSH, LEGACY_MIGRATE_DEPLOY, MIGRATE
 pytestmark: Final = pytest.mark.timeout(300)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+MIGRATIONS_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras" / "migrations"
 SHIPPED_MIGRATIONS: Final = frozenset(path.name for path in MIGRATIONS_DIR.iterdir() if path.is_dir())
 CANNED_REPLY: Final = "Hello! This is a mock response from the fake OpenAI endpoint."
 PROVIDER_KEY: Final = "integration-provider-key"

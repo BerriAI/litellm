@@ -26,6 +26,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @pytest.mark.asyncio
@@ -548,16 +549,17 @@ async def test_validate_team_no_mcp_config_blocks_all(
 
 
 @pytest.fixture
-def unified_mcp_prisma() -> Iterator[MagicMock]:
+def unified_mcp_prisma(rust_auth_stores: RustAuthStores) -> Iterator[MagicMock]:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     prisma: Final = MagicMock()
-    prisma.db.litellm_accessgrouptable.find_unique = AsyncMock(
-        return_value=LiteLLM_AccessGroupTable(
+    rust_auth_stores.access_group.seed(
+        "ag-1",
+        LiteLLM_AccessGroupTable(
             access_group_id="ag-1",
             access_group_name="group one",
             access_mcp_server_ids=["server-1"],
-        )
+        ),
     )
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
     manager: Final = _make_mock_mcp_manager(
@@ -641,17 +643,20 @@ async def test_team_allowed_servers_union_object_permission_and_unified_access_g
 @pytest.mark.parametrize("group_state", ["empty", "missing", "unresolved"])
 async def test_team_unified_access_group_without_servers_preserves_direct_grants(
     unified_mcp_prisma: MagicMock,
+    rust_auth_stores: RustAuthStores,
     group_state: Literal["empty", "missing", "unresolved"],
 ) -> None:
-    unified_mcp_prisma.db.litellm_accessgrouptable.find_unique.return_value = (
-        LiteLLM_AccessGroupTable(
-            access_group_id="ag-1",
-            access_group_name="empty or stale group",
-            access_mcp_server_ids=["deleted-server"] if group_state == "unresolved" else [],
+    if group_state == "missing":
+        del rust_auth_stores.access_group.reader["ag-1"], rust_auth_stores.access_group.writer["ag-1"]
+    else:
+        rust_auth_stores.access_group.seed(
+            "ag-1",
+            LiteLLM_AccessGroupTable(
+                access_group_id="ag-1",
+                access_group_name="empty or stale group",
+                access_mcp_server_ids=["deleted-server"] if group_state == "unresolved" else [],
+            ),
         )
-        if group_state != "missing"
-        else None
-    )
     team: Final = LiteLLM_TeamTableCachedObj(
         team_id="team-1",
         access_group_ids=["ag-1"],
@@ -1052,6 +1057,26 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-a"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_tool_permissions", ["[]", "null", '"server-2"'], ids=["array", "null", "string"])
+@patch(
+    "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_allowed_mcp_servers_rejects_stored_tool_permissions_that_are_not_an_object(
+    mock_access_groups,
+    stored_tool_permissions: str,
+):
+    mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    mock_perm.mcp_servers = ["server-1"]
+    mock_perm.mcp_access_groups = []
+    mock_perm.mcp_tool_permissions = stored_tool_permissions
+
+    with pytest.raises(AttributeError, match="object has no attribute 'keys'"):
+        await _resolve_team_allowed_mcp_servers(mock_perm)
 
 
 # ---- Tests for the all-proxy-mcpservers sentinel (team scoped to every server) ----

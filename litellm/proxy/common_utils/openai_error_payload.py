@@ -17,6 +17,7 @@ from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
+_SERVER_IS_OVERLOADED_CODE: Final = "server_is_overloaded"
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
@@ -42,6 +43,31 @@ _FAILOVER_REFUSALS: Final = (
     "the database system is not yet accepting connections",
     "terminating connection due to administrator command",
 )
+
+
+class OverloadedProxyException(ProxyException):
+    def __init__(
+        self,
+        message: str,
+        headers: dict[str, str] | None,  # mutable-ok: matches ProxyException's constructor
+        provider_specific_fields: dict[str, object] | None,  # mutable-ok: matches ProxyException's constructor
+    ) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # ProxyException omits generic arguments
+            message=message,
+            type="service_unavailable_error",
+            param=None,
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers=None if headers is None else dict(headers),
+            provider_specific_fields=provider_specific_fields,
+        )
+
+    def to_dict(self) -> dict[str, object]:  # mutable-ok: matches ProxyException.to_dict
+        return {
+            **_ERROR_BODY.validate_python(
+                super().to_dict()  # pyright: ignore[reportUnknownMemberType]  # ProxyException omits generic arguments
+            ),
+            "code": _SERVER_IS_OVERLOADED_CODE,
+        }
 
 
 def attribute_of(value: object, name: str, default: object = None) -> object:

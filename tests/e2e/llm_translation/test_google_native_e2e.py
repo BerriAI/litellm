@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
-UPSTREAM_MODEL = "gemini/gemini-2.5-flash"
+UPSTREAM_MODEL = "gemini/gemini-3.8-flash"
 
 
 class _GenerateContentPart(BaseModel):

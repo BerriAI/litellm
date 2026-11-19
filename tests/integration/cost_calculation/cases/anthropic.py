@@ -2,10 +2,13 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
 
+from pydantic import JsonValue
+
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
-    with_usage,
     CostTrackingTestCase,
     ExactExpected,
     FailureDetails,
@@ -14,10 +17,9 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     RecountRates,
     SseResponse,
+    with_usage,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-
 
 # claude-haiku-4-5
 CLAUDE_HAIKU_4_5_INPUT_TEXT: Final = CostTrackingTestCase(
@@ -5344,6 +5346,66 @@ CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_FABLE_5_2_INPUT_TEXT: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-input_text",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "7d8c0a2d1ecc summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-2",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer 7d8c0a2d1ecc"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+                "speed": "standard",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.03432, input_cost=0.016192, output_cost=0.018128, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
 CLAUDE_FABLE_5_1_STREAM: Final = CostTrackingTestCase(
     name="claude-fable-5-1-stream",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
@@ -5429,6 +5491,91 @@ CLAUDE_FABLE_5_1_STREAM: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_FABLE_5_2_STREAM: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "459736de6b4a summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "type": "message_start",
+                "message": {
+                    "model": "claude-fable-5-2",
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "container": None,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "stop_details": None,
+                    "usage": {
+                        "input_tokens": 1840,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                        "output_tokens": 1,
+                        "service_tier": "standard",
+                        "inference_geo": "global",
+                        "speed": "standard",
+                    },
+                    "diagnostics": None,
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "ping"},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "scripted answer 459736de6b4a"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None, "stop_details": None, "container": None},
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+            {"type": "message_stop"},
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.03432, input_cost=0.016192, output_cost=0.018128, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
 CLAUDE_FABLE_5_1_CACHE_READ: Final = CostTrackingTestCase(
     name="claude-fable-5-1-cache_read",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -5487,6 +5634,67 @@ CLAUDE_FABLE_5_1_CACHE_READ: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.0603008, input_cost=0.0299008, output_cost=0.0304, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+CLAUDE_FABLE_5_2_CACHE_READ: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-cache_read",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "c5a9841fc31b summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-2",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer c5a9841fc31b"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 640,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 12288,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 380,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+                "speed": "standard",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.02505536, input_cost=0.00833536, output_cost=0.01672, prompt_tokens=12928, completion_tokens=380
     ),
 )
 
@@ -5550,6 +5758,66 @@ CLAUDE_FABLE_5_1_CACHE_WRITE_5M: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_FABLE_5_2_CACHE_WRITE_5M: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-cache_write_5m",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "95e59856831e summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-2",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer 95e59856831e"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 512,
+                "cache_creation_input_tokens": 9216,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 9216, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 350,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.1212816, input_cost=0.1058816, output_cost=0.0154, prompt_tokens=9728, completion_tokens=350
+    ),
+)
+
 CLAUDE_FABLE_5_1_CACHE_WRITE_1H: Final = CostTrackingTestCase(
     name="claude-fable-5-1-cache_write_1h",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -5610,6 +5878,66 @@ CLAUDE_FABLE_5_1_CACHE_WRITE_1H: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_FABLE_5_2_CACHE_WRITE_1H: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-cache_write_1h",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "0057eda38d9c summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-2",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer 0057eda38d9c"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 512,
+                "cache_creation_input_tokens": 9216,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 9216},
+                "output_tokens": 350,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.1821072, input_cost=0.1667072, output_cost=0.0154, prompt_tokens=9728, completion_tokens=350
+    ),
+)
+
 CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
     name="claude-fable-5-1-messages_input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -5651,6 +5979,47 @@ CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-messages_input_text",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "summarize the attached material in one line"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-2",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted response"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+                "speed": "standard",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.03432, input_cost=0.016192, output_cost=0.018128, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
 
 CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = CostTrackingTestCase(
     name="claude-fable-5-1-messages_stream",
@@ -5678,6 +6047,35 @@ CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.0624, input_cost=0.02944, output_cost=0.03296, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_FABLE_5_2_MESSAGES_STREAM: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-messages_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-fable-5-2",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "summarize the attached material in one line"}],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-fable-5-2","id":"msg_$REQUEST_ID","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: ping\ndata: {"type":"ping"}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"scripted "}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"response"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":1840,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":412,"output_tokens_details":{"thinking_tokens":0}}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.03432, input_cost=0.016192, output_cost=0.018128, prompt_tokens=1840, completion_tokens=412
     ),
 )
 CLAUDE_OPUS_5_5_STREAM: Final = CostTrackingTestCase(
@@ -6560,6 +6958,92 @@ CLAUDE_FABLE_5_1_TOOL_CALL: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_FABLE_5_2_TOOL_CALL: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6c08522a6809 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "allowed_openai_params": ["tool_choice"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-2",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_$REQUEST_ID",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                    "caller": {"type": "direct"},
+                }
+            ],
+            "container": None,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.03432, input_cost=0.016192, output_cost=0.018128, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
 CLAUDE_FABLE_5_1_THINKING: Final = CostTrackingTestCase(
     name="claude-fable-5-1-thinking",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -6618,6 +7102,67 @@ CLAUDE_FABLE_5_1_THINKING: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.0528, input_cost=0.01984, output_cost=0.03296, prompt_tokens=1240, completion_tokens=412
+    ),
+)
+
+CLAUDE_FABLE_5_2_THINKING: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-thinking",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "697b4f57a5df summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-2",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer 697b4f57a5df"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1240,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+                "speed": "standard",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.02904, input_cost=0.010912, output_cost=0.018128, prompt_tokens=1240, completion_tokens=412
     ),
 )
 
@@ -6895,6 +7440,14 @@ CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON: Final = CLAUDE_FABLE_5_1_MESSAGES_INPUT
     }
 )
 
+CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON: Final = CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-fable-5-2-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
 CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.model_copy(
     update={
         "name": "claude-opus-5-5-responses_bridged_json",
@@ -6902,6 +7455,7 @@ CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_T
         "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
     }
 )
+
 
 def _responses_bridged_stream_case(
     sibling: CostTrackingTestCase, stream_sibling: CostTrackingTestCase, name: str
@@ -6916,19 +7470,29 @@ def _responses_bridged_stream_case(
 
 
 CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
-    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON, CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_1_MESSAGES_STREAM,
     "claude-fable-5-1-responses_bridged_stream",
 )
+
+CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    "claude-fable-5-2-responses_bridged_stream",
+)
 CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
-    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
     "claude-haiku-5-5-responses_bridged_stream",
 )
 CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
-    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     "claude-opus-5-5-responses_bridged_stream",
 )
 CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
-    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_SONNET_5_5_MESSAGES_STREAM,
     "claude-sonnet-5-5-responses_bridged_stream",
 )
 
@@ -7015,7 +7579,517 @@ CLAUDE_SONNET_5_SLASH_ALIAS_STREAM: Final = CLAUDE_SONNET_5_STREAM.model_copy(
     update={"name": "claude-sonnet-5-slash_alias_stream", "alias": "anthropic/claude-sonnet-5-$MARKER"}
 )
 
+_PROVIDER_CACHEABLE_PROMPT_5M: Final = (
+    "The pricing harness keeps one stable instruction block so the provider can cache it. " * 220
+)
+_PROVIDER_CACHEABLE_PROMPT_1H: Final = (
+    "The pricing harness keeps one stable one hour instruction block so the provider can cache it. " * 220
+)
+
+
+def _prompt_cache_request(prompt: str, cache_control: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "model": "$MODEL",
+        "messages": [
+            {"role": "system", "content": [{"type": "text", "text": prompt, "cache_control": dict(cache_control)}]},
+            {"role": "user", "content": "Reply with OK."},
+        ],
+        "stream": False,
+    }
+
+
+_PROMPT_CACHE_5M_REQUEST: Final = _prompt_cache_request(_PROVIDER_CACHEABLE_PROMPT_5M, {"type": "ephemeral"})
+_PROMPT_CACHE_1H_REQUEST: Final = _prompt_cache_request(
+    _PROVIDER_CACHEABLE_PROMPT_1H, {"type": "ephemeral", "ttl": "1h"}
+)
+_THINKING_ADAPTIVE_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "messages": [
+        {
+            "role": "user",
+            "content": (
+                "A farmer has chickens, cows and spiders with 30 heads and 122 legs in total, and twice as many "
+                "chickens as spiders. How many cows are there? Answer with the number only."
+            ),
+        }
+    ],
+    "stream": False,
+    "thinking": {"type": "adaptive"},
+}
+
+
+def _with_real_usage(
+    base: CostTrackingTestCase,
+    shape: str,
+    request: Mapping[str, JsonValue],
+    usage: Mapping[str, JsonValue],
+    expected: ExactExpected,
+) -> CostTrackingTestCase:
+    response: Final = cast(JsonResponse, base.response)
+    scripted_usage: Final = cast(dict[str, JsonValue], response.body["usage"])
+    return base.model_copy(
+        update={
+            "name": f"{base.model}-{shape}",
+            "request": dict(request),
+            "response": response.model_copy(update={"body": {**response.body, "usage": {**scripted_usage, **usage}}}),
+            "expected": expected,
+        }
+    )
+
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.007602925,
+        input_cost=0.007580925,
+        output_cost=2.2e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.007566625,
+    ),
+)
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.00064163,
+        input_cost=0.00061963,
+        output_cost=2.2e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_read_cost=0.00060533,
+    ),
+)
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 40,
+        "output_tokens_details": {"thinking_tokens": 36},
+    },
+    ExactExpected(
+        spend=0.0137929,
+        input_cost=0.0135729,
+        output_cost=0.00022,
+        prompt_tokens=6176,
+        completion_tokens=40,
+        cache_creation_cost=0.0135586,
+    ),
+)
+CLAUDE_HAIKU_5_5_THINKING_ADAPTIVE: Final = _with_real_usage(
+    CLAUDE_HAIKU_5_5_THINKING,
+    "thinking_adaptive",
+    _THINKING_ADAPTIVE_REQUEST,
+    {
+        "input_tokens": 66,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 887,
+        "output_tokens_details": {"thinking_tokens": 857},
+    },
+    ExactExpected(spend=0.0049511, input_cost=7.26e-05, output_cost=0.0048785, prompt_tokens=66, completion_tokens=887),
+)
+CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.022825275,
+        input_cost=0.022742775,
+        output_cost=8.25e-05,
+        prompt_tokens=5516,
+        completion_tokens=5,
+        cache_creation_cost=0.022699875,
+    ),
+)
+CLAUDE_SONNET_5_5_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_SONNET_5_5_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.00194139,
+        input_cost=0.00185889,
+        output_cost=8.25e-05,
+        prompt_tokens=5516,
+        completion_tokens=5,
+        cache_read_cost=0.00181599,
+    ),
+)
+CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0408012,
+        input_cost=0.0407187,
+        output_cost=8.25e-05,
+        prompt_tokens=6176,
+        completion_tokens=5,
+        cache_creation_cost=0.0406758,
+    ),
+)
+CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.027647,
+        input_cost=0.027567,
+        output_cost=8e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.027515,
+    ),
+)
+CLAUDE_OPUS_5_5_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0012326,
+        input_cost=0.0011526,
+        output_cost=8e-05,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_read_cost=0.0011006,
+    ),
+)
+CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.049436,
+        input_cost=0.049356,
+        output_cost=8e-05,
+        prompt_tokens=6176,
+        completion_tokens=4,
+        cache_creation_cost=0.049304,
+    ),
+)
+CLAUDE_OPUS_5_5_THINKING_ADAPTIVE: Final = _with_real_usage(
+    CLAUDE_OPUS_5_5_THINKING,
+    "thinking_adaptive",
+    _THINKING_ADAPTIVE_REQUEST,
+    {
+        "input_tokens": 66,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 503,
+        "output_tokens_details": {"thinking_tokens": 356},
+    },
+    ExactExpected(spend=0.010324, input_cost=0.000264, output_cost=0.01006, prompt_tokens=66, completion_tokens=503),
+)
+CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.110588,
+        input_cost=0.110268,
+        output_cost=0.00032,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.11006,
+    ),
+)
+CLAUDE_FABLE_5_1_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_FABLE_5_1_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0094128,
+        input_cost=0.0090128,
+        output_cost=0.0004,
+        prompt_tokens=5516,
+        completion_tokens=5,
+        cache_read_cost=0.0088048,
+    ),
+)
+CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.197744,
+        input_cost=0.197424,
+        output_cost=0.00032,
+        prompt_tokens=6176,
+        completion_tokens=4,
+        cache_creation_cost=0.197216,
+    ),
+)
+CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_5M: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
+    "prompt_cache_write_5m",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 5503,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 5503, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0608234,
+        input_cost=0.0606474,
+        output_cost=0.000176,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_creation_cost=0.060533,
+    ),
+)
+CLAUDE_FABLE_5_2_PROMPT_CACHE_READ: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_CACHE_READ,
+    "prompt_cache_read",
+    _PROMPT_CACHE_5M_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5503,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.00150106,
+        input_cost=0.00132506,
+        output_cost=0.000176,
+        prompt_tokens=5516,
+        completion_tokens=4,
+        cache_read_cost=0.00121066,
+    ),
+)
+CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_1H: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
+    "prompt_cache_write_1h",
+    _PROMPT_CACHE_1H_REQUEST,
+    {
+        "input_tokens": 13,
+        "cache_creation_input_tokens": 6163,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 6163},
+        "output_tokens": 4,
+        "output_tokens_details": {"thinking_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.1087592,
+        input_cost=0.1085832,
+        output_cost=0.000176,
+        prompt_tokens=6176,
+        completion_tokens=4,
+        cache_creation_cost=0.1084688,
+    ),
+)
+CLAUDE_FABLE_5_2_THINKING_ADAPTIVE: Final = _with_real_usage(
+    CLAUDE_FABLE_5_2_THINKING,
+    "thinking_adaptive",
+    _THINKING_ADAPTIVE_REQUEST,
+    {
+        "input_tokens": 66,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 721,
+        "output_tokens_details": {"thinking_tokens": 541},
+    },
+    ExactExpected(spend=0.0323048, input_cost=0.0005808, output_cost=0.031724, prompt_tokens=66, completion_tokens=721),
+)
+
+CLAUDE_FABLE_5_2_ANTHROPIC_FAST_MODE: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-anthropic_fast_mode",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "dd7504ab4a95 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5-2",
+            "content": [{"type": "text", "text": "scripted answer dd7504ab4a95"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "speed": "fast"},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.06864, input_cost=0.032384, output_cost=0.036256, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_FABLE_5_2_ANTHROPIC_US_INFERENCE: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-anthropic_us_inference",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "7dcf31884733 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5-2",
+            "content": [{"type": "text", "text": "scripted answer 7dcf31884733"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "inference_geo": "us"},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.037752, input_cost=0.0178112, output_cost=0.0199408, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_FABLE_5_2_ANTHROPIC_FAST_MODE,
+    CLAUDE_FABLE_5_2_ANTHROPIC_US_INFERENCE,
     CLAUDE_SONNET_5_GENERALIZED_ALIAS,
     CLAUDE_SONNET_5_GENERALIZED_ALIAS_STREAM,
     CLAUDE_SONNET_5_SLASH_ALIAS_STREAM,
@@ -7028,11 +8102,13 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM,
     CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
     CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
     CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
     CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON,
     CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_HAIKU_4_5_INPUT_TEXT,
     CLAUDE_HAIKU_4_5_CACHE_READ,
@@ -7129,12 +8205,19 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_FABLE_5_CACHE_WRITE_1H,
     CLAUDE_FABLE_5_MESSAGES_INPUT_TEXT,
     CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_INPUT_TEXT,
     CLAUDE_FABLE_5_1_STREAM,
+    CLAUDE_FABLE_5_2_STREAM,
     CLAUDE_FABLE_5_1_CACHE_READ,
+    CLAUDE_FABLE_5_2_CACHE_READ,
     CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
     CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
     CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
     CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_2_MESSAGES_STREAM,
     CLAUDE_OPUS_5_5_STREAM,
     CLAUDE_OPUS_5_5_CACHE_READ,
     CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
@@ -7148,16 +8231,94 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_FABLE_5_TOOL_CALL,
     CLAUDE_FABLE_5_THINKING,
     CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_FABLE_5_2_TOOL_CALL,
     CLAUDE_FABLE_5_1_THINKING,
+    CLAUDE_FABLE_5_2_THINKING,
     CLAUDE_OPUS_5_5_TOOL_CALL,
     CLAUDE_OPUS_5_5_THINKING,
     CLAUDE_OPUS_5_5_UPSTREAM_404_ZERO_SPEND,
     CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_READ,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_HAIKU_5_5_THINKING_ADAPTIVE,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_READ,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_READ,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_THINKING_ADAPTIVE,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_THINKING_ADAPTIVE,
+)
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_STREAM,
+    CLAUDE_HAIKU_5_5_TOOL_CALL,
+    CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_SONNET_5_5_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_STREAM,
+    CLAUDE_SONNET_5_5_TOOL_CALL,
+    CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_OPUS_5_5_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_STREAM,
+    CLAUDE_OPUS_5_5_TOOL_CALL,
+    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_STREAM,
+    CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_FABLE_5_2_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_STREAM,
+    CLAUDE_FABLE_5_2_TOOL_CALL,
+    CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_READ,
+    CLAUDE_HAIKU_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_HAIKU_5_5_THINKING_ADAPTIVE,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_READ,
+    CLAUDE_SONNET_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_READ,
+    CLAUDE_OPUS_5_5_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_THINKING_ADAPTIVE,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_1_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_READ,
+    CLAUDE_FABLE_5_2_PROMPT_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_THINKING_ADAPTIVE,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_STREAM
     ),
     StreamParityTestCase(
         plain=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM
@@ -7190,11 +8351,13 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=CLAUDE_HAIKU_5_5_STREAM),
     StreamParityTestCase(plain=CLAUDE_FABLE_5_INPUT_TEXT, streamed=CLAUDE_FABLE_5_STREAM),
     StreamParityTestCase(plain=CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=CLAUDE_FABLE_5_1_STREAM),
+    StreamParityTestCase(plain=CLAUDE_FABLE_5_2_INPUT_TEXT, streamed=CLAUDE_FABLE_5_2_STREAM),
     StreamParityTestCase(plain=CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=CLAUDE_OPUS_5_5_STREAM),
     StreamParityTestCase(plain=CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, streamed=CLAUDE_OPUS_5_5_MESSAGES_STREAM),
     StreamParityTestCase(plain=CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT, streamed=CLAUDE_SONNET_5_5_MESSAGES_STREAM),
     StreamParityTestCase(plain=CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT, streamed=CLAUDE_HAIKU_5_5_MESSAGES_STREAM),
     StreamParityTestCase(plain=CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, streamed=CLAUDE_FABLE_5_1_MESSAGES_STREAM),
+    StreamParityTestCase(plain=CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT, streamed=CLAUDE_FABLE_5_2_MESSAGES_STREAM),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -7219,6 +8382,9 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=CLAUDE_FABLE_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON),
     BridgeCostParityTestCase(
         native=CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, bridged=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT, bridged=CLAUDE_FABLE_5_2_RESPONSES_BRIDGED_JSON
     ),
     BridgeCostParityTestCase(
         native=CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON

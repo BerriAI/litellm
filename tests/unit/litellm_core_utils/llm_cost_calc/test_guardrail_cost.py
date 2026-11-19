@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     cost_breakdown_with_guardrail,
     guardrail_cost_total,
     guardrail_information_cost,
+    guardrail_share_of_spend,
 )
 
 
@@ -349,3 +350,15 @@ def test_native_trace_entry_redacts_the_pii_matches_before_they_reach_spend_logs
     assert entry["guardrail_status"] == "guardrail_intervened"
     assert "123-45-6789" not in json.dumps(entry["guardrail_response"])
     assert entry["guardrail_usage"]["sensitiveInformationPolicyUnits"] == 2
+
+
+
+@pytest.mark.parametrize(("spend", "expected"), [(1.0, 0.3), (0.2, 0.2), (-1.0, 0.0)])
+def test_guardrail_share_of_spend_is_the_billed_guardrail_cost_capped_at_the_row_spend(
+    spend: float, expected: float
+) -> None:
+    information: Final = [
+        {"guardrail_name": "billed", "guardrail_cost": 0.3},
+        {"guardrail_name": "report-only", "guardrail_cost": 0.4, "guardrail_cost_in_spend": False},
+    ]
+    assert guardrail_share_of_spend({"guardrail_information": information}, spend) == pytest.approx(expected)
