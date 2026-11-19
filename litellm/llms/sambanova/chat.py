@@ -11,7 +11,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 DEFAULT_INTEGRATION_SOURCE: Final = "litellm"
@@ -120,7 +119,7 @@ class SambanovaConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """Send X-Integration-Source: caller header, then extra_body, then env var, then default"""
+        """Send X-Integration-Source: caller header, then extra_body, then default"""
         extra_headers: Final[dict[str, str]] = dict(optional_params.get("extra_headers") or {})
         extra_body: Final[dict[str, object]] = dict(optional_params.get("extra_body") or {})
         body_source: Final = extra_body.pop("integration_source", None)
@@ -128,9 +127,7 @@ class SambanovaConfig(OpenAIGPTConfig):
             (value for key, value in extra_headers.items() if key.lower() == INTEGRATION_SOURCE_HEADER.lower()),
             None,
         )
-        integration_source: Final = (
-            body_source or get_secret_str("SAMBANOVA_INTEGRATION_SOURCE") or DEFAULT_INTEGRATION_SOURCE
-        )
+        integration_source: Final = body_source or DEFAULT_INTEGRATION_SOURCE
         headers_with_source: Final = (
             extra_headers if header_source else {**extra_headers, INTEGRATION_SOURCE_HEADER: integration_source}
         )

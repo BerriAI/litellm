@@ -76,20 +76,12 @@ def _transform(optional_params):
     )
 
 
-def test_integration_source_defaults_to_litellm(monkeypatch):
-    monkeypatch.delenv("SAMBANOVA_INTEGRATION_SOURCE", raising=False)
+def test_integration_source_defaults_to_litellm():
     request = _transform({})
     assert request["extra_headers"]["X-Integration-Source"] == "litellm"
 
 
-def test_integration_source_env_overrides_default(monkeypatch):
-    monkeypatch.setenv("SAMBANOVA_INTEGRATION_SOURCE", "langflow")
-    request = _transform({})
-    assert request["extra_headers"]["X-Integration-Source"] == "langflow"
-
-
-def test_integration_source_param_overrides_env(monkeypatch):
-    monkeypatch.setenv("SAMBANOVA_INTEGRATION_SOURCE", "langflow")
+def test_integration_source_param_overrides_default():
     optional_params = {"extra_body": {"integration_source": "my-framework"}}
     request = _transform(optional_params)
     assert request["extra_headers"]["X-Integration-Source"] == "my-framework"
@@ -97,8 +89,7 @@ def test_integration_source_param_overrides_env(monkeypatch):
     assert "integration_source" in optional_params["extra_body"], "caller's dict must not be mutated"
 
 
-def test_integration_source_explicit_header_wins(monkeypatch):
-    monkeypatch.setenv("SAMBANOVA_INTEGRATION_SOURCE", "langflow")
+def test_integration_source_explicit_header_wins():
     request = _transform({"extra_headers": {"X-Integration-Source": "custom", "X-Other": "1"}})
     assert request["extra_headers"] == {"X-Integration-Source": "custom", "X-Other": "1"}
 
@@ -114,8 +105,7 @@ def test_integration_source_removed_from_body_when_header_also_set():
     assert request["extra_body"] == {"other": 1}
 
 
-def test_integration_source_header_matched_case_insensitively(monkeypatch):
-    monkeypatch.setenv("SAMBANOVA_INTEGRATION_SOURCE", "langflow")
+def test_integration_source_header_matched_case_insensitively():
     request = _transform({"extra_headers": {"x-integration-source": "custom"}})
     assert request["extra_headers"] == {"x-integration-source": "custom"}
 
