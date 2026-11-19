@@ -13,8 +13,9 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager
+import weakref
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime as dt_object
@@ -978,6 +979,8 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
+    _active_failure_handlers: int = 0
+    _failure_exception_ref: weakref.ref[Exception] | None = None
     v2_scope: RequestScope | None = None
     v2_auth: object = None
     v2_failure_delivered: bool = False
@@ -3049,6 +3052,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
         attempt: Final = copy.copy(self)
+        attempt._active_failure_handlers = 0
         attempt.model_call_details = dict(self.model_call_details)
         return attempt
 
@@ -3065,6 +3069,7 @@ class Logging(LiteLLMLoggingBaseClass):
             },
         }
         scoped: Final = copy.copy(self)
+        scoped._active_failure_handlers = 0
         scoped.litellm_params = litellm_params
         scoped.model_call_details = {**self.model_call_details, "litellm_params": litellm_params}
         return scoped
@@ -5167,7 +5172,13 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
     def _failure_handler_helper_fn(
-        self, exception, traceback_exception, start_time=None, end_time=None, *, estimate_prompt_tokens: bool = True
+        self,
+        exception: Exception,
+        traceback_exception,
+        start_time=None,
+        end_time=None,
+        *,
+        estimate_prompt_tokens: bool = True,
     ):
         if start_time is None:
             start_time = self.start_time
@@ -5178,14 +5189,21 @@ class Logging(LiteLLMLoggingBaseClass):
         if not hasattr(self, "model_call_details"):
             self.model_call_details = {}
 
-        if (
-            self.model_call_details.get("exception") is exception
-            and self.model_call_details.get("standard_logging_object") is not None
-        ):
+        previous_exception: Final[object] = (
+            self._failure_exception_ref()
+            if self._failure_exception_ref is not None
+            else self.model_call_details.get("exception")
+        )
+        if previous_exception is exception and self.model_call_details.get("standard_logging_object") is not None:
+            self.model_call_details["exception"] = exception
             return start_time, self.model_call_details["end_time"]
 
         self.model_call_details["log_event_type"] = "failed_api_call"
         self.model_call_details["exception"] = exception
+        try:
+            self._failure_exception_ref = weakref.ref(exception)
+        except TypeError:
+            self._failure_exception_ref = None
         self.model_call_details["traceback_exception"] = (
             redact_string(traceback_exception) if isinstance(traceback_exception, str) else traceback_exception
         )
@@ -5296,12 +5314,13 @@ class Logging(LiteLLMLoggingBaseClass):
         ## get original model group ##
 
         model_group: Final = metadata.get("model_group") or None
+        callback_kwargs: Final = {**self._model_call_details_view, "exception": exception}
         for callback in litellm._async_failure_callback:
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.log_model_group_rate_limit_error(
                     exception=exception,
                     original_model_group=model_group,
-                    kwargs=self.model_call_details,
+                    kwargs=callback_kwargs,
                 )
 
     def _is_pass_through_call(self) -> bool:
@@ -5312,6 +5331,23 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         self.v2_failure_delivered = True
         return True
+
+    @contextmanager
+    def _failure_logging_context(self) -> Generator[None]:
+        self._active_failure_handlers += 1
+        try:
+            yield
+        finally:
+            self._active_failure_handlers -= 1
+            failure: Final[object] = self.model_call_details.get("exception")
+            if (
+                self._active_failure_handlers == 0
+                and isinstance(failure, BaseException)
+                and failure.__traceback__ is not None
+            ):
+                self.model_call_details = {
+                    key: value for key, value in self.model_call_details.items() if key != "exception"
+                }
 
     def failure_handler(
         self,
@@ -5329,7 +5365,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ``for_async_request`` marks the sync run of a failure whose async run also logs it, so a
         CustomLogger that gets ``async_log_failure_event`` from that async run skips its sync hook."""
         try:
-            with outside_mirrored_call(), self._parent_otel_span_anchored():
+            with outside_mirrored_call(), self._parent_otel_span_anchored(), self._failure_logging_context():
                 return self._failure_handler_body(
                     exception=exception,
                     traceback_exception=traceback_exception,
@@ -5566,7 +5602,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with outside_mirrored_call(), self._parent_otel_span_anchored():
+            with outside_mirrored_call(), self._parent_otel_span_anchored(), self._failure_logging_context():
                 return await self._async_failure_handler_body(
                     exception=exception,
                     traceback_exception=traceback_exception,
