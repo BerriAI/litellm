@@ -905,8 +905,11 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    own_spend_log_routes = ("/spend/logs", "/spend/logs/v2")
+
     self_managed_routes = [
         "/management/v1/customer_budget_increase_requests",
+        *own_spend_log_routes,
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",
