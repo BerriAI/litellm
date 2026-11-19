@@ -112,7 +112,7 @@ class _MembershipTable:
 
 
 class _PermissionRow(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", frozen=True)
 
     object_permission_id: str
 
