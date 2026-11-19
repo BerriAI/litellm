@@ -1153,6 +1153,8 @@ model LiteLLM_DailyCustomerMemberSpend {
   completion_tokens   BigInt   @default(0)
   cache_read_input_tokens BigInt @default(0)
   cache_creation_input_tokens BigInt @default(0)
+  cache_cost Float @default(0.0)
+  priced_cache_tokens BigInt @default(0)
   compression_saved_tokens BigInt @default(0)
   compression_savings_spend Float @default(0.0)
   prompt_caching_savings_spend Float @default(0.0)

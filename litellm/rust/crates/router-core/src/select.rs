@@ -1,7 +1,7 @@
 //! Selection: resolve a name, filter its deployments in the order of
 //! `Router._core_async_get_healthy_deployments` (team, web search, cooldown, blocked, plugins,
 //! pre-call checks, tags, order, retry skips), then pick one with the strategy. Simple-shuffle is
-//! native (`router_strategy/simple_shuffle.py`); other strategies go through `Host::select`.
+//! native (`router_strategy/simple_shuffle.py`); other strategies go through `RouterHost::select`.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -9,11 +9,11 @@ use parking_lot::Mutex;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use crate::{
-    Core, RouterStateSnapshot,
+    Call, RouterStateSnapshot,
     config::{Op, RoutingStrategy},
     error::Error,
     health_routing::WhenAllUnhealthy,
-    host::{RouterRequest, RoutingContext, SelectStage},
+    host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
     registry::{Deployment, Registry, ResolveKind},
     resolve::{Caller, resolve_request},
     strategy::{StrategyScope, request_override, routing_context},
@@ -251,7 +251,7 @@ fn without_deployments_that_cannot_batch(
         .collect()
 }
 
-impl Core {
+impl<H: RouterHost> Call<'_, H> {
     fn context<'a>(
         &'a self,
         snapshot: &'a RouterStateSnapshot,
@@ -264,7 +264,6 @@ impl Core {
         RoutingContext {
             registry: &snapshot.registry,
             settings: &snapshot.settings,
-            health: &self.health,
             request,
             op,
             model_group,
@@ -334,7 +333,7 @@ impl Core {
             caller,
             default_target,
             snapshot.settings.dynamic.default_ref(),
-            self.health.timestamp(),
+            self.health().timestamp(),
         )?
         .ok_or_else(|| Error::UnknownModel {
             // The name `_common_checks_available_deployment` looked for, past the alias.
@@ -417,7 +416,7 @@ impl Core {
             Vec::new()
         } else {
             // `async_get_cooldown_deployments` reads every deployment's, as one throttled batch.
-            self.health
+            self.health()
                 .active_cooldowns(&snapshot.registry.ids())
                 .await?
         };
@@ -431,7 +430,7 @@ impl Core {
             } else {
                 WhenAllUnhealthy::KeepAll
             };
-            self.health
+            self.health()
                 .health_check_filter(settings, all.clone(), when_all_unhealthy)
                 .await
         };

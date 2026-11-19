@@ -7,20 +7,6 @@ OPENAI_RESPONSES_REQUEST_FROM_CHAT_COMPLETIONS: Final[Mapping[str, JsonValue]] =
     "input": [
         {
             "type": "message",
-            "role": "system",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "You help maintain a synthetic Python project. Read the relevant files before "
-                    "suggesting a fix. Explain which file you need next, then call a read-only tool. "
-                    "Never change files. Use the chat_completions client for this project review. "
-                    "Consider zero, negative and non-integer quantities before choosing the next file "
-                    "to inspect.",
-                }
-            ],
-        },
-        {
-            "type": "message",
             "role": "user",
             "content": [
                 {
@@ -65,6 +51,11 @@ OPENAI_RESPONSES_REQUEST_FROM_CHAT_COMPLETIONS: Final[Mapping[str, JsonValue]] =
             ],
         },
     ],
+    "instructions": "You help maintain a synthetic Python project. Read the relevant files before "
+    "suggesting a fix. Explain which file you need next, then call a read-only tool. "
+    "Never change files. Use the chat_completions client for this project review. "
+    "Consider zero, negative and non-integer quantities before choosing the next file "
+    "to inspect.",
     "max_output_tokens": 1024,
     "reasoning": {"effort": "high"},
     "stream": False,

@@ -1,16 +1,19 @@
 //! The router's errors: [`ConfigError`] when a router is built or changed, [`Error`] when a call
 //! or a selection fails, and [`AttemptError`], the typed facts of one failed attempt.
 
-use std::{any::Any, fmt, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use crate::config::{Op, RoutingStrategy};
+use crate::{
+    config::{Op, RoutingStrategy},
+    host::Capability,
+};
 
 /// What a host cannot serve, found when the router is built rather than partway through a call.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum Unsupported {
-    #[error("routing strategy `{0}` needs a host that can select")]
+    #[error("routing strategy `{0}` needs a host that {needs}", needs = Capability::Select)]
     Strategy(RoutingStrategy),
-    #[error("routing plugin `{0}` needs a host that can select")]
+    #[error("routing plugin `{0}` needs a host that {needs}", needs = Capability::Select)]
     Plugin(String),
     #[error("the host cannot run operation `{op}` on provider `{provider}`")]
     Op { op: Op, provider: String },
@@ -47,8 +50,17 @@ pub enum Error {
         /// strategy refused every candidate.
         request_ids: Option<Vec<String>>,
     },
+    /// `raised_at` names the slot the call keeps the host's own error in. It is `None` for a
+    /// failure the router made itself and for one handed in from outside the call.
     #[error("the attempt failed")]
-    Attempt(#[from] AttemptError),
+    Attempt {
+        #[source]
+        failure: AttemptError,
+        raised_at: Option<RaisedAt>,
+    },
+    /// The host ended the call from inside an attempt ([`crate::AttemptFailure::Refused`]).
+    #[error("the host refused the call")]
+    Refused(RaisedAt),
     #[error("the routing cache failed")]
     Cache(#[from] litellm_cache::Error),
     #[error("the router was retired")]
@@ -125,12 +137,22 @@ pub enum Error {
     },
 }
 
+impl From<AttemptError> for Error {
+    fn from(failure: AttemptError) -> Self {
+        Self::Attempt {
+            failure,
+            raised_at: None,
+        }
+    }
+}
+
 impl Error {
     /// The failed attempt behind this error, when a deployment was called.
     pub fn attempt(&self) -> Option<&AttemptError> {
         match self {
-            Self::Attempt(attempt) => Some(attempt),
+            Self::Attempt { failure, .. } => Some(failure),
             Self::Config(_)
+            | Self::Refused(_)
             | Self::UnknownModel { .. }
             | Self::NoHealthyDeployments { .. }
             | Self::Cache(_)
@@ -190,7 +212,8 @@ impl Error {
             Self::MissingRoutingGroup { .. } => (&["KeyError", "LookupError"], None),
             Self::IndexOutOfRange { .. } => (&["IndexError", "LookupError"], None),
             Self::DefaultDeploymentRaises { .. } => (&["Exception"], None),
-            Self::Attempt(_)
+            Self::Attempt { .. }
+            | Self::Refused(_)
             | Self::Config(_)
             | Self::Cache(_)
             | Self::Retired
@@ -263,7 +286,8 @@ impl Error {
             Self::IndexOutOfRange { model } => Self::IndexOutOfRange {
                 model: model.clone(),
             },
-            Self::Attempt(_)
+            Self::Attempt { .. }
+            | Self::Refused(_)
             | Self::Config(_)
             | Self::Cache(_)
             | Self::Retired
@@ -334,16 +358,10 @@ pub enum FailureKind {
     Other,
 }
 
-/// An opaque value the host hands through the router unchanged, such as the original Python
-/// exception or response object.
-#[derive(Clone)]
-pub struct Payload(pub Arc<dyn Any + Send + Sync>);
-
-impl fmt::Debug for Payload {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Payload(..)")
-    }
-}
+/// Which of the call's host failures an error stands for: the slot the call keeps the host's own
+/// error in, handed back in [`crate::CallError::raised`] when the call ends on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RaisedAt(pub(crate) usize);
 
 /// One failed attempt, as typed facts the retry, fallback and cooldown rules decide by.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -391,7 +409,6 @@ pub struct AttemptError {
     /// The failure counts against no per-minute requests: `async_deployment_callback_on_failure`
     /// does not run for a sync call, and returns at once for a batch retrieve.
     pub uncounted_request: bool,
-    pub payload: Option<Payload>,
 }
 
 impl AttemptError {
@@ -411,7 +428,6 @@ impl AttemptError {
             caller_scoped: false,
             status_absent: false,
             uncounted_request: false,
-            payload: None,
         }
     }
 

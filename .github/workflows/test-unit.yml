@@ -84,6 +84,7 @@ jobs:
       mode: ${{ steps.plan.outputs.mode }}
       skipped: ${{ steps.plan.outputs.skipped }}
       changed-tests: ${{ steps.plan.outputs.changed-tests }}
+      tests-only: ${{ steps.plan.outputs.tests-only }}
       lint-runtime: ${{ steps.plan.outputs.lint-runtime }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -114,20 +115,31 @@ jobs:
           fi
           [ "${mode}" != core ] || [ "${CHANGED_FILE_COUNT:-0}" -le 3000 ] || mode=full
           changed_tests=''
+          tests_only=false
           if [ "${mode}" = core ]; then
-            changed_tests="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' \
-              | python3 .github/scripts/ci/select_changed_tests.py | paste -sd ' ' -)" || { mode=full; changed_tests=''; }
+            changed_files="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')" || mode=full
+            if [ "${mode}" = core ]; then
+              classification="$(printf '%s\n' "${changed_files}" | bash .github/scripts/ci/classify_changes.sh tests-only)" || classification=skip
+              selection_args=()
+              if [ "${classification}" = run ]; then
+                tests_only=true
+                selection_args+=(--include-core)
+              fi
+              changed_tests="$(printf '%s\n' "${changed_files}" \
+                | python3 .github/scripts/ci/select_changed_tests.py "${selection_args[@]}" | paste -sd ' ' -)" || { mode=full; changed_tests=''; tests_only=false; }
+            fi
           fi
           if [ "${mode}" = full ]; then
             skipped=(unit-core unit-changed)
           else
             skipped=(unit docs helm openai-sdk-compat redis-compat)
+            [ "${tests_only}" = false ] || skipped+=(unit-core)
             [ -n "${changed_tests}" ] || skipped+=(unit-changed)
           fi
           [ "${lint_runtime}" = true ] || skipped+=(lint-runtime)
           skipped_json="$(printf '%s\n' "${skipped[@]}" | jq -R . | jq -sc .)"
-          printf 'mode=%s\nskipped=%s\nchanged-tests=%s\nlint-runtime=%s\n' \
-            "${mode}" "${skipped_json}" "${changed_tests}" "${lint_runtime}" | tee -a "$GITHUB_OUTPUT"
+          printf 'mode=%s\nskipped=%s\nchanged-tests=%s\nlint-runtime=%s\ntests-only=%s\n' \
+            "${mode}" "${skipped_json}" "${changed_tests}" "${lint_runtime}" "${tests_only}" | tee -a "$GITHUB_OUTPUT"
   unit:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, plan]
@@ -1163,7 +1175,7 @@ jobs:
   unit-core:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.mode == 'core' }}
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'core' && needs.plan.outputs.tests-only == 'false' }}
     runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
@@ -1176,17 +1188,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: core-auth-spend
+          - shard: core-auth-request
             test-path: |-
               tests/unit/proxy/auth/test_user_api_key_auth.py
               tests/unit/proxy/auth/test_user_api_key_auth_request_flow.py
+              tests/unit/proxy/db/test_prisma_query_span.py
+              tests/unit/test_package_layout.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 10
+            job-timeout-minutes: 15
+            dist: worksteal
+
+          - shard: core-auth-spend
+            test-path: |-
               tests/unit/proxy/auth/test_auth_checks.py
               tests/unit/proxy/auth/test_auth_checks_object_access_and_lookup.py
               tests/unit/proxy/db/test_db_spend_update_writer.py
-              tests/unit/proxy/db/test_prisma_query_span.py
               tests/unit/proxy/spend_tracking/test_spend_tracking_utils.py
               tests/unit/proxy/hooks/test_proxy_track_cost_callback.py
-              tests/unit/test_package_layout.py
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -1235,6 +1256,36 @@ jobs:
             test-path: |-
               tests/unit/test_router
               --ignore=tests/unit/test_router/core
+              --deselect=tests/unit/test_router/test_router.py::test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fallback_usage
+              --deselect=tests/unit/test_router/test_router.py::test_continued_stream_success_log_bills_every_cut_leg
+              --deselect=tests/unit/test_router/test_router.py::test_num_retries_per_request_stops_retries_at_caps_above_four
+              --deselect=tests/unit/test_router/test_router.py::test_retry_records_keep_only_the_last_four_attempts
+              --deselect=tests/unit/test_router/test_router.py::test_retry_records_stay_per_request_and_flat_across_failing_requests
+              --deselect=tests/unit/test_router/test_router.py::TestMemberAutoRouterInference
+              --deselect=tests/unit/test_router/test_router.py::test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deployment_routable
+              --deselect=tests/unit/test_router/test_router.py::test_retry_records_never_carry_a_forwarded_credential
+              --deselect=tests/unit/test_router/test_router.py::test_retry_records_are_flat_and_name_the_failed_group_on_fallback_hops
+              --deselect=tests/unit/test_router/test_router.py::test_router_not_found_retries_governs_every_404_shape
+            runner: ubuntu-latest-16-cores
+            python-version: "3.12"
+            workers: 12
+            reruns: 0
+            timeout-minutes: 10
+            job-timeout-minutes: 15
+            dist: worksteal
+
+          - shard: core-router-retries
+            test-path: |-
+              tests/unit/test_router/test_router.py::test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fallback_usage
+              tests/unit/test_router/test_router.py::test_continued_stream_success_log_bills_every_cut_leg
+              tests/unit/test_router/test_router.py::test_num_retries_per_request_stops_retries_at_caps_above_four
+              tests/unit/test_router/test_router.py::test_retry_records_keep_only_the_last_four_attempts
+              tests/unit/test_router/test_router.py::test_retry_records_stay_per_request_and_flat_across_failing_requests
+              tests/unit/test_router/test_router.py::TestMemberAutoRouterInference
+              tests/unit/test_router/test_router.py::test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deployment_routable
+              tests/unit/test_router/test_router.py::test_retry_records_never_carry_a_forwarded_credential
+              tests/unit/test_router/test_router.py::test_retry_records_are_flat_and_name_the_failed_group_on_fallback_hops
+              tests/unit/test_router/test_router.py::test_router_not_found_retries_governs_every_404_shape
             runner: ubuntu-latest-16-cores
             python-version: "3.12"
             workers: 12
