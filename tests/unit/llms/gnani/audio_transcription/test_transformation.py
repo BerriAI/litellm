@@ -189,6 +189,13 @@ def test_unsupported_openai_options_are_rejected(options: dict[str, object], res
     assert not respx_mock.calls
 
 
+@pytest.mark.parametrize("stream", [None, ""])
+def test_unset_stream_is_not_rejected(stream: str | None, respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, stream=stream)
+    assert route.called
+
+
 def test_global_drop_params_drops_unsupported_options(respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", True)
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
@@ -241,8 +248,17 @@ def test_dropping_unsupported_options_preserves_native_hints(respx_mock: MockRou
     }
 
 
-@pytest.mark.parametrize(("language", "expected"), [("", b"indic-auto"), (" , ", b"indic-auto"), ("hi,", b"hi-IN")])
-def test_prisma_v3_ignores_blank_language_hints(language: str, expected: bytes, respx_mock: MockRouter) -> None:
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("", b"indic-auto"),
+        (" , ", b"indic-auto"),
+        ("hi,", b"hi-IN"),
+        ("INDIC-AUTO", b"indic-auto"),
+        ("Indic-Auto", b"indic-auto"),
+    ],
+)
+def test_prisma_v3_normalizes_language_hints(language: str, expected: bytes, respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
     litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, language=language)
     assert _form(route.calls.last.request)["language_code"] == expected
