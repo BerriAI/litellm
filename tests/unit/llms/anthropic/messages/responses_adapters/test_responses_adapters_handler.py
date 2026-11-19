@@ -144,6 +144,25 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             {"store": False, "previous_response_id": "resp_prior"},
             True,
         ),
+        (
+            {"store": False, "previous_response_id": "resp_prior", "additional_drop_params": ["previous_response_id"]},
+            {"store": False},
+            False,
+        ),
+        (
+            {"store": False, "truncation": "auto", "additional_drop_params": ["truncation"]},
+            {"store": False},
+            False,
+        ),
+        (
+            {
+                "store": False,
+                "extra_body": {"previous_response_id": "resp_prior"},
+                "additional_drop_params": ["previous_response_id"],
+            },
+            {"store": False, "previous_response_id": "resp_prior"},
+            True,
+        ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
     ],
 )
