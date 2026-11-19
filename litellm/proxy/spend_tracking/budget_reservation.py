@@ -12,7 +12,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
@@ -260,12 +260,16 @@ async def reserve_budget_for_request(
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
+    request: Request | None = None,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
-    if get_model_from_request(request_body, route, llm_router=llm_router, path_params=path_params) is None:
+    model: Final = get_model_from_request(request_body, route, llm_router=llm_router, path_params=path_params)
+    if model is None:
+        return None
+    if isinstance(model, str) and await _forwards_subscription_oauth(request, model, route, llm_router, valid_token):
         return None
 
     counters: Final = await _get_budget_counters(
@@ -324,6 +328,39 @@ async def reserve_budget_for_request(
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )
+
+
+async def _forwards_subscription_oauth(
+    request: Request | None,
+    model: str,
+    route: str,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+) -> bool:
+    if request is None:
+        return False
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.proxy.litellm_pre_call_utils import forwarded_anthropic_oauth_token
+
+    if not any(is_anthropic_oauth_key(request.headers.get(name)) for name in ("authorization", "x-api-key")):
+        return False
+    if route.startswith("/anthropic/"):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            anthropic_route_uses_client_oauth,
+        )
+
+        return await anthropic_route_uses_client_oauth(request, valid_token)
+    if route not in ("/messages", "/v1/messages", "/chat/completions", "/v1/chat/completions"):
+        return False
+    if forwarded_anthropic_oauth_token(request.headers) is None:
+        return False
+    if llm_router is not None:
+        upstreams: Final = llm_router.registry().resolve(model, kind="upstreams", team_id=valid_token.team_id)
+        return bool(upstreams) and all(provider == "anthropic" for _, provider in upstreams)
+    try:
+        return litellm.get_llm_provider(model=model)[1] == "anthropic"
+    except litellm.BadRequestError:
+        return False
 
 
 async def _native_budget_plan(

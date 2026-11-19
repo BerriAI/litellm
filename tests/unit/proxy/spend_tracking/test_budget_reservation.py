@@ -7,6 +7,7 @@ from typing import Final
 from unittest.mock import patch
 
 import pytest
+from fastapi import Request
 
 import litellm
 from litellm.caching import DualCache
@@ -55,6 +56,35 @@ TOKEN_COUNTING_ROUTES: Final = (
 
 def _budgeted_token() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", token="hashed-token", max_budget=100.0, spend=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions", "/anthropic/v1/messages"])
+@pytest.mark.parametrize("oauth,operator,skip", [(True, False, True), (False, False, False), (True, True, False)])
+async def test_only_forwarded_subscription_oauth_skips_budget_hold(route: str, oauth: bool, operator: bool, skip: bool):
+    credential: Final = "sk-ant-oat-test" if oauth else "sk-ant-api-test"
+    request: Final = Request({"type": "http", "path": route, "headers": [
+        (b"authorization", f"Bearer {credential}".encode()), (b"x-litellm-api-key", b"sk-test")
+    ]})
+    router: Final = Router(model_list=[{"model_name": "claude", "litellm_params": {
+        "model": "anthropic/claude-sonnet-4-5", "api_key": "operator-key",
+        "input_cost_per_token": 0.001, "output_cost_per_token": 0.002,
+    }}])
+    with (
+        patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.anthropic_route_auth_header",
+              return_value={"x-api-key": "operator-key"} if operator else None),
+        patch("litellm.proxy.spend_tracking.budget_reservation._native_budget_plan", return_value={"held": True}) as reserve,
+    ):
+        result = await reserve_budget_for_request(
+            request_body={"model": "claude", "messages": ANTHROPIC_MESSAGES, "max_tokens": 1,
+                          "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}}},
+            route=route, llm_router=router, valid_token=_budgeted_token(), team_object=None, user_object=None,
+            prisma_client=None, user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()), request=request,
+        )
+    expected_skip: Final = skip or (oauth and operator and not route.startswith("/anthropic/"))
+    assert result == (None if expected_skip else {"held": True})
+    assert reserve.call_count == (0 if expected_skip else 1)
 
 
 @pytest.mark.asyncio

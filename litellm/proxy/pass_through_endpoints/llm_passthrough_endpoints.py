@@ -1382,11 +1382,6 @@ async def anthropic_proxy_route(
     )
 
     # Add or update query parameters
-    anthropic_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="anthropic",
-        region_name=None,
-    )
-
     ## check for streaming
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
@@ -1401,9 +1396,7 @@ async def anthropic_proxy_route(
     )
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = await AnthropicModelInfo.aget_auth_header(
-        anthropic_api_key or None, allow_workload_identity=True
-    )
+    auth_header: Final = await anthropic_route_auth_header()
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
@@ -3383,6 +3376,16 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
     if _VERTEX_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(forwarded):
         raise HTTPException(status_code=401, detail=_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL)
     return forwarded
+
+
+async def anthropic_route_auth_header() -> Mapping[str, str] | None:
+    credential: Final = passthrough_endpoint_router.get_credentials(custom_llm_provider="anthropic", region_name=None)
+    return await AnthropicModelInfo.aget_auth_header(credential or None, allow_workload_identity=True)
+
+
+async def anthropic_route_uses_client_oauth(request: Request, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    _upstream_headers_for_anthropic_route(request, user_api_key_dict, await anthropic_route_auth_header())
+    return getattr(request.state, ANTHROPIC_CLIENT_OAUTH_STATE_KEY, False) is True
 
 
 def _upstream_headers_for_anthropic_route(
