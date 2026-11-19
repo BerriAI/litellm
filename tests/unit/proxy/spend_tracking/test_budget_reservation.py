@@ -30,6 +30,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
+    reconcile_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -61,30 +62,83 @@ def _budgeted_token() -> UserAPIKeyAuth:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions", "/anthropic/v1/messages"])
 @pytest.mark.parametrize("oauth,operator,skip", [(True, False, True), (False, False, False), (True, True, False)])
-async def test_only_forwarded_subscription_oauth_skips_budget_hold(route: str, oauth: bool, operator: bool, skip: bool):
+@pytest.mark.parametrize(
+    "fallback",
+    [
+        None,
+        "fallbacks",
+        "context_window_fallbacks",
+        "content_policy_fallbacks",
+        "default_fallbacks",
+        "request_fallbacks",
+        "request_models",
+    ],
+)
+async def test_only_forwarded_subscription_oauth_skips_budget_hold(
+    route: str,
+    oauth: bool,
+    operator: bool,
+    skip: bool,
+    spend_counter_store: SpendCounterStore,
+    monkeypatch: pytest.MonkeyPatch,
+    fallback: str | None,
+):
     credential: Final = "sk-ant-oat-test" if oauth else "sk-ant-api-test"
-    request: Final = Request({"type": "http", "path": route, "headers": [
-        (b"authorization", f"Bearer {credential}".encode()), (b"x-litellm-api-key", b"sk-test")
-    ]})
-    router: Final = Router(model_list=[{"model_name": "claude", "litellm_params": {
-        "model": "anthropic/claude-sonnet-4-5", "api_key": "operator-key",
-        "input_cost_per_token": 0.001, "output_cost_per_token": 0.002,
-    }}])
-    with (
-        patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.anthropic_route_auth_header",
-              return_value={"x-api-key": "operator-key"} if operator else None),
-        patch("litellm.proxy.spend_tracking.budget_reservation._native_budget_plan", return_value={"held": True}) as reserve,
-    ):
-        result = await reserve_budget_for_request(
-            request_body={"model": "claude", "messages": ANTHROPIC_MESSAGES, "max_tokens": 1,
-                          "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}}},
-            route=route, llm_router=router, valid_token=_budgeted_token(), team_object=None, user_object=None,
-            prisma_client=None, user_api_key_cache=UserApiKeyCache(),
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()), request=request,
-        )
-    expected_skip: Final = skip or (oauth and operator and not route.startswith("/anthropic/"))
-    assert result == (None if expected_skip else {"held": True})
-    assert reserve.call_count == (0 if expected_skip else 1)
+    request: Final = Request(
+        {
+            "type": "http",
+            "path": route,
+            "headers": [(b"authorization", f"Bearer {credential}".encode()), (b"x-litellm-api-key", b"sk-test")],
+        }
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "operator-key",
+                    "use_in_pass_through": True,
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            }
+        ],
+        fallbacks=[{"claude": ["paid"]}] if fallback == "fallbacks" else None,
+        context_window_fallbacks=[{"claude": ["paid"]}] if fallback == "context_window_fallbacks" else None,
+        content_policy_fallbacks=[{"claude": ["paid"]}] if fallback == "content_policy_fallbacks" else None,
+        default_fallbacks=["paid"] if fallback == "default_fallbacks" else None,
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(proxy_server, "llm_router", router if operator else None)
+    result = await reserve_budget_for_request(
+        request_body={
+            "model": "claude",
+            "messages": ANTHROPIC_MESSAGES,
+            "max_tokens": 1,
+            **({"fallbacks": ["paid"]} if fallback == "request_fallbacks" else {}),
+            **({"models": ["claude", "paid"]} if fallback == "request_models" else {}),
+            "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}},
+        },
+        route=route,
+        llm_router=router,
+        valid_token=_budgeted_token(),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        request=request,
+    )
+    expected_skip: Final = fallback is None and (skip or (oauth and operator and not route.startswith("/anthropic/")))
+    if expected_skip:
+        assert result is None
+        return
+    assert result is not None
+    assert result["reserved_cost"] > 0
+    assert len(result["entries"]) == 1
+    assert result["entries"][0]["reserved_cost"] == pytest.approx(result["reserved_cost"])
+    await reconcile_budget_reservation(result, actual_cost=0.0)
 
 
 @pytest.mark.asyncio

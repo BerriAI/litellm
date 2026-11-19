@@ -269,7 +269,9 @@ async def reserve_budget_for_request(
     model: Final = get_model_from_request(request_body, route, llm_router=llm_router, path_params=path_params)
     if model is None:
         return None
-    if isinstance(model, str) and await _forwards_subscription_oauth(request, model, route, llm_router, valid_token):
+    if isinstance(model, str) and await _forwards_subscription_oauth(
+        request, model, route, llm_router, valid_token, _WINDOW_OBJECT.validate_python(request_body)
+    ):
         return None
 
     counters: Final = await _get_budget_counters(
@@ -336,9 +338,22 @@ async def _forwards_subscription_oauth(
     route: str,
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth,
+    request_body: Mapping[str, object],
 ) -> bool:
     if request is None or not request.scope.get("headers"):
         return False
+    if any(
+        field in request_body
+        for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "models", "model_list")
+    ):
+        return False
+    if llm_router is not None:
+        settings: Final = llm_router.settings()
+        if any(
+            _CACHED_VALUE.validate_python(getattr(settings, field))
+            for field in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+        ):
+            return False
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
     from litellm.proxy.litellm_pre_call_utils import forwarded_anthropic_oauth_token
 
