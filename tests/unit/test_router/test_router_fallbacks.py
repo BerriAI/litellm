@@ -1686,9 +1686,10 @@ async def test_admin_fallback_from_a_name_several_teams_share_still_serves(
     assert response.choices[0].message.content == "served by the anthropic backup"
 
 
+@pytest.mark.parametrize("caller_kwargs", ({}, {"api_key": None}), ids=("no_key", "null_key"))
 @pytest.mark.asyncio
 async def test_fallback_without_caller_credentials_keeps_the_requests_headers(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caller_kwargs: dict[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _anthropic_router(
@@ -1705,10 +1706,103 @@ async def test_fallback_without_caller_credentials_keeps_the_requests_headers(
     )
 
     await router.acompletion(
-        model="claude", messages=[{"role": "user", "content": "hi"}], headers={"x-admin-configured": "kept"}
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        headers={"x-admin-configured": "kept"},
+        **caller_kwargs,
     )
 
     assert bedrock.calls.last.request.headers["x-admin-configured"] == "kept"
+
+
+def _bedrock_iam_params(region: str = "us-east-1") -> dict[str, object]:
+    return {
+        "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+        "aws_access_key_id": "AKIAFALLBACKTEST",
+        "aws_secret_access_key": "fallback-test-secret",
+        "aws_region_name": region,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_a_forwarded_credential_header_off_bedrock(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _anthropic_router(_bedrock_iam_params())
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded_response())
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_bedrock_converse_response()
+    )
+
+    await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], headers={"Api-Key": _CALLER_KEY}
+    )
+
+    sent: Final = bedrock.calls.last.request
+    assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFALLBACKTEST/")
+    assert all(_CALLER_KEY not in value for value in sent.headers.values())
+
+
+@pytest.mark.asyncio
+async def test_fallback_scopes_a_caller_body_credential_like_its_region(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _anthropic_router(_bedrock_iam_params())
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded_response())
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_bedrock_converse_response()
+    )
+
+    response: Final = await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], aws_region_name="eu-west-1"
+    )
+
+    assert bedrock.call_count == 1
+    assert response.choices[0].message.content == "served by bedrock"
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_a_complexity_tier_pinned_key_off_another_provider(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    tier: Final = {"model_name": "claude", "litellm_params": {"api_key": "sk-ant-tier-pinned-key"}}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "smart",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router/smart",
+                    "complexity_router_default_model": "claude",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": [tier], "MEDIUM": [tier], "COMPLEX": [tier], "REASONING": [tier]}
+                    },
+                },
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-admin-key"},
+            },
+            {"model_name": "claude-bedrock", "litellm_params": _bedrock_iam_params()},
+        ],
+        fallbacks=[{"claude": ["claude-bedrock"]}],
+        num_retries=0,
+    )
+    anthropic: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_overloaded_response()
+    )
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_bedrock_converse_response()
+    )
+
+    await router.acompletion(model="smart", messages=[{"role": "user", "content": "hi"}])
+
+    assert anthropic.calls.last.request.headers["x-api-key"] == "sk-ant-tier-pinned-key"
+    sent: Final = bedrock.calls.last.request
+    assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFALLBACKTEST/")
+    assert all("sk-ant-tier-pinned-key" not in value for value in sent.headers.values())
 
 
 class _StreamCutBeforeContent(httpx.AsyncByteStream):

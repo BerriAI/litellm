@@ -16,6 +16,7 @@ from typing import Final, cast  # noqa: TID251  # narrows the untyped request di
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
+from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.utils import server_owned_wif_litellm_params
 
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
@@ -91,8 +92,25 @@ PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
 }
 
 
+_TRANSPORT_PARAMS: Final = frozenset(
+    {"headers", "extra_headers", "default_headers", "extra_body", "client", "custom_llm_provider"}
+)
+CALLER_CREDENTIAL_PARAMS: Final = PROVIDER_BOUND_PARAMS - _TRANSPORT_PARAMS
+_CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names()
+_HEADER_CARRIERS: Final = ("headers", "extra_headers")
+
+
+def _names_a_credential_header(headers: object) -> bool:
+    if not isinstance(headers, Mapping):
+        return False
+    names: Final[Mapping[object, object]] = headers
+    return any(isinstance(name, str) and name.lower() in _CREDENTIAL_HEADER_NAMES for name in names)
+
+
 def carries_caller_credentials(kwargs: Mapping[str, object]) -> bool:
-    return any(kwargs.get(key) is not None for key in clientside_credential_keys)
+    return any(kwargs[key] is not None for key in kwargs.keys() & CALLER_CREDENTIAL_PARAMS) or any(
+        _names_a_credential_header(kwargs.get(carrier)) for carrier in _HEADER_CARRIERS
+    )
 
 
 def request_for_provider(

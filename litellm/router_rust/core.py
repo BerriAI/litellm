@@ -36,6 +36,7 @@ from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
+from litellm.exceptions import BadRequestError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -120,9 +121,9 @@ from litellm.router_rust.invoke.endpoints import (
 )
 from litellm.router_rust.invoke.shaping import (
     Shaping,
+    authenticates_as_caller,
     non_stream_timeout,
     provider_of_deployment,
-    serves_caller_credentials,
 )
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
@@ -3471,7 +3472,7 @@ class RustCore(
     def queues_on(self, request: Mapping[str, object]) -> Callable[[Mapping[str, object]], bool]:
         def queues(deployment: Mapping[str, object]) -> bool:
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
-            return not serves_caller_credentials(request, deployment) and not self.per_user_deployment(deployment_id)
+            return not authenticates_as_caller(request, deployment) and not self.per_user_deployment(deployment_id)
 
         return queues
 
@@ -4579,7 +4580,6 @@ class _Driver:
         self._base_level: Final = stream_failure[0] if stream_failure is not None else 0
         # How many fallback hops deep the walk is: the "Successful fallback" lines a served hop logs.
         self._fallback_depth: int = 0
-        self._carries_caller_credentials: Final = carries_caller_credentials(request)
         self._credential_scope: frozenset[str] | None = credential_scope
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
@@ -5427,7 +5427,7 @@ class _Driver:
         return request if params is None else {**request, **params}
 
     def _request_for(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
-        if not self._carries_caller_credentials:
+        if not carries_caller_credentials(self._request):
             return self._request
         if _serves_the_primary(step):
             _ = self._settled_credential_scope(get_pre_routing_selection(self._request) or _routed_model(self._request))
@@ -5455,11 +5455,9 @@ class _Driver:
         return frozenset(() if named is None else (named,))
 
     def _requested_deployments(self, model: str) -> Sequence[Mapping[str, object]]:
-        import litellm.exceptions as litellm_exceptions
-
         try:
             return self._core._hosted._core_deployments_for_request(model, self._request)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        except litellm_exceptions.BadRequestError:
+        except BadRequestError:
             return ()
 
     async def _slot_or_turn_back(
