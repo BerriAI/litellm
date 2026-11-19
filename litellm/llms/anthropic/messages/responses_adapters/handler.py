@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     prompt_cache_breakpoint_with_readable_mode,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
@@ -201,6 +201,16 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
         logging_obj.record_bridged_responses_api_response(result)
 
 
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
+    dropped: Final = drop_policy(request_params).additional_drop_params
+    top_level_store: Final = None if "store" in dropped else request_params.get("store")
+    return extra_body.get("store", top_level_store) is not False or any(
+        params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
+        for params in (request_params, extra_body)
+    )
+
+
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
     return extra_kwargs or {}
@@ -367,10 +377,7 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
-        preserve_system_instructions=any(
-            params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
-            for params in (forwarded_kwargs, as_str_mapping(forwarded_kwargs.get("extra_body")) or {})
-        ),
+        preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
 
     caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
