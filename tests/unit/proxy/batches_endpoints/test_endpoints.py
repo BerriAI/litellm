@@ -221,6 +221,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
@@ -474,9 +475,7 @@ async def test_create__team_with_an_allowlist_and_no_request_bucket_leaves_the_b
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "request_bucket,expected_bucket", [("team-a-bucket", "team-a-bucket"), (None, "model-bucket")]
-)
+@pytest.mark.parametrize("request_bucket,expected_bucket", [("team-a-bucket", "team-a-bucket"), (None, "model-bucket")])
 @pytest.mark.parametrize(
     "routing",
     [
@@ -1564,6 +1563,7 @@ def retrieve_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
@@ -2151,6 +2151,7 @@ def list_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []
@@ -2576,6 +2577,7 @@ def cancel_harness():
     registry.access_groups = MagicMock(return_value={})
     registry.resolve = MagicMock(side_effect=lambda name, **_: name)
     registry.all = MagicMock(return_value=[])
+    registry.deployments = MagicMock(return_value=[])
     creds_resolver = MagicMock(side_effect=_registry_creds_lookup)
     registry.credentials = _route_credentials({"with_provider": creds_resolver})
     router.model_list = []

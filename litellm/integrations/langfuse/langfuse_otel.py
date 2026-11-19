@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import FAILED_PROMPT_TOKEN_ESTIMATE_KEY, REDACTED_BY_LITELLM
 from litellm.integrations._types.open_inference import ErrorAttributes
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
@@ -19,8 +19,10 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     serialize_langfuse_datetime,
 )
 from litellm.integrations.opentelemetry import (
+    ESTIMATED_INPUT_TOKENS_ATTRIBUTE,
     HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
     LITELLM_PROXY_REQUEST_SPAN_NAME,
+    USAGE_PROVIDER_STATUS_ATTRIBUTE,
     OpenTelemetry,
     OpenTelemetryConfig,
 )
@@ -150,6 +152,12 @@ def _a_destination_carries_the_trace() -> bool:
     from litellm.integrations.otel.plumbing.context import destination_backends
 
     return ExporterOwner.LANGFUSE_OTEL in destination_backends()
+
+
+def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_refused_by_otel_v2
+
+    return langfuse_tenant_host_refused_by_otel_v2(params)
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -378,9 +386,15 @@ class LangfuseOtelLogger(OpenTelemetry):
         limit: Final = span_attribute_limit(span)
         carried: Final = carried_keys(span)
         new_keys: Final = tuple(key for key, _value in fields if key not in carried)
-        room: Final = (
-            len(new_keys) if limit is None else max(limit - len(carried) - len(_ERROR_ATTRIBUTES - carried), 0)
+        pending_usage: Final[frozenset[str]] = (
+            frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE, ESTIMATED_INPUT_TOKENS_ATTRIBUTE))
+            if isinstance(kwargs.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY), int)
+            else frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE,))
+            if FAILED_PROMPT_TOKEN_ESTIMATE_KEY in kwargs
+            else frozenset()
         )
+        reserved: Final = _ERROR_ATTRIBUTES | pending_usage
+        room: Final = len(new_keys) if limit is None else max(limit - len(carried) - len(reserved - carried), 0)
         written: Final = carried | frozenset(new_keys[:room])
         for key, value in fields:
             if key in written:
@@ -519,7 +533,11 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         dynamic_langfuse_public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
+        if (
+            dynamic_langfuse_public_key
+            and dynamic_langfuse_secret_key
+            and not _refused_on_otel_v2(standard_callback_dynamic_params)
+        ):
             auth_header: Final = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
@@ -541,7 +559,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if not public_key or not secret_key:
+        if not public_key or not secret_key or _refused_on_otel_v2(standard_callback_dynamic_params):
             return None
 
         langfuse_host: Final = standard_callback_dynamic_params.get("langfuse_host") or self._get_langfuse_otel_host()

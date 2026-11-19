@@ -19,7 +19,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
@@ -173,6 +172,7 @@ class PassThroughStreamingHandler:
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
         route_streaming_logging: RouteStreamingLogging | None = None,
+        on_upstream_error: Callable[[Exception], object] = lambda _: None,
     ):
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
             route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
@@ -239,6 +239,8 @@ class PassThroughStreamingHandler:
                 # ``cost_injection_active`` already requires ``model_name`` to
                 # be truthy; pin to a typed local so mypy narrows ``Optional[str]``
                 # -> ``str`` for the per-chunk call site.
+                from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
                 assert model_name is not None
                 resolved_model_name: Final[str] = model_name
                 pending = b""
@@ -271,6 +273,7 @@ class PassThroughStreamingHandler:
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
+            on_upstream_error(e)
             if response.status_code < 400:
                 logging_scheduled = True
                 await PassThroughStreamingHandler.schedule_stream_failure_logging(

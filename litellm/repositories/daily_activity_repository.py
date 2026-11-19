@@ -97,6 +97,9 @@ class _DailyActivityDatabase(Protocol):
     def litellm_dailyenduserspend(self) -> TableActions[DailyActivityRow]: ...
 
     @property
+    def litellm_dailycustomermemberspend(self) -> TableActions[DailyActivityRow]: ...
+
+    @property
     def litellm_dailyagentspend(self) -> TableActions[DailyActivityRow]: ...
 
 
@@ -132,6 +135,8 @@ class _CustomerDailyRow(BaseModel):
     prompt_caching_savings_spend: float
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
+    guardrail_spend: float
+    customer_margin_spend: float
     spend: float
     api_requests: int
     successful_requests: int
@@ -177,6 +182,8 @@ def _daily_rows_table(
         return prisma_client.db.litellm_dailyorganizationspend
     if table is DailyActivityTable.CUSTOMER:
         return prisma_client.db.litellm_dailyenduserspend
+    if table is DailyActivityTable.CUSTOMER_MEMBER:
+        return prisma_client.db.litellm_dailycustomermemberspend
     if table is DailyActivityTable.AGENT:
         return prisma_client.db.litellm_dailyagentspend
     assert_never(table)
@@ -391,6 +398,7 @@ class DailyActivityRepository:
         )
         conditions: Final = {
             "date": {"gte": adjusted_start, "lte": adjusted_end},
+            **({"app_id": scope.app_id} if scope.app_id is not None else {}),
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
             **(

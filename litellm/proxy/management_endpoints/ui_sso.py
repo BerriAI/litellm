@@ -86,14 +86,20 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_team_object, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    ExperimentalUIJWTToken,
+    email_belongs_to_another_user,
+    get_team_object,
+    get_user_object,
+    read_email_verified,
+)
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
     has_user_setup_sso,
 )
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.jwt import ClaimReading
 from litellm.proxy.auth.team_grants import TeamModelAliasTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
@@ -946,7 +952,7 @@ def determine_role_from_groups(
 
 def process_sso_jwt_access_token(
     access_token_str: str | None,
-    sso_jwt_handler: JWTHandler | None,
+    sso_jwt_handler: ClaimReading | None,
     result: OpenID | dict | None,
     role_mappings: Optional["RoleMappings"] = None,
 ) -> dict | None:
@@ -1262,8 +1268,8 @@ async def google_login(
 
 def generic_response_convertor(
     response,
-    jwt_handler: JWTHandler,
-    sso_jwt_handler: JWTHandler | None = None,
+    jwt_handler: ClaimReading,
+    sso_jwt_handler: ClaimReading | None = None,
     role_mappings: Optional["RoleMappings"] = None,
     team_mappings: Optional["TeamMappings"] = None,
     jwt_auth_enabled: bool = False,
@@ -1389,6 +1395,7 @@ def generic_response_convertor(
         team_id_to_upsert=team_id_to_upsert,
         user_role=user_role,
         extra_fields=extra_fields,
+        email_verified=read_email_verified(token.get("email_verified")),
     )
 
 
@@ -1616,8 +1623,8 @@ def _handle_generic_sso_error(
 
 async def get_generic_sso_response(
     request: Request,
-    jwt_handler: JWTHandler,
-    sso_jwt_handler: JWTHandler | None,  # sso specific jwt handler - used for restricted sso group access control
+    jwt_handler: ClaimReading,
+    sso_jwt_handler: ClaimReading | None,  # sso specific jwt handler - used for restricted sso group access control
     generic_client_id: str,
     redirect_url: str,
 ) -> tuple[
@@ -1973,11 +1980,13 @@ async def get_existing_user_info_from_db(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     raise_database_outage: bool = False,
+    email_verified: bool | None = None,
 ) -> LiteLLM_UserTable | None:
     try:
         user_info = await get_user_object(
             user_id=user_id,
             user_email=user_email,
+            email_verified=email_verified,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
@@ -2001,6 +2010,18 @@ def sso_lookup_user_ids(alternate_user_id: str | None, provider_id: str | None) 
         for user_id in (alternate_user_id, provider_id)
         if user_id is not None and not _is_blank_sso_user_id(user_id)
     )
+
+
+async def _sso_email_taken(
+    prisma_client: PrismaClient, user_email: str | None, owner_id: str | None, stored_email: str | None
+) -> bool:
+    if user_email is None or owner_id is None or (stored_email or "").casefold() == user_email.casefold():
+        return False
+    try:
+        return await email_belongs_to_another_user(prisma_client, user_email, owner_id)
+    except Exception as error:  # noqa: BLE001  # the email is optional, so a failed check leaves it out
+        verbose_proxy_logger.warning("SSO sign-in: could not check whether the email is in use: %s", error)
+        return True
 
 
 async def get_user_info_from_db(
@@ -2027,6 +2048,9 @@ async def get_user_info_from_db(
         )
 
         user_info: LiteLLM_UserTable | NewUserResponse | None = None
+        email_verified: Final = read_email_verified(
+            _sso_result_to_dict(result).get("email_verified")  # pyright: ignore[reportUnknownArgumentType]  # untyped IdP dict
+        )
 
         for user_id in potential_user_ids:
             user_info = await get_existing_user_info_from_db(
@@ -2036,6 +2060,7 @@ async def get_user_info_from_db(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 raise_database_outage=resolved_by_database_only,
+                email_verified=email_verified,
             )
             if user_info is not None:
                 break
@@ -2044,12 +2069,22 @@ async def get_user_info_from_db(
             "user_info: %s; litellm.default_internal_user_params: %s", user_info, litellm.default_internal_user_params
         )
 
+        new_user_id: Final = None if user_defined_values is None else user_defined_values.get("user_id")
+        owner_id: Final = new_user_id if user_info is None else user_info.user_id
+        stored_email: Final = None if user_info is None else user_info.user_email
+        email_taken: Final = await _sso_email_taken(prisma_client, user_email, owner_id, stored_email)
+        new_user_values: Final[SSOUserDefinedValues | None] = (
+            {**user_defined_values, "user_email": None}
+            if email_taken and user_defined_values is not None
+            else user_defined_values
+        )
+
         # Upsert SSO User to LiteLLM DB
         user_info = await SSOAuthenticationHandler.upsert_sso_user(
             result=result,
             user_info=user_info,
-            user_email=user_email,
-            user_defined_values=user_defined_values,
+            user_email=stored_email if email_taken else user_email,
+            user_defined_values=new_user_values,
             prisma_client=prisma_client,
             raise_database_outage=resolved_by_database_only,
         )
@@ -2150,7 +2185,7 @@ def _build_sso_user_update_data(
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _sync_user_role_from_jwt_role_map(
-    jwt_handler: JWTHandler | None,
+    jwt_handler: ClaimReading | None,
     received_response: dict | None,
     user_info: LiteLLM_UserTable | NewUserResponse | None,
     prisma_client: PrismaClient,
@@ -2257,8 +2292,8 @@ async def _sso_provider_callback(
     google_client_id: str | None,
     microsoft_client_id: str | None,
     generic_client_id: str | None,
-    jwt_handler: JWTHandler,
-    sso_jwt_handler: JWTHandler | None,
+    jwt_handler: ClaimReading,
+    sso_jwt_handler: ClaimReading | None,
     return_raw_sso_response: bool = False,
 ) -> tuple[
     OpenID | dict[str, object] | None, dict[str, object] | None, dict[str, object] | None, SSOIdentityAssertion | None
@@ -2314,29 +2349,25 @@ async def auth_callback(request: Request, state: str | None = None):
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy.proxy_server import (
         general_settings,
-        jwt_handler,
+        litellm_jwtauth,
         master_key,
         prisma_client,
-        user_api_key_cache,
     )
+
+    jwt_handler: Final = ClaimReading(litellm_jwtauth)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    sso_jwt_handler: JWTHandler | None = None
+    sso_jwt_handler: ClaimReading | None = None
     ui_access_mode: Final = general_settings.get("ui_access_mode", None)
     if ui_access_mode is not None and isinstance(ui_access_mode, dict):
-        sso_jwt_handler = JWTHandler()
-        sso_jwt_handler.update_environment(
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            litellm_jwtauth=LiteLLM_JWTAuth(
+        sso_jwt_handler = ClaimReading(
+            LiteLLM_JWTAuth(
                 team_ids_jwt_field=general_settings.get("ui_access_mode", {}).get("sso_group_jwt_field", None),
-            ),
-            leeway=0,
+            )
         )
 
     microsoft_client_id: Final = os.getenv("MICROSOFT_CLIENT_ID", None)
@@ -2425,11 +2456,13 @@ async def saml_callback(request: Request):
     """Assertion Consumer Service. Validates the IdP assertion and issues a UI session."""
     from litellm.proxy.proxy_server import (
         general_settings,
-        jwt_handler,
+        litellm_jwtauth,
         master_key,
         prisma_client,
         saml_sso_cache,
     )
+
+    jwt_handler: Final = ClaimReading(litellm_jwtauth)
 
     if is_admin_ui_disabled():
         return admin_ui_disabled()
@@ -3176,7 +3209,7 @@ def set_session_token_cookie(response: Response, request: Request, jwt_token: st
 
     Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
     populate its own Authorization headers (see
-    ``ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
+    ``litellm/ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
     HttpOnly would break login. Secure is still required whenever the public
     origin is HTTPS, resolved the same trust-aware way as every other
     litellm cookie."""
@@ -3936,7 +3969,7 @@ class SSOAuthenticationHandler:
         generic_client_id: str | None = None,
         ui_access_mode: dict | None = None,
         access_token_payload: dict | None = None,
-        jwt_handler: JWTHandler | None = None,
+        jwt_handler: ClaimReading | None = None,
         return_to: str | None = None,
         sso_assertion: SSOIdentityAssertion | None = None,
     ) -> RedirectResponse:
@@ -5176,25 +5209,20 @@ async def debug_sso_callback(request: Request):
     from fastapi.responses import HTMLResponse
 
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy.proxy_server import (
         general_settings,
-        jwt_handler,
-        prisma_client,
-        user_api_key_cache,
+        litellm_jwtauth,
     )
 
-    sso_jwt_handler: JWTHandler | None = None
+    jwt_handler: Final = ClaimReading(litellm_jwtauth)
+
+    sso_jwt_handler: ClaimReading | None = None
     ui_access_mode: Final = general_settings.get("ui_access_mode", None)
     if ui_access_mode is not None and isinstance(ui_access_mode, dict):
-        sso_jwt_handler = JWTHandler()
-        sso_jwt_handler.update_environment(
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            litellm_jwtauth=LiteLLM_JWTAuth(
+        sso_jwt_handler = ClaimReading(
+            LiteLLM_JWTAuth(
                 team_ids_jwt_field=general_settings.get("ui_access_mode", {}).get("sso_group_jwt_field", None),
-            ),
-            leeway=0,
+            )
         )
 
     microsoft_client_id: Final = os.getenv("MICROSOFT_CLIENT_ID", None)

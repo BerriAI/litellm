@@ -5,7 +5,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import ClassVar, Final, Literal, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1133,6 +1133,93 @@ async def test_realtime_session_requests_forward_an_explicit_null_upstream(
     assert parent[body_path[-1]] is None
     session_fields: Final = gateway.body["session"] if body_path[0] == "session" else gateway.body
     assert [key for key, value in session_fields.items() if value is None] == []
+
+
+def _create_translation_client_secret(expires_after: object, gateway: _GatewayThatRecordsTheBody) -> Awaitable[object]:
+    return realtime_main.acreate_realtime_translation_client_secret.__wrapped__(
+        model="gpt-realtime-translate",
+        expires_after=expires_after,
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        litellm_logging_obj=_realtime_http_logging("translation_client_secrets"),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expires_after",
+    [
+        pytest.param({"anchor": "created_at", "seconds": 600}, id="dict"),
+        pytest.param(MappingProxyType({"anchor": "created_at", "seconds": 600}), id="read-only-mapping"),
+    ],
+)
+async def test_translation_client_secret_forwards_a_mapping_expires_after(expires_after: Mapping[str, object]) -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    await _create_translation_client_secret(expires_after, gateway)
+
+    assert gateway.body["expires_after"] == {"anchor": "created_at", "seconds": 600}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expires_after",
+    [
+        pytest.param([("anchor", "created_at"), ("seconds", 600)], id="list-of-pairs"),
+        pytest.param("seconds=600", id="string"),
+    ],
+)
+async def test_translation_client_secret_rejects_an_expires_after_that_is_not_a_mapping(expires_after: object) -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    with pytest.raises(TypeError, match=r"realtime\.RealtimeExpiresAfter\(\) argument after \*\* must be a mapping"):
+        await _create_translation_client_secret(expires_after, gateway)
+
+    assert gateway.body is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transcription_session",
+    [
+        pytest.param([("input_audio_format", "pcm16")], id="list-of-pairs"),
+        pytest.param("input_audio_format=pcm16", id="string"),
+    ],
+)
+async def test_transcription_session_rejects_a_session_that_is_not_a_mapping(transcription_session: object) -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    with pytest.raises(
+        TypeError, match=r"realtime\.RealtimeTranscriptionSessionRequest\(\) argument after \*\* must be a mapping"
+    ):
+        await realtime_main.acreate_realtime_transcription_session.__wrapped__(
+            model="openai/gpt-transcribe",
+            transcription_session=transcription_session,
+            api_base="https://realtime-gateway.example/v1",
+            api_key="fake-key",
+            litellm_logging_obj=FakeLogging(),
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        )
+
+    assert gateway.body is None
+
+
+@pytest.mark.asyncio
+async def test_transcription_session_accepts_a_read_only_mapping() -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    await realtime_main.acreate_realtime_transcription_session.__wrapped__(
+        model="openai/gpt-transcribe",
+        transcription_session=MappingProxyType({"input_audio_format": "pcm16"}),
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+
+    assert gateway.body["input_audio_format"] == "pcm16"
 
 
 @pytest.mark.asyncio
