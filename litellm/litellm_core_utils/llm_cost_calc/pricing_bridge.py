@@ -442,13 +442,24 @@ class CandidateFee(TypedDict):
 
 class CandidateFacts(TypedDict):
     """What Python found for one candidate of a call, by its place among the candidates: the built-in tools it used
-    and the Model Router fee it bills, rows named by index among the rows passed beside the document, or that finding
-    them raised."""
+    and the Model Router fee it bills, rows named by index among the candidate's own rows, which start at
+    ``rows_from`` among the rows passed beside the document, or that finding them raised."""
 
     candidate: ReadOnly[int]
     tools: ReadOnly[ToolUse | None]
     router_fee: ReadOnly[CandidateFee | None]
     failed: ReadOnly[bool]
+    rows_from: ReadOnly[int]
+
+
+class UsagePart(TypedDict):
+    """One usage a call bills on its own walk of its candidates, with its service tier and what Python found for each
+    candidate."""
+
+    usage: ReadOnly[PricedUsage]
+    service_tier: ReadOnly[str | None]
+    raw: ReadOnly[RawCounts]
+    candidates: ReadOnly[Sequence[CandidateFacts]]
 
 
 class _PriceDocument(TypedDict):
@@ -472,6 +483,7 @@ class _PriceDocument(TypedDict):
     tools: ReadOnly[ToolUse | None]
     router_fee: ReadOnly[RouterFeeUse | None]
     candidates: ReadOnly[NotRequired[Sequence[CandidateFacts]]]
+    parts: ReadOnly[NotRequired[Sequence[UsagePart]]]
 
 
 class BatchLineDocument(TypedDict):
@@ -842,6 +854,46 @@ def price_call(
         candidates=candidates,
     )
     return model_cost_inputs.price(document, None, None, None, rows)
+
+
+def price_parts(
+    call: CallFacts,
+    parts: Sequence[UsagePart],
+    rows: Sequence[Mapping[str, object]],
+    data_residency: str | None,
+    vertex_location: str | None,
+    requested_model: str | None,
+    adjust: AdjustFacts,
+    branch: BranchFacts,
+    breakdown: BreakdownFrom,
+) -> tuple[NativeReceipt, ...] | None:
+    """The receipt of each part of ``call``, each part walking ``call``'s candidates on its own in main's order.
+    ``None`` when any part is left to Python."""
+    first: Final = parts[0]
+    document: Final = _PriceDocument(
+        named=call,
+        usage=first["usage"],
+        requested_model=requested_model,
+        service_tier=first["service_tier"],
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        at=_billed_at(None),
+        adjust=adjust,
+        rules=branch.rules,
+        elapsed=branch.elapsed,
+        characters=branch.characters,
+        embedding=branch.embedding,
+        raw=first["raw"],
+        reported=None,
+        custom=None,
+        decisions=False,
+        breakdown=breakdown,
+        tools=None,
+        router_fee=None,
+        parts=parts,
+    )
+    receipts: Final = model_cost_inputs.price_parts(document, rows)
+    return None if receipts is None else tuple(receipts)
 
 
 def branch_receipt(
