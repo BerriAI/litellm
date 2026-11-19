@@ -112,6 +112,7 @@ import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTo
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import AppAccessSelector from "@/app/(dashboard)/apps/_components/AppAccessSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
 import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
@@ -453,6 +454,7 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
     agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
     object_permission_search_tools: z.array(z.string()).optional(),
     object_permission_skills: z.array(z.string()).optional(),
+    object_permission_apps: z.array(z.string()).optional(),
     organization_id: z.string().nullish(),
     logging_settings: z.array(z.unknown()).optional(),
     secret_manager_settings: z.string().optional(),
@@ -506,6 +508,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
   object_permission_skills: [],
+  object_permission_apps: [],
   organization_id: null,
   logging_settings: [],
   secret_manager_settings: "",
@@ -578,6 +581,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   },
   object_permission_search_tools: info.object_permission?.search_tools || [],
   object_permission_skills: info.object_permission?.skills || [],
+  object_permission_apps: info.object_permission?.apps || [],
   organization_id: info.organization_id,
   logging_settings: info.metadata?.logging || [],
   secret_manager_settings: info.metadata?.secret_manager_settings
@@ -1229,6 +1233,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (Array.isArray(values.object_permission_skills)) {
         updateData.object_permission.skills = values.object_permission_skills;
       }
+
+      const requestedApps = values.object_permission_apps ?? [];
+      const storedApps = info.object_permission?.apps ?? [];
+      if (isProxyAdminRole(userRole ?? "") && requestedApps.join("\n") !== storedApps.join("\n")) {
+        updateData.object_permission.apps = requestedApps;
+      }
+      delete values.object_permission_apps;
 
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
@@ -2200,6 +2211,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     )}
                   </FormField>
+
+                  {isProxyAdminRole(userRole ?? "") && (
+                    <FormField
+                      control={form.control}
+                      name="object_permission_apps"
+                      label={t("teams.teamInfo.editForm.customerApps")}
+                      description={t("teams.teamInfo.editForm.customerAppsHint")}
+                    >
+                      {({ value, onChange }) => (
+                        <AppAccessSelector
+                          onChange={onChange}
+                          value={value}
+                          placeholder={t("teams.teamInfo.editForm.customerAppsPlaceholder")}
+                        />
+                      )}
+                    </FormField>
+                  )}
 
                   <FormField
                     control={form.control}
