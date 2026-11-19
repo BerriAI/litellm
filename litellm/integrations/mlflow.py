@@ -110,7 +110,7 @@ class MlflowLogger(CustomLogger):
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                scrubbed: Final = scrubbed_exception_record(kwargs)
+                scrubbed: Final = scrubbed_exception_record(kwargs, self)
                 span.add_event(
                     SpanEvent.from_exception(exception)
                     if scrubbed is None

@@ -13789,13 +13789,51 @@ async def test_failure_scrubs_the_error_for_a_callback_with_its_own_turn_off_mes
     assert SCRUB_PROMPT not in kwargs["standard_logging_object"]["error_information"]["error_message"]
 
 
+def test_sync_failure_passes_the_shared_details_to_a_callback_whose_turn_off_message_logging_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unset: Final = _FailureCapture()
+    unset.turn_off_message_logging = None  # pyright: ignore[reportAttributeAccessIssue]  # a config flag set to null
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "failure_callback", [unset])
+    logging_obj: Final = _prompt_failure_logging_obj()
+
+    logging_obj.failure_handler(_prompt_echo_error(), "Traceback")
+
+    assert unset.sync_kwargs is logging_obj.model_call_details
+    assert SCRUB_PROMPT in unset.sync_kwargs["standard_logging_object"]["error_str"]
+
+
 @pytest.mark.asyncio
-async def test_failure_payload_keeps_the_excluded_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["metadata"])
+async def test_async_failure_logs_the_error_as_raised_for_a_callback_whose_turn_off_message_logging_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unset: Final = _FailureCapture()
+    unset.turn_off_message_logging = None  # pyright: ignore[reportAttributeAccessIssue]  # a config flag set to null
 
-    kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error())
+    kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error(), capture=unset)
 
-    assert "metadata" in kwargs["standard_logging_object"]
+    assert SCRUB_PROMPT in kwargs["standard_logging_object"]["error_str"]
+    assert SCRUB_PROMPT in kwargs["traceback_exception"]
+
+
+@pytest.mark.asyncio
+async def test_failure_reaches_redacting_callbacks_when_the_request_metadata_holds_a_value_that_cannot_be_copied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redacting: Final = _FailureCapture(turn_off_message_logging=True)
+    opted_out: Final = _FailureCapture(message_logging=False)
+    logging_everything: Final = _FailureCapture()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [redacting, opted_out, logging_everything])
+    logging_obj: Final = _prompt_failure_logging_obj({"metadata": {"metadata": {"lock": threading.Lock()}}})
+
+    await logging_obj.async_failure_handler(_prompt_echo_error(), "Traceback")
+
+    assert redacting.async_kwargs is not None and opted_out.async_kwargs is not None
+    assert logging_everything.async_kwargs is not None
+    assert SCRUB_PROMPT not in redacting.async_kwargs["standard_logging_object"]["error_str"]
+    assert SCRUB_PROMPT not in opted_out.async_kwargs["standard_logging_object"]["error_str"]
 
 
 @pytest.mark.asyncio

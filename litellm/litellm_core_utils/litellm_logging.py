@@ -193,6 +193,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
+    redacts_failure_events,
     scrub_request_text,
     scrubbed_error_fields,
     scrubbed_exception_text,
@@ -5777,7 +5778,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     start_time=start_time,
                     end_time=end_time,
                     response_obj=result,
-                    kwargs=failure_details_for_custom_logger(self.model_call_details, callback),
+                    kwargs=(
+                        failure_details_for_custom_logger(self.model_call_details, callback)
+                        if redacts_failure_events(callback)
+                        else self.model_call_details
+                    ),
                 )
             if callback == "langfuse":
                 global langFuseLogger
