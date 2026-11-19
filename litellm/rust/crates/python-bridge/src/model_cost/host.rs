@@ -1,5 +1,6 @@
 //! Calls into `litellm.rust_bridge.host.model_cost`
 
+use litellm_model_catalog::{Generation, KnownNames};
 use pyo3::call::PyCallArgs;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -69,6 +70,29 @@ pub(crate) fn kept<'py>(
     registration: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
     Ok(call(registration.py(), "kept", (previous, registration))?.cast_into::<PyDict>()?)
+}
+
+/// The published table and the generation a pricing snapshot of it is keyed on
+pub(crate) fn generation(py: Python<'_>) -> PyResult<(Bound<'_, PyDict>, Generation)> {
+    let (rows, table, size, writes, discount, margin) = call(py, "generation", ())?.extract()?;
+    Ok((
+        rows,
+        Generation {
+            table,
+            size,
+            writes,
+            discount,
+            margin,
+        },
+    ))
+}
+
+pub(crate) fn known_names(py: Python<'_>) -> PyResult<KnownNames> {
+    let (providers, renamed_models) = call(py, "known_names", ())?.extract()?;
+    Ok(KnownNames {
+        providers,
+        renamed_models,
+    })
 }
 
 pub(crate) fn published(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
