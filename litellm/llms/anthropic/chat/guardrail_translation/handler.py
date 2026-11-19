@@ -1105,8 +1105,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
-        for block in content:
-            if not isinstance(block, dict) or not is_non_empty_text_block(block):
+        for item in cast(Sequence[object], content):  # cast-ok: untrusted client payload
+            if (block := as_str_mapping(item)) is None or not is_non_empty_text_block(block):
                 continue
             anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
                 "type": "text",
