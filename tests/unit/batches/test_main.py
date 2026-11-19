@@ -341,9 +341,11 @@ def test_list__vertex_ai_dispatch(seams):
 
 def test_list__unsupported_provider_raises_badrequest(seams):
     # anthropic supports retrieve but NOT list - good negative case.
-    with pytest.raises(litellm.exceptions.BadRequestError):
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
         bm.list_batches(custom_llm_provider="anthropic")  # type: ignore[arg-type]
 
+    assert "list_batches" in str(exc_info.value)
+    assert exc_info.value.response.request.method == "list_batches"
     for m in _all_seam_methods(seams, "list_batches"):
         m.assert_not_called()
 
