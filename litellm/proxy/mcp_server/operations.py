@@ -2500,7 +2500,7 @@ async def _execute_mcp_tool(
     # Primary and recommended way to use external MCP servers
     #########################################################
     elif mcp_server:
-        response = await _handle_managed_mcp_tool(
+        managed_execution: Final = _handle_managed_mcp_tool(
             server_name=server_name,
             name=original_tool_name,
             arguments=arguments,
@@ -2525,6 +2525,13 @@ async def _execute_mcp_tool(
             input_responses=input_responses,
             request_state=request_state,
             incoming_bearer_token=incoming_bearer_token,
+        )
+        response = await _relay_guarded_url_elicitation(
+            managed_execution,
+            logging_obj=litellm_logging_obj,
+            original_auth=user_api_key_auth,
+            guardrail_auth=effective_guardrail_auth,
+            request_data=kwargs,
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2619,6 +2626,62 @@ async def _execute_mcp_tool(
         guardrail_auth=effective_guardrail_auth,
         request_data=kwargs,
     )
+
+
+def _json_object(value: object) -> Mapping[str, JsonValue] | None:
+    return TypeAdapter(dict[str, JsonValue]).validate_python(value) if isinstance(value, dict) else None
+
+
+def _elicitation_message(elicitation: Mapping[str, JsonValue] | None) -> str | None:
+    message: Final = elicitation.get("message") if elicitation is not None else None
+    return message if isinstance(message, str) else None
+
+
+async def _relay_guarded_url_elicitation(
+    execution: Awaitable[CallToolResult | InputRequiredResult],
+    logging_obj: LiteLLMLoggingObj | None,
+    original_auth: UserAPIKeyAuth | None,
+    guardrail_auth: UserAPIKeyAuth | None,
+    request_data: Mapping[str, object],
+) -> CallToolResult | InputRequiredResult:
+    try:
+        return await execution
+    except MCPError as error:
+        if not is_url_elicitation_required(error):
+            raise
+        data: Final = _json_object(error.error.data)
+        listed: Final = data.get("elicitations") if data is not None else None
+        elicitations: Final = TypeAdapter(list[JsonValue]).validate_python(listed) if isinstance(listed, list) else []
+        entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
+        messages: Final = tuple(_elicitation_message(entry) for entry in entries)
+        guarded: Final = tuple(index for index, message in enumerate(messages) if message is not None)
+        checked: Final = await _run_post_mcp_call_guardrails(
+            CallToolResult(
+                content=[
+                    TextContent(type="text", text=error.error.message),
+                    *(TextContent(type="text", text=message) for message in messages if message is not None),
+                ]
+            ),
+            litellm_logging_obj=logging_obj,
+            original_auth=original_auth,
+            guardrail_auth=guardrail_auth,
+            request_data=request_data,
+        )
+        texts: Final = tuple(TextContent.model_validate(block).text for block in checked.content)
+        replaced: Final = dict(zip(guarded, texts[1:], strict=True))
+        raise MCPError(
+            code=error.error.code,
+            message=texts[0],
+            data={
+                **data,
+                "elicitations": [
+                    {**entry, "message": replaced[index]} if entry is not None and index in replaced else elicitation
+                    for index, (elicitation, entry) in enumerate(zip(elicitations, entries, strict=True))
+                ],
+            }
+            if data is not None and replaced
+            else error.error.data,
+        ) from error
 
 
 def _guarded_progress_callback(

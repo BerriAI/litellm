@@ -229,6 +229,117 @@ def test_rest_tool_call_keeps_the_flattened_error_result_for_url_elicitation_req
         assert _upstream_nonces(upstream) == [nonce]
 
 
+REDACTED: Final = "[KEYWORD_REDACTED]"
+
+
+def _addressed_elicitation(nonce: str, shown: str, hinted: str) -> dict[str, object]:
+    return {
+        "code": -32042,
+        "message": f"Authorize to continue for {shown}.",
+        "data": {
+            "elicitations": [
+                {
+                    "mode": "url",
+                    "elicitationId": nonce,
+                    "url": f"https://consent.example.invalid/oauth2/authorize?request_uri={nonce}&login_hint={hinted}",
+                    "message": f"Sign in as {shown}.",
+                }
+            ]
+        },
+    }
+
+
+@contextmanager
+def _output_guardrail(gateway: Gateway, keyword: str, action: Literal["MASK", "BLOCK"]) -> Iterator[None]:
+    created: Final = gateway.client.post(
+        "/guardrails",
+        headers={"x-litellm-api-key": gateway.key},
+        json={
+            "guardrail": {
+                "guardrail_name": "elicit" + uuid.uuid4().hex[:8],
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "post_mcp_call",
+                    "default_on": True,
+                    "blocked_words": [{"keyword": keyword, "action": action}],
+                },
+            }
+        },
+    )
+    assert created.status_code == 200, created.text
+    try:
+        yield
+    finally:
+        deleted: Final = gateway.client.delete(
+            f"/guardrails/{created.json()['guardrail_id']}", headers={"x-litellm-api-key": gateway.key}
+        )
+        assert deleted.status_code == 200, deleted.text
+
+
+def _addressed_tools(email: str) -> tuple[ScriptedTool, ScriptedTool]:
+    return (
+        ScriptedTool("consent", lambda params: JsonRpcFailure(_addressed_elicitation(_nonce(params), email, email))),
+        ScriptedTool("whoami", lambda _: text_result(f"Signed in as {email}.")),
+    )
+
+
+@pytest.mark.parametrize("entry", ("mcp", "rest"))
+def test_masking_output_guardrail_redacts_the_elicitation_messages_and_leaves_the_consent_url_alone(
+    gateway: Gateway, entry: EntryPoint
+) -> None:
+    email: Final = f"john.doe.{uuid.uuid4().hex[:8]}@example.com"
+    with (
+        _output_guardrail(gateway, email, "MASK"),
+        _granted(gateway, *_addressed_tools(email)) as (upstream, alias, identity, key),
+    ):
+        caller: Final = McpCaller(gateway, key, entry, alias)
+        control: Final = eventually(
+            lambda: caller.call(f"{alias}-whoami", {}, _server_arg(entry, identity)),
+            lambda outcome: outcome.text == f"Signed in as {REDACTED}.",
+            seconds=40,
+            return_last_on_timeout=True,
+        )
+        assert control.text == f"Signed in as {REDACTED}.", control.raw
+        upstream.drain()
+        nonce: Final = uuid.uuid4().hex
+        outcome: Final = caller.call(f"{alias}-consent", {"nonce": nonce}, _server_arg(entry, identity))
+        assert outcome.status == 200 and outcome.error, outcome.raw
+        redacted: Final = _addressed_elicitation(nonce, REDACTED, email)
+        assert (json.loads(outcome.error) if entry == "mcp" else outcome.error) == (
+            redacted if entry == "mcp" else f"MCPError: {redacted['message']}"
+        ), outcome.raw
+        assert _upstream_nonces(upstream) == [nonce]
+
+
+@pytest.mark.parametrize("entry", ("mcp", "rest"))
+def test_blocking_output_guardrail_withholds_the_elicitation_like_a_blocked_tool_result(
+    gateway: Gateway, entry: EntryPoint
+) -> None:
+    email: Final = f"john.doe.{uuid.uuid4().hex[:8]}@example.com"
+    with (
+        _output_guardrail(gateway, email, "BLOCK"),
+        _granted(gateway, *_addressed_tools(email)) as (upstream, alias, identity, key),
+    ):
+        caller: Final = McpCaller(gateway, key, entry, alias)
+        blocked_result: Final = eventually(
+            lambda: caller.call(f"{alias}-whoami", {}, _server_arg(entry, identity)),
+            lambda outcome: outcome.error is not None,
+            seconds=40,
+            return_last_on_timeout=True,
+        )
+        assert blocked_result.error is not None, blocked_result.raw
+        upstream.drain()
+        nonce: Final = uuid.uuid4().hex
+        outcome: Final = caller.call(f"{alias}-consent", {"nonce": nonce}, _server_arg(entry, identity))
+        assert (outcome.status, outcome.text, outcome.error) == (
+            blocked_result.status,
+            blocked_result.text,
+            blocked_result.error,
+        ), outcome.raw
+        assert "consent.example.invalid" not in str(outcome.raw) and nonce not in str(outcome.raw), outcome.raw
+        assert _upstream_nonces(upstream) == [nonce]
+
+
 @contextmanager
 def _authenticated(
     scenario: Scenario, upstream: McpPeer, mode: AuthMode
