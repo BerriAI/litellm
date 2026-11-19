@@ -23,5 +23,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+litellm-redis-testing.workspace = true
 rstest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
