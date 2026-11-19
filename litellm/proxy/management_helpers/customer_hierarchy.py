@@ -1227,7 +1227,8 @@ class CustomerHierarchyStore:
     async def preserve_member_custom_budget(self, member: CustomerMember, actor: str) -> CustomerMember | Failure:
         if member.budget_override_id is None or member.budget_override_expires_at is not None:
             return member
-        base_id: Final = await self.update_budget(member.budget_override_id, member.effective_budget, actor)
+        permanent: Final = effective_member_budget(member.budget, member.budget_override, None, self.now)
+        base_id: Final = await self.update_budget(member.budget_override_id, permanent, actor)
         await update_budget_row(self.budgets, base_id, {"budget_reset_at": member.budget_reset_at}, actor)
         await self.members.update(
             where={"customer_member_id": member.customer_member_id},
@@ -1501,6 +1502,7 @@ class CustomerHierarchyStore:
 
     async def delete_organization(self, organization_id: str, *, cascade: bool = False) -> None | Failure:
         await self.lock_customer_identities()
+        await self.lock_organization(organization_id)
         organization: Final = await self.get_organization(organization_id)
         if isinstance(organization, Failure):
             return organization

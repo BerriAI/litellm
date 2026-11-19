@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 from typing import Final
 
@@ -85,6 +86,48 @@ def test_editing_base_limits_preserves_the_active_grant_and_its_expiry() -> None
     later: Final = client(database=database, now=NOW + timedelta(days=32))
     expired: Final = later.get(f"/management/v1/customer_members/{member_id}").json()
     assert expired["effective_budget"] == {**custom.json()["budget"], "rpm_limit": 23}
+
+
+@pytest.mark.parametrize("maximum", (None, 750))
+def test_preserving_legacy_custom_budget_keeps_existing_increases_temporary(maximum: int | None) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    member_id: Final = _paused_member(http, "pause_allow_increase")
+    custom: Final = http.patch(
+        f"/management/v1/customer_members/{member_id}",
+        json={"budget_override": {"max_budget": maximum, "rpm_limit": 17}},
+    )
+    assert custom.status_code == 200, custom.text
+    original: Final = custom.json()["effective_budget"]
+    asyncio.run(
+        database.litellm_budgettable.update(
+            where={"budget_id": custom.json()["budget_override_id"]},
+            data={"temp_budget_increase": 50, "temp_budget_expiry": NOW + timedelta(days=3)},
+        )
+    )
+    requested: Final = http.post(
+        REQUESTS,
+        json={
+            "customer_member_id": member_id,
+            "requested_max_budget": 1000,
+            "expires_at": (NOW + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert requested.status_code == 201, requested.text
+    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
+    assert approved.status_code == 200, approved.text
+    promoted: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
+    assert promoted["budget"] == original
+    assert promoted["budget_id"] == custom.json()["budget_override_id"]
+    assert promoted["effective_budget"]["max_budget"] == 1000
+    first_expired: Final = client(database=database, now=NOW + timedelta(days=2)).get(
+        f"/management/v1/customer_members/{member_id}"
+    )
+    assert first_expired.json()["effective_budget"] == {**original, "max_budget": original["max_budget"] + 50}
+    both_expired: Final = client(database=database, now=NOW + timedelta(days=4)).get(
+        f"/management/v1/customer_members/{member_id}"
+    )
+    assert both_expired.json()["effective_budget"] == original
 
 
 def _as(http: TestClient, caller: UserAPIKeyAuth) -> TestClient:
