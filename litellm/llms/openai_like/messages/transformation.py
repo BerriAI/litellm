@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -42,6 +43,12 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return False
+
+    @staticmethod
+    def _translate_adaptive_effort_for_non_adaptive_model(
+        model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
+        return None
 
     def validate_anthropic_messages_environment(
         self,

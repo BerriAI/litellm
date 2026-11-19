@@ -269,6 +269,26 @@ def test_request_maps_reasoning_effort_to_thinking(config):
     assert payload["thinking"]["budget_tokens"] < payload["max_tokens"]
 
 
+@pytest.mark.parametrize("drop_params", [None, True])
+def test_request_forwards_adaptive_thinking_and_effort_unchanged(
+    config: OpenAILikeAnthropicMessagesConfig, drop_params: bool | None
+) -> None:
+    payload = config.transform_anthropic_messages_request(
+        model="example/reasoning-model",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "low"},
+        },
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"] == {"effort": "low"}
+
+
 def test_passthrough_disables_anthropic_beta_filtering(config):
     from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
 
