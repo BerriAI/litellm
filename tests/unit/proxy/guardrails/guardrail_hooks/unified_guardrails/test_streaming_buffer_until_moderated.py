@@ -14,7 +14,7 @@ import copy
 import json
 import logging
 from collections.abc import Callable
-from typing import Any, AsyncGenerator, List, Literal, Optional
+from typing import Any, AsyncGenerator, Final, List, Literal, Optional
 
 import pytest
 from pydantic import BaseModel
@@ -1170,7 +1170,7 @@ def _text_completion_chunk(text: str, finish_reason: str | None = None) -> TextC
     )
 
 
-def _text_completion_items() -> list[Any]:
+def _text_completion_items() -> list[TextCompletionResponse]:
     return [
         _text_completion_chunk("call "),
         _text_completion_chunk(ORIGINAL_MARKER),
@@ -1182,12 +1182,14 @@ def _text_completion_items() -> list[Any]:
 async def test_buffered_text_completion_stream_reaches_the_client_masked_as_through_a_policy_engine_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    flat_guardrail = _MaskingGuardrail(guardrail_name="rewriter", event_hook="post_call")
-    pipeline_guardrail = _MaskingGuardrail(guardrail_name="rewriter", event_hook="post_call")
+    flat_guardrail: Final = _MaskingGuardrail(guardrail_name="rewriter", event_hook="post_call")
+    pipeline_guardrail: Final = _MaskingGuardrail(guardrail_name="rewriter", event_hook="post_call")
     monkeypatch.setattr(litellm, "callbacks", [pipeline_guardrail])
 
-    flat = _rendered(await _flat_path_output(flat_guardrail, "/v1/completions", _text_completion_items()))
-    pipeline = _rendered(await _policy_engine_output(pipeline_guardrail, "/v1/completions", _text_completion_items()))
+    flat: Final = _rendered(await _flat_path_output(flat_guardrail, "/v1/completions", [*_text_completion_items()]))
+    pipeline: Final = _rendered(
+        await _policy_engine_output(pipeline_guardrail, "/v1/completions", [*_text_completion_items()])
+    )
 
     assert flat == pipeline
     assert MASKED_MARKER in "".join(flat) and ORIGINAL_MARKER not in "".join(flat), flat
@@ -1195,16 +1197,16 @@ async def test_buffered_text_completion_stream_reaches_the_client_masked_as_thro
 
 @pytest.mark.asyncio
 async def test_masking_guardrail_holds_a_text_completion_stream_and_releases_it_masked() -> None:
-    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
+    guardrail: Final = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
     guardrail.streaming_buffer_release_on_scan = True
     guardrail.streaming_sampling_rate = 1
-    request_data = {
+    request_data: Final[dict[str, object]] = {
         "prompt": "hi",
         "guardrail_to_apply": guardrail,
         "metadata": {"guardrails": [guardrail.guardrail_name]},
     }
-    collected: list[Any] = []
-    released_before_each_chunk: list[int] = []
+    collected: Final[list[TextCompletionResponse]] = []  # mutable-ok: the client side of the stream under test
+    released_before_each_chunk: Final[list[int]] = []  # mutable-ok: records how much reached the client per chunk
 
     async def upstream() -> AsyncGenerator[TextCompletionResponse, None]:
         for chunk in _text_completion_items():
@@ -1216,6 +1218,7 @@ async def test_masking_guardrail_holds_a_text_completion_stream_and_releases_it_
         response=upstream(),
         request_data=request_data,
     ):
+        assert isinstance(chunk, TextCompletionResponse), chunk
         collected.append(chunk)
 
     assert released_before_each_chunk == [0, 0, 0], "a chunk reached the client before the end-of-stream scan"
