@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { ItemTitle } from "@/components/ui/item";
+import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
 import i18n from "@/i18n/i18n";
@@ -161,11 +162,12 @@ export function SearchInput({
 }) {
   const { t } = useTranslation();
   return (
-    <InputGroup className="h-8 min-w-0 flex-1">
-      <InputGroupAddon>
-        <Search />
+    <InputGroup className="h-auto min-h-11 min-w-0 flex-1 rounded-md bg-transparent shadow-none has-[>[data-align=inline-start]]:[&>input]:pl-3 dark:bg-transparent">
+      <InputGroupAddon className="pl-4">
+        <Search className="size-[18px]" />
       </InputGroupAddon>
       <InputGroupInput
+        className="pl-3 text-sm leading-[1.6] font-normal placeholder:opacity-100 md:text-sm pointer-coarse:text-base"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -183,8 +185,13 @@ export function SearchInput({
         </InputGroupAddon>
       )}
       {!value && showShortcut && (
-        <InputGroupAddon align="inline-end">
-          <kbd aria-hidden="true">⌘K</kbd>
+        <InputGroupAddon align="inline-end" className="[&>kbd]:rounded-md">
+          <Kbd
+            className="h-auto rounded-md border bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-[1.4] font-normal"
+            aria-hidden="true"
+          >
+            ⌘K
+          </Kbd>
         </InputGroupAddon>
       )}
     </InputGroup>

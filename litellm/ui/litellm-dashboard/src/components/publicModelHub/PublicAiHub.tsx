@@ -14,7 +14,6 @@ import { SkillsPane } from "./ResourcePanes";
 import { type HubData, useHubData } from "./useHubData";
 import { type HubTab, useHubUrlState } from "./useHubUrlState";
 import { useRequirePublicHubAuth } from "./useRequirePublicHubAuth";
-import styles from "./catalog.module.css";
 import { catalogTypography } from "./fonts";
 
 const hubStatus = (hub: HubData): HubStatus => {
@@ -34,7 +33,7 @@ function PublicAiHubContent() {
     <Tabs
       value={tab}
       onValueChange={(next) => setTab(next as HubTab)}
-      className={`${styles.catalog} ${catalogTypography}`}
+      className={`${catalogTypography} min-h-dvh gap-0 bg-background`}
     >
       <CatalogNavbar
         title={hub.info.data?.docs_title || t("publicModelHub.header.title")}
@@ -44,7 +43,7 @@ function PublicAiHubContent() {
           hub.models.onSearchChange(value);
         }}
       />
-      <main className={`${styles.main} mx-auto w-full max-w-(--page-width) px-(--page-gutter) pb-12`}>
+      <main className="mx-auto w-full max-w-(--page-width) px-(--page-gutter) pb-12 max-[760px]:pb-7">
         <HubHeader info={hub.info.data} status={status} tab={tab} />
         {status === "unavailable" ? (
           <HubNotEnabled />

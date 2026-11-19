@@ -286,7 +286,7 @@ describe("PublicAiHub", () => {
     expect(screen.getByRole("tab", { name: "Model Hub" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Skills Hub" })).toHaveAttribute("aria-selected", "false");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await user.click(screen.getByText("Quick start with LiteLLM"));
+    await user.click(screen.getByRole("button", { name: "Quick start with LiteLLM" }));
     expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("https://gateway.example.com");
 
     await user.click(screen.getByRole("tab", { name: "Skills Hub" }));
@@ -375,6 +375,7 @@ describe("PublicAiHub", () => {
     const user = userEvent.setup();
     renderWithProviders(<PublicAiHub accessToken={null} />);
 
+    await user.click(screen.getByRole("button", { name: "Quick start with LiteLLM" }));
     await user.click(await screen.findByRole("button", { name: "Links" }));
 
     expect(await screen.findByRole("menuitem", { name: "Getting started" })).toHaveAttribute(
