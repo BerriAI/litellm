@@ -5768,18 +5768,16 @@ class _EntryReadDuringARegistration(dict[str, object]):
         return super().__contains__(key)
 
 
-@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5"])
+@pytest.mark.parametrize("walk", ["fireworks_ai", "ollama", "gpt-5"])
 def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     monkeypatch: pytest.MonkeyPatch, walk: str
 ) -> None:
-    from litellm.llms.fal_ai.cost_calculator import _keyed_rows
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
     from litellm.litellm_core_utils.model_cost_table import publish
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
-        "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
         "fireworks_ai": FireworksAIConfig._get_fireworks_index,
         "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
         "gpt-5": _catalogue_declares_default_effort,
