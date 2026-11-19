@@ -92,12 +92,6 @@ def _uploaded(put: Received) -> dict[str, object]:
     return loaded
 
 
-def _assert_backoff_gaps(puts: list[Received]) -> None:
-    gaps: Final = [later.at - earlier.at for earlier, later in zip(puts, puts[1:])]
-    for attempt, gap in enumerate(gaps):
-        assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 0.25, (attempt, gap)
-
-
 _LOGGED_BACKOFF: Final = re.compile(r"retrying in (\d+\.\d+)s")
 
 
@@ -144,34 +138,48 @@ class TestS3V2UnitTests:
 
 
 @pytest.mark.asyncio
-async def test_async_upload_retries_on_s3_503(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket) -> None:
+@pytest.mark.parametrize("response_delay", (0.0, 2.0), ids=("immediate", "slow-response"))
+async def test_async_upload_retries_on_s3_503(
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    caplog: pytest.LogCaptureFixture,
+    response_delay: float,
+) -> None:
+    bucket.delay = response_delay
     bucket.reply("test-retry", (503, ""), (200, ""))
-    await _upload(_logger(monkeypatch, bucket), _payload("test-retry"))
+    logger: Final = _logger(monkeypatch, bucket)
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await _upload(logger, _payload("test-retry"))
 
     assert len(bucket.puts()) == 2
-    _assert_backoff_gaps(bucket.puts())
+    _assert_logged_backoff(bucket.puts(), caplog)
+    assert bucket.puts()[0].body == bucket.puts()[1].body
+    assert logger.sink.queued_keys() == []
 
 
 @pytest.mark.asyncio
-async def test_async_upload_retries_on_s3_500(monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket) -> None:
+async def test_async_upload_retries_on_s3_500(
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, caplog: pytest.LogCaptureFixture
+) -> None:
     bucket.reply("test-retry-500", (500, ""), (200, ""))
-    await _upload(_logger(monkeypatch, bucket), _payload("test-retry-500"))
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await _upload(_logger(monkeypatch, bucket), _payload("test-retry-500"))
 
     assert len(bucket.puts()) == 2
-    _assert_backoff_gaps(bucket.puts())
+    _assert_logged_backoff(bucket.puts(), caplog)
 
 
 @pytest.mark.asyncio
 async def test_async_upload_exhausts_retries_on_persistent_503(
-    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, caplog: pytest.LogCaptureFixture
 ) -> None:
     bucket.reply("test-exhaust", (503, ""))
     logger: Final = _logger(monkeypatch, bucket)
-    with _failures() as mock_failure:
+    with _failures() as mock_failure, caplog.at_level(logging.DEBUG, logger="LiteLLM"):
         await _upload(logger, _payload("test-exhaust"))
 
     assert len(bucket.puts()) == 3
-    _assert_backoff_gaps(bucket.puts())
+    _assert_logged_backoff(bucket.puts(), caplog)
     mock_failure.assert_called_once_with()
 
 
@@ -201,29 +209,31 @@ async def test_async_upload_is_single_attempted_on_404_through_production_http_h
 
 @pytest.mark.asyncio
 async def test_async_upload_access_denied_403_is_retried_and_then_requeued(
-    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, caplog: pytest.LogCaptureFixture
 ) -> None:
     bucket.reply("test-403-denied", (403, "<Error><Code>AccessDenied</Code></Error>"))
     logger: Final = _logger(monkeypatch, bucket)
-    await _upload(logger, _payload("test-403-denied"))
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await _upload(logger, _payload("test-403-denied"))
 
     assert len(bucket.puts()) == 3
-    _assert_backoff_gaps(bucket.puts())
+    _assert_logged_backoff(bucket.puts(), caplog)
     assert len(logger.sink.queued_keys()) == 1
 
 
 @pytest.mark.asyncio
 async def test_async_upload_retries_429_through_production_http_handler(
-    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket
+    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, caplog: pytest.LogCaptureFixture
 ) -> None:
     bucket.reply("429", (429, ""), (200, ""))
     logger: Final = _logger(monkeypatch, bucket)
-    await _upload(logger, _payload("429"))
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await _upload(logger, _payload("429"))
 
     puts: Final = bucket.puts()
     assert len(puts) == 2
     assert puts[0].body == puts[1].body
-    _assert_backoff_gaps(puts)
+    _assert_logged_backoff(puts, caplog)
     assert logger.sink.queued_keys() == []
 
 
@@ -1597,15 +1607,20 @@ def _names(puts: list[Received]) -> list[str]:
     ],
 )
 async def test_retryable_statuses_back_off_three_attempts(
-    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, status: int, code: str | None
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    status: int,
+    code: str | None,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     logger: Final = _logger(monkeypatch, bucket)
     bucket.reply("/test-bucket/", (status, _coded_body(code)))
 
-    await _upload(logger, _payload("req"))
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await _upload(logger, _payload("req"))
 
     assert len(bucket.puts()) == 3
-    _assert_backoff_gaps(bucket.puts())
+    _assert_logged_backoff(bucket.puts(), caplog)
     assert len(logger.sink.queued_keys()) == 1
 
 
@@ -2642,12 +2657,16 @@ async def test_async_upload_exhausts_403_retries_through_production_http_handler
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transient_status", [500, 503])
 async def test_async_upload_recovers_from_transient_5xx_through_production_http_handler(
-    monkeypatch: pytest.MonkeyPatch, bucket: ScriptedBucket, rotating_profile: str, transient_status: int
+    monkeypatch: pytest.MonkeyPatch,
+    bucket: ScriptedBucket,
+    rotating_profile: str,
+    transient_status: int,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     bucket.reply(f"_test-{transient_status}.json", (transient_status, _SIGNATURE_DOES_NOT_MATCH), (200, ""))
     logger: Final = _profile_logger(monkeypatch, bucket, rotating_profile)
 
-    with _failures() as failure:
+    with _failures() as failure, caplog.at_level(logging.DEBUG, logger="LiteLLM"):
         await _upload(logger, _payload(f"test-{transient_status}"))
 
     requests: Final = bucket.puts()
@@ -2655,7 +2674,7 @@ async def test_async_upload_recovers_from_transient_5xx_through_production_http_
     assert all(request.method == "PUT" for request in requests)
     assert requests[0].path == requests[1].path
     assert requests[0].body == requests[1].body
-    _assert_backoff_gaps(requests)
+    _assert_logged_backoff(requests, caplog)
     failure.assert_not_called()
     assert logger.sink.queued_keys() == []
 

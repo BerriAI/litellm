@@ -49,6 +49,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_update,
 )
 from litellm.proxy.auth.auth_checks import get_key_object
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,
@@ -2223,21 +2224,11 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch, rust_auth_stores: R
             print("MockPrismaClient.connect() called")
             pass
 
-    class MockDualCache:
-        async def async_get_cache(self, *args, **kwargs):
-            return None
-
-        async def async_set_cache(self, *args, **kwargs):
-            pass
-
-        async def set_cache(self, *args, **kwargs):
-            pass
-
     rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(
         litellm.proxy.proxy_server,
@@ -2289,21 +2280,11 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch, rust_au
             print("MockPrismaClient.connect() called")
             pass
 
-    class MockDualCache:
-        async def async_get_cache(self, *args, **kwargs):
-            return None
-
-        async def async_set_cache(self, *args, **kwargs):
-            pass
-
-        async def set_cache(self, *args, **kwargs):
-            pass
-
     rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     setattr(litellm.proxy.proxy_server, "general_settings", {})
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 

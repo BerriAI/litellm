@@ -31,6 +31,7 @@ from starlette.datastructures import FormData
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -11903,7 +11904,7 @@ class TestOpenSearchProxyRoute:
 
         key: Final = "sk-opensearch-model-limited-writer"
         grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
-        cache: Final = DualCache()
+        cache: Final = UserApiKeyCache()
         cache.set_cache(
             key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
         )
