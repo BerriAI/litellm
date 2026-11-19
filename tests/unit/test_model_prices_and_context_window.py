@@ -1068,6 +1068,44 @@ def test_model_prices_backup_is_synchronized(prices: dict):
     assert backup == prices
 
 
+@pytest.mark.parametrize(
+    "alias,snapshot",
+    (
+        ("gpt-realtime-translate", "gpt-realtime-translate-2026-05-06"),
+        ("gpt-realtime-whisper", "gpt-realtime-whisper-2026-05-06"),
+        ("gpt-realtime-2.1", "gpt-realtime-2.1-2026-07-07"),
+        ("gpt-realtime-2.1-mini", "gpt-realtime-2.1-mini-2026-07-07"),
+        ("gpt-6.1-terra", "us/gpt-6.1-terra"),
+        ("gpt-6.1-terra", "eu/gpt-6.1-terra"),
+        ("gpt-6.1-terra", "apac/gpt-6.1-terra"),
+    ),
+)
+def test_azure_aliases_and_model_variants_retire_together(prices: dict, alias: str, snapshot: str) -> None:
+    assert prices[f"azure/{alias}"]["deprecation_date"] == prices[f"azure/{snapshot}"]["deprecation_date"]
+
+
+def test_gmi_gemini_hydrogen_bills_at_its_hosted_rates(prices: dict, local_model_cost_map: None) -> None:
+    model: Final = "gmi/google/gemini-4-hydrogen"
+    row: Final = prices[model]
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model,
+        usage_object=Usage(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40, cache_write_tokens=10),
+        ),
+    )
+
+    expected_input: Final = (
+        50 * row["input_cost_per_token"]
+        + 10 * row["cache_creation_input_token_cost"]
+        + 40 * row["cache_read_input_token_cost"]
+    )
+    assert (prompt_cost, completion_cost) == pytest.approx((expected_input, 20 * row["output_cost_per_token"]))
+
+
 def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType(
