@@ -99,7 +99,16 @@ class OcrDocument(TypedDict):
     catalog_deferred: ReadOnly[bool]
 
 
-class SpeechDocument(TypedDict):
+class TokenFacts(TypedDict):
+    """The token usage a speech or transcription response reported, billed by ``generic_cost_per_token``'s rules on
+    the row passed beside the document when the call's row prices tokens."""
+
+    tokens: ReadOnly[NotRequired[BilledUsage | None]]
+    service_tier: ReadOnly[NotRequired[str | None]]
+    data_residency: ReadOnly[NotRequired[str | None]]
+
+
+class SpeechDocument(TokenFacts):
     kind: ReadOnly[Literal["speech"]]
     model: ReadOnly[str]
     provider: ReadOnly[str]
@@ -107,12 +116,11 @@ class SpeechDocument(TypedDict):
     generations: ReadOnly[int | None]
 
 
-class TranscriptionDocument(TypedDict):
+class TranscriptionDocument(TokenFacts):
     kind: ReadOnly[Literal["transcription"]]
     model: ReadOnly[str]
     provider: ReadOnly[str]
     seconds: ReadOnly[float]
-    tokens: ReadOnly[bool]
 
 
 class SearchDocument(TypedDict):
@@ -122,6 +130,7 @@ class SearchDocument(TypedDict):
     queries: ReadOnly[int]
     additional_results: ReadOnly[int]
     adjust: ReadOnly[AdjustFacts | None]
+    max_results: ReadOnly[NotRequired[float | None]]
 
 
 class VideoDocument(TypedDict):
@@ -144,6 +153,7 @@ class ImageDocument(TypedDict):
     images: ReadOnly[int]
     pixels: ReadOnly[int]
     input_images: ReadOnly[int]
+    vertex_location: ReadOnly[NotRequired[str | None]]
 
 
 class WritesByTtl(TypedDict):
@@ -868,6 +878,34 @@ def price_units(
     """A per-unit call priced from ``document``'s facts, or why no row prices it. ``tables`` are the deployment's own
     price tables, read in order ahead of ``catalog``, the row ``get_model_info`` found for the call."""
     return model_cost_inputs.price_units(document, tables, catalog)
+
+
+def per_image_cost(
+    model: str,
+    provider: str,
+    images: int,
+    row: Mapping[str, object] | None,
+    vertex_location: str | None = None,
+) -> float:
+    """``row``'s ``output_cost_per_image`` for each image, with its Vertex AI regional endpoint uplift at a non-global
+    ``vertex_location``, 0.0 when no row or no per-image price prices the call."""
+    if row is None:
+        return 0.0
+    return total_or_zero(
+        price_units(
+            ImageDocument(
+                kind="image",
+                model=model,
+                provider=provider,
+                calculator="per_image",
+                images=images,
+                pixels=0,
+                input_images=0,
+                vertex_location=vertex_location,
+            ),
+            catalog=row,
+        )
+    )
 
 
 def batch_usage(usage: Usage) -> BatchUsage:

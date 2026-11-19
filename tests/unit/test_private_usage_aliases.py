@@ -1472,13 +1472,6 @@ ALIAS_CASES: Final = (
     (
         "litellm.litellm_core_utils.llm_cost_calc.utils",
         "",
-        "_get_regional_uplift_multiplier",
-        "get_regional_uplift_multiplier",
-        False,
-    ),
-    (
-        "litellm.litellm_core_utils.llm_cost_calc.utils",
-        "",
         "_get_service_tier_cost_key",
         "get_service_tier_cost_key",
         False,

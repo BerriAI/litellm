@@ -4,6 +4,7 @@ Google AI Image Generation Cost Calculator
 
 from typing import Final
 
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import per_image_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
     calculate_image_response_web_search_cost,
@@ -44,6 +45,4 @@ def cost_calculator(
     if token_based_cost is not None:
         return token_based_cost + web_search_cost
 
-    output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
-    num_images: Final[int] = len(image_response.data) if image_response.data else 0
-    return output_cost_per_image * num_images + web_search_cost
+    return per_image_cost(model, "gemini", len(image_response.data or ()), _model_info) + web_search_cost

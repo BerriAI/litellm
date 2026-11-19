@@ -185,7 +185,7 @@ pub(super) fn prices_tokens(row: &impl LoweredRow) -> bool {
     positive(Meter::TEXT_INPUT)
         || positive(Meter::TEXT_OUTPUT)
         || row.prices().tiers().is_some()
-        || row.facts().prices_by_results
+        || row.facts().prices_by_results()
 }
 
 /// The rate `_per_second_pricing_cost_from_info` bills, `None` for a row it leaves to the token branches
@@ -281,7 +281,7 @@ fn characters(row: &impl LoweredRow, query: &TokensQuery, by_token: Sides) -> Si
     prompt_side.joined(completion_side)
 }
 
-/// The rate a quote bills `meter` at, 0.0 for one the row cannot price, as `NativeQuote` reads it
+/// The rate a quote bills `meter` at, 0.0 for one the row cannot price
 fn quoted(quote: &crate::quote::Quote<'_>, meter: &Meter) -> UnitPrice {
     quote
         .rate(meter)

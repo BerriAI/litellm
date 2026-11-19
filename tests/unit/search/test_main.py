@@ -329,28 +329,49 @@ def test_a_runtime_price_on_the_mode_entry_wins_over_a_runtime_price_on_the_gene
 def test_result_tiers_price_a_search_ahead_of_the_rows_flat_query_rate(
     monkeypatch: pytest.MonkeyPatch, max_results: int, expected: float
 ) -> None:
+    cost: Final = _two_tier_search_cost(monkeypatch, 0.009, {"max_results": max_results})
+
+    assert cost == pytest.approx((expected, 0.0))
+
+
+def _two_tier_search_cost(
+    monkeypatch: pytest.MonkeyPatch, upper_tier_price: object, optional_params: Mapping[str, object]
+) -> tuple[float, float]:
+    model: Final = f"exa_ai/two-tier-probe-{type(upper_tier_price).__name__}"
     monkeypatch.setitem(
         litellm.model_cost,
-        "exa_ai/tiered-probe",
+        model,
         {
             "litellm_provider": "exa_ai",
             "mode": "search",
             "input_cost_per_query": 0.004,
             "tiered_pricing": [
                 {"max_results_range": [1, 25], "input_cost_per_query": 0.002},
-                {"max_results_range": [26, 100], "input_cost_per_query": 0.009},
+                {"max_results_range": [26, 100], "input_cost_per_query": upper_tier_price},
             ],
         },
     )
+    return search_provider_cost_per_query(model=model, custom_llm_provider="exa_ai", optional_params=optional_params)
 
-    cost: Final = search_provider_cost_per_query(
-        model="exa_ai/tiered-probe",
-        custom_llm_provider="exa_ai",
-        number_of_queries=1,
-        optional_params={"max_results": max_results},
+
+@pytest.mark.parametrize(
+    ("written", "read_as"),
+    [("50", {"max_results": 50}), (" 50 ", {"max_results": 50}), ("many", {}), ("nan", {}), (None, {})],
+)
+def test_max_results_written_as_text_picks_the_tier_of_the_number_it_spells(
+    monkeypatch: pytest.MonkeyPatch, written: str | None, read_as: Mapping[str, object]
+) -> None:
+    assert _two_tier_search_cost(monkeypatch, 0.009, {"max_results": written}) == _two_tier_search_cost(
+        monkeypatch, 0.009, read_as
     )
 
-    assert cost == pytest.approx((expected, 0.0))
+
+def test_a_tier_price_written_as_text_bills_like_the_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    upper_tier: Final = {"max_results": 50}
+    as_number: Final = _two_tier_search_cost(monkeypatch, 0.009, upper_tier)
+
+    assert _two_tier_search_cost(monkeypatch, "0.009", upper_tier) == as_number
+    assert as_number[0] > 0.0
 
 
 @pytest.mark.usefixtures("_search_mode_prices")

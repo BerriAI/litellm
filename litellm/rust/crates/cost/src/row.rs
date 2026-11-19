@@ -71,9 +71,9 @@ pub struct RowFacts {
     /// How main's `float()` read `provider_specific_entry` for the speed and geo uplifts
     pub provider_entry: ProviderEntry,
     pub declared: Declared,
-    /// The row lists `tiered_pricing`, which main's search pricing reads ahead of a flat query rate as tiers by the
-    /// results the request asks for. Billing lowering leaves result tiers out
-    pub prices_by_results: bool,
+    /// `tiered_pricing` as main's search pricing reads it, ahead of a flat query rate, as tiers by the results the
+    /// request asks for. Billing lowering leaves result tiers out
+    pub result_tiers: Vec<ResultTier>,
     /// The row lists `guardrail_cost_per_unit` as a mapping of numbers, which main reads as a guardrail pricing row
     /// even when it prices none of a call's counters
     pub guardrail_units: bool,
@@ -81,6 +81,21 @@ pub struct RowFacts {
     pub legacy_search_query_rate: Option<crate::money::UnitPrice>,
     /// `litellm_provider` as the row wrote it, which picks the providers whose Decisions calls bill per request
     pub provider: Option<Box<str>>,
+}
+
+/// One `tiered_pricing` entry as `search_provider_cost_per_query` reads it: the inclusive `max_results_range` and the
+/// `input_cost_per_query` of the tier
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResultTier {
+    pub results: Option<(f64, f64)>,
+    pub rate: Option<crate::money::UnitPrice>,
+}
+
+impl RowFacts {
+    /// The row lists any `tiered_pricing`, whatever it tiers by
+    pub fn prices_by_results(&self) -> bool {
+        !self.result_tiers.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

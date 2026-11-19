@@ -12,8 +12,8 @@ use litellm_cost::money::UnitPrice;
 use litellm_cost::price::{Adjustments, Uplift};
 use litellm_cost::query::Candidate;
 use litellm_cost::row::{
-    Declared, LoweredRow as PricedRow, Provenance, ProviderEntry, RowFacts, RowMode, RowPrices,
-    RowRef as PricedRef, RowSource,
+    Declared, LoweredRow as PricedRow, Provenance, ProviderEntry, ResultTier, RowFacts, RowMode,
+    RowPrices, RowRef as PricedRef, RowSource,
 };
 use litellm_python_compat::number::{float_of, int_of};
 use litellm_python_compat::truthy::json_truthy;
@@ -182,10 +182,13 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
         max_output_tokens: count("max_output_tokens"),
         provider_entry: provider_entry(fields.get("provider_specific_entry")),
         declared: declared(fields),
-        prices_by_results: fields
+        result_tiers: fields
             .get("tiered_pricing")
             .and_then(Value::as_array)
-            .is_some_and(|tiers| !tiers.is_empty()),
+            .into_iter()
+            .flatten()
+            .map(result_tier)
+            .collect(),
         guardrail_units: fields
             .get("guardrail_cost_per_unit")
             .and_then(Value::as_object)
@@ -202,6 +205,21 @@ pub(crate) fn row_facts(fields: &Fields) -> RowFacts {
 
 fn price_of(value: &Value) -> Option<UnitPrice> {
     UnitPrice::deserialize(value).ok()
+}
+
+/// A `tiered_pricing` entry as `search_provider_cost_per_query` reads it, which compares JSON numbers only
+fn result_tier(tier: &Value) -> ResultTier {
+    ResultTier {
+        results: match tier
+            .get("max_results_range")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+        {
+            Some([low, high]) => low.as_f64().zip(high.as_f64()),
+            _ => None,
+        },
+        rate: tier.get("input_cost_per_query").and_then(price_of),
+    }
 }
 
 /// `get_provider_specific_geo_multiplier` and `get_provider_specific_speed_multiplier` read the entry with `float()`
@@ -485,7 +503,31 @@ mod tests {
     #[case::no_tiers(json!({"tiered_pricing": []}), false)]
     #[case::flat_query_rate(json!({"input_cost_per_query": 0.005}), false)]
     fn a_row_prices_by_results_whenever_it_lists_tiers(#[case] row: Value, #[case] expected: bool) {
-        assert_eq!(row_facts(&fields(row)).prices_by_results, expected);
+        assert_eq!(row_facts(&fields(row)).prices_by_results(), expected);
+    }
+
+    #[rstest]
+    #[case::numbers(json!({"max_results_range": [0, 25], "input_cost_per_query": 0.005}), Some((0.0, 25.0)), Some(0.005))]
+    #[case::fractional(json!({"max_results_range": [1, 10.5], "input_cost_per_query": 5e-3}), Some((1.0, 10.5)), Some(0.005))]
+    #[case::numeric_text(json!({"max_results_range": ["1", 10], "input_cost_per_query": "5e-3"}), None, Some(0.005))]
+    #[case::word_rate(json!({"max_results_range": [0, 25], "input_cost_per_query": "cheap"}), Some((0.0, 25.0)), None)]
+    #[case::bool_rate(json!({"max_results_range": [0, 25], "input_cost_per_query": true}), Some((0.0, 25.0)), None)]
+    #[case::token_tier(json!({"range": [0, 1000], "input_cost_per_token": 1e-6}), None, None)]
+    #[case::short_range(json!({"max_results_range": [5], "input_cost_per_query": 0.005}), None, Some(0.005))]
+    #[case::not_an_object(json!(7), None, None)]
+    fn a_result_tier_reads_its_range_and_query_rate(
+        #[case] tier: Value,
+        #[case] results: Option<(f64, f64)>,
+        #[case] rate: Option<f64>,
+    ) {
+        let facts = row_facts(&fields(json!({"tiered_pricing": [tier]})));
+        assert_eq!(
+            facts.result_tiers,
+            vec![ResultTier {
+                results,
+                rate: rate.and_then(UnitPrice::new)
+            }]
+        );
     }
 
     #[rstest]
@@ -988,5 +1030,145 @@ mod tokens_parity {
             json!(case["row"]["search_queries_cost_per_query"].to_string());
 
         assert_eq!(sides(&written_as_text), sides(&case));
+    }
+}
+
+#[cfg(test)]
+mod units_parity {
+    //! Parity with main's per-image fallbacks of the Vertex AI, Gemini and Bedrock image calculators and with its
+    //! search pricing by `max_results_range` tiers, over rows Model Catalog lowered. `units_parity.json` was captured
+    //! once from main's Python: each case holds the row fields main read, the call's units and main's answer
+
+    use litellm_cost::query::{
+        AdjustmentPolicy, Basis, Candidate, Header, ImageCalculator, ImageQuery, PriceQuery,
+        PriceSource, SearchQuery,
+    };
+    use litellm_cost::receipt::PriceOutcome;
+    use rstest::rstest;
+    use serde_json::Value;
+
+    use super::*;
+    use crate::snapshot::SnapshotInputs;
+    use crate::store::Store;
+    use crate::test_support::{GENERATION, TestRows, bundled_rows, bundled_rules, names};
+
+    const FIXTURE: &str = include_str!("units_parity.json");
+
+    fn case(kind: &str, name: &str) -> Value {
+        let fixture: Value = serde_json::from_str(FIXTURE).expect("the fixture is JSON");
+        fixture[kind]
+            .as_array()
+            .expect("each kind lists cases")
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap_or_else(|| panic!("no fixture case {name}"))
+            .clone()
+    }
+
+    fn priced(case: &Value, row: Value, query: impl FnOnce(Header) -> PriceQuery) -> PriceOutcome {
+        let snapshot: Snapshot<Store<TestRows>> = Snapshot::new(
+            GENERATION,
+            CostConfig::default(),
+            SnapshotInputs {
+                table: Store::new(bundled_rows()),
+                rules: Arc::new(bundled_rules()),
+                names: Arc::new(names(&[])),
+            },
+        );
+        let provider = case["provider"].as_str().expect("a provider");
+        let Value::Object(fields) = row else {
+            panic!("a row is an object")
+        };
+        let (rows, at) = snapshot
+            .pricing_rows([], [])
+            .with_per_call("catalog", fields, provider);
+        let header = Header {
+            candidates: vec![Candidate {
+                model: case["model"].as_str().expect("a model").into(),
+                provider: provider.parse().expect("every provider parses"),
+            }],
+            source: PriceSource::Rows { rows: vec![at] },
+            basis: Basis {
+                service_tier: Default::default(),
+                data_residency: None,
+                vertex_location: case["vertex_location"].as_str().map(Into::into),
+                at: jiff::Timestamp::UNIX_EPOCH,
+            },
+            adjustments: AdjustmentPolicy::None,
+            reported: None,
+        };
+        litellm_cost::price(&rows, &query(header))
+    }
+
+    /// Main billed a row with no per-image rate 0.0, which the adapter maps an unpriced call to
+    fn total(outcome: PriceOutcome) -> f64 {
+        match outcome {
+            PriceOutcome::Priced(receipt) => receipt.total,
+            PriceOutcome::Unpriced(_) => 0.0,
+        }
+    }
+
+    #[rstest]
+    #[case::vertex_catalog_regional("vertex_catalog_regional")]
+    #[case::vertex_catalog_global("vertex_catalog_global")]
+    #[case::vertex_catalog_global_upper("vertex_catalog_global_upper")]
+    #[case::vertex_catalog_no_location("vertex_catalog_no_location")]
+    #[case::vertex_deployment_uplift("vertex_deployment_uplift")]
+    #[case::vertex_deployment_text_uplift("vertex_deployment_text_uplift")]
+    #[case::vertex_deployment_bad_uplift("vertex_deployment_bad_uplift")]
+    #[case::vertex_deployment_no_rate("vertex_deployment_no_rate")]
+    #[case::vertex_catalog_pro_image("vertex_catalog_pro_image")]
+    #[case::gemini_imagen("gemini_imagen")]
+    #[case::gemini_flash_image("gemini_flash_image")]
+    #[case::bedrock_stability1_default("bedrock_stability1_default")]
+    #[case::bedrock_stability1_max_steps("bedrock_stability1_max_steps")]
+    #[case::bedrock_stability1_small("bedrock_stability1_small")]
+    #[case::bedrock_stability3("bedrock_stability3")]
+    #[case::bedrock_nova_canvas("bedrock_nova_canvas")]
+    #[case::bedrock_titan("bedrock_titan")]
+    #[case::bedrock_titan_no_images("bedrock_titan_no_images")]
+    fn a_per_image_fallback_costs_what_main_charged(#[case] name: &str) {
+        let case = case("images", name);
+        let images = case["images"].as_u64().expect("an image count");
+        let outcome = priced(&case, case["row"].clone(), |header| {
+            PriceQuery::Image(Box::new(ImageQuery {
+                header,
+                calculator: ImageCalculator::PerImage,
+                images,
+                pixels: 0,
+                input_images: 0,
+            }))
+        });
+        assert_eq!(Some(total(outcome)), case["expected"].as_f64());
+    }
+
+    #[rstest]
+    #[case::exa_default_results("exa_default_results")]
+    #[case::exa_low_tier("exa_low_tier")]
+    #[case::exa_tier_upper_edge("exa_tier_upper_edge")]
+    #[case::exa_next_tier_lower_edge("exa_next_tier_lower_edge")]
+    #[case::exa_last_tier("exa_last_tier")]
+    #[case::exa_past_every_tier("exa_past_every_tier")]
+    #[case::exa_below_every_tier("exa_below_every_tier")]
+    #[case::firecrawl_default("firecrawl_default")]
+    #[case::firecrawl_many("firecrawl_many")]
+    fn a_search_priced_by_requested_results_costs_what_main_charged(#[case] name: &str) {
+        let case = case("search", name);
+        let row = serde_json::json!({"tiered_pricing": case["tiered_pricing"]});
+        let outcome = priced(&case, row, |header| {
+            PriceQuery::Search(Box::new(SearchQuery {
+                header,
+                queries: case["queries"].as_u64().expect("a query count"),
+                additional_results: 0,
+                max_results: case["max_results"].as_f64(),
+            }))
+        });
+        let PriceOutcome::Priced(receipt) = outcome else {
+            panic!("unpriced: {outcome:?}")
+        };
+        assert_eq!(
+            serde_json::json!([receipt.prompt.get(), receipt.completion.get()]),
+            case["expected"]
+        );
     }
 }
