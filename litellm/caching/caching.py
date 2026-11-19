@@ -1207,6 +1207,7 @@ def enable_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
@@ -1219,6 +1220,7 @@ def enable_cache(
         password (Optional[str]): The password for the cache server. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments.
 
     Returns:
@@ -1242,6 +1244,7 @@ def enable_cache(
             port=port,
             password=password,
             supported_call_types=supported_call_types,
+            excluded_call_types=excluded_call_types,
             **kwargs,
         )
     print_verbose(f"LiteLLM: Cache enabled, litellm.cache={litellm.cache}")
@@ -1254,6 +1257,7 @@ def update_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
@@ -1266,6 +1270,7 @@ def update_cache(
         password (Optional[str]): The password for the cache. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments for the cache.
 
     Returns:
@@ -1279,6 +1284,7 @@ def update_cache(
         port=port,
         password=password,
         supported_call_types=supported_call_types,
+        excluded_call_types=excluded_call_types,
         **kwargs,
     )
     print_verbose(f"LiteLLM: Cache Updated, litellm.cache={litellm.cache}")

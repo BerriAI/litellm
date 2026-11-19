@@ -25,7 +25,7 @@ import litellm
 from litellm import CustomLLM, acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
-from litellm.caching.caching import Cache, CacheMode, response_cache_phase
+from litellm.caching.caching import Cache, CacheMode, enable_cache, response_cache_phase, update_cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
 from litellm.caching.dual_cache import DualCache
@@ -1942,6 +1942,30 @@ async def test_excluded_call_types_bypass_embeddings_cached_before_the_exclusion
     assert counting_embedder.calls == 2
     assert [item["embedding"] for item in response.data] == [[2.0], [2.0]]
     assert backend.cache_dict == primed
+
+
+@pytest.mark.parametrize("configure_cache", [enable_cache, update_cache], ids=["enable_cache", "update_cache"])
+def test_cache_setup_helpers_pass_excluded_call_types_to_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    counting_embedder: _CountingEmbedder,
+    configure_cache: Callable[..., None],
+) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "input_callback", list(litellm.input_callback))
+    monkeypatch.setattr(litellm, "success_callback", list(litellm.success_callback))
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm._async_success_callback))
+    backend: Final = InMemoryCache()
+
+    configure_cache(type=LiteLLMCacheType.LOCAL, excluded_call_types=list(_EMBEDDING_CALL_TYPES), _backend=backend)
+    embedding(**_EMBED_REQUEST)
+    embedding(**_EMBED_REQUEST)
+    embedding_entries: Final = len(backend.cache_dict)
+    completion(**_COMPLETION_REQUEST, mock_response="first")
+    second: Final = completion(**_COMPLETION_REQUEST, mock_response="second")
+
+    assert counting_embedder.calls == 2
+    assert embedding_entries == 0
+    assert _completion_text(second) == "first"
 
 
 def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact() -> None:
