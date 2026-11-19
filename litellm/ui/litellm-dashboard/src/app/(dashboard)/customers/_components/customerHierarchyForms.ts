@@ -169,6 +169,9 @@ const budgetChanged = (fields: CustomerHierarchyFields, initial: CustomerHierarc
 const aliasChanges = (initial: string | null | undefined, value: string): { alias?: string | null } =>
   value === (initial ?? "") ? {} : { alias: value.trim() || null };
 
+const legacyMemberBudgetClear = (member: Member): { budget_override?: null } =>
+  member.budget_override != null && member.budget_override_expires_at == null ? { budget_override: null } : {};
+
 const memberPatch = (
   member: Member,
   fields: CustomerHierarchyFields,
@@ -176,8 +179,7 @@ const memberPatch = (
 ): PatchResult => {
   if (!fields.templateId && !fields.budgetEnabled) return { ok: false, error: "budgetRequired" };
   const alias = aliasChanges(member.alias, fields.alias);
-  const legacy = member.budget_override != null && member.budget_override_expires_at == null;
-  const clearLegacy = legacy ? { budget_override: null } : {};
+  const clearLegacy = legacyMemberBudgetClear(member);
   const templateChanged = fields.templateId !== initial.templateId;
   if (templateChanged && fields.templateId)
     return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearLegacy } } };
