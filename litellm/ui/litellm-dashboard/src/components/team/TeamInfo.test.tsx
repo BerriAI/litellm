@@ -1765,8 +1765,8 @@ describe("TeamInfoView", () => {
 
       await openSettingsEditor(user);
 
-      expect(screen.getByPlaceholderText("Max spend ($)")).toHaveValue(5);
-      expect(screen.getByPlaceholderText("Max spend ($)")).toBeDisabled();
+      expect(screen.getByPlaceholderText("Max Budget (USD)")).toHaveValue(5);
+      expect(screen.getByPlaceholderText("Max Budget (USD)")).toBeDisabled();
       expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
     });
 
@@ -1791,7 +1791,7 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
 
       await openSettingsEditor(user);
-      fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "2.5" } });
+      fireEvent.change(screen.getByPlaceholderText("Max Budget (USD)"), { target: { value: "2.5" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       expect((await savedPayload()).model_max_budget).toEqual({ "gpt-4": { budget_limit: 2.5, time_period: "1d" } });
@@ -1948,7 +1948,7 @@ describe("TeamInfoView", () => {
       await user.click(screen.getByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      await user.click(await screen.findByRole("combobox", { name: "Select pass through routes" }));
+      await user.click(await screen.findByRole("combobox", { name: "Select pass-through routes" }));
 
       const option = await screen.findByText("POST /bedrock-passthrough");
       await user.click(option);

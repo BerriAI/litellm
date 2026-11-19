@@ -76,7 +76,7 @@ const views = {
       budgetResetAt: null,
     },
     memberId: null,
-    amount: "Spend limit (USD)",
+    amount: "Max Budget (USD)",
     dialog: "Edit organization budget",
     error: "Budget update unavailable",
   },
@@ -127,9 +127,9 @@ describe("organization budget dialog", () => {
   it("opens from the budget summary and saves custom spend, soft budget, rates and reset period", async () => {
     const user = await openBudget("organization");
     const dialog = within(await screen.findByRole("dialog", { name: "Edit organization budget" }));
-    expect(await dialog.findByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(100);
+    expect(await dialog.findByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(100);
     expect(dialog.getByRole("textbox", { name: "Custom period" })).toHaveValue("7d");
-    fireEvent.change(dialog.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "200" } });
+    fireEvent.change(dialog.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "200" } });
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Soft budget (USD)" }), { target: { value: "150" } });
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "2000" } });
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
@@ -154,7 +154,7 @@ describe("organization budget dialog", () => {
     const source = await screen.findByRole("combobox", { name: "Customer organization limits" });
     await waitFor(() => expect(source).toBeEnabled());
     await chooseSelectOption(user, source, /^Standard/);
-    expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Max Budget (USD)" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(await writes()[0].clone().json()).toEqual({ budget_id: "standard" });
@@ -291,7 +291,7 @@ describe("member budget dialog", () => {
       json(new URL((input as Request).url).pathname.endsWith("/customer_members/member-1") ? custom : organization),
     );
     const user = await openBudget("member");
-    fireEvent.change(await screen.findByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Additional Max Budget (USD)" }), {
       target: { value: "" },
     });
     fireEvent.change(screen.getByRole("textbox", { name: "Custom reset period" }), { target: { value: "14d" } });

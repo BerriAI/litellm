@@ -204,7 +204,7 @@ describe("customer app budgets", () => {
     };
     const user = await openBudget();
     await chooseAppOption(user, screen.getByRole("combobox", { name: "Budget source" }), "Enter custom limits instead");
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional Max Budget (USD)" }), {
       target: { value: "0" },
     });
     expect(await saveBudget(user)).toEqual({
@@ -392,7 +392,7 @@ describe("customer app budgets", () => {
     expect(table.getByText("$100.00")).toBeInTheDocument();
     expect(table.queryByText("$1,000.00")).not.toBeInTheDocument();
     expect(table.getByRole("button", { name: "Budget details" })).toBeInTheDocument();
-    expect(table.queryByText("No spend limit")).not.toBeInTheDocument();
+    expect(table.queryByText("No max budget")).not.toBeInTheDocument();
   });
   it("should route Add app budget to Gateway setup when the app definition is unset", async () => {
     configured = false;

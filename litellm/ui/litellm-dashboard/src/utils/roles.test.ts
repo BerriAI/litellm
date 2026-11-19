@@ -15,6 +15,7 @@ import {
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
   teamListScopeUserId,
+  userRoleDisplayLabel,
 } from "./roles";
 import { Organization, Team } from "@/components/networking";
 
@@ -22,6 +23,13 @@ const orgWithMembers = (members: { user_id: string; user_role: string }[]): Orga
   ({ organization_id: "org-1", members }) as unknown as Organization;
 
 describe("roles", () => {
+  it.each([
+    ["Admin Viewer", "Proxy Admin Viewer"],
+    ["Internal Viewer", "Internal User Viewer"],
+  ])("displays the read-only session role %s as %s", (role, label) => {
+    expect(userRoleDisplayLabel(role)).toBe(label);
+  });
+
   describe("isAdminRole", () => {
     it("should return true for all admin roles", () => {
       expect(isAdminRole("Admin")).toBe(true);

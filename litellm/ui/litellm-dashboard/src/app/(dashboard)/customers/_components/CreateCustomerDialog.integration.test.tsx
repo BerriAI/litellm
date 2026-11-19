@@ -137,7 +137,7 @@ describe("CreateCustomerDialog", () => {
       screen.getByRole("combobox", { name: "Customer organization limits" }),
       "Enter custom limits instead",
     );
-    fireEvent.change(screen.getByLabelText("Spend limit (USD)"), { target: { value: "40" } });
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "40" } });
     await userEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
     expect(creations[0]).toMatchObject({ budget: { max_budget: 40, budget_duration: "1mo" } });
@@ -157,7 +157,7 @@ describe("CreateCustomerDialog", () => {
 
   it("previews profile limits and preserves custom values when switching modes", async () => {
     const user = renderCustomerForm();
-    fireEvent.change(await screen.findByLabelText("Spend limit (USD)"), { target: { value: "15000" } });
+    fireEvent.change(await screen.findByLabelText("Max Budget (USD)"), { target: { value: "15000" } });
     fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "25000" } });
     fireEvent.change(screen.getByLabelText("Requests per minute"), { target: { value: "120" } });
     fireEvent.change(screen.getByLabelText("Group 2 tokens per minute"), { target: { value: "5000" } });
@@ -173,12 +173,12 @@ describe("CreateCustomerDialog", () => {
     expect(profile).toHaveTextContent("$12,000/yr");
     expect(profile).toHaveTextContent("50K TPM");
     expect(profile).toHaveTextContent("0 RPM");
-    expect(screen.queryByLabelText("Spend limit (USD)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Max Budget (USD)")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Tokens per minute")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Requests per minute")).not.toBeInTheDocument();
     await user.click(profile);
     await user.keyboard("e{Enter}");
-    expect(screen.getByLabelText("Spend limit (USD)")).toHaveValue(15000);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(15000);
     expect(screen.getByLabelText("Tokens per minute")).toHaveValue(25000);
     expect(screen.getByLabelText("Requests per minute")).toHaveValue(120);
     await user.click(screen.getByRole("button", { name: "Create customer" }));

@@ -76,7 +76,7 @@ describe("CreateCustomerHierarchyDialog", () => {
     );
     await user.type(screen.getByRole("textbox", { name: "Display name" }), "Engineering");
     act(() =>
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } }),
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "0" } }),
     );
     fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "90000" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "300" } });
@@ -129,7 +129,7 @@ describe("CreateCustomerHierarchyDialog", () => {
       />,
     );
     expect(screen.getByRole("combobox", { name: "Member limits" })).toHaveTextContent("Standard");
-    expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Max Budget (USD)" })).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "Display name" }), "Jamie");
     await user.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ kind: "member", record: created }));
@@ -180,7 +180,7 @@ describe("CreateCustomerHierarchyDialog", () => {
     await user.click(screen.getByRole("combobox", { name: "Member limits" }));
     await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Jamie" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "25" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "25" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "20000" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "100" } });
     await user.click(screen.getByRole("button", { name: "Create" }));
@@ -215,10 +215,10 @@ describe("CreateCustomerHierarchyDialog", () => {
     );
     await user.click(screen.getByRole("combobox", { name: "Member limits" }));
     await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "25" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "25" } });
     await user.click(screen.getByRole("combobox", { name: "Member limits" }));
     await user.click(await screen.findByRole("option", { name: /Power/ }));
-    expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Max Budget (USD)" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     expect(await requestBody()).toMatchObject({ body: { budget_id: "power" } });

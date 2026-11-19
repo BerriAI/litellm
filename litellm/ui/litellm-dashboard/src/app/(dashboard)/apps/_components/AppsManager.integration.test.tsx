@@ -139,7 +139,7 @@ describe("Gateway app definition", () => {
     const user = await openAppSettings();
     const overall = within(await screen.findByRole("group", { name: "Overall app budget" }));
     const member = within(screen.getByRole("group", { name: "Default per-member budget" }));
-    expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
+    expect(overall.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(150);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     fireEvent.change(member.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "30" } });
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
@@ -165,10 +165,10 @@ describe("Gateway app definition", () => {
     configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
     const user = await openAppSettings();
     const editor = within(await screen.findByRole("group", { name: title }));
-    const amount = editor.getByRole("spinbutton", { name: "1mo spend limit (USD)" });
+    const amount = editor.getByRole("spinbutton", { name: "1mo Max Budget (USD)" });
     expect(amount).toHaveAttribute("placeholder", "No limit");
     expect(amount).toHaveAccessibleDescription(
-      "Leave an amount blank to remove that spend limit. Other spend limits and TPM/RPM limits stay unchanged.",
+      "Leave an amount blank to remove that max budget. Other max budgets and TPM/RPM limits stay unchanged.",
     );
     if (action === "clear") fireEvent.change(amount, { target: { value: "" } });
     else await user.click(editor.getAllByRole("button", { name: "Remove limit" })[0]);
