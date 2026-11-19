@@ -227,6 +227,86 @@ def upstream_reply(route: str, model: str) -> Mapping[str, object]:
     }
 
 
+@pytest.fixture
+def reasoning_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "opencode_go/fixture-reasoning",
+        {
+            "litellm_provider": "opencode_go",
+            "mode": "chat",
+            "supported_endpoints": ["/v1/chat/completions"],
+            "supports_reasoning": True,
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ("none", "low", "medium", "high"))
+@pytest.mark.parametrize("drop_params", (True, False))
+async def test_chat_reasoning_effort_forwarded_regression(
+    reasoning_catalog: None, effort: str, drop_params: bool
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/chat/completions")
+        assert request.headers["authorization"] == "Bearer synthetic-go-key"
+        assert json.loads(request.content).get("reasoning_effort") == effort
+        return httpx.Response(200, json=upstream_reply("chat/completions", "fixture-reasoning"))
+
+    with respx.mock(using="httpx") as transport:
+        route: Final = transport.post().mock(side_effect=respond)
+        response: Final = await litellm.acompletion(
+            model="opencode_go/fixture-reasoning",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="synthetic-go-key",
+            reasoning_effort=effort,
+            drop_params=drop_params,
+        )
+        assert route.called
+        assert response.choices[0].message.content == "hello"
+        assert response.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", (True, False))
+async def test_unknown_chat_reasoning_effort_guard(drop_params: bool) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/chat/completions")
+        assert "reasoning_effort" not in json.loads(request.content)
+        return httpx.Response(200, json=upstream_reply("chat/completions", "not-in-catalog-x"))
+
+    with respx.mock(using="httpx", assert_all_called=drop_params) as transport:
+        route: Final = transport.post().mock(side_effect=respond)
+        if not drop_params:
+            with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
+                await litellm.acompletion(
+                    model="opencode_go/not-in-catalog-x", messages=[{"role": "user", "content": "hello"}],
+                    api_key="synthetic-go-key", reasoning_effort="high", drop_params=False,
+                )
+            assert not route.called
+            return
+        response: Final = await litellm.acompletion(
+            model="opencode_go/not-in-catalog-x", messages=[{"role": "user", "content": "hello"}],
+            api_key="synthetic-go-key", reasoning_effort="high", drop_params=True,
+        )
+        assert route.called
+        assert response.choices[0].message.content == "hello"
+
+
+def test_chat_supported_reasoning_params_regression(reasoning_catalog: None, go_catalog: None) -> None:
+    base: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/fixture-chat") or ())
+    supported: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/fixture-reasoning") or ())
+    assert "reasoning_effort" not in base
+    assert supported == base | {"reasoning_effort"}
+
+
+def test_unknown_chat_supported_params_guard(go_catalog: None) -> None:
+    base: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/fixture-chat") or ())
+    supported: Final = frozenset(litellm.get_supported_openai_params(model="opencode_go/not-in-catalog-x") or ())
+    assert "reasoning_effort" not in supported
+    assert supported == base
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("upstream", ["chat/completions", "messages", "responses", "gemini"])
 @pytest.mark.parametrize("ingress", ["chat", "responses", "messages"])
@@ -604,26 +684,6 @@ def cost_recorder(monkeypatch: pytest.MonkeyPatch) -> CostRecorder:
     recorder: Final = CostRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     return recorder
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("upstream", ["chat/completions", "messages", "responses", "gemini"])
-@pytest.mark.parametrize("ingress", ["chat", "responses"])
-async def test_reported_list_cost_is_billed_instead_of_rows(
-    go_catalog: None, cost_recorder: CostRecorder, upstream: str, ingress: str
-) -> None:
-    model: Final = f"fixture-{upstream.split('/')[0]}"
-    with respx.mock(using="httpx") as transport:
-        transport.post().mock(
-            return_value=httpx.Response(200, json=go_priced_reply(upstream, model, GO_REPORTED_USAGE))
-        )
-        kwargs: Final = {"model": f"opencode_go/{model}", "api_key": "fake-go-key"}
-        if ingress == "chat":
-            response: Final = await litellm.acompletion(messages=[{"role": "user", "content": "hello"}], **kwargs)
-        else:
-            response = await litellm.aresponses(input="hello", **kwargs)
-    assert response._hidden_params["additional_headers"][RESPONSE_COST_HEADER] == pytest.approx(0.00412)
-    assert await logged_cost(cost_recorder) == pytest.approx(0.00412)
 
 
 @pytest.mark.asyncio

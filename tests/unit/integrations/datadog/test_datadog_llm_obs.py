@@ -13,8 +13,9 @@ import json
 import os
 from datetime import datetime, timedelta
 from typing import Any, Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -89,6 +90,38 @@ def build(logger: DataDogLLMObsLogger, **kwargs: Any) -> dict[str, Any]:
     start = datetime(2026, 9, 1, 12, 0, 0)
     payload = logger.create_llm_obs_payload(build_payload(**kwargs), start, start + timedelta(seconds=2))
     return json.loads(safe_dumps(payload))
+
+
+def test_dd_tags_reach_the_span_without_a_second_value_for_its_cost_keys(logger: DataDogLLMObsLogger) -> None:
+    dd_tags: Final = "team:platform,user:shared,model_group:default,cost_center:engineering"
+    with patch.dict(os.environ, {"DD_TAGS": dd_tags}):
+        payload: Final = build(logger, metadata={"user_api_key_user_id": "alice"}, model_group="gpt")
+
+    keys: Final = ("team:", "user:", "model_group:", "cost_center:")
+    assert sorted(tag for tag in payload["tags"] if tag.startswith(keys)) == [
+        "cost_center:engineering",
+        "model_group:gpt",
+        "team:platform",
+        "user:alice",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_batch_tags_leave_dd_tags_to_each_span(logger: DataDogLLMObsLogger) -> None:
+    start: Final = datetime(2026, 9, 1, 12, 0, 0)
+    accepted: Final = httpx.Response(202, request=httpx.Request("POST", "https://intake.example"))
+    with (
+        patch.dict(os.environ, {"DD_TAGS": "team:platform"}),
+        patch.object(logger.async_client, "post", AsyncMock(return_value=accepted)) as post,
+    ):
+        request: Final = build_payload(metadata={"user_api_key_team_alias": "payments"})
+        logger.log_queue.append(logger.create_llm_obs_payload(request, start, start + timedelta(seconds=2)))
+        await logger.async_send_batch()
+
+    attributes: Final = json.loads(post.await_args.kwargs["content"])["data"]["attributes"]
+    assert [tag for tag in [*attributes["tags"], *attributes["spans"][0]["tags"]] if tag.startswith("team:")] == [
+        "team:payments"
+    ]
 
 
 def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMObsLogger) -> None:

@@ -14,6 +14,7 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
 class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
+    key_id: str | None = None
     token: str | None = None
     key_name: str | None = None
     key_alias: str | None = None

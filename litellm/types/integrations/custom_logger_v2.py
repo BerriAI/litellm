@@ -167,6 +167,9 @@ class KeyIdentity(Record):
     invoked_agent_id: Scalar | None = None
     team_priority: Scalar | None = None
     key_priority: Scalar | None = None
+    customer_org_id: str | None = None
+    customer_team_id: str | None = None
+    customer_member_id: str | None = None
 
 
 class LoggedKeyIdentity(Record):
@@ -211,6 +214,20 @@ class AgentPolicy(Record):
     session_tpm_limit: Scalar | None = None
 
 
+class CustomerScope(Record):
+    """One level of the customer hierarchy a request is charged to, with the limits its budget row grants.
+    ``borrows`` marks a customer organization whose per-model limits are shares of idle capacity the dynamic
+    limiter enforces, because customer organizations are listed to borrow it."""
+
+    key: str | None = None
+    entity_id: str | None = None
+    rpm_limit: I64 | None = None
+    tpm_limit: I64 | None = None
+    model_rpm_limit: Mapping[str, I64] | None = None
+    model_tpm_limit: Mapping[str, I64] | None = None
+    borrows: Flag | None = None
+
+
 class KeyLimits(Record):
     rpm_limit: Scalar | None = None
     tpm_limit: Scalar | None = None
@@ -231,6 +248,7 @@ class KeyLimits(Record):
     estimated_output_tokens: EstimatedOutputTokens | None = None
     managed_agent_policy: AgentPolicy | None = None
     invoked_agent_policy: AgentPolicy | None = None
+    customer_scopes: tuple[CustomerScope, ...] | None = None
 
 
 class BudgetPlanCounter(Strict):
@@ -478,6 +496,7 @@ __all__ = [
     "BudgetPlanCounter",
     "BudgetReservation",
     "Cost",
+    "CustomerScope",
     "Deployment",
     "EstimatedOutputTokens",
     "GuardrailEntry",

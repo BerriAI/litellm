@@ -1,49 +1,13 @@
 use std::fmt;
 
+use litellm_python_compat::pydantic::LaxI64;
 use serde::Deserializer;
 use serde::de::{self, Visitor};
 use serde_with::DeserializeAs;
 
-pub(crate) struct LaxI64;
-
 pub(crate) struct Count;
 
 pub(crate) struct NumericCount;
-
-impl<'de> DeserializeAs<'de, i64> for LaxI64 {
-    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
-        deserializer.deserialize_any(Self)
-    }
-}
-
-impl Visitor<'_> for LaxI64 {
-    type Value = i64;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("an integer in the i64 range")
-    }
-
-    fn visit_i64<E: de::Error>(self, value: i64) -> Result<i64, E> {
-        Ok(value)
-    }
-
-    fn visit_u64<E: de::Error>(self, value: u64) -> Result<i64, E> {
-        i64::try_from(value).map_err(E::custom)
-    }
-
-    fn visit_f64<E: de::Error>(self, value: f64) -> Result<i64, E> {
-        integral_float(value).ok_or_else(|| E::custom("expected an integer in the i64 range"))
-    }
-
-    fn visit_str<E: de::Error>(self, value: &str) -> Result<i64, E> {
-        integer_string(value.trim())
-            .ok_or_else(|| E::custom("expected an integer in the i64 range"))
-    }
-
-    fn visit_bool<E: de::Error>(self, value: bool) -> Result<i64, E> {
-        Ok(i64::from(value))
-    }
-}
 
 impl<'de> DeserializeAs<'de, u64> for Count {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
@@ -80,31 +44,6 @@ impl Visitor<'_> for NumericCount {
             .and_then(|whole| u64::try_from(whole).ok())
             .ok_or_else(|| E::invalid_value(de::Unexpected::Float(value), &self))
     }
-}
-
-fn integer_string(value: &str) -> Option<i64> {
-    let integer = match value.split_once('.') {
-        Some((integer, fraction)) => {
-            if fraction.is_empty() || !fraction.bytes().all(|byte| byte == b'0') {
-                return None;
-            }
-            integer
-        }
-        None => value,
-    };
-    if integer.starts_with('_') || integer.ends_with('_') || integer.contains("__") {
-        return None;
-    }
-    let digits = integer.strip_prefix(['+', '-']).unwrap_or(integer);
-    if digits.is_empty()
-        || digits.starts_with('_')
-        || !digits
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || byte == b'_')
-    {
-        return None;
-    }
-    integer.replace('_', "").parse().ok()
 }
 
 fn integral_float(value: f64) -> Option<i64> {

@@ -1,4 +1,3 @@
-import copy
 import json
 import re
 import time
@@ -37,13 +36,13 @@ from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     map_finish_reason,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    DEFS_MAX_INLINED_BYTES,
+    defs_unpacked,
     invalid_type_message,
     is_present_non_string,
     is_unhashable_value_behind,
     sanitize_input_schema_for_anthropic,
-    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -140,6 +139,7 @@ from litellm.utils import (
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_mid_conversation_system,
     supports_reasoning,
+    thinking_param_needs_replayed_thinking_blocks,
     token_counter,
 )
 
@@ -645,6 +645,22 @@ def tools_without_unsupported_tool_search(
     return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
 
 
+def mapped_max_output_tokens(cost_map_key: str) -> int | None:
+    row: Final = object_mapping(litellm.model_cost.get(cost_map_key)) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # cost map rows are untyped JSON
+    match row.get("max_output_tokens"):
+        case int() as max_tokens:
+            return max_tokens
+        case _:
+            return None
+
+
+def _own_max_output_tokens(model: str) -> int | None:
+    try:
+        return get_max_tokens(model)
+    except Exception:
+        return None
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -691,7 +707,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def get_config(cls, *, model: str | None = None, configured_max_output_tokens: int | None = None):
+    def get_config(
+        cls,
+        *,
+        model: str | None = None,
+        configured_max_output_tokens: int | None = None,
+        custom_llm_provider: str | None = None,
+    ):
         config: Final = super().get_config()
 
         # anthropic requires a default value for max_tokens
@@ -699,26 +721,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             config["max_tokens"] = (
                 configured_max_output_tokens
                 if configured_max_output_tokens is not None
-                else cls.get_max_tokens_for_model(model)
+                else cls.get_max_tokens_for_model(model, custom_llm_provider)
             )
 
         return config
 
     @staticmethod
-    def get_max_tokens_for_model(model: str | None = None) -> int:
+    def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
-        Get the max output tokens for a given model.
-        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if model is not found.
+        Get the max output tokens for a given model from its own cost-map row, then from its
+        unversioned id's row (claude-sonnet-4-6@default reads claude-sonnet-4-6), else from the
+        serving host's row (e.g. vertex_ai/claude-3-5-haiku@20241022).
+        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if no row exists.
         """
         if model is None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-        try:
-            max_tokens: Final = get_max_tokens(model)
-            if max_tokens is None:
-                return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-            return max_tokens
-        except Exception:
-            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+        own_max_tokens: Final = _own_max_output_tokens(model)
+        if own_max_tokens is not None:
+            return own_max_tokens
+        unversioned_model, version_separator, _ = model.partition("@")
+        unversioned_max_tokens: Final = mapped_max_output_tokens(unversioned_model) if version_separator else None
+        if unversioned_max_tokens is not None:
+            return unversioned_max_tokens
+        host_max_tokens: Final = (
+            None if custom_llm_provider is None else mapped_max_output_tokens(f"{custom_llm_provider}/{model}")
+        )
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if host_max_tokens is None else host_max_tokens
 
     @staticmethod
     def convert_tool_use_to_openai_format(
@@ -932,7 +960,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return cls._raise_invalid_reasoning_effort(model, value, llm_provider)
 
     def get_supported_openai_params(self, model: str):
-        sampling_params: Final = ("temperature", "top_p") if self._supports_sampling_params(model) else ()
+        sampling_params: Final = ("temperature", "top_p") if self._supports_sampling_params(model) else ("temperature",)
         params: Final = [
             "stream",
             "stop",
@@ -1866,14 +1894,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return json_schema
 
     @staticmethod
-    def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
-        unpacked: Final = copy.deepcopy(dict(json_schema))
-        defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
-        if isinstance(defs, dict) and defs:
-            unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-        return unpacked
-
-    @staticmethod
     def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         if (
             schema_has_unresolvable_ref(json_schema)
@@ -1904,7 +1924,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return self.uses_native_structured_output(model) and not open_object_takes_json_tool
 
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
-        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
+        return self.filter_anthropic_output_schema(dict(defs_unpacked(json_schema)))
 
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)
@@ -2552,7 +2572,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
-            optional_params.get("thinking") is not None
+            thinking_param_needs_replayed_thinking_blocks(
+                optional_params.get("thinking")  # pyright: ignore[reportUnknownArgumentType]  # optional_params is a bare dict
+            )
             and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
             and not any_assistant_message_has_thinking_blocks(capped_messages)
         ):
@@ -2681,7 +2703,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else None
         )
         config: Final[Mapping[str, object]] = MappingProxyType(
-            litellm.AnthropicConfig.get_config(model=model, configured_max_output_tokens=configured_max_output_tokens)
+            litellm.AnthropicConfig.get_config(
+                model=model,
+                configured_max_output_tokens=configured_max_output_tokens,
+                custom_llm_provider=self._resolved_provider,
+            )
         )
         for k, v in config.items():
             if (

@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -9,11 +10,17 @@ from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_base_url,
+    map_vertex_image_size,
+    vertex_top_level_request_fields,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.vertex_ai import (
@@ -51,7 +58,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses generateContent API for Gemini models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: list[str] = ["size"]
+    SUPPORTED_PARAMS: list[str] = ["n", "size"]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -65,13 +72,18 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, str]:
-        supported_params: Final = self.get_supported_openai_params(model)
-        if "size" not in supported_params or "size" not in image_edit_optional_params:
-            return {}
+    ) -> dict[str, object]:
+        request_count: Final[Mapping[str, object]] = (
+            {"n": image_edit_optional_params["n"]} if "n" in image_edit_optional_params else {}
+        )
+        if "size" not in image_edit_optional_params:
+            return dict(request_count)
 
         size: Final = image_edit_optional_params.get("size")
-        return dict(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})
+        return {**request_count, **(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})}
+
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        return image_request_count(image_edit_optional_request_params.get("n"), model=model, llm_provider="vertex_ai")
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -168,6 +180,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
     ) -> tuple[dict[str, object], RequestFiles | None]:
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise litellm.BadRequestError(
@@ -194,7 +208,16 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
         }
 
-        request_body: Final[dict[str, object]] = {"contents": contents, "generationConfig": generation_config}
+        label_fields: Final = (
+            vertex_top_level_request_fields({"labels": litellm_params.get("labels")}, litellm_params)
+            if vertex_request_label_fields()
+            else None
+        )
+        request_body: Final[dict[str, object]] = {
+            "contents": contents,
+            "generationConfig": generation_config,
+            **(label_fields or {}),
+        }
 
         payload: Final = json.dumps(request_body)
         empty_files: Final = cast(RequestFiles, [])

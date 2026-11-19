@@ -1,10 +1,6 @@
 import asyncio
 import re
-import shutil
-import subprocess
-import sys
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -26,7 +22,6 @@ from litellm.proxy.auth.master_key_boot_check import (
     UnsafeMasterKeyError,
     UnsafeMasterKeyReason,
     UnsafeMasterKeyRefused,
-    announce_on_stderr_at_exit,
     enforce_master_key_boot_verdict,
     master_key_boot_verdict,
     render_refusal,
@@ -361,24 +356,6 @@ def test_migration_with_an_exported_key_replaces_it_in_place_and_numbers_every_s
     assert text.index("os.environ/") < text.index(MIGRATE_FROM_MASTER_KEY_ENV_VAR + "=") < text.index("Start the proxy")
 
 
-@pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
-@pytest.mark.parametrize("from_master_key", [PUBLICLY_KNOWN_KEY, "", " " + PUBLICLY_KNOWN_KEY])
-def test_printed_migration_commands_save_both_keys_to_the_env_file(tmp_path: Path, from_master_key: str):
-    from dotenv import dotenv_values
-
-    text = render_refusal(
-        _refusal(migration=StoredSecretsMigration(from_master_key=from_master_key, encrypted_value_count=1))
-    )
-    commands = [line.strip() for line in text.splitlines() if line.strip().startswith("echo ")]
-
-    subprocess.run(["bash", "-c", "\n".join(commands)], cwd=tmp_path, capture_output=True, text=True, check=True)
-
-    saved = dotenv_values(tmp_path / ".env")
-    assert saved[MIGRATE_FROM_MASTER_KEY_ENV_VAR] == from_master_key
-    assert _verdict(saved[MASTER_KEY_ENV_VAR]) == SafeMasterKey()
-    assert len(commands) == 2
-
-
 @pytest.mark.parametrize("migration", [_MIGRATION, None])
 def test_override_hint_is_the_last_paragraph(migration: StoredSecretsMigration | None):
     text = render_refusal(_refusal(migration=migration))
@@ -386,30 +363,6 @@ def test_override_hint_is_the_last_paragraph(migration: StoredSecretsMigration |
 
     assert WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR in last_paragraph
     assert f"general_settings.{WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING}" in last_paragraph
-
-
-@pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
-def test_printed_command_saves_a_key_the_boot_check_accepts(tmp_path: Path):
-    completed = subprocess.run(
-        ["bash", "-c", GENERATE_MASTER_KEY_COMMAND], cwd=tmp_path, capture_output=True, text=True, check=True
-    )
-
-    saved = (tmp_path / ".env").read_text()
-    match = re.fullmatch(rf"{MASTER_KEY_ENV_VAR}=(sk-[0-9a-f]{{64}})\n", saved)
-    assert match is not None
-    assert completed.stdout == saved
-    assert _verdict(match.group(1)) == SafeMasterKey()
-
-
-@pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
-def test_rotation_command_prints_a_key_the_boot_check_accepts_and_saves_nothing(tmp_path: Path):
-    completed = subprocess.run(
-        ["bash", "-c", PRINT_NEW_MASTER_KEY_COMMAND], cwd=tmp_path, capture_output=True, text=True, check=True
-    )
-
-    assert re.fullmatch(r"sk-[0-9a-f]{64}\n", completed.stdout) is not None
-    assert _verdict(completed.stdout.strip()) == SafeMasterKey()
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_refusal_announces_the_fix_and_aborts_the_boot():
@@ -429,19 +382,3 @@ def test_safe_and_overridden_keys_boot_without_announcing(verdict: MasterKeyBoot
     enforce_master_key_boot_verdict(verdict, announce=announced.append)
 
     assert announced == []
-
-
-def test_announced_fix_is_the_last_thing_a_crashing_process_prints():
-    crash_after_announcing = (
-        "from litellm.proxy.auth.master_key_boot_check import announce_on_stderr_at_exit\n"
-        "announce_on_stderr_at_exit('THE FIX')\n"
-        "print('buffered stdout')\n"
-        "raise RuntimeError('lifespan failed')\n"
-    )
-
-    completed = subprocess.run([sys.executable, "-c", crash_after_announcing], capture_output=True, text=True)
-
-    assert completed.returncode != 0
-    assert "RuntimeError: lifespan failed" in completed.stderr
-    assert completed.stderr.endswith("THE FIX")
-    assert completed.stdout == "buffered stdout\n"

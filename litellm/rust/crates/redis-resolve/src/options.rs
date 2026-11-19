@@ -1,13 +1,15 @@
 use std::time::Duration;
 
-use litellm_python_compat::{BigInt, number};
+use litellm_python_compat::{
+    BigInt, flags::redis_str_to_bool, json::from_json, number, pydantic::lax_bool, truthy::truthy,
+};
 use litellm_redis_types::Ignored;
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use crate::{
     Entry, Error, Expected, Kwargs,
-    keys::{self, Asked},
+    keys::{self, Asked, Kwarg},
 };
 
 /// Every setting the resolver reads. A setting is `None` when it is unset, null or empty, except that a null
@@ -86,61 +88,61 @@ impl Options {
     /// The typed settings and the ones the Rust client drops.
     pub(super) fn read(kwargs: &Kwargs) -> Result<(Self, Vec<Ignored>), Error> {
         let ignored = ignored(kwargs)?;
-        let options = Self::from_lookup(|key| kwargs.get(key).cloned());
+        let options = Self::from_lookup(|kwarg| kwargs.get(kwarg.name()).cloned());
         Ok((options, ignored))
     }
 
-    fn from_lookup(lookup: impl Fn(&'static str) -> Option<Entry>) -> Self {
-        let get = |key| lookup(key).filter(|entry| is_present(&entry.value));
+    fn from_lookup(lookup: impl Fn(Kwarg) -> Option<Entry>) -> Self {
+        let get = |kwarg| lookup(kwarg).filter(|entry| is_present(&entry.value));
         Self {
-            url: get("url"),
-            host: get("host"),
-            port: get("port"),
-            db: get("db"),
-            unix_socket_path: get("unix_socket_path"),
-            startup_nodes: get("startup_nodes"),
+            url: get(Kwarg::Url),
+            host: get(Kwarg::Host),
+            port: get(Kwarg::Port),
+            db: get(Kwarg::Db),
+            unix_socket_path: get(Kwarg::UnixSocketPath),
+            startup_nodes: get(Kwarg::StartupNodes),
             sentinel: SentinelOptions {
-                nodes: get("sentinel_nodes"),
-                service_name: get("service_name"),
-                password: get("sentinel_password"),
+                nodes: get(Kwarg::SentinelNodes),
+                service_name: get(Kwarg::ServiceName),
+                password: get(Kwarg::SentinelPassword),
             },
-            username: get("username"),
-            password: get("password"),
-            credential_provider: get("credential_provider"),
+            username: get(Kwarg::Username),
+            password: get(Kwarg::Password),
+            credential_provider: get(Kwarg::CredentialProvider),
             gcp: GcpOptions {
-                service_account: get("gcp_service_account"),
-                ssl_ca_certs: get("gcp_ssl_ca_certs"),
+                service_account: get(Kwarg::GcpServiceAccount),
+                ssl_ca_certs: get(Kwarg::GcpSslCaCerts),
             },
             azure: AzureOptions {
-                ad_token: get("azure_redis_ad_token"),
-                client_id: get("azure_client_id"),
-                tenant_id: get("azure_tenant_id"),
-                client_secret: get("azure_client_secret"),
+                ad_token: get(Kwarg::AzureRedisAdToken),
+                client_id: get(Kwarg::AzureClientId),
+                tenant_id: get(Kwarg::AzureTenantId),
+                client_secret: get(Kwarg::AzureClientSecret),
             },
             aws: AwsOptions {
-                auth: get("aws_iam_auth"),
-                user_name: get("aws_iam_user_name"),
-                cache_name: get("aws_iam_cache_name"),
-                region: get("aws_iam_region"),
-                serverless: get("aws_iam_serverless"),
+                auth: get(Kwarg::AwsIamAuth),
+                user_name: get(Kwarg::AwsIamUserName),
+                cache_name: get(Kwarg::AwsIamCacheName),
+                region: get(Kwarg::AwsIamRegion),
+                serverless: get(Kwarg::AwsIamServerless),
             },
-            ssl: get("ssl"),
+            ssl: get(Kwarg::Ssl),
             tls: TlsInput {
-                cert_reqs: lookup("ssl_cert_reqs")
+                cert_reqs: lookup(Kwarg::SslCertReqs)
                     .filter(|entry| entry.value.is_null() || is_present(&entry.value)),
-                ca_certs: get("ssl_ca_certs"),
-                ca_data: get("ssl_ca_data"),
-                ca_path: get("ssl_ca_path"),
-                certfile: get("ssl_certfile"),
-                keyfile: get("ssl_keyfile"),
-                key_password: get("ssl_password"),
-                check_hostname: get("ssl_check_hostname"),
+                ca_certs: get(Kwarg::SslCaCerts),
+                ca_data: get(Kwarg::SslCaData),
+                ca_path: get(Kwarg::SslCaPath),
+                certfile: get(Kwarg::SslCertfile),
+                keyfile: get(Kwarg::SslKeyfile),
+                key_password: get(Kwarg::SslPassword),
+                check_hostname: get(Kwarg::SslCheckHostname),
             },
-            namespace: get("namespace"),
-            socket_timeout: get("socket_timeout"),
-            socket_connect_timeout: get("socket_connect_timeout"),
-            health_check_interval: get("health_check_interval"),
-            socket_keepalive: get("socket_keepalive"),
+            namespace: get(Kwarg::Namespace),
+            socket_timeout: get(Kwarg::SocketTimeout),
+            socket_connect_timeout: get(Kwarg::SocketConnectTimeout),
+            health_check_interval: get(Kwarg::HealthCheckInterval),
+            socket_keepalive: get(Kwarg::SocketKeepalive),
         }
     }
 }
@@ -210,11 +212,10 @@ pub(super) fn flag(entry: Option<&Entry>) -> Result<bool, Error> {
         return Ok(false);
     };
     match &entry.value {
-        Value::Bool(flag) => Ok(*flag),
-        Value::Number(number) => Ok(number.as_f64().is_some_and(|number| number != 0.0)),
-        Value::String(text) => match text.to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Ok(true),
-            "false" | "0" | "no" | "off" | "f" | "n" => Ok(false),
+        Value::Bool(_) | Value::Number(_) => Ok(truthy(&from_json(entry.value.clone()))),
+        Value::String(text) => match (redis_str_to_bool(text), lax_bool(&text.as_str().into())) {
+            (true, Some(true)) => Ok(true),
+            (false, Some(false)) => Ok(false),
             _ => Err(invalid(&entry.source, Expected::Boolean)),
         },
         _ => Err(invalid(&entry.source, Expected::Boolean)),
@@ -258,23 +259,23 @@ mod tests {
     use std::{cell::RefCell, collections::BTreeSet};
 
     use rstest::rstest;
+    use strum::IntoEnumIterator;
 
     use super::Options;
-    use crate::SETTINGS;
+    use crate::Kwarg;
 
     // a Read row that Options never asks for would be neither modeled nor passed through nor warned about
     #[rstest]
     fn options_ask_for_exactly_the_read_rows() {
         let asked = RefCell::new(BTreeSet::new());
         let _ = Options::from_lookup(|kwarg| {
-            asked.borrow_mut().insert(kwarg);
+            asked.borrow_mut().insert(kwarg.name());
             None
         });
 
-        let read: BTreeSet<&str> = SETTINGS
-            .iter()
-            .filter(|setting| setting.is_read())
-            .map(|setting| setting.kwarg)
+        let read: BTreeSet<&str> = Kwarg::iter()
+            .filter(|kwarg| kwarg.setting().is_read())
+            .map(Kwarg::name)
             .collect();
         assert_eq!(asked.into_inner(), read);
     }

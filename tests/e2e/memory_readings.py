@@ -12,10 +12,13 @@ instead of passing on the replicas that did answer.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
+from e2e_config import MEMORY_RSS_SAMPLE_INTERVAL_SECONDS, MEMORY_RSS_SETTLE_SAMPLES
 from e2e_http import Result, Success
 from models import MemorySummaryResponse
 from proxy_client import ProxyClient
@@ -76,3 +79,43 @@ def rss_capture(summaries: Mapping[str, Result[MemorySummaryResponse]]) -> RssCa
 
 def read_rss_everywhere(proxy: ProxyClient, *, timeout: float | None = None) -> RssCapture:
     return rss_capture(proxy.memory_summary_everywhere(timeout=timeout))
+
+
+RSS_SAMPLE_CAP: Final = 4 * MEMORY_RSS_SETTLE_SAMPLES
+
+
+def _read_rss_everywhere_after_pause(proxy: ProxyClient) -> tuple[RssReading, ...]:
+    time.sleep(MEMORY_RSS_SAMPLE_INTERVAL_SECONDS)
+    capture: Final = read_rss_everywhere(proxy)
+    assert not capture.failures, (
+        f"{len(capture.failures)} replica(s) gave no RSS reading mid-checkpoint, so their workers cannot be "
+        f"compared with themselves: {'; '.join(capture.failures)}"
+    )
+    return capture.readings
+
+
+def _readings_until_no_new_worker(
+    proxy: ProxyClient, readings: tuple[RssReading, ...], samples: int, samples_since_new_worker: int
+) -> tuple[RssReading, ...]:
+    if samples >= RSS_SAMPLE_CAP or samples_since_new_worker >= MEMORY_RSS_SETTLE_SAMPLES:
+        return readings
+    sample: Final = _read_rss_everywhere_after_pause(proxy)
+    known: Final = frozenset(reading.worker for reading in readings)
+    new_worker_answered: Final = any(reading.worker not in known for reading in sample)
+    return _readings_until_no_new_worker(
+        proxy, readings + sample, samples + 1, 0 if new_worker_answered else samples_since_new_worker + 1
+    )
+
+
+def settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading]:
+    """The lowest reading per worker, sampled until no new worker has answered for a settle window: a burst of
+    traffic leaves a transient bulge of garbage that gc reclaims within seconds, and a load-balanced address
+    reaches the workers behind it one answer at a time."""
+    readings: Final = _readings_until_no_new_worker(proxy, (), 0, 0)
+    assert readings, "no /debug/memory/summary read carried ram_usage_mb, so the proxy cannot report its RSS"
+    return MappingProxyType(
+        {
+            worker: min((reading for reading in readings if reading.worker == worker), key=lambda r: r.ram_usage_mb)
+            for worker in {reading.worker for reading in readings}
+        }
+    )
