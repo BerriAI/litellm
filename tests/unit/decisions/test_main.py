@@ -657,6 +657,75 @@ async def test_litellm_proxy_decisions_refuse_what_the_deployment_turns_off(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("header", "billed"), [("0.00042", 0.00042), ("not-a-cost", None)])
+async def test_litellm_proxy_decisions_bill_the_cost_the_proxy_reports(
+    respx_mock: respx.MockRouter,
+    header: str,
+    billed: float | None,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE, headers={"x-litellm-response-cost": header}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert get_response_cost_from_hidden_params(response.hidden_params) == billed
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unchanged(
+    respx_mock: respx.MockRouter,
+) -> None:
+    decisions_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE
+    )
+    systemone_route: Final = respx_mock.post("https://proxy.example/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        state="review photo-1",
+        questions=_QUESTIONS,
+        assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert not decisions_route.called
+    sent: Final = json.loads(systemone_route.calls.last.request.content)
+    assert sent["model"] == "gemini/gemini-decision-1"
+    assert sent["questions"] == _QUESTIONS
+    assert sent["assets"] == {"photo-1": {"format": "png", "data_base64": "AA=="}}
+    assert systemone_route.calls.last.request.headers["authorization"] == "Bearer proxy-key"
+    assert response.answers["sentiment"].confidence == 0.8
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_decisions_keep_the_evidence_fields_the_proxy_returns(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={**_OPENAI_PREDICATE_RESPONSE, "decision_id": "dec_123", "mode": "fast"}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/parallel_ai/decider",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert response.model_dump()["decision_id"] == "dec_123"
+    assert response.model_dump()["mode"] == "fast"
+
+
+@pytest.mark.asyncio
 async def test_a_deployment_flagged_use_litellm_proxy_sends_decisions_to_the_proxy(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,

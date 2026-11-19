@@ -704,6 +704,7 @@ class DecisionsIRResponse:
     answers: tuple[DecisionsIRAnswer, ...]
     usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+    reported_cost: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
