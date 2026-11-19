@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import click
 import httpx
 import pytest
+import respx
 import uvicorn
 import yaml
 from gunicorn.config import Config as GunicornConfig
@@ -154,6 +155,37 @@ async def test_segmented_request_headers(
         protocol.connection_lost(None)
 
 
+_CLI_TEST_PROXY: Final = "http://127.0.0.1:24871"
+_CLI_TEST_PROXY_ARGS: Final = ("--host", "127.0.0.1", "--port", "24871")
+
+
+def _cli_test_completion_reply(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    if request.url.path == "/completions":
+        return httpx.Response(
+            200,
+            json={"id": "cmpl-1", "object": "text_completion", "created": 1, "model": body["model"], "choices": []},
+        )
+    if body.get("stream"):
+        chunk: Final = {
+            "id": "chunk-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": body["model"],
+            "choices": [],
+        }
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        )
+    return httpx.Response(
+        200, json={"id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": body["model"], "choices": []}
+    )
+
+
+def _mock_cli_test_completions(proxy: str = _CLI_TEST_PROXY) -> respx.models.CallList:
+    return respx.post(url__regex=rf"^{proxy}/(chat/)?completions$").mock(side_effect=_cli_test_completion_reply).calls
+
+
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
@@ -169,52 +201,110 @@ class TestProxyInitializationHelpers:
         mock_version.assert_called_once_with("litellm")
         mock_echo.assert_called_once_with("\nLiteLLM: Current Version = 1.0.0\n")
 
-    @patch("httpx.get")
-    @patch("builtins.print")
-    @patch("json.dumps")
-    def test_run_health_check(self, mock_dumps, mock_print, mock_get):
-        # Setup
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"status": "healthy"}
-        mock_get.return_value = mock_response
-        mock_dumps.return_value = '{"status": "healthy"}'
+    @respx.mock
+    def test_health_flag_authenticates_with_the_master_key(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        health: Final = respx.get(f"{_CLI_TEST_PROXY}/health").respond(json={"healthy_count": 1})
 
-        # Execute
-        ProxyInitializationHelpers._run_health_check("localhost", 8000)
+        run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
 
-        # Assert
-        mock_get.assert_called_once_with(url="http://localhost:8000/health")
-        mock_response.json.assert_called_once()
-        mock_dumps.assert_called_once_with({"status": "healthy"}, indent=4)
+        assert health.calls.last.request.headers["Authorization"] == "Bearer sk-cli-master"
+        assert '"healthy_count": 1' in capsys.readouterr().out
 
-    @patch("openai.OpenAI")
-    @patch("click.echo")
-    @patch("builtins.print")
-    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):
-        # Setup
-        mock_client = MagicMock()
-        mock_openai.return_value = mock_client
+    @pytest.mark.parametrize(
+        ("listed_models", "expected_model"),
+        [
+            pytest.param(
+                [
+                    {"id": "speech-model", "mode": "audio_speech"},
+                    {"id": "retired-chat-model", "mode": "chat"},
+                    {"id": "served-chat-model", "mode": "chat"},
+                ],
+                "served-chat-model",
+                id="skips-non-chat-and-retired",
+            ),
+            pytest.param(
+                [{"id": "retired-chat-model", "mode": "chat"}, {"id": "unlabeled-model"}],
+                "unlabeled-model",
+                id="unlabeled-counts-as-chat",
+            ),
+            pytest.param(
+                [{"id": "embedding-model", "mode": "embedding"}, {"id": "retired-chat-model", "mode": "chat"}],
+                "retired-chat-model",
+                id="every-chat-model-retired",
+            ),
+        ],
+    )
+    @respx.mock
+    def test_test_flag_sends_every_request_for_a_model_the_proxy_serves(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        listed_models: list[dict[str, str]],
+        expected_model: str,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        monkeypatch.setitem(litellm.model_cost, "retired-chat-model", {"deprecation_date": "2000-01-01"})
+        models: Final = respx.get(f"{_CLI_TEST_PROXY}/v1/models").respond(json={"data": listed_models})
+        completions: Final = _mock_cli_test_completions()
 
-        mock_response = MagicMock()
-        mock_client.chat.completions.create.return_value = mock_response
+        run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
 
-        mock_stream_response = MagicMock()
-        mock_stream_response.__iter__.return_value = [MagicMock(), MagicMock()]
-        mock_client.chat.completions.create.side_effect = [
-            mock_response,
-            mock_stream_response,
-        ]
+        assert models.called
+        assert [json.loads(call.request.content)["model"] for call in completions] == [expected_model] * 3
+        assert {call.request.headers["Authorization"] for call in respx.calls} == {"Bearer sk-cli-master"}
 
-        # Execute
-        with pytest.raises(ValueError, match="Invalid test value"):
-            ProxyInitializationHelpers._run_test_chat_completion("localhost", 8000, "gpt-3.5-turbo", True)
+    @respx.mock
+    def test_test_flag_with_a_model_skips_the_model_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        models: Final = respx.get(f"{_CLI_TEST_PROXY}/v1/models")
+        completions: Final = _mock_cli_test_completions()
 
-        # Test with valid string test value
-        ProxyInitializationHelpers._run_test_chat_completion("localhost", 8000, "gpt-3.5-turbo", "http://test-url")
+        run_server.main(["--test", "--model", "picked-by-user", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
 
-        # Assert
-        mock_openai.assert_called_once_with(api_key="My API Key", base_url="http://test-url")
-        mock_client.chat.completions.create.assert_called()
+        assert not models.called
+        assert [json.loads(call.request.content)["model"] for call in completions] == ["picked-by-user"] * 3
+
+    @respx.mock
+    def test_test_flag_never_sends_the_openai_key_to_the_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-upstream")
+        respx.get(f"{_CLI_TEST_PROXY}/v1/models").respond(json={"data": [{"id": "served-chat-model", "mode": "chat"}]})
+        _mock_cli_test_completions()
+
+        run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert len(respx.calls) == 4
+        assert all("sk-openai-upstream" not in call.request.headers["Authorization"] for call in respx.calls)
+
+    @pytest.mark.parametrize(
+        ("models_response", "expected_message"),
+        [
+            pytest.param(
+                httpx.Response(401, text="Invalid proxy server token passed"),
+                "/v1/models answered 401: Invalid proxy server token passed",
+                id="rejected-key",
+            ),
+            pytest.param(
+                httpx.Response(200, json={"data": [{"id": "embedding-model", "mode": "embedding"}]}),
+                "lists no chat model, pass one with --model",
+                id="no-chat-model",
+            ),
+        ],
+    )
+    @respx.mock
+    def test_test_flag_stops_before_any_completion_when_no_model_can_be_picked(
+        self, models_response: httpx.Response, expected_message: str
+    ) -> None:
+        respx.get(f"{_CLI_TEST_PROXY}/v1/models").mock(return_value=models_response)
+        completions: Final = _mock_cli_test_completions()
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert expected_message in raised.value.message
+        assert completions == []
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config
@@ -1991,6 +2081,30 @@ class TestProxyInitializationHelpers:
         assert captured["options"]["max_requests_jitter"] == 50
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_banner_curl_authenticates_and_names_no_model(self, capsys: pytest.CaptureFixture[str]) -> None:
+        pytest.importorskip("gunicorn")
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run"),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4012,
+                app=MagicMock(),
+                num_workers=1,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        banner: Final = capsys.readouterr().out
+        assert "curl --location 'http://0.0.0.0:4012/chat/completions'" in banner
+        assert '--header "Authorization: Bearer $LITELLM_MASTER_KEY"' in banner
+        assert '"model": "<your-model-name>"' in banner
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     @pytest.mark.parametrize("max_request_header_size", [DEFAULT_MAX_REQUEST_HEADER_SIZE, 128 * 1024])
     def test_gunicorn_workers_bound_graceful_shutdown_by_graceful_shutdown_timeout(
         self, monkeypatch, max_request_header_size: int
@@ -2959,14 +3073,16 @@ class TestRunServerDbSetup:
         with patch("httpx.get", return_value=httpx.Response(200, json={})) as mock_get:
             run_server.main(["--health", "--enforce_prisma_migration_check"], standalone_mode=False)
 
-        mock_get.assert_called_once_with(url="http://0.0.0.0:4000/health")
+        assert mock_get.call_args.kwargs["url"] == "http://0.0.0.0:4000/health"
         assert "--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out
 
     def test_the_retired_enforce_prisma_migration_check_opt_in_warns_on_test(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """`--test` returns before the config is read too, and prints the deprecation line before its request."""
-        with pytest.raises(ValueError, match="Invalid test value"):
+        with respx.mock:
+            respx.get("http://0.0.0.0:4000/v1/models").respond(json={"data": [{"id": "served-chat-model"}]})
+            _mock_cli_test_completions("http://0.0.0.0:4000")
             run_server.main(["--test", "--enforce_prisma_migration_check"], standalone_mode=False)
 
         assert "--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out

@@ -20,11 +20,12 @@ import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
 from pydantic import BeforeValidator, ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.litellm_core_utils.llm_request_utils import is_cost_map_model_past_deprecation_date
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -273,6 +274,36 @@ _LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object]
 _DECODED_JSON: Final = TypeAdapter[object](object)
 
 
+class _ListedModel(TypedDict):
+    id: ReadOnly[str]
+    mode: NotRequired[ReadOnly[str | None]]
+
+
+class _ModelList(TypedDict):
+    data: ReadOnly[tuple[_ListedModel, ...]]
+
+
+_MODEL_LIST: Final = TypeAdapter(_ModelList)
+
+
+def _proxy_api_key() -> str:
+    return os.getenv("LITELLM_MASTER_KEY") or "My API Key"
+
+
+def _pick_test_model(api_base: str, api_key: str) -> str:
+    response: Final = httpx.get(url=f"{api_base}/v1/models", headers={"Authorization": f"Bearer {api_key}"})
+    if response.is_error:
+        raise click.ClickException(f"GET {response.url} answered {response.status_code}: {response.text}")
+    chat_models: Final = tuple(
+        listed["id"]
+        for listed in _MODEL_LIST.validate_json(response.content)["data"]
+        if listed.get("mode") in (None, "chat")
+    )
+    if not chat_models:
+        raise click.ClickException(f"the proxy at {api_base} lists no chat model, pass one with --model")
+    return next((model for model in chat_models if not is_cost_map_model_past_deprecation_date(model)), chat_models[0])
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def echo_litellm_version():
@@ -284,7 +315,9 @@ class ProxyInitializationHelpers:
     @staticmethod
     def run_health_check(host, port):
         print("\nLiteLLM: Health Testing models in config")
-        response: Final = httpx.get(url=f"http://{host}:{port}/health")
+        response: Final = httpx.get(
+            url=f"http://{host}:{port}/health", headers={"Authorization": f"Bearer {_proxy_api_key()}"}
+        )
         print(json.dumps(response.json(), indent=4))
 
     _run_health_check = run_health_check
@@ -329,22 +362,14 @@ class ProxyInitializationHelpers:
     _run_config_validation = run_config_validation
 
     @staticmethod
-    def run_test_chat_completion(
-        host: str,
-        port: int,
-        model: str,
-        test: bool | str,
-    ):
-        request_model: Final = model or "gpt-3.5-turbo"
-        click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
+    def run_test_chat_completion(host: str, port: int, model: str | None) -> None:
         import openai
 
-        api_base = f"http://{host}:{port}"
-        if isinstance(test, str):
-            api_base = test
-        else:
-            raise ValueError("Invalid test value")
-        client: Final = openai.OpenAI(api_key="My API Key", base_url=api_base)
+        api_base: Final = f"http://{host}:{port}"
+        api_key: Final = _proxy_api_key()
+        request_model: Final = model or _pick_test_model(api_base, api_key)
+        click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
+        client: Final = openai.OpenAI(api_key=api_key, base_url=api_base)
 
         response: Final = client.chat.completions.create(
             model=request_model,
@@ -720,8 +745,9 @@ class ProxyInitializationHelpers:
                     _endpoint_str
                     + """
                 --header 'Content-Type: application/json' \\
+                --header "Authorization: Bearer $LITELLM_MASTER_KEY" \\
                 --data ' {
-                "model": "gpt-3.5-turbo",
+                "model": "<your-model-name>",
                 "messages": [
                     {
                     "role": "user",
@@ -1143,7 +1169,7 @@ def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | Non
 @click.option(
     "--test",
     flag_value=True,
-    help="proxy chat completions url to make a test request to",
+    help="Send test chat, streaming and text completion requests to the proxy at --host and --port",
 )
 @click.option(
     "--test_async",
@@ -1547,7 +1573,7 @@ def run_server(
         ProxyInitializationHelpers.run_health_check(host, port)
         return
     if test is True:
-        ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
+        ProxyInitializationHelpers.run_test_chat_completion(host, port, model)
         return
     else:
         worker_headers: Final = _DECODED_JSON.validate_python(json.loads(headers) if headers else headers)
