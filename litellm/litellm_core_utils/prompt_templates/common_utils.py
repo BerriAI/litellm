@@ -999,11 +999,17 @@ def _resolve_in_scope(scope: _DefsScope, ref: str) -> tuple[str, object] | None:
     return next(((ref, defs[ref]) if ref in defs else (name, defs[name]) for defs in scope if name in defs), None)
 
 
+class DefsRefTargetNotASchemaError(AttributeError):
+    pass
+
+
 def _definition_schema(definition: object) -> Mapping[str, object]:
     if isinstance(definition, bool):
         return {} if definition else {"not": {}}
     if not isinstance(definition, dict):
-        raise AttributeError(f"unpack_defs: a $ref target must be a schema object, not {type(definition).__name__}")
+        raise DefsRefTargetNotASchemaError(
+            f"unpack_defs: a $ref target must be a schema object, not {type(definition).__name__}"
+        )
     return definition
 
 
