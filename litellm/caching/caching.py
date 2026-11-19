@@ -13,7 +13,7 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from enum import Enum
 from itertools import chain
@@ -309,7 +309,7 @@ class Cache:
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
         _backend: BaseCache | None = None,
-        excluded_call_types: list[CachingSupportedCallTypes] | None = None,
+        excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
         **kwargs,
     ):
         """
@@ -356,7 +356,7 @@ class Cache:
 
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
-            excluded_call_types (list, optional): Call types to drop from supported_call_types. Defaults to None.
+            excluded_call_types (Sequence, optional): Call types to drop from supported_call_types. Defaults to None.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
