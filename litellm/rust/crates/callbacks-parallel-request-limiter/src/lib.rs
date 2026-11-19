@@ -22,7 +22,10 @@ pub use arithmetic::{
     no_max_tokens_output_floor, output_cap, throttled_limit,
 };
 pub use batch::{BatchFacts, TPD_SUFFIX, TPD_WINDOW_SECONDS};
-pub use builder::{McpScope, Selection, TpdLimit};
+pub use builder::{
+    AuthMetadata, Lookups, McpScope, Request as DescriptorRequest, RequestFacts, Selection,
+    TpdLimit,
+};
 pub use descriptor::{Declared, Descriptor, Limits, PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM};
 pub use engine::{
     Ctx, Engine, GuardedOp, Now, Op, Policy, SLOT_TTL_SECONDS, Settings, SlotAcquisition,
@@ -33,8 +36,10 @@ pub use enqueued::{
     ReservationBackend, process_monotonic,
 };
 pub use estimate::{
-    EstimateRequest, PythonServed, REQUEST_KEYS, input_and_output_tokens, tokens_for_request,
+    EstimateRequest, PythonServed, REQUEST_KEYS, explicit_output_cap, input_and_output_tokens,
+    tokens_for_request,
 };
+pub use hosted::write_output_cap;
 pub use limiter::{
     BatchResponseFacts, CallIdFacts, Candidate, CapSettings, FailureFacts, LogPrepareInputs,
     ModelFacts, NAME, ParallelRequestLimiter, Phase, Plan, PolicyFacts, PostCallFailureFacts,
