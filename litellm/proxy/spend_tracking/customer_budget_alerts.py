@@ -4,7 +4,7 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import product
 from typing import Final, Protocol, runtime_checkable
 
@@ -14,6 +14,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.duration_parser import get_budget_window_end
 from litellm.proxy.db.budget_window_spend_writer import CommittedWindowSpend
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_identity
 from litellm.proxy.management_helpers.customer_hierarchy import (
@@ -163,15 +164,11 @@ async def _app_entity(
 
 
 def _app_usages(
-    scope: AppBudgetScope,
-    entity_id: str,
     budget: Budget,
     lifetime_spend: float,
     store: AppStore,
     windows: Sequence[CommittedWindowSpend] | None,
 ) -> tuple[CustomerBudgetUsage, ...]:
-    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
-
     if windows is None:
         return (
             (
@@ -189,13 +186,9 @@ def _app_usages(
             max_budget=limit.max_budget,
             spend=window.spend,
             window_start=window.window_start,
-            reset_at=customer_window_counters(
-                scope,
-                entity_id,
-                (limit,),
-                now=window.window_start.replace(tzinfo=timezone.utc),
-                reset_settings=store.customers.settings,
-            )[0].reset_at,
+            reset_at=get_budget_window_end(
+                window.window_duration, window.window_start, store.customers.settings.timezone
+            ),
         )
         for window, limit in product(windows, app_budget_limits(budget))
         if window.window_duration == limit.budget_duration
@@ -218,7 +211,7 @@ async def _app_events(
     budget: Final = entity.budget if isinstance(entity, App) else entity.effective_budget
     if budget is None:
         return ()
-    usages: Final = _app_usages(scope, entity_id, budget, entity.spend, store, windows)
+    usages: Final = _app_usages(budget, entity.spend, store, windows)
 
     def event(kind: CustomerBudgetEventType, usage: CustomerBudgetUsage, threshold: float) -> CustomerBudgetEvent:
         return CustomerBudgetEvent(
@@ -248,8 +241,6 @@ async def _app_events(
         existing
         if existing
         else _app_usages(
-            scope,
-            entity_id,
             Budget(
                 max_budget=budget.soft_budget,
                 budget_duration=budget.budget_duration,
@@ -355,10 +346,8 @@ class CustomerBudgetAlerting:
         ttl: Final = (
             100 * 365 * 24 * 60 * 60
             if event.period == "lifetime"
-            else max(
-                SlackAlertingArgsEnum.budget_alert_ttl.value if event.scope in _APP_SCOPES else 1,
-                math.ceil((datetime.fromisoformat(event.period) - event.timestamp).total_seconds()),
-            )
+            else max(1, math.ceil((datetime.fromisoformat(event.period) - event.timestamp).total_seconds()))
+            + (SlackAlertingArgsEnum.budget_alert_ttl.value if event.scope in _APP_SCOPES else 0)
         )
         if await cache.async_increment_cache(key=key, value=1, ttl=ttl) != 1:
             return

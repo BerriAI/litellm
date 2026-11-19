@@ -44,7 +44,17 @@ _ROWS: Final[Mapping[CustomerBudgetScope, Mapping[str, object]]] = {
 
 
 @pytest.mark.parametrize("scope", ("app", "app_customer_org", "app_customer_member"))
-@pytest.mark.parametrize("duration", (None, "1mo", "12mo", "7d"))
+@pytest.mark.parametrize(
+    "duration,reset_at",
+    (
+        (None, None),
+        ("1mo", None),
+        ("12mo", None),
+        ("7d", None),
+        ("1mo", _NOW.replace(year=2028)),
+        ("12mo", _NOW.replace(year=2028)),
+    ),
+)
 @pytest.mark.parametrize("hard_limit", (None, 10.0))
 @pytest.mark.parametrize("delayed", (False, True))
 @pytest.mark.parametrize("legacy", (False, True))
@@ -55,6 +65,7 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
     respx_mock: respx.MockRouter,
     scope: CustomerBudgetScope,
     duration: str | None,
+    reset_at: datetime | None,
     hard_limit: float | None,
     delayed: bool,
     legacy: bool,
@@ -63,7 +74,17 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
     database, store, app = app_store
     receiver: Final = respx_mock.post(_URL).respond(200)
     await database.litellm_budgettable.create(
-        {"budget_id": "policy", "max_budget": hard_limit, "soft_budget": 5, "budget_duration": duration}
+        {
+            "budget_id": "policy",
+            "max_budget": hard_limit,
+            "soft_budget": 5,
+            "budget_duration": duration,
+            "budget_limits": [
+                {"max_budget": hard_limit, "budget_duration": duration, "reset_at": reset_at.isoformat()}
+            ]
+            if hard_limit is not None and reset_at is not None
+            else [],
+        }
     )
     await database.litellm_apptable.update(
         {"app_id": app.app_id},
@@ -87,7 +108,11 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
         windows: Final = (
             (
                 CommittedWindowSpend(
-                    entity_type=scope, entity_id=entity_id, window_duration=duration, window_start=_NOW, spend=spend
+                    entity_type=scope,
+                    entity_id=entity_id,
+                    window_duration=duration,
+                    window_start=_NOW - timedelta(days=3) if duration == "7d" else _NOW,
+                    spend=spend,
                 ),
             )
             if duration is not None
@@ -132,7 +157,9 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
         )
         assert len(receiver.calls) == len(expected)
     if duration is not None and delayed:
-        rolled: Final = windows[0].model_copy(update={"window_start": _NOW.replace(year=2027)})
+        rolled: Final = windows[0].model_copy(
+            update={"window_start": _NOW.replace(year=2027, day=4 if duration == "7d" else 1)}
+        )
         for seconds in (15, 18):
             delivered_at: Final = _NOW + timedelta(days=400, seconds=seconds)
             monkeypatch.setattr("time.time", delivered_at.timestamp)
@@ -475,6 +502,31 @@ async def test_crossings_do_not_repeat_after_a_day_or_near_the_end_of_the_budget
 class _BrokenCallback(CustomLogger):
     async def async_on_customer_budget_event(self, event: CustomerBudgetEvent) -> None:
         raise RuntimeError("callback unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("app", "app_customer_org", "app_customer_member"))
+async def test_app_warning_claim_survives_reset_after_an_early_period_warning(
+    scope: CustomerBudgetScope, alerts: DualCache, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    reset: Final = _NOW.replace(month=2)
+    for instant in (_NOW, reset + timedelta(seconds=2), reset + timedelta(hours=2)):
+        monkeypatch.setattr("time.time", instant.timestamp)
+        await CustomerBudgetAlerting.emit(
+            CustomerBudgetEvent(
+                event="soft_budget_crossed",
+                scope=scope,
+                entity_id="app:member",
+                spend=6,
+                budget=5,
+                budget_duration="1mo",
+                period=reset.isoformat(),
+                timestamp=instant,
+            ),
+            alerts,
+        )
+    assert receiver.call_count == 1
 
 
 @pytest.mark.asyncio
