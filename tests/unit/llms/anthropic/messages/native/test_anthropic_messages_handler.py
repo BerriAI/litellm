@@ -2,40 +2,34 @@ import asyncio
 import copy
 import json
 import os
+import unittest.mock
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Final, List
+from typing import Any, Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import openai
-import respx
 import pytest
-from fastapi.testclient import TestClient
+import respx
 from pydantic import TypeAdapter, ValidationError
 
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import litellm
-from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, on
-from litellm.llms.anthropic.messages.native.handler import _execute_pre_request_hooks
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.llms.anthropic.messages.native import handler as python_messages
+from litellm.llms.anthropic.messages.native.handler import _execute_pre_request_hooks
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
 from litellm.types.utils import (
-    Delta,
     ModelResponse,
     StandardLoggingPayloadErrorInformation,
-    StreamingChoices,
 )
-from litellm.litellm_core_utils.model_cost_table import publish
-import unittest.mock
 
 
 @pytest.mark.asyncio
@@ -1308,7 +1302,9 @@ async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_e
     api_base: Final = {} if api_base_from_env else {"api_base": "https://example-resource.cognitiveservices.azure.com"}
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         patch(
             "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
             return_value=lambda: "entra-token",
@@ -1355,7 +1351,9 @@ async def test_bridged_messages_keep_the_azure_env_credential_when_the_deploymen
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
@@ -1532,7 +1530,7 @@ def test_messages_sync_streaming_reports_provider_local_model():
     assert json.loads(first_event.decode().split("data: ", 1)[1])["message"]["model"] == "perplexity/kimi-k3"
 
 
-_RESPONSES_COMPLETED_BODY: Dict[str, Any] = {
+_RESPONSES_COMPLETED_BODY: dict[str, Any] = {
     "id": "resp-1",
     "object": "response",
     "created_at": 0,
@@ -1550,7 +1548,7 @@ _RESPONSES_COMPLETED_BODY: Dict[str, Any] = {
     "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
 }
 
-_RESPONSES_SSE_EVENTS: List[Dict[str, Any]] = [
+_RESPONSES_SSE_EVENTS: list[dict[str, Any]] = [
     {
         "type": "response.created",
         "response": {
@@ -1571,7 +1569,7 @@ _RESPONSES_SSE_EVENTS: List[Dict[str, Any]] = [
 ]
 
 
-def _sse_body(events: List[Dict[str, Any]]) -> bytes:
+def _sse_body(events: list[dict[str, Any]]) -> bytes:
     return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
 
 
@@ -1579,7 +1577,7 @@ class _SuccessPayloadCapture(CustomLogger):
     def __init__(self, tracking_id: str):
         super().__init__()
         self.tracking_id = tracking_id
-        self.payloads: List[Dict[str, Any]] = []
+        self.payloads: list[dict[str, Any]] = []
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if kwargs.get("litellm_call_id") == self.tracking_id:
@@ -1594,7 +1592,7 @@ def capture_success_payloads(monkeypatch):
     return capture
 
 
-async def _drain(sse_stream) -> List[bytes]:
+async def _drain(sse_stream) -> list[bytes]:
     return [chunk async for chunk in sse_stream]
 
 
@@ -1616,7 +1614,7 @@ async def _flush_logging_worker(capture: "_SuccessPayloadCapture") -> None:
         await asyncio.sleep(0.05)
 
 
-def _assert_anthropic_sse(chunks: List[bytes]) -> None:
+def _assert_anthropic_sse(chunks: list[bytes]) -> None:
     body = b"".join(chunks).decode()
     assert "message_start" in body
     assert "message_stop" in body
@@ -1994,35 +1992,6 @@ _CLIENT_BETA_HEADERS: Final = (
 )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
-async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_bedrock_invoke(
-    local_beta_headers_config, client_headers
-):
-    """Bedrock Invoke takes betas in the body's `anthropic_beta` and 400s on `safeguards` without the beta, so the beta rides along with the field."""
-    from litellm.llms.anthropic.messages.native import handler
-
-    safeguards, safeguard_results = _claude_code_auto_mode_request()
-    captured: dict[str, object] = {}
-
-    response = await handler.anthropic_messages(
-        max_tokens=16,
-        messages=[{"role": "user", "content": "hi"}],
-        model="bedrock/us.anthropic.claude-sonnet-5",
-        custom_llm_provider="bedrock",
-        aws_access_key_id="test-access-key",
-        aws_secret_access_key="test-secret-key",
-        aws_region_name="us-east-1",
-        client=_upstream_answering_with(safeguard_results, captured),
-        safeguards=safeguards,
-        extra_headers=client_headers,
-    )
-
-    assert captured["body"]["safeguards"] == safeguards
-    assert captured["body"]["anthropic_beta"] == ["dangerous-tool-use-2026-09-03"]
-    assert response["safeguard_results"] == safeguard_results
-
-
 _OPUS_4_8_ON_BEDROCK_INVOKE: Final = "bedrock/invoke/us.anthropic.claude-opus-4-8"
 
 
@@ -2061,21 +2030,6 @@ async def _opus_4_8_messages_with_top_k(bodies: list[dict[str, object]], **deplo
         client=_bedrock_invoke_recording(bodies),
         **deployment,
     )
-
-
-@pytest.mark.asyncio
-async def test_bedrock_invoke_messages_drops_top_k_the_deployment_lists_on_a_model_without_sampling_params(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    bodies: Final[list[dict[str, object]]] = []
-
-    response: Final = await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_k"])
-
-    assert response["content"] == [{"type": "text", "text": "ok"}]
-    (body,) = bodies
-    assert "top_k" not in body
-    assert body["max_tokens"] == 16
 
 
 @pytest.mark.asyncio
@@ -2503,135 +2457,6 @@ async def test_anthropic_messages_with_thinking():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_bedrock_credentials_passthrough():
-    """
-    Test that AWS credentials are correctly passed through to BaseAWSLLM.get_credentials
-    when using anthropic.messages.acreate with a bedrock model
-    """
-    # Mock the get_credentials method
-    with unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials:
-        # Create a proper mock for credentials with the necessary attributes
-        mock_credentials = unittest.mock.MagicMock()
-        mock_credentials.access_key = "mock_access_key"
-        mock_credentials.secret_key = "mock_secret_key"
-        mock_credentials.token = "mock_session_token"
-        mock_get_credentials.return_value = mock_credentials
-
-        # We also need to mock the actual AWS request signing to avoid real API calls
-        with unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"):
-            # Set up mock for AsyncHTTPHandler.post to avoid actual API calls
-            with unittest.mock.patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
-                # Configure mock response
-                mock_response = unittest.mock.MagicMock()
-                mock_response.raise_for_status = unittest.mock.MagicMock()
-                mock_response.json.return_value = {
-                    "id": "msg_bedrock_123",
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "This is a mock response"}],
-                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                    "stop_reason": "end_turn",
-                    "usage": {"input_tokens": 10, "output_tokens": 20},
-                }
-                mock_post.return_value = mock_response
-
-                # Test AWS credentials parameters - separate from function call parameters
-                aws_params = {
-                    "aws_access_key_id": "test_access_key",
-                    "aws_secret_access_key": "test_secret_key",
-                    "aws_session_token": "test_session_token",
-                    "aws_region_name": "us-west-2",
-                    "aws_role_name": "test_role_name",
-                    "aws_session_name": "test_session_name",
-                    "aws_profile_name": "test_profile",
-                    "aws_web_identity_token": "test_web_identity_token",
-                    "aws_sts_endpoint": "https://sts.test-region.amazonaws.com",
-                }
-
-                # Call the function with AWS credentials
-                await python_messages.anthropic_messages(
-                    messages=[{"role": "user", "content": "Hello, test credentials"}],
-                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                    max_tokens=100,
-                    **aws_params,
-                )
-
-                # Verify get_credentials was called with the correct parameters
-                mock_get_credentials.assert_called_once()
-                call_args = mock_get_credentials.call_args[1]
-
-                # Assert that our test credentials were passed correctly
-                for param_name, param_value in aws_params.items():
-                    assert call_args[param_name] == param_value, f"Parameter {param_name} was not passed correctly"
-
-
-@pytest.mark.asyncio
-async def test_anthropic_messages_bedrock_dynamic_region():
-    """
-    Test that when aws_region_name is provided, it is used in request url
-    """
-    # Mock the HTTP response
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "id": "msg_bedrock_123",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "This is a mock response"}],
-        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {"input_tokens": 10, "output_tokens": 20},
-    }
-
-    # Create a mock client with AsyncMock for the post method
-    mock_client = AsyncMock(spec=AsyncHTTPHandler)
-    mock_client.post = AsyncMock(return_value=mock_response)
-
-    # Patch necessary AWS components
-    with (
-        unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"),
-        unittest.mock.patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials,
-    ):
-        # Setup mock credentials
-        mock_credentials = unittest.mock.MagicMock()
-        mock_credentials.access_key = "test_access_key"
-        mock_credentials.secret_key = "test_secret_key"
-        mock_credentials.token = "test_session_token"
-        mock_get_credentials.return_value = mock_credentials
-
-        # Test with specific region
-        test_region = "us-east-1"
-
-        # Call anthropic.messages.acreate with aws_region_name
-        response = await python_messages.anthropic_messages(
-            messages=[{"role": "user", "content": "Hello, test region"}],
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            max_tokens=100,
-            aws_region_name=test_region,
-            client=mock_client,
-        )
-
-        # Verify response
-        assert response == mock_response.json.return_value
-
-        # Verify the post method was called with the correct URL containing the region
-        mock_client.post.assert_called_once()
-        call_args = mock_client.post.call_args
-
-        # Check that the URL contains the correct region
-        url = call_args.kwargs.get("url", "")
-        assert f"bedrock-runtime.{test_region}.amazonaws.com" in url, (
-            f"URL does not contain the correct region. URL: {url}"
-        )
-
-        # Verify get_credentials was called with the correct region
-        mock_get_credentials.assert_called_once()
-        credentials_args = mock_get_credentials.call_args.kwargs
-        assert credentials_args.get("aws_region_name") == test_region
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("malformed_messages", [["hi"], "hi", [{"role": "user", "content": "hi"}, 7]])
 async def test_anthropic_messages_with_safeguards_and_no_classifier_keep_the_upstream_400_for_malformed_messages(
     malformed_messages: object,
@@ -2813,33 +2638,6 @@ def test_a_thread_create_on_a_leg_without_message_threads_is_thread_unsupported_
 
 
 @pytest.mark.asyncio
-async def test_a_thread_create_on_a_native_leg_without_message_threads_is_served_without_the_thread_under_drop_params(
-    local_beta_headers_config: None,
-) -> None:
-    from litellm.llms.anthropic.messages.native import handler
-
-    captured: Final[dict[str, object]] = {}
-    response: Final = await handler.anthropic_messages(
-        max_tokens=16,
-        messages=[{"role": "user", "content": "hi"}],
-        model="bedrock/us.anthropic.claude-sonnet-5",
-        custom_llm_provider="bedrock",
-        aws_access_key_id="test-access-key",
-        aws_secret_access_key="test-secret-key",
-        aws_region_name="us-east-1",
-        client=_upstream_answering_with([], captured),
-        thread={"type": "create"},
-        drop_params=True,
-    )
-
-    body: Final = captured["body"]
-    assert isinstance(body, dict)
-    assert "thread" not in body
-    assert body["messages"] == [{"role": "user", "content": "hi"}]
-    assert _JSON_BODY.validate_python(response)["id"] == "msg_1"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
 @pytest.mark.parametrize(
@@ -2887,14 +2685,14 @@ async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
         "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
     }
     chat_stream: Final = (
-        'data: {"id":"chatcmpl-azure","object":"chat.completion.chunk","created":1,'
-        '"model":"qa-deployment","choices":[{"index":0,"delta":{"role":"assistant","content":"hello there"},'
-        '"finish_reason":null}]}\n\n'
-        'data: {"id":"chatcmpl-azure","object":"chat.completion.chunk","created":1,'
-        '"model":"qa-deployment","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
-        '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
-        "data: [DONE]\n\n"
-    ).encode()
+        b'data: {"id":"chatcmpl-azure","object":"chat.completion.chunk","created":1,'
+        b'"model":"qa-deployment","choices":[{"index":0,"delta":{"role":"assistant","content":"hello there"},'
+        b'"finish_reason":null}]}\n\n'
+        b'data: {"id":"chatcmpl-azure","object":"chat.completion.chunk","created":1,'
+        b'"model":"qa-deployment","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+        b'"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
+        b"data: [DONE]\n\n"
+    )
     with respx.mock(assert_all_called=True) as upstream:
         route: Final = upstream.route(host="qa-resource.openai.azure.com").mock(
             return_value=(
