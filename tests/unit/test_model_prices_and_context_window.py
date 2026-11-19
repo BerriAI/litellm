@@ -225,6 +225,50 @@ def test_geo_catalog_rows_price_the_declared_long_context_boundary(
     ) == pytest.approx((prompt_tokens * row[f"input_cost_per_token{suffix}"], row[f"output_cost_per_token{suffix}"]))
 
 
+# OpenAI's pricing page, Life sciences models, gpt-6-rosalind (promotional through at least 2026-12-31),
+# USD per 1M tokens. Short context is up to 272K input tokens; the long-context column bills the whole request.
+GPT_6_ROSALIND_PAGE_RATES_PER_1M: Final = MappingProxyType(
+    {
+        "input_cost_per_token": 10.0,
+        "cache_read_input_token_cost": 1.0,
+        "cache_creation_input_token_cost": 12.5,
+        "cache_creation_input_token_cost_above_12hr": 25.0,
+        "output_cost_per_token": 50.0,
+        "input_cost_per_token_above_272k_tokens": 20.0,
+        "cache_read_input_token_cost_above_272k_tokens": 2.0,
+        "cache_creation_input_token_cost_above_272k_tokens": 25.0,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 50.0,
+        "output_cost_per_token_above_272k_tokens": 75.0,
+    }
+)
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH))
+def test_gpt_6_rosalind_rows_carry_every_rate_on_the_pricing_page(path: Path) -> None:
+    # The short-context input, output and cached input moved to the promotional rates while the cache
+    # writes and the whole long-context column kept the launch rates, 1.5x what OpenAI bills.
+    row: Final = json.loads(path.read_text())["gpt-6-rosalind"]
+    assert {key: row[key] * 1_000_000 for key in GPT_6_ROSALIND_PAGE_RATES_PER_1M} == pytest.approx(
+        dict(GPT_6_ROSALIND_PAGE_RATES_PER_1M)
+    )
+
+
+@pytest.mark.parametrize("above_threshold", (False, True))
+def test_gpt_6_rosalind_prices_both_sides_of_the_272k_boundary_at_the_page_rates(
+    above_threshold: bool, local_model_cost_map: None
+) -> None:
+    prompt_tokens: Final = 272_000 + int(above_threshold)
+    suffix: Final = "_above_272k_tokens" if above_threshold else ""
+    assert litellm.cost_per_token(model="gpt-6-rosalind", prompt_tokens=prompt_tokens, completion_tokens=5_000) == (
+        pytest.approx(
+            (
+                prompt_tokens * GPT_6_ROSALIND_PAGE_RATES_PER_1M[f"input_cost_per_token{suffix}"] / 1_000_000,
+                5_000 * GPT_6_ROSALIND_PAGE_RATES_PER_1M[f"output_cost_per_token{suffix}"] / 1_000_000,
+            )
+        )
+    )
+
+
 @pytest.mark.parametrize("model", ("openai.gpt-6.2-sol", "openai.gpt-6.2-astra"))
 def test_bedrock_mantle_gpt_6_2_deployments_are_served_by_the_mantle_responses_config(
     model: str, local_model_cost_map: None
