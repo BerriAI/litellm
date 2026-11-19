@@ -61,7 +61,7 @@ async def refuse_build(target: VectorStoreTarget, request: httpx.Request) -> htt
     raise AssertionError("eligibility tests never build a target request")
 
 
-def plan_for(provider: NativeSearchProvider, endpoint: str) -> VectorStorePassthroughPlan:
+def plan_for(provider: NativeSearchProvider, endpoint: str, client_query: str = "") -> VectorStorePassthroughPlan:
     targets: Final = tuple(
         VectorStoreTarget(
             name,
@@ -79,7 +79,7 @@ def plan_for(provider: NativeSearchProvider, endpoint: str) -> VectorStorePassth
         for name in ("primary", "backup")
     )
     return VectorStorePassthroughPlan(
-        VectorStoreFallbackPlan(targets, cooldown_time=0), route_builder(provider, endpoint)
+        VectorStoreFallbackPlan(targets, cooldown_time=0), route_builder(provider, endpoint), client_query
     )
 
 
@@ -118,7 +118,7 @@ async def test_native_status_controls_failover_without_changing_body_or_resource
                 content=body,
                 headers={"api-key": "primary-key", "Authorization": "Bearer primary-key"},
             ),
-            plan_for(provider, endpoint),
+            plan_for(provider, endpoint, "api-version=test"),
         )
         await response.aread()
     retryable: Final = status in (408, 429, 500, 503)
@@ -148,7 +148,7 @@ async def test_connection_failure_falls_back_but_last_native_error_is_preserved(
         response: Final = await send_with_vector_store_fallbacks(
             client,
             client.build_request("GET", "https://primary.example/indexes/physical-index/docs?search=test"),
-            plan_for("azure_ai", "indexes/physical-index/docs"),
+            plan_for("azure_ai", "indexes/physical-index/docs", "search=test"),
         )
     assert response.status_code == 503
     assert response.content == b'{"error":"native overload"}'
@@ -173,7 +173,7 @@ async def test_opensearch_resigns_each_target_and_keeps_physical_index() -> None
                 json={"query": {"match_all": {}}},
                 headers={"Authorization": "primary signature"},
             ),
-            plan_for("opensearch", "public-alias/_search"),
+            plan_for("opensearch", "public-alias/_search", "size=3"),
         )
         await response.aread()
     assert [request.url.path for request in seen] == ["/prefix/physical-index/_search"] * 2
@@ -188,10 +188,10 @@ async def test_opensearch_resigns_each_target_and_keeps_physical_index() -> None
     ("client_url", "expected"),
     [
         ("https://primary/search", "https://backup/search?api-version=1"),
-        ("https://primary/search?q=water", "https://backup/search?q=water"),
+        ("https://primary/search?q=water", "https://backup/search?api-version=1&q=water"),
     ],
 )
-def test_retargeted_request_copies_only_a_present_client_query(client_url: str, expected: str) -> None:
+def test_retargeted_request_merges_client_query_into_fallback_query(client_url: str, expected: str) -> None:
     retargeted: Final = retargeted_request(
         httpx.Request("GET", client_url, headers={"api-key": "primary", "accept": "application/json"}),
         "https://backup/search?api-version=1",
@@ -252,7 +252,7 @@ async def test_vertex_retargets_datastore_project_and_credentials(
         await response.aread()
     assert [request.url.path for request in seen] == [
         "/" + endpoint,
-        f"/v1/projects/{'backup-project' if configured_project else 'client'}/locations/global/collections/default_collection/dataStores/backup-datastore/servingConfigs/default_config:search",
+        f"/v1/projects/{'backup-project' if configured_project else 'adc-project'}/locations/global/collections/default_collection/dataStores/backup-datastore/servingConfigs/default_config:search",
     ]
     assert [request.headers["authorization"] for request in seen] == [
         "Bearer route-token",
@@ -465,3 +465,44 @@ async def test_malformed_gzip_keeps_received_status_retryability(status: int) ->
         ["primary.example"] if status == 400 else ["primary.example", "backup.example"]
     )
 
+
+
+@pytest.mark.asyncio
+async def test_azure_backup_uses_its_own_base_query_and_service_name() -> None:
+    seen: Final[list[httpx.Request]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(503 if request.url.host == "primary.example" else 200, json={"value": []})
+
+    original: Final = plan_for("azure_ai", "indexes/docs/docs/search")
+    primary, backup = original.fallback_plan.targets
+    plan: Final = replace(
+        original,
+        fallback_plan=replace(
+            original.fallback_plan,
+            targets=(
+                primary,
+                replace(
+                    backup,
+                    params={
+                        **{key: value for key, value in backup.params.items() if key != "api_base"},
+                        "azure_search_service_name": "backup-service",
+                    },
+                ),
+            ),
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        response: Final = await send_with_vector_store_fallbacks(
+            client,
+            client.build_request(
+                "POST", "https://primary.example/indexes/docs/docs/search?api-version=primary", json={"search": "hi"}
+            ),
+            plan,
+        )
+    assert response.status_code == 200
+    assert [str(request.url) for request in seen] == [
+        "https://primary.example/indexes/docs/docs/search?api-version=primary",
+        "https://backup-service.search.windows.net/indexes/docs/docs/search",
+    ]

@@ -2838,9 +2838,9 @@ async def _azure_search_fallback_request(
     provider_config: BaseVectorStoreConfig, endpoint: str, target: VectorStoreTarget, request: httpx.Request
 ) -> httpx.Request:
     litellm_params: Final = dict(with_named_credential(target.params))
-    base_target_url: Final = _optional_str(litellm_params.get("api_base"))
-    if base_target_url is None:
-        raise ValueError(f"API base not found for {target.store_id}")
+    base_target_url: Final = provider_config.get_complete_url(
+        api_base=_optional_str(litellm_params.get("api_base")), litellm_params=litellm_params
+    )
     auth_credentials: Final = _AUTH_CREDENTIALS.validate_python(
         provider_config.get_auth_credentials(litellm_params=litellm_params)  # pyright: ignore[reportUnknownMemberType]  # provider interface still accepts an untyped parameter dict
     )
@@ -3667,7 +3667,7 @@ async def _vertex_search_fallback_request(
     litellm_params: Final = with_named_credential(target.params)
     token, project = await VertexBase().ensure_access_token_async(
         credentials=_optional_str(litellm_params.get("vertex_credentials")),
-        project_id=_optional_str(litellm_params.get("vertex_project")) or matched["project"],
+        project_id=_optional_str(litellm_params.get("vertex_project")),
         custom_llm_provider="vertex_ai",
     )
     location: Final = _optional_str(litellm_params.get("vertex_location")) or matched["location"]

@@ -44,6 +44,7 @@ _AUTH_HEADERS: Final = frozenset(
 class VectorStorePassthroughPlan:
     fallback_plan: VectorStoreFallbackPlan
     build_request: TargetRequestBuilder
+    client_query: str
 
 
 async def set_passthrough_fallback_plan(
@@ -70,15 +71,18 @@ async def set_passthrough_fallback_plan(
         target.provider != "vertex_ai/search_api" or target.params.get("vertex_engine_id") for target in plan.targets
     ):
         raise HTTPException(400, "Native Vertex fallbacks require search_api data stores")
-    setattr(request.state, PASSTHROUGH_FALLBACK_STATE, VectorStorePassthroughPlan(plan, build_request))
+    setattr(
+        request.state,
+        PASSTHROUGH_FALLBACK_STATE,
+        VectorStorePassthroughPlan(plan, build_request, request.url.query),
+    )
 
 
 def retargeted_request(request: httpx.Request, url: httpx.URL | str, auth_headers: Mapping[str, str]) -> httpx.Request:
     forwarded: Final = {key: value for key, value in request.headers.items() if key.lower() not in _AUTH_HEADERS}
-    target: Final = httpx.URL(url)
     return httpx.Request(
         request.method,
-        target.copy_with(query=request.url.query) if request.url.query else target,
+        httpx.URL(url).copy_merge_params(request.url.params),
         headers={**forwarded, **auth_headers},
         content=request.content,
         extensions=request.extensions,
@@ -91,10 +95,17 @@ async def send_with_vector_store_fallbacks(
     plan: VectorStorePassthroughPlan,
 ) -> httpx.Response:
     primary: Final = plan.fallback_plan.targets[0]
+    client_request: Final = httpx.Request(
+        request.method,
+        request.url.copy_with(query=plan.client_query.encode() or None),
+        headers=request.headers,
+        content=request.content,
+        extensions=request.extensions,
+    )
 
     async def attempt(target: VectorStoreTarget) -> Attempt[httpx.Response]:
         try:
-            prepared: Final = request if target is primary else await plan.build_request(target, request)
+            prepared: Final = request if target is primary else await plan.build_request(target, client_request)
         except Exception as error:  # noqa: BLE001  # credential preparation failures are terminal attempt values
             return Failed(target, error, False)
         if isinstance(prepared, IndexRefusal):
