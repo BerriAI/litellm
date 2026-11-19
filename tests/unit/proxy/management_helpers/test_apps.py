@@ -1,10 +1,12 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from typing import Final
 from uuid import uuid4
 
 import pytest
 from pydantic import TypeAdapter
 
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id, app_scope_identity
 from litellm.proxy.management_helpers.customer_hierarchy import ErrorCode, Failure
 from litellm.types.proxy.management_endpoints.apps import (
@@ -102,15 +104,37 @@ class CompositeTable(AppTable):
         return await Table.update(self, where, data)
 
 
+class AppConfigTable(Table):
+    def __init__(self, database: Database) -> None:
+        super().__init__("param_name", database)
+        self.read_error: Exception | None = None
+
+    async def find_unique(
+        self, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Record | None:
+        self.read_count += 1
+        if self.read_error is not None:
+            raise self.read_error
+        return await super().find_unique(where, include)
+
+
 class AppDatabase(Database):
     def __init__(self) -> None:
         super().__init__()
+        self.committed = False
+        self.litellm_config = AppConfigTable(self)
         self.litellm_apptable: Final = AppTable("app_id", self)
         self.litellm_appcustomerorgtable: Final = CompositeTable("app_id_customer_org_id", self)
         self.litellm_appcustomermembertable: Final = CompositeTable("app_id_customer_member_id", self)
         self.litellm_teamtable: Final = AppTable("team_id", self)
         self.litellm_projecttable = AppTable("project_id", self)
         self.litellm_verificationtoken = AppTable("token", self)
+
+    @asynccontextmanager
+    async def tx(self) -> AsyncGenerator["AppDatabase", None]:
+        async with super().tx():
+            yield self
+        self.committed = True
 
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
@@ -139,6 +163,22 @@ class AppDatabase(Database):
             return super().has_budget_reference(budget_id, relation)
         table, field = reference
         return any(row.model_dump().get(field) == budget_id for row in table.rows.values())
+
+
+class AppPrismaClient:
+    def __init__(self, db: AppDatabase) -> None:
+        self.db: Final = db
+
+
+class CommitAwareCache(UserApiKeyCache):
+    def __init__(self, database: AppDatabase) -> None:
+        super().__init__()
+        self.database: Final = database
+        self.invalidated_after_commit: bool | None = None
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.invalidated_after_commit = self.database.committed
+        await super().async_delete_cache(key)
 
 
 async def seed_resources(database: AppDatabase) -> None:
@@ -197,6 +237,68 @@ async def test_apps_are_opt_in_and_discovery_does_not_configure_a_resource() -> 
     assert isinstance(rejected, AppFailure) and rejected.status == 409
     assert not database.litellm_apptable.rows
     assert await store.definition() == AppDefinition()
+
+
+@pytest.mark.asyncio
+async def test_definition_cache_caches_an_absent_config() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW, cache=UserApiKeyCache())
+
+    assert await store.definition() == AppDefinition()
+    assert await store.definition() == AppDefinition()
+    assert database.litellm_config.read_count == 1
+
+
+@pytest.mark.asyncio
+async def test_definition_cache_is_invalidated_after_a_config_update() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW, cache=UserApiKeyCache())
+    assert await store.definition() == AppDefinition()
+
+    stored: Final = await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    assert stored == AppDefinition(resource_type=AppResourceType.TEAM)
+    await store.invalidate_definition_cache()
+
+    assert await store.definition() == AppDefinition(resource_type=AppResourceType.TEAM)
+    assert await store.definition() == AppDefinition(resource_type=AppResourceType.TEAM)
+    assert database.litellm_config.read_count == 3
+
+
+@pytest.mark.asyncio
+async def test_app_store_dependency_invalidates_after_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.management_v1.apps import get_app_store
+
+    database: Final = AppDatabase()
+    cache: Final = CommitAwareCache(database)
+    monkeypatch.setattr(proxy_server, "prisma_client", AppPrismaClient(database))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    await AppStore(database, NOW, cache=cache).definition()
+
+    dependency: Final = get_app_store()
+    store: Final = await anext(dependency)
+    definition: Final = AppDefinition(resource_type=AppResourceType.TEAM)
+    assert await store.put_definition(definition) == definition
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(dependency)
+
+    assert cache.invalidated_after_commit is True
+    assert await AppStore(database, NOW, cache=cache).definition() == definition
+
+
+@pytest.mark.asyncio
+async def test_definition_cache_does_not_cache_database_errors() -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW, cache=UserApiKeyCache())
+    database.litellm_config.read_error = RuntimeError("database read failed")
+
+    with pytest.raises(RuntimeError, match="database read failed"):
+        await store.definition()
+
+    database.litellm_config.read_error = None
+    assert await store.definition() == AppDefinition()
+    assert database.litellm_config.read_count == 2
 
 
 @pytest.mark.asyncio

@@ -905,8 +905,11 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    own_spend_log_routes = ("/spend/logs", "/spend/logs/v2")
+
     self_managed_routes = [
         "/management/v1/customer_budget_increase_requests",
+        *own_spend_log_routes,
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",
@@ -3407,6 +3410,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     model_max_budget: Mapping[str, object] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3979,6 +3983,7 @@ class SpendLogsMetadata(TypedDict):
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    route_call_type: ReadOnly[NotRequired[str | None]]
     upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool | None]]
@@ -4637,6 +4642,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
     caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
@@ -5465,6 +5471,8 @@ class BaseDailySpendTransaction(TypedDict):
     autorouter_savings_spend: NotRequired[float]
     guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
     customer_margin_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    cache_cost: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
+    priced_cache_tokens: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

@@ -2856,3 +2856,47 @@ def test_spent_proxy_budget_refuses_chat_routes(monkeypatch: pytest.MonkeyPatch,
     _global_proxy_budget_check(global_proxy_spend=0.4, skip_budget_checks=False, route=route)
     with pytest.raises(litellm.BudgetExceededError):
         _global_proxy_budget_check(global_proxy_spend=1.0, skip_budget_checks=False, route=route)
+
+
+@pytest.mark.parametrize(
+    "authenticated_by_custom_auth, route, spend, expect_budget_error",
+    [
+        pytest.param(True, "/chat/completions", 15.0, True, id="custom-auth-over-budget-llm-route"),
+        pytest.param(True, "/queue/chat/completions", 15.0, True, id="custom-auth-over-budget-queued-route"),
+        pytest.param(True, "/chat/completions", 5.0, False, id="custom-auth-under-budget-llm-route"),
+        pytest.param(True, "/key/info", 15.0, False, id="custom-auth-over-budget-management-route"),
+        pytest.param(False, "/chat/completions", 15.0, False, id="virtual-key-path-checks-before-common-checks"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
+    authenticated_by_custom_auth: bool, route: str, spend: float, expect_budget_error: bool
+) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    max_budget: Final = 10.0
+    valid_token: Final = UserAPIKeyAuth(token="test-token", spend=spend, max_budget=max_budget).model_copy(
+        update={"authenticated_by_custom_auth": authenticated_by_custom_auth}
+    )
+
+    async def run() -> bool:
+        return await common_checks(
+            request_body={},
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=valid_token,
+            request=MagicMock(),
+        )
+
+    if expect_budget_error:
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await run()
+        assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
+    else:
+        assert await run() is True

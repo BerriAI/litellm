@@ -18,8 +18,8 @@ use litellm_host_python::{from_py_argument, json_loads, to_py};
 use litellm_router_core::lookup::{ListScope, Lookup, Row};
 use litellm_router_core::{
     AttemptError, Blocked, BuildPath, Built, Deployment, DeploymentSpec, Error, FailureKind,
-    FailureReport, Op, OutcomeCallbacks, PreRouted, Provided, RetryCause, Router, RouterEvent,
-    SecretAt, SuccessReport, UsageWindow,
+    FailureReport, HostFacts, Op, OutcomeCallbacks, PreRouted, Provided, RetryCause, Router,
+    RouterEvent, SecretAt, SuccessReport, UsageWindow,
     build::Install,
     registry::{DeploymentFilter, ResolveKind, ResolveScope},
     strategy::routing_context,
@@ -35,7 +35,7 @@ use litellm_redis_store::router_usage::{Counter, Kind, Scope};
 
 use self::host::{
     CacheOp, CacheOutcome, DriveError, Driver, Finish, HostCall, HostCallResponse,
-    PythonRandomness, Stage, Step, StepHost, StepKind,
+    PythonRandomness, PythonRouterCache, PythonRouterHost, Stage, Step, StepKind,
 };
 use crate::errors::RustBridgeDeclined;
 
@@ -98,7 +98,7 @@ impl From<&Error> for ErrorKind {
             Error::Config(_) => Self::Config,
             Error::UnknownModel { .. } => Self::UnknownModel,
             Error::NoHealthyDeployments { .. } => Self::NoHealthyDeployments,
-            Error::Attempt(_) => Self::Attempt,
+            Error::Attempt { .. } | Error::Refused(_) => Self::Attempt,
             Error::Cache(_) => Self::Cache,
             Error::Retired => Self::Retired,
             Error::Paused { .. } => Self::Paused,
@@ -175,7 +175,7 @@ impl RouterCoreHandle {
         let build = || {
             let config = config::parse_router_config(config)?;
             let dynamic = config::parse_dynamic_config(dynamic)?;
-            Ok(Router::builder(config, dynamic, Arc::new(StepHost))
+            Ok(Router::builder(config, dynamic, HostFacts::everything())
                 .randomness(Arc::new(PythonRandomness))
                 .build()?)
         };
@@ -191,7 +191,11 @@ impl RouterCoreHandle {
             config::parse_request(document(request)?, None).map_err(config_error_to_pyerr)?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
-            router.call(op, request).await.map(Finish::Call)
+            router
+                .call(&PythonRouterHost, op, request)
+                .await
+                .map(Finish::Call)
+                .map_err(|ended| ended.error)
         }))
     }
 
@@ -203,7 +207,9 @@ impl RouterCoreHandle {
             .map_err(config_error_to_pyerr)?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
-            let deployment = router.select(&Op::from("acompletion"), &request).await?;
+            let deployment = router
+                .select(&PythonRouterHost, &Op::from("acompletion"), &request)
+                .await?;
             Ok(Finish::Selected {
                 deployment_id: deployment.id.clone(),
                 model_group: deployment.model_name.clone(),
@@ -218,7 +224,9 @@ impl RouterCoreHandle {
             .map_err(config_error_to_pyerr)?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
-            let candidates = router.healthy(&Op::from("acompletion"), &request).await?;
+            let candidates = router
+                .healthy(&PythonRouterHost, &Op::from("acompletion"), &request)
+                .await?;
             // A deployment named by its id is listed alone, as a dict (`_core_async_get_healthy_deployments`).
             let single = candidates.kind.is_single() && candidates.healthy.len() == 1;
             let deployments = candidates.healthy;
@@ -267,7 +275,7 @@ impl RouterCoreHandle {
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             router
-                .build(path, entries, resolve_secrets, install)
+                .build(&PythonRouterHost, path, entries, resolve_secrets, install)
                 .await
                 .map(Finish::Built)
         }))
@@ -284,7 +292,7 @@ impl RouterCoreHandle {
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             router
-                .router_model_info(&query)
+                .router_model_info(&PythonRouterHost, &query)
                 .await
                 .map(Finish::RouterModelInfo)
         }))
@@ -302,7 +310,7 @@ impl RouterCoreHandle {
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
             router
-                .deployment_model_info(&model_id, &model_name)
+                .deployment_model_info(&PythonRouterHost, &model_id, &model_name)
                 .await
                 .map(Finish::DeploymentModelInfo)
         }))
@@ -318,7 +326,7 @@ impl RouterCoreHandle {
                 .map_err(|error| PyValueError::new_err(format!("bad group-info query: {error}")))?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
-            let info = router.model_group_info(&query).await?;
+            let info = router.model_group_info(&PythonRouterHost, &query).await?;
             Ok(Finish::Value(info.map_or(
                 Value::Null,
                 |info| serde_json::json!({"assignments": info.assignments}),
@@ -341,7 +349,9 @@ impl RouterCoreHandle {
         };
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
-            let (input, output) = router.configured_token_limits(id, &configured).await?;
+            let (input, output) = router
+                .configured_token_limits(&PythonRouterHost, id, &configured)
+                .await?;
             Ok(Finish::Value(serde_json::json!([input, output])))
         }))
     }
@@ -353,7 +363,9 @@ impl RouterCoreHandle {
         let deployments: Vec<Value> = from_py_argument(deployments)?;
         let router = self.router.clone();
         Ok(RouterCall::new(async move {
-            let listing = router.model_listing_info(&deployments).await?;
+            let listing = router
+                .model_listing_info(&PythonRouterHost, &deployments)
+                .await?;
             Ok(Finish::Value(serde_json::json!({
                 "cost_map_keys": listing.cost_map_keys,
                 "max_input_tokens": listing.max_input_tokens,
@@ -442,7 +454,7 @@ impl RouterCoreHandle {
         };
         Ok(RouterCall::new(async move {
             router
-                .report_failure(&id, &failure, report)
+                .report_failure(&PythonRouterCache, &id, &failure, report)
                 .await
                 .map(|cooldown| Finish::Reported { cooldown })
         }))
@@ -452,7 +464,7 @@ impl RouterCoreHandle {
     /// `done` (`key`: the tokens counter's key when usage was added, else None, as
     /// `deployment_callback_on_success` returns it).
     /// `usage_model` is the model its usage is keyed by, and `tracks_usage` the host's answer to
-    /// whether it counts any (see `Output::tracks_usage`). `callbacks`: see `report_failure`.
+    /// whether it counts any (see `Served::tracks_usage`). `callbacks`: see `report_failure`.
     #[pyo3(signature = (id, total_tokens, requests, usage_model=None, tracks_usage=None, callbacks=None))]
     fn report_success(
         &self,
@@ -472,7 +484,7 @@ impl RouterCoreHandle {
         };
         Ok(RouterCall::new(async move {
             router
-                .report_success(&id, total_tokens, requests, report)
+                .report_success(&PythonRouterCache, &id, total_tokens, requests, report)
                 .await
                 .map(|window| Finish::Counted {
                     key: window.map(tokens_key),
@@ -493,7 +505,7 @@ impl RouterCoreHandle {
         let callbacks = outcome_callbacks(callbacks)?;
         Ok(RouterCall::new(async move {
             router
-                .count_success(&id, callbacks)
+                .count_success(&PythonRouterCache, &id, callbacks)
                 .await
                 .map(|counted| Finish::SuccessCounted { counted })
         }))

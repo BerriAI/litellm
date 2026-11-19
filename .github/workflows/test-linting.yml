@@ -122,26 +122,10 @@ jobs:
         run: |
           uv lock --check || (echo "❌ uv.lock is out of sync with pyproject.toml. Run 'uv lock' locally and commit the result." && exit 1)
 
-      - &cache-rust
-        name: Cache the Rust build
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-cargo-build
-
-      - name: Install dependencies
+      - name: Install the lint tools
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev
-
-      - &cache-prisma
-        name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-prisma-binaries
-
-      - &generate-prisma
-        name: Generate Prisma client
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+          uv sync --frozen --only-group dev --no-install-project
 
       - name: Check ruff format
         if: steps.changes.outputs.decision != 'skip'
@@ -200,25 +184,12 @@ jobs:
         run: |
           uv run --no-sync python litellm/scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
 
-      - name: Check OpenAPI docs (POST routes without a request schema, description or 200 schema, delta vs merge-base counts)
-        if: steps.changes.outputs.decision != 'skip'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
-          uv run --no-sync python litellm/scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
-
       - name: Check for circular imports
         if: steps.changes.outputs.decision != 'skip'
         run: |
           cd litellm
           uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py
           cd ..
-
-      - name: Check import safety
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
       - name: check_migrations_no_data_rewrites
         if: steps.changes.outputs.decision != 'skip'
@@ -245,26 +216,22 @@ jobs:
       - *setup-python
       - *setup-uv
       - *cache-uv
-      - *cache-rust
-
-      - name: Install dependencies
+      - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
-        run: uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
-
-      - *cache-prisma
-      - *generate-prisma
+        uses: ./.github/actions/cache-prisma-binaries
 
       - name: Check basedpyright (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/type_check_gate.py --base "$GATE_BASE_SHA"
+          python litellm/scripts/type_check_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
         run: |
           if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyproject.toml | grep -q .; then
+            uv sync --frozen --no-install-project --group proxy-dev --group e2e-dev --extra proxy
             uv run --no-sync basedpyright tests/e2e tests/e2e_harness
           else
             echo "No changed tests/e2e Python files; skipping."

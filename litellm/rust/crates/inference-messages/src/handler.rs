@@ -335,7 +335,9 @@ async fn provider_call(
     let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
     let without_keys = without_additional_drop_params(sanitized, &dropped_keys)?;
     let requested = requested_optional_params(without_keys, provider, &transform_context)?;
-    let requested_params = serde_json::to_value(&requested.params).map_err(serialize_failure)?;
+    let requested_params =
+        serde_json::to_value(config.logged_params(requested.params.clone(), &transform_context)?)
+            .map_err(serialize_failure)?;
     let trimmed =
         without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 
@@ -439,7 +441,7 @@ async fn provider_call(
     };
 
     let request_context = RequestContext {
-        model: body.model.clone(),
+        model: config.logged_model(&body.model),
         custom_llm_provider: provider.as_str().to_string(),
         optional_params: requested_params,
         secret_fields: Vec::new(),
@@ -1060,7 +1062,11 @@ fn decode_response(
                 )));
             };
             body.entry("stop_sequence").or_insert(Value::Null);
-            return Ok(MessagesBody::Unchecked(body));
+            return config
+                .transform_unchecked_response(body)
+                .map(MessagesBody::Unchecked)
+                .map_err(Error::from)
+                .map_err(Error::after_send);
         }
     };
     let message = config
@@ -1307,6 +1313,7 @@ mod tests {
                     ..SupportedEffortTiers::default()
                 },
                 bedrock: BedrockCapabilities {
+                    supports_adaptive_thinking: true,
                     output_config_effort_ceiling: Some(
                         litellm_llms_types::formats::messages::EffortLevel::Max,
                     ),
@@ -2221,5 +2228,123 @@ mod tests {
                 .map(Bytes::from_static)
                 .collect::<Vec<_>>()
         );
+    }
+
+    async fn mantle_call(model: &str, fields: Value, api_key: Option<&str>) -> ProviderCall {
+        provider_call_with_secrets(
+            MessagesCall {
+                body: body(Value::Object(
+                    [
+                        ("model".to_string(), json!(model)),
+                        ("max_tokens".to_string(), json!(16)),
+                        (
+                            "messages".to_string(),
+                            json!([{"role": "user", "content": "hi"}]),
+                        ),
+                    ]
+                    .into_iter()
+                    .chain(fields.as_object().cloned().unwrap_or_default())
+                    .collect(),
+                )),
+                api_key: api_key.map(str::to_string),
+                api_base: Some("https://mantle.test".into()),
+                custom_llm_provider: None,
+                litellm_params: crate::litellm_params(Map::from_iter([
+                    ("model".into(), json!(model)),
+                    ("aws_access_key_id".into(), json!("AKIDEXAMPLE")),
+                    ("aws_secret_access_key".into(), json!("secret")),
+                ]))
+                .unwrap(),
+                extra_headers: None,
+                provider_specific_header: None,
+                timeout: None,
+                shaping: MessagesShaping::default(),
+            },
+            &|name: &str| (name == "AWS_BEARER_TOKEN_BEDROCK").then(|| "env-token".into()),
+        )
+        .await
+        .unwrap()
+    }
+
+    fn authorization(call: &ProviderCall) -> Option<&str> {
+        call.wire
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle_route_signs("bedrock/mantle/anthropic.claude-sonnet-5-5", None)]
+    #[case::bedrock_mantle_provider_reads_the_env(
+        "bedrock_mantle/anthropic.claude-sonnet-5-5",
+        Some("Bearer env-token")
+    )]
+    #[case::bedrock_invoke_signs("bedrock/anthropic.claude-sonnet-5-5", None)]
+    #[tokio::test]
+    async fn an_empty_api_key_reads_the_env_only_on_the_bedrock_mantle_provider(
+        #[case] model: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let call = mantle_call(model, json!({}), Some("")).await;
+        assert_eq!(
+            (authorization(&call), call.signer.is_some()),
+            (expected, expected.is_none())
+        );
+    }
+
+    #[rstest]
+    #[case::listed_region_is_routing_only(
+        "bedrock_mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        "anthropic.claude-sonnet-5-5"
+    )]
+    #[case::unlisted_region_stays_in_the_model(
+        "bedrock_mantle/ca-west-1/anthropic.claude-sonnet-5-5",
+        "ca-west-1/anthropic.claude-sonnet-5-5"
+    )]
+    #[case::bedrock_route_logs_its_mantle_prefix(
+        "bedrock/mantle/us-west-2/anthropic.claude-sonnet-5-5",
+        "mantle/us-west-2/anthropic.claude-sonnet-5-5"
+    )]
+    #[tokio::test]
+    async fn mantle_calls_are_logged_under_the_model_python_resolves(
+        #[case] model: &str,
+        #[case] logged: &str,
+    ) {
+        let call = mantle_call(model, json!({}), Some("key")).await;
+        assert_eq!(call.identity.model, logged);
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5-5")]
+    #[case::bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5-5")]
+    #[tokio::test]
+    async fn a_string_stream_flag_neither_streams_nor_sends_a_stream_key_to_mantle(
+        #[case] model: &str,
+    ) {
+        let call = mantle_call(model, json!({"stream": "true"}), Some("key")).await;
+        assert_eq!((call.wire.body.get("stream"), call.stream), (None, false));
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(litellm_core_utils::get_llm_provider_logic::LlmProviders::BedrockMantle, "anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::bedrock_mantle_route(litellm_core_utils::get_llm_provider_logic::LlmProviders::Bedrock, "mantle/anthropic.claude-sonnet-5-5", Some(json!({"input_tokens": 0, "output_tokens": 0})))]
+    #[case::anthropic(
+        litellm_core_utils::get_llm_provider_logic::LlmProviders::Anthropic,
+        "claude-sonnet-5-5",
+        None
+    )]
+    fn an_error_envelope_bills_zero_usage_only_on_mantle(
+        #[case] provider: litellm_core_utils::get_llm_provider_logic::LlmProviders,
+        #[case] model: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let config = messages_provider(provider, model).unwrap().config();
+        let envelope =
+            r#"{"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}"#;
+        let Ok(MessagesBody::Unchecked(body)) = decode_response(config, model, envelope) else {
+            panic!("an error envelope decodes unchecked");
+        };
+        assert_eq!(body.get("usage").cloned(), expected);
     }
 }

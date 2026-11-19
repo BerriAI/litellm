@@ -4030,6 +4030,7 @@ async def test_user_info_v2_response_shape(mocker):
         "object_permission",
         "model_max_budget",
         "model_max_budget_usage",
+        "budget_limits_usage",
     }
     assert set(response_dict.keys()) == expected_fields
 
@@ -6033,3 +6034,144 @@ async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: 
 
     assert pbkdf2_on_event_loop == [False]
     assert data["password"].startswith("pbkdf2:")
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_reports_current_spend_per_budget_window(mocker):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    budget_limits = [
+        {"budget_duration": "1h", "max_budget": 2.0, "reset_at": "2026-08-15T18:00:00+00:00"},
+        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": "2026-09-14T00:00:00+00:00"},
+    ]
+    user_row = mocker.MagicMock()
+    user_row.model_dump.return_value = {"user_id": "window-user", "budget_limits": budget_limits}
+    prisma = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
+    spend_by_counter = {"spend:user_window:window-user:1h": 0.73, "spend:user_window:window-user:30d": 41.25}
+    get_current_spend = mocker.patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        mocker.AsyncMock(side_effect=lambda **kwargs: spend_by_counter[kwargs["counter_key"]]),
+    )
+
+    response = await user_info_v2(
+        request=mocker.MagicMock(spec=Request),
+        user_id="window-user",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.budget_limits_usage == {"1h": {"current_spend": 0.73}, "30d": {"current_spend": 41.25}}
+    assert [call.kwargs for call in get_current_spend.await_args_list] == [
+        {
+            "counter_key": "spend:user_window:window-user:1h",
+            "fallback_spend": 0.0,
+            "max_budget": 2.0,
+            "window_entity_type": "User",
+            "window_entity_id": "window-user",
+            "window_duration": "1h",
+            "window_start": datetime(2026, 8, 15, 17, 0, tzinfo=timezone.utc),
+        },
+        {
+            "counter_key": "spend:user_window:window-user:30d",
+            "fallback_spend": 0.0,
+            "max_budget": 100.0,
+            "window_entity_type": "User",
+            "window_entity_id": "window-user",
+            "window_duration": "30d",
+            "window_start": datetime(2026, 8, 15, 0, 0, tzinfo=timezone.utc),
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_info_reports_current_spend_per_budget_window(mocker):
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    user_row = LiteLLM_UserTable(
+        user_id="window-user",
+        budget_limits=[{"budget_duration": "1d", "max_budget": 5.0, "reset_at": "2026-08-16T00:00:00+00:00"}],
+    )
+    prisma = mocker.MagicMock()
+    prisma.get_data = mocker.AsyncMock(
+        side_effect=lambda **kwargs: [] if kwargs.get("table_name") in ("key", "team") else user_row
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
+    mocker.patch("litellm.proxy.management_endpoints.team_endpoints.list_team", mocker.AsyncMock(return_value=None))
+    mocker.patch("litellm.proxy.proxy_server.get_current_spend", mocker.AsyncMock(return_value=3.21))
+
+    response = await user_info(
+        request=mocker.MagicMock(spec=Request),
+        user_id="window-user",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert json.loads(response.model_dump_json())["user_info"]["budget_limits_usage"] == {"1d": {"current_spend": 3.21}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin_mcp", [False, True])
+@pytest.mark.parametrize("has_windows", [False, True])
+async def test_admin_self_lookup_reports_budget_window_spend(mocker, admin_mcp, has_windows):
+    from fastapi import FastAPI, Request
+
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    windows = [{"budget_duration": "1d", "max_budget": 5.0, "reset_at": "2026-08-16T00:00:00+00:00"}]
+    row = LiteLLM_UserTable(user_id="window-admin", budget_limits=windows if has_windows else None)
+    prisma = mocker.MagicMock()
+    prisma.get_data = mocker.AsyncMock(return_value=row)
+    prisma.db.query_raw = mocker.AsyncMock(return_value=[{"teams": [], "keys": []}])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
+    spend = mocker.patch("litellm.proxy.proxy_server.get_current_spend", mocker.AsyncMock(return_value=3.21))
+
+    response = await user_info(
+        request=Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/user/info",
+                "headers": [],
+                "query_string": b"",
+                "app": FastAPI(),
+            }
+        ),
+        user_id=None,
+        user_api_key_dict=UserAPIKeyAuth(user_id="window-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        admin_mcp=admin_mcp,
+        mcp_tool=None,
+        mcp_path=None,
+    )
+
+    payload = json.loads(response.model_dump_json())["user_info"]
+    assert payload.get("budget_limits_usage") == ({"1d": {"current_spend": 3.21}} if has_windows else None)
+    assert spend.await_count == (1 if has_windows else 0)
+
+
+@pytest.mark.asyncio
+async def test_user_info_v2_without_budget_windows_reads_no_window_spend(mocker):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    user_row = mocker.MagicMock()
+    user_row.model_dump.return_value = {"user_id": "plain-user", "budget_limits": None}
+    prisma = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
+    get_current_spend = mocker.patch("litellm.proxy.proxy_server.get_current_spend", mocker.AsyncMock())
+
+    response = await user_info_v2(
+        request=mocker.MagicMock(spec=Request),
+        user_id="plain-user",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.budget_limits_usage is None
+    get_current_spend.assert_not_awaited()
