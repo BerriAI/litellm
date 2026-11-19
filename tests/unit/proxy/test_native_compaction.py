@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.redact_messages import should_redact_message_log
 from litellm.proxy import common_request_processing, proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_model
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy._types import ProxyException
 from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash, get_request_stash
 from litellm.proxy.native_compaction import with_proxy_compaction_executor

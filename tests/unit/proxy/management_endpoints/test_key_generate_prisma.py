@@ -82,7 +82,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_s
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
@@ -2478,4 +2478,3 @@ def test_should_track_cost_callback():
         team_id=None,
         end_user_id="1234",
     )
-
