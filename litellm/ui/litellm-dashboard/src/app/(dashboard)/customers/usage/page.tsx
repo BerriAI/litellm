@@ -9,9 +9,13 @@ import CustomerMemberSpend from "../_components/CustomerMemberSpend";
 import CustomerUsageHeader from "../_components/CustomerUsageHeader";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "../_components/CustomerHierarchyNavigation";
 import CustomerBudgetSummary from "../_components/CustomerBudgetSummary";
+import CustomerSurchargeBreakdown from "../_components/CustomerSurchargeBreakdown";
 import CustomerUsageRankings from "../_components/CustomerUsageRankings";
 import CustomerUsageTrend from "../_components/CustomerUsageTrend";
 import useCustomerHierarchyUsage from "../_components/useCustomerHierarchyUsage";
+import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
+import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
+import CustomerUsageAppFilter from "../_components/CustomerUsageAppFilter";
 
 const METRIC_LABELS = {
   spend: "customerPortal.analytics.spend",
@@ -47,6 +51,7 @@ export default function CustomerHierarchyUsagePage() {
     setBucket,
     setSearch,
     setPage,
+    setApp,
   } = useCustomerHierarchyUsage();
   const metricLabel = t(METRIC_LABELS[params.metric]);
   const budgetEntity = data?.member ?? data?.team ?? data?.organization;
@@ -94,10 +99,26 @@ export default function CustomerHierarchyUsagePage() {
             budget={null}
             showBudgetHint={false}
             spendDetails={
-              budgetEntity &&
-              budgetSettingsHref && <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+              <>
+                <CustomerSurchargeBreakdown
+                  spend={totals.spend}
+                  surcharge={data?.metadata.total_customer_margin_spend}
+                />
+                {budgetEntity && budgetSettingsHref && (
+                  <CustomerBudgetSummary entity={budgetEntity} settingsHref={budgetSettingsHref} />
+                )}
+              </>
             }
           />
+          {!scope.team && !scope.member && (
+            <CustomerOrganizationApps
+              key={scope.org}
+              organizationId={scope.org}
+              organizationAlias={data?.organization.label}
+              onAppSelect={setApp}
+            />
+          )}
+          {scope.member && <CustomerMemberApps key={scope.member} memberId={scope.member} />}
           <CustomerUsageTrend
             data={data}
             dimension={params.breakdown}
@@ -109,6 +130,7 @@ export default function CustomerHierarchyUsagePage() {
             colorByModel={modelColors}
             onMetricChange={setMetric}
             onBucketChange={setBucket}
+            appFilter={<CustomerUsageAppFilter value={params.app_id} onChange={setApp} />}
           />
           {data && <CustomerMemberSpend data={data} onMemberClick={(id) => drillDown("members", id)} />}
           {!usage.isPending && (

@@ -1723,7 +1723,12 @@ def run_server(
             db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
-            from litellm.proxy.db.connection_budget import ConnectionBudget
+            from litellm.proxy.db.connection_budget import (
+                RUST_READER_CONNECTIONS_ENV_VAR,
+                RUST_WRITER_CONNECTIONS_ENV_VAR,
+                ConnectionBudget,
+                UnsplittableConnectionLimit,
+            )
             from litellm.proxy.db.db_url_settings import (
                 DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
@@ -1764,13 +1769,38 @@ def run_server(
                 disable_prepared_statements=disable_prepared_statements,
                 extra_params=db_extra_connection_params,
             )
-            writer_budget: Final = ConnectionBudget.of(connection_url_params["connection_limit"])
-            rust_writer_connections: Final = 0 if writer_budget is None else writer_budget.rust
-            prisma_url_params: Final = (
-                connection_url_params if writer_budget is None else writer_budget.prisma_params(connection_url_params)
-            )
+            # The reader pool is a real pool against the same configured cap, so it
+            # gets the allowlisted pool params. Schema-affecting ones, including any
+            # the operator smuggled in through database_extra_connection_params, stay
+            # on the writer. Anything pinned on the replica URL wins, unlike the
+            # writer where the config is applied on top.
+            read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+            try:
+                writer_budget: Final = ConnectionBudget.of("DATABASE_URL", connection_url_params["connection_limit"])
+                reader_budget: Final = (
+                    ConnectionBudget.of(
+                        "DATABASE_URL_READ_REPLICA",
+                        _url_query_value(read_replica_url, "connection_limit")
+                        or connection_url_params["connection_limit"],
+                    )
+                    if read_replica_url
+                    else None
+                )
+            except UnsplittableConnectionLimit as unsplittable:
+                print(
+                    terminal_text(f"\033[1;31mLiteLLM Proxy: {unsplittable}\033[0m"),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                sys.exit(1)
+            os.environ[RUST_WRITER_CONNECTIONS_ENV_VAR] = str(writer_budget.rust)
+            if reader_budget is None:
+                os.environ.pop(RUST_READER_CONNECTIONS_ENV_VAR, None)
+            else:
+                os.environ[RUST_READER_CONNECTIONS_ENV_VAR] = str(reader_budget.rust)
+            prisma_url_params: Final = writer_budget.prisma_params(connection_url_params)
             lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
-            prisma_defaults: Final = prisma_default_params(lifetime_params, rust_writer_connections)
+            prisma_defaults: Final = prisma_default_params(lifetime_params, writer_budget.rust)
             if os.getenv("DATABASE_URL", None) is not None:
                 database_url = get_secret("DATABASE_URL", default_value=None)
                 resolved_url: Final[str | None] = str(database_url) if database_url else None
@@ -1798,21 +1828,7 @@ def run_server(
                 os.environ["DIRECT_URL"] = translate_libpq_ssl_params(
                     add_missing_query_params(modified_url, lifetime_params)
                 )
-            # The reader pool is a real pool against the same configured cap, so it
-            # gets the allowlisted pool params. Schema-affecting ones, including any
-            # the operator smuggled in through database_extra_connection_params, stay
-            # on the writer. Anything pinned on the replica URL wins, unlike the
-            # writer where the config is applied on top.
-            read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
-            reader_budget: Final = (
-                ConnectionBudget.of(
-                    _url_query_value(read_replica_url, "connection_limit") or connection_url_params["connection_limit"]
-                )
-                if read_replica_url
-                else None
-            )
-            reader_prisma_limit: Final = None if reader_budget is None else reader_budget.prisma_limit
-            if read_replica_url:
+            if read_replica_url and reader_budget is not None:
                 reader_options: Final[str] = _pg_options_with_timeouts(
                     _url_query_value(read_replica_url, "options"),
                     db_statement_timeout,
@@ -1827,9 +1843,7 @@ def run_server(
                 os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
                     add_missing_query_params(
                         add_missing_query_params(
-                            reader_url
-                            if reader_prisma_limit is None
-                            else _with_query_value(reader_url, "connection_limit", str(reader_prisma_limit)),
+                            _with_query_value(reader_url, "connection_limit", str(reader_budget.python)),
                             reader_shareable_params(prisma_url_params),
                         ),
                         prisma_defaults,
@@ -1839,7 +1853,7 @@ def run_server(
                 postgres_connection_budget_message(
                     writer_limit=_url_query_value(os.getenv("DATABASE_URL"), "connection_limit")
                     or f"{db_connection_pool_limit}",
-                    rust_writer_limit=rust_writer_connections,
+                    rust_writer_limit=writer_budget.rust,
                     reader_limit=(
                         _url_query_value(os.getenv("DATABASE_URL_READ_REPLICA"), "connection_limit")
                         or f"{db_connection_pool_limit}"

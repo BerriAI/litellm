@@ -113,8 +113,6 @@ pub(crate) struct KeyFacts {
     team_object_permission_id: Option<String>,
     #[pyo3(attribute)]
     project_id: Option<String>,
-    #[pyo3(attribute)]
-    end_user_id: Option<String>,
     #[pyo3(attribute, from_py_with = py_optional_timestamp)]
     last_refreshed_at: Option<Timestamp>,
 }
@@ -130,7 +128,6 @@ impl From<KeyFacts> for KeyRecord {
             team_id: facts.team_id,
             team_object_permission_id: facts.team_object_permission_id,
             project_id: facts.project_id,
-            end_user_id: facts.end_user_id,
             last_refreshed_at: facts.last_refreshed_at,
         }
     }
@@ -805,6 +802,15 @@ pub(crate) enum DenialView {
     TeamNotFound {
         team_id: String,
     },
+    KeyNotFound {
+        hash: String,
+    },
+    NoMatchingJwtPublicKey {
+        message: String,
+    },
+    IdJagNotBearer {
+        message: String,
+    },
 }
 
 impl From<PublicDenial> for DenialView {
@@ -850,6 +856,13 @@ impl From<PublicDenial> for DenialView {
                 entity_id: budget.entity_id,
             },
             PublicDenial::TeamNotFound { team_id } => Self::TeamNotFound { team_id },
+            PublicDenial::KeyNotFound { hash } => Self::KeyNotFound {
+                hash: hash.as_str().to_owned(),
+            },
+            PublicDenial::NoMatchingJwtPublicKey { message } => {
+                Self::NoMatchingJwtPublicKey { message }
+            }
+            PublicDenial::IdJagNotBearer { message } => Self::IdJagNotBearer { message },
         }
     }
 }

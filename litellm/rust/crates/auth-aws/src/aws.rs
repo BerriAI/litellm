@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_credential_types::provider::{SharedCredentialsProvider, error::CredentialsError};
 use aws_smithy_runtime_api::client::http::SharedHttpClient;
+use aws_types::os_shim_internal::{Env, Fs};
 use litellm_secret_value::SecretValue;
 use moka::{Expiry, future::Cache};
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -413,7 +414,20 @@ impl AwsAuthService {
         {
             return Err(Error::WebIdentityTokenReference);
         }
-        self.fresh_credentials(&resolved, &flow).await
+        match (self.fresh_credentials(&resolved, &flow).await, &flow) {
+            (
+                Err(Error::Credentials {
+                    flow: CredentialFlow::Profile,
+                    ..
+                }),
+                AwsAuthFlow::Profile { name },
+            ) if !profile_defined(name, &Fs::real(), &Env::real()).await => {
+                Err(Error::ProfileNotFound {
+                    profile: name.clone(),
+                })
+            }
+            (credentials, _) => credentials,
+        }
     }
 
     pub async fn invalidate_credentials(
@@ -478,6 +492,19 @@ impl AwsAuthService {
             .await
             .map_err(|error| (*error).clone())
     }
+}
+
+/// Whether the AWS config or credentials file names the profile. A file that does not parse
+/// counts as naming it, so its own failure stands.
+async fn profile_defined(name: &str, fs: &Fs, env: &Env) -> bool {
+    aws_config::profile::load(
+        fs,
+        env,
+        &aws_runtime::env_config::file::EnvConfigFiles::default(),
+        None,
+    )
+    .await
+    .map_or(true, |profiles| profiles.get_profile(name).is_some())
 }
 
 fn names_the_environment(
@@ -1237,6 +1264,7 @@ pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
 mod tests {
     use super::*;
     use crate::constants::{AWS_REGION, BEDROCK_SERVICE};
+    use crate::error::StsFailure;
     use reqwest::header::CONTENT_TYPE;
 
     #[cfg(unix)]
@@ -1342,6 +1370,47 @@ mod tests {
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    #[rstest::rstest]
+    #[case::config_profile("present", true)]
+    #[case::credentials_profile("keys", true)]
+    #[case::absent("absent", false)]
+    #[case::absent_default("default", false)]
+    #[tokio::test]
+    async fn a_profile_is_defined_only_when_a_profile_file_names_it(
+        #[case] name: &str,
+        #[case] defined: bool,
+    ) {
+        let env = Env::from_slice(&[
+            ("AWS_CONFIG_FILE", "/aws/config"),
+            ("AWS_SHARED_CREDENTIALS_FILE", "/aws/credentials"),
+        ]);
+        let fs = Fs::from_slice(&[
+            ("/aws/config", "[profile present]\nregion = us-west-2\n"),
+            ("/aws/credentials", "[keys]\naws_access_key_id = a\n"),
+        ]);
+        assert_eq!(profile_defined(name, &fs, &env).await, defined);
+    }
+
+    #[tokio::test]
+    async fn a_profile_no_profile_file_names_is_not_found() {
+        let profile = "litellm-auth-aws-test-profile-that-is-never-configured";
+        let config = AwsAuthConfig {
+            profile_name: Some(profile.into()),
+            region_name: Some("us-east-1".into()),
+            ..Default::default()
+        };
+        let error = AwsAuthService::default()
+            .resolve_credentials(config, &no_env)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            Error::ProfileNotFound {
+                profile: profile.into()
+            }
+        );
     }
 
     #[rstest::rstest]
@@ -2031,6 +2100,8 @@ mod tests {
     struct Sts {
         requests: Arc<std::sync::Mutex<Vec<StsRequest>>>,
         deny_assume_role: bool,
+        reject_web_identity: Option<&'static str>,
+        unreachable: bool,
         caller_arns: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>,
     }
 
@@ -2063,6 +2134,9 @@ mod tests {
             };
             match request.action() {
                 "AssumeRole" if self.deny_assume_role => (403, error("AccessDenied")),
+                "AssumeRoleWithWebIdentity" if self.reject_web_identity.is_some() => {
+                    (400, error(self.reject_web_identity.unwrap_or_default()))
+                }
                 "AssumeRole" => (
                     200,
                     format!(
@@ -2113,7 +2187,13 @@ mod tests {
             };
             let (status, body) = self.response(&recorded);
             self.requests.lock().unwrap().push(recorded);
+            let unreachable = self.unreachable;
             aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async move {
+                if unreachable {
+                    return Err(aws_smithy_runtime_api::client::result::ConnectorError::io(
+                        std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into(),
+                    ));
+                }
                 Ok(
                     aws_smithy_runtime_api::client::orchestrator::HttpResponse::new(
                         status.try_into().unwrap(),
@@ -2425,6 +2505,73 @@ mod tests {
         assert_eq!(request.form["RoleSessionName"], "oidc-session");
         assert_eq!(request.form["DurationSeconds"], "3600");
         assert_eq!(request.form.get("Policy").map(String::as_str), policy);
+    }
+
+    #[rstest::rstest]
+    #[case::invalid_web_identity_token(
+        Sts { reject_web_identity: Some("InvalidIdentityToken"), ..Sts::default() },
+        StsFailure::InvalidWebIdentityToken { message: "denied".into() }
+    )]
+    #[case::expired_web_identity_token(
+        Sts { reject_web_identity: Some("ExpiredTokenException"), ..Sts::default() },
+        StsFailure::Rejected {
+            operation: "AssumeRoleWithWebIdentity",
+            code: "ExpiredTokenException".into(),
+            message: "denied".into(),
+        }
+    )]
+    #[case::unreachable(Sts { unreachable: true, ..Sts::default() }, StsFailure::Unreachable)]
+    #[tokio::test]
+    async fn a_failed_web_identity_exchange_names_why_sts_failed(
+        #[case] sts: Sts,
+        #[case] expected: StsFailure,
+    ) {
+        let error = web_identity_source("oidc/file/var/run/secrets/token")
+            .resolve(
+                &sts_service(&sts, Some(Arc::new(Tokens(Some("resolved.jwt.value"))))),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            litellm_error::find::<Error>(&error).and_then(Error::sts_failure),
+            Some(expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denied_assume_role_names_the_sts_code() {
+        let sts = Sts {
+            deny_assume_role: true,
+            caller_arns: Arc::new(std::sync::Mutex::new(vec![None, None])),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            ..AwsAuthConfig::default()
+        }));
+
+        let error = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            litellm_error::find::<Error>(&error).and_then(Error::sts_failure),
+            Some(StsFailure::Rejected {
+                operation: "AssumeRole",
+                code: "AccessDenied".into(),
+                message: "denied".into(),
+            })
+        );
     }
 
     #[rstest::rstest]

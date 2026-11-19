@@ -19,5 +19,6 @@ thiserror.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+envy = "0.4.2"
 rstest.workspace = true
 serde_json.workspace = true

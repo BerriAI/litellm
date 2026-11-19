@@ -46,6 +46,7 @@ from litellm.types.repositories.daily_activity import (
     UserPage,
     UserSpendRow,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,7 @@ class _Activity:
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
     guardrail_spend: float
+    customer_margin_spend: float
     api_requests: int
     successful_requests: int
     failed_requests: int
@@ -111,6 +113,7 @@ def _activity_for_entity(
             gateway_injected_caching_savings_spend=0.3,
             autorouter_savings_spend=0.4,
             guardrail_spend=0.5,
+            customer_margin_spend=0.0,
             api_requests=1,
             successful_requests=1,
             failed_requests=0,
@@ -168,6 +171,7 @@ def _seeded_activity() -> tuple[_Activity, ...]:
             gateway_injected_caching_savings_spend=0.0,
             autorouter_savings_spend=0.0,
             guardrail_spend=0.0,
+            customer_margin_spend=0.0,
             api_requests=1,
             successful_requests=1,
             failed_requests=0,
@@ -192,6 +196,7 @@ def _metrics(rows: Sequence[_Activity]) -> Mapping[str, int | float]:
         "gateway_injected_caching_savings_spend": sum(row.gateway_injected_caching_savings_spend for row in rows),
         "autorouter_savings_spend": sum(row.autorouter_savings_spend for row in rows),
         "guardrail_spend": sum(row.guardrail_spend for row in rows),
+        "customer_margin_spend": sum(row.customer_margin_spend for row in rows),
         "api_requests": sum(row.api_requests for row in rows),
         "successful_requests": sum(row.successful_requests for row in rows),
         "failed_requests": sum(row.failed_requests for row in rows),
@@ -626,9 +631,12 @@ def _daily_activity_test_client(repository: _FakeRepository, prisma_client: obje
 
 
 @pytest.fixture
-def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
+def daily_activity_client(rust_auth_stores: RustAuthStores) -> Iterator[tuple[TestClient, _FakeRepository]]:
     repository: Final = _FakeRepository(_seeded_activity())
-    with _daily_activity_test_client(repository, _prisma_client()) as client:
+    prisma_client: Final = _prisma_client()
+    for user in prisma_client.db.litellm_usertable._rows:
+        rust_auth_stores.user.rows[user.user_id] = user.model_dump(mode="json")
+    with _daily_activity_test_client(repository, prisma_client) as client:
         yield client, repository
 
 
@@ -816,6 +824,7 @@ def test_search_folds_each_entity_key_across_days(
                     "gateway_injected_caching_savings_spend": 0.6,
                     "autorouter_savings_spend": 0.8,
                     "guardrail_spend": 1.0,
+                    "customer_margin_spend": 0.0,
                     "total_tokens": 30,
                     "successful_requests": 2,
                     "failed_requests": 0,
