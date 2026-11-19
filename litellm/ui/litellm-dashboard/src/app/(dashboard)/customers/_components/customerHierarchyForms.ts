@@ -166,7 +166,7 @@ export const parseBudget = (fields: BudgetFields): Budget | null => {
   };
 };
 
-const enteredBudget = (budget: Budget): Budget => ({
+export const enteredBudget = (budget: Budget): Budget => ({
   ...(budget.max_budget != null ? { max_budget: budget.max_budget } : {}),
   ...(budget.soft_budget != null ? { soft_budget: budget.soft_budget } : {}),
   ...(budget.tpm_limit != null ? { tpm_limit: budget.tpm_limit } : {}),

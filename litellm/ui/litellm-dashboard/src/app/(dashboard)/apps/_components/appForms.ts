@@ -1,5 +1,10 @@
 import type { components } from "@/lib/http/schema";
-import { budgetFields, parseBudget, type BudgetFields } from "../../customers/_components/customerHierarchyForms";
+import {
+  budgetFields,
+  enteredBudget,
+  parseBudget,
+  type BudgetFields,
+} from "../../customers/_components/customerHierarchyForms";
 
 export type App = components["schemas"]["App"];
 export type Budget = components["schemas"]["Budget"];
@@ -40,7 +45,9 @@ export const appBudgetValue = (fields: AppBudgetFields, original?: Budget | null
       return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
     windows.push({ ...window.budget, max_budget: parsedWindow.max_budget });
   }
-  return { ok: true, value: { ...original, ...parsed, budget_limits: windows.length ? windows : null } } as const;
+  const value: Budget = original == null ? enteredBudget(parsed) : { ...original, ...parsed, budget_limits: null };
+  if (windows.length) value.budget_limits = windows;
+  return { ok: true, value } as const;
 };
 
 const MAX_SURCHARGE_PERCENT = 1000;

@@ -38,7 +38,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customer member apps", () => {
-  it("should show a compact member budget row and save an app-specific override", async () => {
+  it("should save a first custom app member spend limit without clearing inherited restrictions", async () => {
     const requests: Request[] = [];
     fetchMock.mockImplementation(async (input) => {
       const request = input as Request;
@@ -51,14 +51,20 @@ describe("customer member apps", () => {
               customer_member_id: "member-1",
               spend: 2.5,
               budget_source: "customer_default",
-              effective_budget: { rpm_limit: 1 },
+              effective_budget: {
+                max_budget: 111,
+                tpm_limit: 1700,
+                rpm_limit: 17,
+                allowed_models: ["test-model"],
+                budget_limits: [{ budget_duration: "12mo", max_budget: 6000 }],
+              },
             },
       );
     });
     const user = userEvent.setup();
     render(<CustomerMemberApps memberId="member-1" />);
-    expect(await screen.findByText("$2.50")).toBeInTheDocument();
-    expect(screen.getByText("Customer member default")).toBeInTheDocument();
+    await screen.findByRole("button", { name: "Edit member budget for Assistant" });
+    expect(screen.getByText(/Customer member default/)).toBeInTheDocument();
     expect(screen.getAllByRole("columnheader")).toHaveLength(3);
     expect(screen.queryByText("$100.00")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit member budget for Assistant" }));
@@ -75,12 +81,6 @@ describe("customer member apps", () => {
     expect(await request?.json()).toEqual({
       budget: {
         max_budget: 5,
-        soft_budget: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        budget_duration: null,
-        allowed_models: null,
-        budget_limits: null,
       },
     });
   });
