@@ -18,6 +18,7 @@ from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
@@ -488,9 +489,22 @@ async def _auth_object_prefetch(host: PythonAuthHost) -> None:
     )
 
 
+_PREFETCHES: Final = pytest.mark.parametrize(
+    "prefetch", [_identity_prefetch, _auth_object_prefetch], ids=["identity", "auth_objects"]
+)
+
+
+async def _run(prefetch: Callable[[PythonAuthHost], Awaitable[None]], host: PythonAuthHost) -> None:
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch(host)
+
+
+def _declared(handle: FakeCooldowns) -> list[frozenset[str]]:
+    return [frozenset(ids) for ids in handle.declared]
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prefetch", [_identity_prefetch, _auth_object_prefetch], ids=["identity", "auth_objects"])
-@pytest.mark.parametrize("configured_router", [True, False], ids=["with_router", "without_router"])
+@_PREFETCHES
 @pytest.mark.parametrize(
     ("request_data", "reads"),
     [
@@ -500,16 +514,44 @@ async def _auth_object_prefetch(host: PythonAuthHost) -> None:
     ],
 )
 async def test_the_auth_prefetch_reads_the_cooldowns_of_the_deployments_the_requested_model_may_route_to(
+    monkeypatch: pytest.MonkeyPatch,
     prefetch: Callable[[PythonAuthHost], Awaitable[None]],
-    configured_router: bool,
     request_data: dict[str, object],  # mutable-ok: the host takes the request body it rewrites
     reads: list[frozenset[str]],
 ) -> None:
     router, handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     cache, _ = shared_cache()
-    host: Final = replace(_host(request_data=request_data, cache=cache), llm_router=router if configured_router else None)
 
-    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
-        await prefetch(host)
+    await _run(prefetch, _host(request_data=request_data, cache=cache))
 
-    assert [frozenset(ids) for ids in handle.declared] == (reads if configured_router else [])
+    assert _declared(handle) == reads
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+async def test_the_auth_prefetch_reads_no_cooldowns_without_a_proxy_router(
+    monkeypatch: pytest.MonkeyPatch, prefetch: Callable[[PythonAuthHost], Awaitable[None]]
+) -> None:
+    captured, handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
+
+    assert _declared(handle) == []
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+async def test_the_auth_prefetch_reads_from_the_proxy_router_current_when_it_reads_not_the_one_the_host_captured(
+    monkeypatch: pytest.MonkeyPatch, prefetch: Callable[[PythonAuthHost], Awaitable[None]]
+) -> None:
+    captured, captured_handle = _router_recording_cooldown_reads()
+    current, current_handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", current)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
+
+    assert (_declared(captured_handle), _declared(current_handle)) == ([], [frozenset({"dep-a"})])

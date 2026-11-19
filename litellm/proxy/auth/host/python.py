@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -89,6 +90,7 @@ from litellm.proxy.auth.resolvers.grants import (
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.team_grants import team_grants, team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import (
+    arm_routing_cooldowns,
     identity_cache_keys,
     normalize_model_for_auth,
     prefetch_referenced_auth_objects,
@@ -102,7 +104,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.router_api import RoutingContext
 from litellm.rust_bridge._native import RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
@@ -267,7 +268,7 @@ class PythonAuthHost:
         await prefetch_identity_keys(
             identity_cache_keys(token or "", end_user_id=end_user_id, key_is_resolved=token is None),
             user_api_key_cache=self.user_api_key_cache,
-            before_read=self._arm_routing_cooldowns,
+            before_read=partial(arm_routing_cooldowns, self._requested_model()),
         )
 
     async def end_user(self, end_user_id: str | None) -> EndUserRow:
@@ -406,16 +407,12 @@ class PythonAuthHost:
             end_user_id=end_user.end_user_id,
             user_api_key_cache=self.user_api_key_cache,
             prisma_client=self.prisma_client,
-            before_read=self._arm_routing_cooldowns,
+            requested_model=self._requested_model(),
         )
 
-    def _arm_routing_cooldowns(self) -> None:
-        """Declares the cooldown read routing takes later into the auth prefetch's round trip, scoped to the
-        deployments the request's model may route to when it names one."""
-        if self.llm_router is None:
-            return
+    def _requested_model(self) -> str | None:
         model: Final = None if self.http is None else self.http.request_data.get("model")
-        RoutingContext(self.llm_router).arm_cooldown_prefetch(model if isinstance(model, str) else None)
+        return model if isinstance(model, str) else None
 
     async def key_owner(self, user_id: str) -> LiteLLM_UserTable | None:
         """Raises when the owner cannot be read; the core treats that as no owner."""
