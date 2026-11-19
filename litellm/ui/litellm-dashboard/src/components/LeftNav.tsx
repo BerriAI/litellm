@@ -521,6 +521,7 @@ const menuGroups: MenuGroup[] = [
 ];
 
 const HOME_ROUTE = "home";
+const LENS_ROUTE = "lens";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
@@ -625,6 +626,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   const currentRoute = routeForPathname(usePathname());
   const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
+  const inLensWorkspace = currentRoute === LENS_ROUTE;
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
 
@@ -761,12 +763,12 @@ const Sidebar_: React.FC<SidebarProps> = ({
             collapsed={collapsed}
             className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
           />
-          <AriaSidebarLink active={currentRoute === "aria"} />
+          {!inLensWorkspace && <AriaSidebarLink active={currentRoute === "aria"} />}
         </SidebarGroup>
         <SidebarContent>
           <ScrollArea className="min-h-0 flex-1">
             <nav className="flex flex-col gap-0.5 px-3 pb-3">
-              {visibleGroups.map((group, gi) => (
+              {(inLensWorkspace ? [] : visibleGroups).map((group, gi) => (
                 <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
                   {gi > 0 && (
                     <SidebarSeparator
