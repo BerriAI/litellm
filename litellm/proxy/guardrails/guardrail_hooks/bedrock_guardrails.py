@@ -878,8 +878,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         secret: signing with it fails, and it would be sent to AWS as a bearer token.
 
         Only a request that is itself Bedrock-routed can carry a key that is also
-        valid here. When the provider cannot be determined the old behaviour is kept,
-        so a clientside Bedrock key keeps working.
+        valid here. A bare proxy alias is resolved through the deployment it routes
+        to, and when that is unknown the guardrail's own credentials win. A request
+        with no model has no LLM key to confuse, so its key is still used.
         """
         if not request_data:
             return False
@@ -888,9 +889,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         provider: Final = request_data.get("custom_llm_provider") or nested_provider
         if provider:
             return provider == "bedrock"
-        model: Final = request_data.get("model") or ""
-        # A bare name gives nothing to route on, so leave it to the caller's config.
-        return not (isinstance(model, str) and "/" in model and not model.startswith("bedrock/"))
+        model: Final = request_data.get("model")
+        if not isinstance(model, str) or not model:
+            return True
+        if "/" in model:
+            return model.startswith("bedrock/")
+        from litellm.proxy.litellm_pre_call_utils import (
+            _resolve_provider_from_deployment,  # pyright: ignore[reportPrivateUsage]  # credential overrides use it too
+        )
+        from litellm.proxy.proxy_server import llm_router
+
+        return llm_router is not None and _resolve_provider_from_deployment(llm_router, model) == "bedrock"
 
     def _prepare_request(
         self,
@@ -2662,7 +2671,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         source: Literal["INPUT", "OUTPUT"],
         event_type: GuardrailEventHooks,
     ) -> BedrockGuardrailResponse:
-        api_key: Final = request_data.get("api_key")
+        api_key: Final = (
+            request_data.get("api_key") if self._request_api_key_is_a_bedrock_credential(request_data) else None
+        )
         return await self._apply_guardrail_to_content(
             content=images,
             bedrock_request_data={

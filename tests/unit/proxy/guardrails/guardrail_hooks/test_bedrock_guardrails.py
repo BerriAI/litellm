@@ -6206,8 +6206,7 @@ class TestRequestApiKeyIsNotAlwaysABedrockCredential:
             ({"model": "bedrock/anthropic.claude-3", "api_key": "bedrock-key"}, True),
             ({"custom_llm_provider": "bedrock", "model": "anthropic.claude-3", "api_key": "k"}, True),
             ({"litellm_params": {"custom_llm_provider": "bedrock"}, "model": "x/y", "api_key": "k"}, True),
-            # Nothing to route on: unchanged, so a clientside Bedrock key still works.
-            ({"model": "claude-sonnet", "api_key": "k"}, True),
+            # No model, so no LLM key can be in the field.
             ({"api_key": "k"}, True),
             # No request data at all.
             (None, False),
@@ -6216,6 +6215,54 @@ class TestRequestApiKeyIsNotAlwaysABedrockCredential:
     )
     def test_only_a_bedrock_routed_request_yields_a_bedrock_credential(self, request_data, expected):
         assert self._guardrail()._request_api_key_is_a_bedrock_credential(request_data) is expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "expected_authorization"),
+        [
+            ("gpt-4o", "Bearer guardrail-token"),
+            ("not-deployed", "Bearer guardrail-token"),
+            ("claude-sonnet", "Bearer request-key"),
+        ],
+    )
+    async def test_a_bare_proxy_alias_reuses_the_request_key_only_when_it_routes_to_bedrock(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, expected_authorization: str
+    ) -> None:
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "guardrail-token")
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-deploy"}},
+                {"model_name": "claude-sonnet", "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-4-6"}},
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+        guardrail: Final = self._guardrail()
+
+        with patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock, return_value=_passing_bedrock_httpx_response("ok")
+        ) as mock_post:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hello"}],
+                request_data={"model": model, "api_key": "request-key"},
+            )
+
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == expected_authorization
+
+    @pytest.mark.asyncio
+    async def test_an_image_attachment_scan_does_not_send_a_byok_key_to_aws(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "guardrail-token")
+        guardrail: Final = self._guardrail()
+        data: Final = {**_image_only_chat_request(), "model": "nvidia_nim/meta/llama-3.1-8b", "api_key": "nvapi-SECRET"}
+
+        with patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock, return_value=_passing_bedrock_httpx_response("ok")
+        ) as mock_post:
+            await guardrail.async_scan_request_attachments(data=data, call_type=CallTypes.acompletion.value)
+
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer guardrail-token"
 
     def test_byok_key_is_not_sent_to_aws_as_a_bearer_token(self):
         """End to end through _prepare_request: the NIM key must not become Authorization."""
