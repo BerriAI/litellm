@@ -25,7 +25,6 @@ from litellm.types.utils import (
     DataResidency,
     ImageResponse,
     ModelInfo,
-    ModelInfoBase,
     PassthroughCallTypes,
     PromptTokensDetailsWrapper,
     ServiceTier,
@@ -184,23 +183,6 @@ def get_billable_input_tokens(usage: Usage) -> int:
     """
     details: Final = parse_prompt_tokens_details(usage)
     return usage.prompt_tokens - details["cache_hit_tokens"]
-
-
-def select_cost_metric_for_model(
-    model_info: ModelInfoBase,
-) -> Literal["cost_per_character", "cost_per_token"]:
-    """
-    Select 'cost_per_character' if model_info has 'input_cost_per_character'
-    Select 'cost_per_token' if model_info has 'input_cost_per_token'
-    """
-    if model_info.get("input_cost_per_character") is not None:
-        return "cost_per_character"
-    elif model_info.get("input_cost_per_token") is not None:
-        return "cost_per_token"
-    else:
-        raise ValueError(
-            f"Model {model_info['key']} does not have 'input_cost_per_character' or 'input_cost_per_token'"
-        )
 
 
 def generic_cost_per_character(
@@ -1468,28 +1450,66 @@ class _ModelPricedImageCostCalculator(Protocol):
     def __call__(self, model: str, image_response: ImageResponse, model_info: ModelInfo | None = None) -> float: ...
 
 
+_PER_IMAGE_PROVIDERS: Final = frozenset(
+    {
+        litellm.LlmProviders.RECRAFT.value,
+        litellm.LlmProviders.AIML.value,
+        litellm.LlmProviders.COMETAPI.value,
+        litellm.LlmProviders.RUNWAYML.value,
+    }
+)
+
+
+def _catalog_image_row(model: str, custom_llm_provider: str, pricing: ModelInfo | None) -> ModelInfo | None:
+    """The row ``resolve_image_model_info`` lays a deployment's prices over: raising for an unmapped model without
+    deployment prices, ``None`` beside them."""
+    if pricing is None:
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    try:
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return None
+
+
+def _per_image_cost(
+    model: str,
+    custom_llm_provider: str,
+    image_response: ImageResponse,
+    pricing: ModelInfo | None,
+    calculator: Literal["per_image", "per_image_and_input"],
+) -> float:
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import ImageDocument, price_units
+    from litellm.rust_bridge._native import NativeReceipt
+
+    input_images: Final = image_response.hidden_params.get("billable_input_image_count")
+    outcome: Final = price_units(
+        ImageDocument(
+            kind="image",
+            model=model,
+            provider=custom_llm_provider,
+            calculator=calculator,
+            images=len(image_response.data or ()),
+            pixels=0,
+            input_images=input_images if isinstance(input_images, int) else 0,
+        ),
+        (pricing,) if pricing is not None else (),
+        _catalog_image_row(model, custom_llm_provider, pricing),
+    )
+    if isinstance(outcome, NativeReceipt):
+        return outcome.total
+    if calculator == "per_image_and_input":
+        raise ValueError(f"No output_cost_per_image found for {custom_llm_provider}/{model}")
+    return 0.0
+
+
 def _model_priced_image_cost_calculator(
     custom_llm_provider: str | None, model: str, pricing: ModelInfo | None
 ) -> _ModelPricedImageCostCalculator | None:
     match custom_llm_provider:
-        case litellm.LlmProviders.RECRAFT.value:
-            from litellm.llms.recraft.cost_calculator import cost_calculator as recraft_image_cost_calculator
-
-            return recraft_image_cost_calculator
-        case litellm.LlmProviders.AIML.value:
-            from litellm.llms.aiml.image_generation.cost_calculator import cost_calculator as aiml_image_cost_calculator
-
-            return aiml_image_cost_calculator
-        case litellm.LlmProviders.COMETAPI.value:
-            from litellm.llms.cometapi.image_generation.cost_calculator import (
-                cost_calculator as cometapi_image_cost_calculator,
+        case provider if provider in _PER_IMAGE_PROVIDERS:
+            return lambda model, image_response, model_info=None: _per_image_cost(
+                model, provider, image_response, model_info, "per_image"
             )
-
-            return cometapi_image_cost_calculator
-        case litellm.LlmProviders.RUNWAYML.value:
-            from litellm.llms.runwayml.cost_calculator import cost_calculator as runwayml_image_cost_calculator
-
-            return runwayml_image_cost_calculator
         case litellm.LlmProviders.TENCENT.value:
             from litellm.llms.tencent.cost_calculator import image_cost_calculator as tencent_image_cost_calculator
             from litellm.llms.tencent.image_generation.transformation import is_tokenhub_image_model
@@ -1498,11 +1518,9 @@ def _model_priced_image_cost_calculator(
         case litellm.LlmProviders.DASHSCOPE.value:
             if _deployment_prices_images_without_an_output_price(pricing):
                 return None
-            from litellm.llms.dashscope.image_generation.cost_calculator import (
-                cost_calculator as dashscope_image_cost_calculator,
+            return lambda model, image_response, model_info=None: _per_image_cost(
+                model, litellm.LlmProviders.DASHSCOPE.value, image_response, model_info, "per_image_and_input"
             )
-
-            return dashscope_image_cost_calculator
         case _:
             return None
 

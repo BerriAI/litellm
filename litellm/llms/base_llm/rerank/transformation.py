@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from litellm.types.rerank import RerankBilledUnits, RerankResponse
-from litellm.types.utils import ModelInfo
+from litellm.types.rerank import RerankResponse
 
 from ..chat.transformation import BaseLLMException
 
@@ -97,40 +96,3 @@ class BaseRerankConfig(ABC):
             message=error_message,
             headers=headers,
         )
-
-    def calculate_rerank_cost(
-        self,
-        model: str,
-        custom_llm_provider: str | None = None,
-        billed_units: RerankBilledUnits | None = None,
-        model_info: ModelInfo | None = None,
-    ) -> tuple[float, float]:
-        """
-        Calculates the cost per query for a given rerank model.
-
-        Input:
-            - model: str, the model name without provider prefix
-            - custom_llm_provider: str, the provider used for the model. If provided, used to check if the litellm model info is for that provider.
-            - num_queries: int, the number of queries to calculate the cost for
-            - model_info: ModelInfo, the model info for the given model
-
-        Returns:
-            Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
-        """
-
-        if (
-            model_info is None
-            or "input_cost_per_query" not in model_info
-            or model_info["input_cost_per_query"] is None
-            or billed_units is None
-        ):
-            return 0.0, 0.0
-
-        search_units: Final = billed_units.get("search_units")
-
-        if search_units is None:
-            return 0.0, 0.0
-
-        prompt_cost: Final = model_info["input_cost_per_query"] * search_units
-
-        return prompt_cost, 0.0

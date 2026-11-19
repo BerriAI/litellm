@@ -1,0 +1,171 @@
+{
+ "source": "Captured once from main's Python (8388e4f60f, LITELLM_LOCAL_MODEL_COST_MAP=True). `row` holds the cost fields the calculator read, `expected` what main returned or the exception it raised",
+ "cases": [
+  {
+   "name": "cohere_search_units",
+   "model": "rerank-v3.5",
+   "provider": "cohere",
+   "row": {
+    "input_cost_per_token": 0.0,
+    "input_cost_per_query": 0.002,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": 3
+   },
+   "expected": {
+    "prompt": 0.006,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "cohere_without_search_units",
+   "model": "rerank-v3.5",
+   "provider": "cohere",
+   "row": {
+    "input_cost_per_token": 0.0,
+    "input_cost_per_query": 0.002,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": null,
+    "total_tokens": 40
+   },
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "cohere_token_priced_row",
+   "model": "rerank-v5.0-pro",
+   "provider": "cohere",
+   "row": {
+    "input_cost_per_token": 5e-08,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": 1,
+    "total_tokens": 900
+   },
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "jina_tokens",
+   "model": "jina-reranker-v3.5",
+   "provider": "jina_ai",
+   "row": {
+    "input_cost_per_token": 5e-08,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": 1,
+    "total_tokens": 1234
+   },
+   "expected": {
+    "prompt": 6.17e-05,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "voyage_tokens",
+   "model": "rerank-2.5",
+   "provider": "voyage",
+   "row": {
+    "input_cost_per_token": 5e-08,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "total_tokens": 777
+   },
+   "expected": {
+    "prompt": 3.8849999999999996e-05,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "vertex_search_units",
+   "model": "vertex_ai/semantic-ranker-default",
+   "provider": "vertex_ai",
+   "row": {
+    "input_cost_per_token": 0.0,
+    "input_cost_per_query": 0.001,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": 5
+   },
+   "expected": {
+    "prompt": 0.005,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "azure_ai_search_units",
+   "model": "azure_ai/cohere-rerank-v4.0-pro",
+   "provider": "azure_ai",
+   "row": {
+    "input_cost_per_token": 0.0,
+    "input_cost_per_query": 0.0025,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": 7
+   },
+   "expected": {
+    "prompt": 0.0175,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "azure_ai_token_priced_row",
+   "model": "azure_ai/cohere-rerank-v5-pro",
+   "provider": "azure_ai",
+   "row": {
+    "input_cost_per_token": 5e-08,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": 2,
+    "total_tokens": 50
+   },
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "together_token_priced_row",
+   "model": "together_ai/Salesforce/Llama-Rank-V1",
+   "provider": "together_ai",
+   "row": {
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 0.0
+   },
+   "units": {
+    "search_units": 2,
+    "total_tokens": 50
+   },
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  },
+  {
+   "name": "unmapped",
+   "model": "not-a-reranker",
+   "provider": "cohere",
+   "row": null,
+   "units": {
+    "search_units": 2
+   },
+   "expected": {
+    "prompt": 0.0,
+    "completion": 0.0
+   }
+  }
+ ]
+}

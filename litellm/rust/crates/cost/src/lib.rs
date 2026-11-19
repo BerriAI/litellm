@@ -4,19 +4,28 @@ mod calculate;
 pub mod call;
 mod engine;
 mod error;
+mod image;
 pub mod money;
+mod ocr;
 pub mod price;
 pub mod priced;
 pub mod query;
 pub mod quote;
 pub mod rates;
 pub mod receipt;
+mod rerank;
 pub mod row;
 pub mod schedule;
+mod search;
+mod speech;
 #[cfg(test)]
 mod testing;
 mod tokens;
+mod transcription;
+mod units;
 pub mod usage;
+mod vector_store;
+mod video;
 
 pub use bound::bound;
 pub use calculate::calculate;

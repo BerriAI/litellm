@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::price::{CacheReadMode, CacheTtl, ImageSize, Resolution, SearchContextSize, TokenKind};
 
 /// What one call consumed. Python fills it from the provider response, `calculate` never reads the catalog for it
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Usage {
     /// Prompt size as the provider reported it. Only picks `_above_Nk_tokens` bands, never billed.
     /// Filled even when the call bills characters, `0` when the provider reports none
@@ -21,6 +21,36 @@ pub struct Usage {
     pub search: Search,
     /// Realtime text messages, xAI bills them per message
     pub text_messages: u64,
+    /// Pages and credits a document call billed
+    pub document: Document,
+    /// Provider-defined units the provider reports, such as fal's `x-fal-billable-units`
+    pub billable_units: u64,
+    /// Audio or video a call generated, or audio it read, billed per second or per video
+    pub media: Media,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Document {
+    /// Pages processed, `ocr_cost_per_page`
+    pub pages: u64,
+    /// Pages annotated, `annotation_cost_per_page`
+    pub annotation_pages: u64,
+    /// Credits the provider charged, `ocr_cost_per_credit`
+    pub credits: f64,
+}
+
+/// Seconds stay the float main multiplies, so a measured length bills to the last bit
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Media {
+    /// Seconds billed at `input_cost_per_second`, such as a transcribed file
+    pub input_seconds: f64,
+    /// Seconds billed at `output_cost_per_second_<resolution>`, or `output_cost_per_second` without one
+    pub output_seconds: f64,
+    pub resolution: Option<Resolution>,
+    /// Seconds billed at `output_cost_per_video_per_second`
+    pub video_seconds: f64,
+    /// Videos billed at `output_cost_per_video`
+    pub videos: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

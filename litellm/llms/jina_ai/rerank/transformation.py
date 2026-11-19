@@ -22,7 +22,6 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankTokens,
 )
-from litellm.types.utils import ModelInfo
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
@@ -158,25 +157,3 @@ class JinaAIRerankConfig(BaseRerankConfig):
             "content-type": "application/json",
             "authorization": f"Bearer {api_key}",
         }
-
-    def calculate_rerank_cost(
-        self,
-        model: str,
-        custom_llm_provider: str | None = None,
-        billed_units: RerankBilledUnits | None = None,
-        model_info: ModelInfo | None = None,
-    ) -> tuple[float, float]:
-        if (
-            model_info is None
-            or "input_cost_per_token" not in model_info
-            or model_info["input_cost_per_token"] is None
-            or billed_units is None
-        ):
-            return 0.0, 0.0
-
-        total_tokens: Final = billed_units.get("total_tokens")
-        if total_tokens is None:
-            return 0.0, 0.0
-
-        input_cost: Final = model_info["input_cost_per_token"] * total_tokens
-        return input_cost, 0.0

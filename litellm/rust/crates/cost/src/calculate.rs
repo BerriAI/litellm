@@ -1,15 +1,17 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use crate::call::CallContext;
 use crate::money::{Multiplier, Usd};
-use crate::price::{Adjustments, InputUnit, Meter, OutputUnit, Prices, TokenKind};
+use crate::price::{Adjustments, ImageSize, InputUnit, Meter, OutputUnit, Prices, TokenKind};
 use crate::priced::{Line, Outcome, Priced, Quantity, Side};
 use crate::quote::Quote;
 use crate::usage::{DurationMeter, Usage};
 
-/// Prices one online call from its prompt and completion tokens, prompt characters, input images,
-/// input audio and video time and queries. No other field of `usage` is read. Each side is summed
-/// in the order main sums it, so the two totals equal main's to the last bit
+/// Prices one online call from its prompt and completion tokens, prompt characters, input images and pixels,
+/// input audio and video time, input seconds, queries, generated images, seconds and videos, and billable units.
+/// No other field of `usage` is read. Each side is summed in the order main sums it, so the two totals equal
+/// main's to the last bit
 pub fn calculate(
     prices: &Prices,
     adjustments: &Adjustments,
@@ -99,6 +101,14 @@ fn prompt_charges(quote: &Quote<'_>, usage: &Usage) -> Vec<Vec<Charge>> {
             unit(InputUnit::Query { over_results: None }),
             Quantity::Count(usage.search.queries),
         )],
+        vec![(
+            unit(InputUnit::Second),
+            Quantity::Measured(usage.media.input_seconds),
+        )],
+        vec![(
+            unit(InputUnit::Pixel),
+            Quantity::Count(usage.images.input_pixels),
+        )],
     ]
 }
 
@@ -110,12 +120,45 @@ fn completion_charges(usage: &Usage) -> Vec<Vec<Charge>> {
             Quantity::Count(tokens),
         )]
     };
+    let generated = |unit: OutputUnit, quantity: Quantity| vec![(Meter::Output(unit), quantity)];
+    let sizes: BTreeSet<Option<&ImageSize>> = usage
+        .images
+        .output
+        .iter()
+        .map(|image| image.size.as_ref())
+        .collect();
+    let returned = |size: Option<&ImageSize>| {
+        let count = usage
+            .images
+            .output
+            .iter()
+            .filter(|image| image.size.as_ref() == size)
+            .count();
+        (
+            Meter::Output(OutputUnit::Image(size.cloned())),
+            Quantity::Count(count as u64),
+        )
+    };
     vec![
         output(TokenKind::Text),
         output(TokenKind::Audio),
         vec![(Meter::REASONING, Quantity::Count(usage.tokens.reasoning))],
         output(TokenKind::Image),
         output(TokenKind::Video),
+        sizes.into_iter().map(returned).collect(),
+        generated(
+            OutputUnit::Second(usage.media.resolution.clone()),
+            Quantity::Measured(usage.media.output_seconds),
+        ),
+        generated(
+            OutputUnit::VideoSecond,
+            Quantity::Measured(usage.media.video_seconds),
+        ),
+        generated(OutputUnit::Video, Quantity::Count(usage.media.videos)),
+        generated(
+            OutputUnit::BillableUnit,
+            Quantity::Count(usage.billable_units),
+        ),
     ]
 }
 
@@ -182,6 +225,7 @@ fn is_zero(quantity: Quantity) -> bool {
     match quantity {
         Quantity::Count(units) => units == 0,
         Quantity::Duration(duration) => duration == Duration::ZERO,
+        Quantity::Measured(amount) => amount == 0.0,
     }
 }
 
@@ -638,5 +682,98 @@ mod tests {
 
         assert_eq!(sides(&priced), (0.0, 0.0));
         assert!(priced.lines.is_empty());
+    }
+
+    fn image(size: Option<&str>) -> crate::usage::ImageOut {
+        crate::usage::ImageOut {
+            size: size.and_then(ImageSize::new),
+            ..crate::usage::ImageOut::default()
+        }
+    }
+
+    #[rstest]
+    fn each_returned_image_bills_at_the_rate_of_its_size() {
+        let any = Meter::Output(OutputUnit::Image(None));
+        let one_k = Meter::Output(OutputUnit::Image(ImageSize::new("1K")));
+        let prices = prices(&[
+            (any.clone(), Standard, BASE, 0.04),
+            (one_k.clone(), Standard, BASE, 0.1),
+        ]);
+        let usage = Usage {
+            images: Images {
+                output: vec![image(None), image(Some("1K")), image(None)],
+                ..Images::default()
+            },
+            ..Usage::default()
+        };
+        let priced = priced(&prices, &usage);
+
+        assert_eq!(billed(&priced), vec![(any, 0.04 * 2.0), (one_k, 0.1)]);
+        assert_eq!(sides(&priced), (0.0, 0.04 * 2.0 + 0.1));
+    }
+
+    #[rstest]
+    #[case::own_rate(Some("720p"), 0.3)]
+    #[case::unpriced_resolution_reads_the_plain_rate(Some("1080p"), 0.1)]
+    #[case::no_resolution(None, 0.1)]
+    fn generated_seconds_bill_at_their_resolution_rate_or_the_plain_one(
+        #[case] resolution: Option<&str>,
+        #[case] rate: f64,
+    ) {
+        let prices = prices(&[
+            (Meter::Output(OutputUnit::Second(None)), Standard, BASE, 0.1),
+            (
+                Meter::Output(OutputUnit::Second(crate::price::Resolution::new("720p"))),
+                Standard,
+                BASE,
+                0.3,
+            ),
+        ]);
+        let usage = Usage {
+            media: crate::usage::Media {
+                output_seconds: 4.25,
+                resolution: resolution.and_then(crate::price::Resolution::new),
+                ..crate::usage::Media::default()
+            },
+            ..Usage::default()
+        };
+        assert_eq!(sides(&priced(&prices, &usage)), (0.0, rate * 4.25));
+    }
+
+    #[rstest]
+    fn input_seconds_and_pixels_bill_the_prompt_and_videos_and_units_the_completion() {
+        let prices = prices(&[
+            (Meter::Input(InputUnit::Second), Standard, BASE, 0.006),
+            (Meter::Input(InputUnit::Pixel), Standard, BASE, 1e-8),
+            (Meter::Output(OutputUnit::VideoSecond), Standard, BASE, 0.5),
+            (Meter::Output(OutputUnit::Video), Standard, BASE, 2.0),
+            (
+                Meter::Output(OutputUnit::BillableUnit),
+                Standard,
+                BASE,
+                0.01,
+            ),
+        ]);
+        let usage = Usage {
+            images: Images {
+                input_pixels: 1_048_576,
+                ..Images::default()
+            },
+            media: crate::usage::Media {
+                input_seconds: 12.5,
+                video_seconds: 3.0,
+                videos: 2,
+                ..crate::usage::Media::default()
+            },
+            billable_units: 7,
+            ..Usage::default()
+        };
+        assert_eq!(
+            sides(&priced(&prices, &usage)),
+            (
+                0.006 * 12.5 + 1e-8 * 1_048_576.0,
+                0.5 * 3.0 + 2.0 * 2.0 + 0.01 * 7.0
+            )
+        );
     }
 }

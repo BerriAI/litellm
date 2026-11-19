@@ -1,9 +1,10 @@
-"""Python's side of the Rust pricing core (``NativeModelCostMap.price``, ``bound``, ``rates`` and ``adjust``).
+"""Python's side of the Rust pricing core (``NativeModelCostMap.price``, ``price_units``, ``bound``, ``rates`` and
+``adjust``).
 
 Each helper reads the facts Python holds into the document the bridge reads, and hands back what the old Python
 API returned. ``None`` from ``price`` means Rust left the call to Python, which then prices it the old way."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -18,7 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledUsage,
     billed_usage,
 )
-from litellm.rust_bridge._native import NativeRateCard, NativeReceipt
+from litellm.rust_bridge._native import NativeRateCard, NativeReceipt, NativeUnpriced
 from litellm.types.utils import Usage
 
 SearchContextSize = Literal["low", "medium", "high"]
@@ -75,6 +76,90 @@ class _PriceDocument(TypedDict):
     vertex_location: ReadOnly[str | None]
     at: ReadOnly[str]
     adjust: ReadOnly[AdjustFacts | None]
+
+
+class RerankDocument(TypedDict):
+    kind: ReadOnly[Literal["rerank"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+    search_units: ReadOnly[int | None]
+    total_tokens: ReadOnly[int | None]
+
+
+class VectorStoreSearchDocument(TypedDict):
+    kind: ReadOnly[Literal["vector_store_search"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+
+
+class OcrDocument(TypedDict):
+    kind: ReadOnly[Literal["ocr"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str | None]
+    pages: ReadOnly[int | None]
+    annotation_pages: ReadOnly[int]
+    credits: ReadOnly[float | None]
+    batch: ReadOnly[bool]
+    catalog_deferred: ReadOnly[bool]
+
+
+class SpeechDocument(TypedDict):
+    kind: ReadOnly[Literal["speech"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+    characters: ReadOnly[int | None]
+    generations: ReadOnly[int | None]
+
+
+class TranscriptionDocument(TypedDict):
+    kind: ReadOnly[Literal["transcription"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str]
+    seconds: ReadOnly[float]
+    tokens: ReadOnly[bool]
+
+
+class SearchDocument(TypedDict):
+    kind: ReadOnly[Literal["search"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str | None]
+    queries: ReadOnly[int]
+    additional_results: ReadOnly[int]
+    adjust: ReadOnly[AdjustFacts | None]
+
+
+class VideoDocument(TypedDict):
+    kind: ReadOnly[Literal["video"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str | None]
+    seconds: ReadOnly[float | None]
+    resolution: ReadOnly[str | None]
+    videos: ReadOnly[int]
+    input_images: ReadOnly[int]
+    deployment: ReadOnly[bool]
+    requested_row: ReadOnly[bool]
+
+
+class ImageDocument(TypedDict):
+    kind: ReadOnly[Literal["image"]]
+    model: ReadOnly[str]
+    provider: ReadOnly[str | None]
+    calculator: ReadOnly[Literal["default", "per_image", "per_image_and_input"]]
+    images: ReadOnly[int]
+    pixels: ReadOnly[int]
+    input_images: ReadOnly[int]
+
+
+UnitsDocument = (
+    ImageDocument
+    | VideoDocument
+    | SearchDocument
+    | RerankDocument
+    | VectorStoreSearchDocument
+    | OcrDocument
+    | SpeechDocument
+    | TranscriptionDocument
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +249,21 @@ def price_model(
         row=row,
     )
     return None if receipt is None else (receipt.prompt_cost, receipt.completion_cost)
+
+
+def price_units(
+    document: UnitsDocument,
+    tables: Sequence[Mapping[str, object]] = (),
+    catalog: Mapping[str, object] | None = None,
+) -> NativeReceipt | NativeUnpriced:
+    """A per-unit call priced from ``document``'s facts, or why no row prices it. ``tables`` are the deployment's own
+    price tables, read in order ahead of ``catalog``, the row ``get_model_info`` found for the call."""
+    return model_cost_inputs.price_units(document, tables, catalog)
+
+
+def prompt_and_completion(outcome: NativeReceipt | NativeUnpriced) -> tuple[float, float]:
+    """The receipt's prompt and completion cost, ``(0.0, 0.0)`` for a call no row prices."""
+    return (outcome.prompt_cost, outcome.completion_cost) if isinstance(outcome, NativeReceipt) else (0.0, 0.0)
 
 
 def billed_token_rates(receipt: NativeReceipt) -> BilledTokenRates | None:

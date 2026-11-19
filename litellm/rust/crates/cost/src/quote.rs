@@ -90,6 +90,10 @@ impl Quote<'_> {
                 .listed(meter)
                 .map(Rate::own)
                 .or_else(|| self.borrowed(&Meter::TEXT_OUTPUT)),
+            Meter::Output(OutputUnit::Second(Some(_))) => self
+                .base(meter, ServiceTier::Standard)
+                .map(Rate::own)
+                .or_else(|| self.borrowed(&Meter::Output(OutputUnit::Second(None)))),
             _ => self.base(meter, ServiceTier::Standard).map(Rate::own),
         }
     }

@@ -37,12 +37,21 @@ from litellm.litellm_core_utils.decisions_pricing import (
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
+    AdjustedCost,
     AdjustFacts,
     CallFacts,
+    ImageDocument,
+    OcrDocument,
+    RerankDocument,
+    SpeechDocument,
+    TranscriptionDocument,
+    VectorStoreSearchDocument,
     adjusted_cost,
     billed_token_rates,
     price,
+    price_units,
     priced_usage,
+    prompt_and_completion,
     web_search_use,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -56,7 +65,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
-    generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
     get_billable_input_tokens,
@@ -69,7 +77,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_vertex_regional_endpoint_uplift,
     get_web_search_requests_from_usage,
     parse_prompt_tokens_details,
-    select_cost_metric_for_model,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -112,8 +119,7 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
-    video_clip_cost,
-    video_output_cost_per_second,
+    priced_video,
 )
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
@@ -135,7 +141,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.rust_bridge._native import NativeReceipt, billable_service_tier
+from litellm.rust_bridge._native import NativeReceipt, NativeUnpriced, billable_service_tier
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import (
     DecisionsResponse,
@@ -380,32 +386,98 @@ _TRANSCRIPTION_SECOND_RATE_KEYS: Final[tuple[_TranscriptionRateKey, ...]] = (
 )
 
 
-def _transcription_uses_token_pricing(
-    model: str,
-    custom_llm_provider: str | None,
-    usage_block: Usage | None,
-) -> bool:
-    if usage_block is None:
+def _usage_reports_tokens(usage: Usage | None) -> bool:
+    if usage is None:
         return False
-
-    model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-    if (
-        _declared_transcription_rate(model_info, _TRANSCRIPTION_TOKEN_RATE_KEYS) is None
-        and _declared_transcription_rate(model_info, _TRANSCRIPTION_SECOND_RATE_KEYS) is not None
+    prompt_details: Final[PromptTokensDetailsWrapper | None] = getattr(usage, "prompt_tokens_details", None)
+    if prompt_details is not None and (
+        (getattr(prompt_details, "audio_tokens", 0) or 0) > 0 or (getattr(prompt_details, "text_tokens", 0) or 0) > 0
     ):
-        return False
+        return True
+    return (getattr(usage, "prompt_tokens", 0) or 0) > 0 or (getattr(usage, "completion_tokens", 0) or 0) > 0
 
-    prompt_tokens_val: Final = getattr(usage_block, "prompt_tokens", 0) or 0
-    completion_tokens_val: Final = getattr(usage_block, "completion_tokens", 0) or 0
-    prompt_details: Final[PromptTokensDetailsWrapper | None] = getattr(usage_block, "prompt_tokens_details", None)
 
-    if prompt_details is not None:
-        audio_token_count: Final = getattr(prompt_details, "audio_tokens", 0) or 0
-        text_token_count: Final = getattr(prompt_details, "text_tokens", 0) or 0
-        if audio_token_count > 0 or text_token_count > 0:
-            return True
+def _transcription_cost(
+    model: str,
+    model_without_prefix: str,
+    custom_llm_provider: str,
+    duration: float,
+    usage: Usage,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> tuple[float, float]:
+    if not _usage_reports_tokens(usage):
+        return openai_cost_per_second(
+            model=model_without_prefix, custom_llm_provider=custom_llm_provider, duration=duration
+        )
+    model_info: Final = cached_get_model_info_helper(
+        model=model_without_prefix, custom_llm_provider=custom_llm_provider
+    )
+    declared: Final[Mapping[str, object] | None] = litellm.model_cost.get(model_info.get("key"))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # model cost map is dynamically loaded
+    outcome: Final = price_units(
+        TranscriptionDocument(
+            kind="transcription",
+            model=model_without_prefix,
+            provider=custom_llm_provider,
+            seconds=duration,
+            tokens=True,
+        ),
+        catalog=declared if declared is not None else model_info,
+    )
+    if isinstance(outcome, NativeUnpriced) and outcome.reason == "not_ported":
+        return generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+            service_tier=service_tier,
+            data_residency=data_residency,
+        )
+    return prompt_and_completion(outcome)
 
-    return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+def _speech_cost(
+    model: str,
+    custom_llm_provider: str,
+    prompt_characters: int | None,
+    usage: Usage,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> tuple[float, float]:
+    lyria_generation_cost: Final = (
+        get_vertex_ai_lyria_generation_cost(model=model)
+        if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+        else None
+    )
+    if lyria_generation_cost is not None:
+        return 0.0, lyria_generation_cost
+    outcome: Final = price_units(
+        SpeechDocument(
+            kind="speech",
+            model=model,
+            provider=custom_llm_provider,
+            characters=prompt_characters,
+            generations=None,
+        ),
+        catalog=cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, preserve_unset_costs=True
+        ),
+    )
+    if isinstance(outcome, NativeReceipt):
+        return outcome.prompt_cost, outcome.completion_cost
+    if outcome.reason == "not_ported":
+        return generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+            service_tier=service_tier,
+            data_residency=data_residency,
+        )
+    if outcome.reason == "missing_usage":
+        raise ValueError(
+            f"prompt_characters must be provided for tts calls. prompt_characters={prompt_characters}, "
+            f"model={model}, custom_llm_provider={custom_llm_provider}"
+        )
+    raise ValueError(f"Model {model} does not have 'input_cost_per_character' or 'input_cost_per_token'")
 
 
 def _transcription_duration_for_cost(completion_response: object) -> float:
@@ -417,9 +489,6 @@ def _transcription_duration_for_cost(completion_response: object) -> float:
         hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
     )
     return measured_duration if measured_duration is not None and measured_duration > 0 else 0.0
-
-
-OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
 
 
 class OCRPricing(TypedDict, total=False):
@@ -528,7 +597,7 @@ def cost_per_token(
     response: object | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
-    custom_model_info: OCRPricing | None = None,
+    custom_model_info: OCRPricing | Sequence[Mapping[str, object]] | None = None,
     bedrock_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
@@ -722,50 +791,14 @@ def cost_per_token(
                 ),
             )
     if call_type == "speech" or call_type == "aspeech":
-        lyria_generation_cost: Final = (
-            get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
-            if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
-            else None
-        )
-        if lyria_generation_cost is not None:
-            return 0.0, lyria_generation_cost
-        speech_model_info: Final = cached_get_model_info_helper(
+        return _speech_cost(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
-            preserve_unset_costs=True,
+            prompt_characters=prompt_characters,
+            usage=usage_block,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
-        cost_metric: Final = select_cost_metric_for_model(speech_model_info)
-        prompt_cost: float = 0.0
-        completion_cost: float = 0.0
-        if cost_metric == "cost_per_character":
-            if prompt_characters is None:
-                raise ValueError(
-                    f"prompt_characters must be provided for tts calls. prompt_characters={prompt_characters}, model={model}, custom_llm_provider={custom_llm_provider}, call_type={call_type}"
-                )
-            _prompt_cost, _completion_cost = generic_cost_per_character(
-                model=model_without_prefix,
-                custom_llm_provider=custom_llm_provider,
-                prompt_characters=prompt_characters,
-                completion_characters=0,
-                custom_prompt_cost=None,
-                custom_completion_cost=0,
-            )
-            if _prompt_cost is None or _completion_cost is None:
-                raise ValueError(
-                    f"cost for tts call is None. prompt_cost={_prompt_cost}, completion_cost={_completion_cost}, model={model_without_prefix}, custom_llm_provider={custom_llm_provider}, prompt_characters={prompt_characters}, completion_characters={completion_characters}"
-                )
-            prompt_cost = _prompt_cost
-            completion_cost = _completion_cost
-        elif cost_metric == "cost_per_token":
-            prompt_cost, completion_cost = generic_cost_per_token(
-                model=model_without_prefix,
-                usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
-                service_tier=service_tier,
-                data_residency=data_residency,
-            )
-
-        return prompt_cost, completion_cost
     elif call_type == "arerank" or call_type == "rerank":
         return rerank_cost(
             model=model,
@@ -799,15 +832,6 @@ def cost_per_token(
             vertex_location=vertex_location,
         )
     elif call_type == "atranscription" or call_type == "transcription":
-        if _transcription_uses_token_pricing(model_without_prefix, custom_llm_provider, usage_block):
-            return generic_cost_per_token(
-                model=model,
-                usage=usage_block,
-                custom_llm_provider=custom_llm_provider,
-                service_tier=service_tier,
-                data_residency=data_residency,
-            )
-
         billed_duration: Final = (
             max(audio_transcription_file_duration, _GROQ_MINIMUM_TRANSCRIPTION_SECONDS)
             if (
@@ -817,10 +841,14 @@ def cost_per_token(
             )
             else audio_transcription_file_duration
         )
-        return openai_cost_per_second(
-            model=model_without_prefix,
+        return _transcription_cost(
+            model=model,
+            model_without_prefix=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             duration=billed_duration,
+            usage=usage_block,
+            service_tier=service_tier,
+            data_residency=data_residency,
         )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
@@ -2299,22 +2327,30 @@ def completion_cost(
                             return float(provider_reported_cost)
 
                         if duration_seconds is not None:
-                            # Calculate cost based on video duration using video-specific cost calculation
-                            from litellm.llms.openai.cost_calculation import (
-                                video_generation_cost,
-                            )
-
-                            return video_generation_cost(
+                            return priced_video(
                                 model=model,
-                                duration_seconds=duration_seconds,
                                 custom_llm_provider=custom_llm_provider,
-                                model_info=_video_model_info,
+                                seconds=duration_seconds,
                                 video_resolution=video_resolution,
-                            ) * _video_count(_video_usage_obj) + _video_input_image_cost(
-                                requested_model or model,
-                                custom_llm_provider,
-                                _video_model_info,
-                                getattr(completion_response, "usage", None),
+                                deployment=_video_model_info,
+                                catalog=None
+                                if _video_model_info is not None
+                                else litellm.get_model_info(
+                                    model=model, custom_llm_provider=custom_llm_provider or "openai"
+                                ),
+                                videos=_video_count(_video_usage_obj),
+                                input_images=_billable_input_images(_video_usage_obj),
+                                requested_row=(
+                                    litellm.get_model_info(
+                                        model=requested_model or model, custom_llm_provider=custom_llm_provider
+                                    )
+                                    if _billable_input_images(_video_usage_obj) > 0
+                                    and (
+                                        _video_model_info is None
+                                        or _video_model_info.get("input_cost_per_image") is None
+                                    )
+                                    else None
+                                ),
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
@@ -2323,7 +2359,8 @@ def completion_cost(
                         custom_llm_provider=custom_llm_provider,
                         model_info=_video_model_info,
                         video_resolution=video_resolution,
-                    ) * _video_count(_video_usage_obj)
+                        videos=_video_count(_video_usage_obj),
+                    )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = _speech_billed_characters(
                         completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
@@ -2347,8 +2384,6 @@ def completion_cost(
                         search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
                         completion_tokens = search_units
                 elif call_type in _SEARCH_CALL_TYPES:
-                    from litellm.search import search_provider_cost_per_query
-
                     # Extract number_of_queries from optional_params or default to 1
                     number_of_queries = 1
                     if optional_params is not None:
@@ -2364,44 +2399,20 @@ def completion_cost(
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
 
-                    (
-                        prompt_cost,
-                        completion_cost_result,
-                    ) = (
-                        (number_of_queries * configured_cost_per_query, 0.0)
-                        if configured_cost_per_query is not None
-                        else search_provider_cost_per_query(
-                            model=search_model,
-                            custom_llm_provider=custom_llm_provider,
-                            number_of_queries=number_of_queries,
-                            optional_params=optional_params,
-                            search_response=completion_response
-                            if isinstance(completion_response, SearchResponse)
-                            else None,
-                        )
-                    )
-
-                    # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
-                    _final_cost = prompt_cost + completion_cost_result
-
-                    return _adjusted_stored_cost(
-                        original_cost=_final_cost,
-                        prompt_cost=prompt_cost,
-                        completion_cost=completion_cost_result,
-                        tool_cost=0.0,
-                        additional_costs=None,
-                        custom_llm_provider=custom_llm_provider,
-                        pricing_provider=custom_llm_provider,
+                    return _priced_search(
+                        search_model=search_model,
                         model=model,
-                        discount_model=model,
-                        region_name=region_name if isinstance(region_name, str) else None,
+                        custom_llm_provider=custom_llm_provider,
+                        number_of_queries=number_of_queries,
+                        optional_params=optional_params,
+                        region=region_name if isinstance(region_name, str) else None,
+                        configured_cost_per_query=configured_cost_per_query,
+                        search_response=completion_response
+                        if isinstance(completion_response, SearchResponse)
+                        else None,
                         litellm_logging_obj=litellm_logging_obj,
-                        usage=None,
                         service_tier=service_tier,
                         data_residency=data_residency,
-                        vertex_location=None,
-                        custom_cost_per_token=None,
-                        bedrock_model_info=None,
                     )
                 elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
@@ -2514,7 +2525,7 @@ def completion_cost(
                     data_residency=data_residency,
                     vertex_location=vertex_location,
                     response=completion_response,
-                    custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                    custom_model_info=_ocr_price_tables(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
                 )
 
@@ -2772,25 +2783,67 @@ def _video_count(usage: object) -> int:
     return count if type(count) is int and count > 1 else 1
 
 
-def _video_input_image_cost(
+def _priced_search(
+    search_model: str,
     model: str,
     custom_llm_provider: str | None,
-    model_info: ModelInfo | None,
-    usage: object,
+    number_of_queries: int,
+    optional_params: Mapping[str, object] | None,
+    region: str | None,
+    configured_cost_per_query: float | None,
+    search_response: SearchResponse | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    service_tier: str | None,
+    data_residency: str | None,
 ) -> float:
+    from litellm.search.cost_calculator import search_cost
+
+    searched: Final = search_cost(
+        model=search_model,
+        custom_llm_provider=custom_llm_provider,
+        number_of_queries=number_of_queries,
+        optional_params=optional_params,
+        adjust=AdjustFacts(provider=custom_llm_provider, model=model, region=region),
+        configured_cost_per_query=configured_cost_per_query,
+        search_response=search_response,
+    )
+    adjusted: Final = (
+        AdjustedCost(
+            cost=searched.total,
+            discount_percent=searched.discount_percent,
+            discount_amount=searched.discount_amount,
+            margin_percent=searched.margin_percent,
+            margin_fixed_amount=searched.margin_fixed_amount,
+            margin_total_amount=searched.margin_total_amount,
+        )
+        if isinstance(searched, NativeReceipt)
+        else adjusted_cost(searched, custom_llm_provider, model, region)
+    )
+    prompt_cost: Final = searched.prompt_cost if isinstance(searched, NativeReceipt) else searched
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=prompt_cost,
+        completion_tokens_cost_usd_dollar=0.0,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=adjusted.cost,
+        original_cost=prompt_cost,
+        discount_percent=adjusted.discount_percent,
+        discount_amount=adjusted.discount_amount,
+        margin_percent=adjusted.margin_percent,
+        margin_fixed_amount=adjusted.margin_fixed_amount,
+        margin_total_amount=adjusted.margin_total_amount,
+        service_tier=service_tier,
+        data_residency=data_residency,
+    )
+    return adjusted.cost
+
+
+def _billable_input_images(usage: object) -> int:
     match usage:
         case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
-            deployment_rate: Final = model_info.get("input_cost_per_image") if model_info is not None else None
-            image_rate: Final = (
-                deployment_rate
-                if deployment_rate is not None
-                else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
-                    "input_cost_per_image"
-                )
-            )
-            return billable_input_images * image_rate if isinstance(image_rate, (int, float)) else 0.0
+            return billable_input_images
         case _:
-            return 0.0
+            return 0
 
 
 _LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
@@ -2829,33 +2882,16 @@ def _deployment_model_info(
     )
 
 
-def _ocr_model_info(
+def _ocr_price_tables(
     litellm_logging_obj: LitellmLoggingObject | None,
     custom_pricing: bool | None,
     router_model_id: str | None,
-) -> OCRPricing | None:
+) -> tuple[Mapping[str, object], ...]:
     deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
     litellm_params: Final = (
         litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
     )
-    if litellm_params is None:
-        return deployment_info
-    return _layered_ocr_pricing(litellm_params, deployment_info)
-
-
-def _first_ocr_price(field: OCRPricingField, *sources: Mapping[str, object] | None) -> float | None:
-    return next(
-        (price for source in sources if source is not None and isinstance(price := source.get(field), int | float)),
-        None,
-    )
-
-
-def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
-    return OCRPricing(
-        ocr_cost_per_page=_first_ocr_price("ocr_cost_per_page", *sources),
-        ocr_cost_per_credit=_first_ocr_price("ocr_cost_per_credit", *sources),
-        annotation_cost_per_page=_first_ocr_price("annotation_cost_per_page", *sources),
-    )
+    return tuple(table for table in (litellm_params, deployment_info) if table is not None)
 
 
 def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
@@ -2942,15 +2978,15 @@ def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
     response: object | None = None,
-    model_info: OCRPricing | None = None,
+    model_info: OCRPricing | Sequence[Mapping[str, object]] | None = None,
 ) -> tuple[float, float]:
     """
     Args:
         model: str - model name
         custom_llm_provider: Optional[str] - custom LLM provider
         response: Optional[Any] - response object
-        model_info: Optional[OCRPricing] - deployment-specific OCR pricing; each rate it sets
-            overrides the model cost map's, the rest fall back to the map
+        model_info: Optional[OCRPricing] - deployment-specific OCR pricing, or several such tables in order; each
+            rate the first table sets overrides the later ones and the model cost map's
 
     Returns:
         Tuple[float, float]: cost of OCR processing
@@ -2959,69 +2995,48 @@ def ocr_cost(
     """
     from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
-    #########################################################
-    # validate it's an OCR response
-    #########################################################
     if response is None or not isinstance(response, OCRResponse):
         raise ValueError(f"response must be of type OCRResponse got type={type(response)}")
 
     if response.usage_info is None:
         raise ValueError("OCR response usage_info is None")
 
-    credits: Final = getattr(response.usage_info, "credits", None)
-    pricing: Final = _layered_ocr_pricing(model_info, _cost_map_model_info(model, custom_llm_provider))
-
-    cost_per_credit: Final = pricing.get("ocr_cost_per_credit")
-    if credits is not None and cost_per_credit is not None:
-        return cost_per_credit * credits, 0.0
-
-    ocr_cost_per_page: Final = pricing.get("ocr_cost_per_page")
-    annotation_cost_per_page: Final = pricing.get("annotation_cost_per_page")
-    annotation_rate: Final = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
-
-    pages_processed: Final = response.usage_info.pages_processed
-    annotation_pages: Final = response.usage_info.pages_processed_annotation or 0
-    has_billable_annotation_pages: Final = annotation_rate is not None and annotation_pages > 0
-
-    if pages_processed is None and not has_billable_annotation_pages:
-        if cost_per_credit is not None or ocr_cost_per_page is None:
-            # Surface missing usage data instead of silently under-reporting
-            # cost. The previous behavior raised ValueError; we now return 0.0
-            # for credit-priced or unpriced models, so log a warning to keep
-            # the regression visible to operators.
-            verbose_logger.warning(
-                "OCR cost: model=%s custom_llm_provider=%s response.usage_info."
-                "pages_processed is None and credits=%s; returning 0.0 cost.",
-                model,
-                custom_llm_provider,
-                credits,
-            )
-            return 0.0, 0.0
+    outcome: Final = price_units(
+        OcrDocument(
+            kind="ocr",
+            model=model,
+            provider=custom_llm_provider,
+            pages=response.usage_info.pages_processed,
+            annotation_pages=response.usage_info.pages_processed_annotation or 0,
+            credits=response.usage_info.credits,
+            batch=False,
+            catalog_deferred=False,
+        ),
+        _price_tables(model_info),
+        _cost_map_model_info(model, custom_llm_provider),
+    )
+    if isinstance(outcome, NativeUnpriced) and outcome.reason == "missing_usage":
         raise ValueError("OCR response pages_processed is None")
-
-    if ocr_cost_per_page is None and not has_billable_annotation_pages:
-        # No per-page pricing configured. Either the model is on credit-based
-        # pricing (and credits weren't returned, so the credit branch above did
-        # not match) or the model has no OCR pricing entry at all. Surface a
-        # warning so that missing pricing entries are visible rather than
-        # silently producing zero cost for billable usage.
+    if isinstance(outcome, NativeUnpriced):
         verbose_logger.warning(
-            "OCR cost: model=%s custom_llm_provider=%s reported "
-            "pages_processed=%s but no ocr_cost_per_page is configured; "
-            "returning 0.0 cost.",
-            model,
-            custom_llm_provider,
-            pages_processed,
+            "OCR cost: model=%s custom_llm_provider=%s reported pages_processed=%s credits=%s but no OCR rate "
+            "prices it; returning 0.0 cost.",
+            _single_log_line(model),
+            _single_log_line(custom_llm_provider),
+            response.usage_info.pages_processed,
+            response.usage_info.credits,
         )
-        return 0.0, 0.0
-
-    ocr_pages_cost: Final = (ocr_cost_per_page or 0.0) * (pages_processed or 0)
-    annotation_pages_cost: Final = (annotation_rate or 0.0) * annotation_pages
-    return ocr_pages_cost + annotation_pages_cost, 0.0
+    return prompt_and_completion(outcome)
 
 
-_OCR_BATCH_PAGE_RATE_KEYS: Final = ("ocr_cost_per_page_batches", "ocr_cost_per_page")
-_OCR_BATCH_ANNOTATION_RATE_KEYS: Final = ("annotation_cost_per_page_batches", "annotation_cost_per_page")
+def _price_tables(
+    model_info: Mapping[str, object] | Sequence[Mapping[str, object]] | None,
+) -> tuple[Mapping[str, object], ...]:
+    if model_info is None:
+        return ()
+    if isinstance(model_info, Mapping):
+        return (model_info,)
+    return tuple(model_info)
 
 
 def ocr_batch_cost(
@@ -3033,55 +3048,51 @@ def ocr_batch_cost(
     """Per-page cost of one OCR result inside a batch output file.
 
     Batch OCR is billed per page at the ``*_batches`` rate, falling back to the
-    synchronous per-page rate when a model has no batch price recorded, the same
-    fallback ``batch_cost_calculator`` applies to per-token batch pricing. Each
+    synchronous per-page rate when a model has no batch price recorded. Each
     per-page family (OCR pages, annotation pages) belongs to the deployment's
     ``model_info`` when it prices that family at either rate and to the published
-    cost map otherwise, so a deployment overriding one family keeps the model's
-    published rate for the other, and the cost map is only consulted for a family
-    the deployment leaves out. Returns ``(prompt_cost, completion_cost)`` with the
+    cost map otherwise. Returns ``(prompt_cost, completion_cost)`` with the
     whole cost in the first slot, like ``ocr_cost``.
     """
-    pages_processed: Final = usage_info.pages_processed or 0
-    annotation_pages: Final = usage_info.pages_processed_annotation or 0
-    deployment_page_rate: Final = _first_price(model_info, *_OCR_BATCH_PAGE_RATE_KEYS)
-    deployment_annotation_rate: Final = _first_price(model_info, *_OCR_BATCH_ANNOTATION_RATE_KEYS)
-    needs_published_pricing: Final = (pages_processed > 0 and deployment_page_rate is None) or (
-        annotation_pages > 0 and deployment_annotation_rate is None
+    document: Final = OcrDocument(
+        kind="ocr",
+        model=model,
+        provider=custom_llm_provider,
+        pages=usage_info.pages_processed or 0,
+        annotation_pages=usage_info.pages_processed_annotation or 0,
+        credits=None,
+        batch=True,
+        catalog_deferred=True,
     )
-    published: Final = (
-        _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider)
-        if needs_published_pricing
-        else None
-    )
-    if needs_published_pricing and published is None:
-        verbose_logger.warning(
-            "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; "
-            "billing only the per-page families the deployment prices.",
-            _single_log_line(model),
-            _single_log_line(custom_llm_provider),
+    tables: Final = _price_tables(model_info)
+    deferred: Final = price_units(document, tables)
+    outcome: Final = (
+        price_units(
+            OcrDocument(
+                kind="ocr",
+                model=model,
+                provider=custom_llm_provider,
+                pages=document["pages"],
+                annotation_pages=document["annotation_pages"],
+                credits=None,
+                batch=True,
+                catalog_deferred=False,
+            ),
+            tables,
+            _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider),
         )
-
-    page_rate: Final = (
-        deployment_page_rate
-        if deployment_page_rate is not None
-        else _first_price(published, *_OCR_BATCH_PAGE_RATE_KEYS)
+        if isinstance(deferred, NativeUnpriced) and deferred.reason == "catalog_deferred"
+        else deferred
     )
-    annotation_rate: Final = (
-        deployment_annotation_rate
-        if deployment_annotation_rate is not None
-        else _first_price(published, *_OCR_BATCH_ANNOTATION_RATE_KEYS)
-    )
-    if page_rate is None and pages_processed > 0:
+    if isinstance(outcome, NativeUnpriced):
         verbose_logger.warning(
             "OCR batch cost: model=%s custom_llm_provider=%s reported pages_processed=%s but no "
             "ocr_cost_per_page is configured; returning 0.0 cost for those pages.",
             _single_log_line(model),
             _single_log_line(custom_llm_provider),
-            pages_processed,
+            usage_info.pages_processed,
         )
-    effective_annotation_rate: Final = annotation_rate if annotation_rate is not None else page_rate
-    return (page_rate or 0.0) * pages_processed + (effective_annotation_rate or 0.0) * annotation_pages, 0.0
+    return prompt_and_completion(outcome)
 
 
 def _single_log_line(value: str | None) -> str:
@@ -3093,12 +3104,6 @@ def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> M
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; caller logs and bills 0.0
         return None
-
-
-def _first_price(model_info: ModelInfo | None, *keys: str) -> float | None:
-    if model_info is None:
-        return None
-    return next((price for price in (model_info.get(k) for k in keys) if isinstance(price, (int, float))), None)
 
 
 def vector_store_search_cost(
@@ -3123,13 +3128,16 @@ def vector_store_search_cost(
         provider=LlmProviders(custom_llm_provider),
         api_type=api_type,
     )
-
-    if config is None:
-        verbose_logger.debug("Vector store search is not supported for %s", custom_llm_provider)
+    if config is None or config.pricing_model is None:
+        verbose_logger.debug("Vector store search is not priced for %s", custom_llm_provider)
         return 0.0, 0.0
-
-    return config.calculate_vector_store_cost(
-        response=response,
+    return prompt_and_completion(
+        price_units(
+            VectorStoreSearchDocument(
+                kind="vector_store_search", model=config.pricing_model, provider=custom_llm_provider
+            ),
+            catalog=litellm.get_model_info(model=config.pricing_model),
+        )
     )
 
 
@@ -3143,28 +3151,19 @@ def rerank_cost(
     - float or None: cost of response OR none if error.
     """
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
-
-    try:
-        config: Final = ProviderConfigManager.get_provider_rerank_config(
-            model=model,
-            api_base=None,
-            present_version_params=[],
-            provider=LlmProviders(custom_llm_provider),
+    units: Final = billed_units or RerankBilledUnits()
+    return prompt_and_completion(
+        price_units(
+            RerankDocument(
+                kind="rerank",
+                model=model,
+                provider=LlmProviders(custom_llm_provider).value,
+                search_units=units.get("search_units"),
+                total_tokens=units.get("total_tokens"),
+            ),
+            catalog=_lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider),
         )
-
-        try:
-            model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        except Exception:
-            model_info = None
-
-        return config.calculate_rerank_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            billed_units=billed_units,
-            model_info=model_info,
-        )
-    except Exception as e:
-        raise e
+    )
 
 
 def transcription_cost(model: str, custom_llm_provider: str | None, duration: float) -> tuple[float, float]:
@@ -3241,29 +3240,23 @@ def default_image_cost_calculator(
     if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
-    price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
     image_count: Final = n if n is not None else 1
-    unit_counts: Final = (
-        ("input_cost_per_image", image_count),
-        ("output_cost_per_image", image_count),
-        ("input_cost_per_pixel", height * width * image_count),
-    )
-    cost: Final = next(
-        (
-            price * units
-            for price_table in price_tables
-            for cost_key, units in unit_counts
-            if (price := price_table.get(cost_key)) is not None
+    outcome: Final = price_units(
+        ImageDocument(
+            kind="image",
+            model=model,
+            provider=custom_llm_provider,
+            calculator="default",
+            images=image_count,
+            pixels=height * width * image_count,
+            input_images=0,
         ),
-        None,
+        (model_info,) if model_info is not None else (),
+        litellm.model_cost[matched_model] if matched_model is not None else None,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
     )
-    if cost is None:
+    if not isinstance(outcome, NativeReceipt):
         raise Exception(f"No pricing information found for model {model}. Tried checking {models_to_check}")
-    return cost
-
-
-_VIDEO_COST_INFO: Final = TypeAdapter(Mapping[str, object])
+    return outcome.total
 
 
 def default_video_cost_calculator(
@@ -3272,6 +3265,7 @@ def default_video_cost_calculator(
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
     video_resolution: str | None = None,
+    videos: int = 1,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -3284,6 +3278,7 @@ def default_video_cost_calculator(
             custom video pricing. When provided, used before falling back to
             the global litellm.model_cost lookup.
         video_resolution (Optional[str]): From usage (e.g. ``720p``, ``1080p``) for tiered per-second pricing.
+        videos (int): How many videos the call generated, each billed the same
 
     Returns:
         float: Cost in USD for the video generation
@@ -3328,29 +3323,15 @@ def default_video_cost_calculator(
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
 
-    clip_cost: Final = video_clip_cost(_VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution)
-    if clip_cost is not None:
-        return clip_cost
-
-    video_cost: Final = cost_info.get("output_cost_per_video")
-    if video_cost is not None:
-        return video_cost
-
-    # Check for video-specific cost per second first
-    video_cost_per_second: Final = cost_info.get("output_cost_per_video_per_second")
-    if video_cost_per_second is not None:
-        return video_cost_per_second * duration_seconds
-
-    output_cost_per_second: Final = video_output_cost_per_second(cost_info, video_resolution)
-    if output_cost_per_second is not None:
-        return output_cost_per_second * duration_seconds
-
-    # If no cost information found, return 0
-    verbose_logger.info(
-        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
-        model,
+    return priced_video(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        seconds=duration_seconds,
+        video_resolution=video_resolution,
+        deployment=model_info,
+        catalog=None if model_info is not None else cost_info,
+        videos=videos,
     )
-    return 0.0
 
 
 def _optional_batch_rate(
