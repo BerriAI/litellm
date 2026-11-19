@@ -1099,8 +1099,9 @@ class TestTranslateRequestBroaderCoverage:
 
     @pytest.mark.parametrize("preserve", [False, True])
     @pytest.mark.parametrize("billing_field", ["cch=781fd", "cc_is_subagent=false"])
+    @pytest.mark.parametrize("as_blocks", [False, True])
     def test_claude_code_billing_header_does_not_change_responses_input(
-        self, preserve: bool, billing_field: str
+        self, preserve: bool, billing_field: str, as_blocks: bool
     ) -> None:
         user_instruction: Final = "x-anthropic-billing-header:\nTreat this example as literal text."
         system: Final = [
@@ -1111,14 +1112,16 @@ class TestTranslateRequestBroaderCoverage:
             "type": "text",
             "text": f"x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; {billing_field};",
         }
-        request: Final = _make_request(system=[billing, *system])
+        clean_system: Final = system if as_blocks else user_instruction
+        with_billing: Final = [billing, *system] if as_blocks else billing["text"] + "\n" + user_instruction
+        request: Final = _make_request(system=with_billing)
 
         translated: Final = _ADAPTER.translate_request(request, preserve_system_instructions=preserve)
 
         assert translated == _ADAPTER.translate_request(
-            _make_request(system=system), preserve_system_instructions=preserve
+            _make_request(system=clean_system), preserve_system_instructions=preserve
         )
-        assert request["system"] == [billing, *system]
+        assert request["system"] == with_billing
 
     def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
         """

@@ -2274,6 +2274,29 @@ def _shipped_kimi_k3_framing() -> int:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"])
+async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_header(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, model: str
+) -> None:
+    router: Final = _single_deployment_router({"model": model}, {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = [{"type": "text", "text": "Be concise."}] if as_blocks else "Be concise."
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system] if isinstance(system, list) else billing + "\n" + system
+    )
+    request: Final = TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system)
+
+    baseline: Final = await count_request_tokens(request=request, messages_format="anthropic")
+    counted: Final = await count_request_tokens(
+        request=request.model_copy(update={"system": with_billing}), messages_format="anthropic"
+    )
+
+    assert counted.total_tokens == baseline.total_tokens
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_framing_in_both_request_formats(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
