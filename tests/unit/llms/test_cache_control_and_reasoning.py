@@ -76,6 +76,19 @@ def test_minimax_supports_thinking_param():
     assert "reasoning_split" in supported_params
 
 
+def test_minimax_forwards_reasoning_effort():
+    config = MinimaxChatConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="minimax/MiniMax-M3.1-Flash",
+        drop_params=True,
+    )
+
+    assert optional_params == {"reasoning_effort": "low"}
+
+
 def test_zai_preserves_cache_control_in_messages():
     """ZAI should NOT strip cache_control from messages."""
     config = ZAIChatConfig()

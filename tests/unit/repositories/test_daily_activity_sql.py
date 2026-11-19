@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -284,6 +285,7 @@ def test_aggregated_query_uses_the_caller_date_bounds(offset_minutes: int | None
 def test_aggregate_query_sums_all_savings_drivers_and_response_time() -> None:
     query = build_aggregated_sql(_scope(), api_key_limit=constants.USAGE_TOP_API_KEYS_DEFAULT)
     fields: Final = tuple(field for field in SpendMetrics.model_fields if field.endswith("_savings_spend")) + (
+        "guardrail_spend",
         "total_response_time_ms",
         "timed_requests",
     )
@@ -467,3 +469,26 @@ def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type
         *((PTU_SENTINEL_API_KEY,) if export_type is not ExportType.DAILY else ()),
         2,
     )
+
+
+def test_customer_app_filter_is_bound_without_replacing_customer_model_or_key_filters() -> None:
+    app_id: Final = "app-value-with-quote'"
+    scope: Final = replace(
+        _scope(entity_ids=("customer-a",), exclude_entity_ids=("excluded",), api_keys=("key-a",), model="model-a"),
+        table=DailyActivityTable.CUSTOMER_MEMBER,
+        entity_id_field="customer_org_id",
+        app_id=app_id,
+    )
+    clause, params = build_where_clause(scope, start_index=4)
+    assert '"customer_org_id" = ANY($6::text[])' in clause
+    assert "model = $8" in clause and "api_key = ANY($9::text[])" in clause
+    assert '"app_id" = $10' in clause and app_id not in clause
+    assert params == ("2026-01-01", "2026-01-31", ["customer-a"], ["excluded"], "model-a", ["key-a"], app_id)
+    query: Final = build_aggregated_sql(scope, api_key_limit=1)
+    assert '"app_id" = $7' in query.sql and app_id not in query.sql
+    assert query.params[-3:] == (app_id, PTU_SENTINEL_API_KEY, 1)
+
+
+def test_app_filter_cannot_be_applied_to_a_table_without_app_attribution() -> None:
+    with pytest.raises(ValueError, match="App filtering"):
+        replace(_scope(), app_id="app-a")

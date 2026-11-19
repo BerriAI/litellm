@@ -1,5 +1,5 @@
 import reprlib
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from types import MappingProxyType
 from typing import Final, cast
@@ -33,6 +33,10 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+AGENTIC_LOOP_TOOL_CHOICE_KEY: Final = "_agentic_loop_tool_choice"
+AGENTIC_LOOP_CONTROL_KWARGS_KEYS: Final = frozenset(
+    {"_agentic_loop_depth", "_agentic_loop_fingerprints", "max_agentic_loops", AGENTIC_LOOP_TOOL_CHOICE_KEY}
+)
 OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
     {
         "token_exchange_endpoint",
@@ -58,6 +62,10 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "client_side_timeout",
             "gcs_bucket_name",
             "bucket_name",
+            "s3_bucket_name",
+            "s3_output_bucket_name",
+            "stored_s3_bucket_name",
+            "allow_legacy_cloud_file_ids",
             "s3_endpoint_url",
             "s3_region_name",
             "s3_access_key_id",
@@ -82,8 +90,12 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "chatgpt_auth_file",
             "github_copilot_auth_type",
             "github_copilot_host",
+            "github_copilot_app_id",
+            "github_copilot_app_installation_id",
+            "github_copilot_app_private_key_ref",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
+            "thought_signature_in_tool_call_id",
             "responses_api_version",
             "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
@@ -93,16 +105,24 @@ OPTIONAL_KWARGS_KEYS: Final = (
     | ANTHROPIC_WIF_KWARGS_KEYS
     | OPENAI_WIF_KWARGS_KEYS
     | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
+    | AGENTIC_LOOP_CONTROL_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 
+SUPPLEMENTAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS | {"provider_specific_header", "extra_headers"}
+
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
 _MAX_SHOWN_INT_BITS: Final = 64
-_EXPECTED: Final = f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits"
+_EXPECTED: Final = MappingProxyType(
+    {
+        "stream_chunk_size": f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits",
+        "fake_stream": "expected true or false",
+    }
+)
 
 
 class _BoundedRepr(reprlib.Repr):
@@ -128,8 +148,17 @@ def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | Inva
     except ValidationError as e:
         param: Final = str(e.errors(include_url=False)[0]["loc"][0])
         return InvalidControlOption(
-            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED}"
+            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED[param]}"
         )
+
+
+def valid_control_options(kwargs: Mapping[str, object]) -> ControlOptions:
+    valid: Final = {
+        name: kwargs[name]
+        for name in _CONTROL_OPTION_NAMES
+        if name in kwargs and isinstance(parse_control_options({name: kwargs[name]}), ControlOptions)
+    }
+    return _CONTROL_OPTIONS.validate_python(valid)
 
 
 def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptions:
@@ -285,19 +314,3 @@ def get_litellm_params(
                 litellm_params[key] = kwargs[key]
 
     return litellm_params
-
-
-def add_trusted_model_credentials_to_litellm_params(
-    litellm_params_dict: MutableMapping[str, object], kwargs: Mapping[str, object]
-) -> None:
-    """
-    Carry the immutable server-side credential snapshot into litellm_params.
-
-    get_litellm_params has a fixed signature, so callers that need the snapshot to
-    survive into the logging object and the downstream file read have to re-add it. Only
-    a MappingProxyType is accepted, since providers resolve trusted configuration such
-    as a Bedrock file bucket from it and must not read a request-supplied mapping.
-    """
-    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
-    if isinstance(trusted_model_credentials, MappingProxyType):
-        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials

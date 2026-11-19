@@ -39,8 +39,6 @@ pytestmark = pytest.mark.e2e
 
 BACKEND_MODEL = "gemini/gemini-3.8-flash"
 GEMINI_API_KEY = "os.environ/GEMINI_API_KEY"
-# Deliberately ~100x above canonical gemini-3.8-flash (input 7.5e-7 / output 3.75e-6)
-# so an override that is ignored or under-applied bills at the base rate and fails.
 CUSTOM_INPUT_RATE = 7.5e-05
 CUSTOM_OUTPUT_RATE = 3.75e-04
 
