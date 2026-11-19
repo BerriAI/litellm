@@ -599,7 +599,7 @@ def _shared_capabilities_set_true(entry: Mapping[str, object]) -> frozenset[str]
 def _distinct_withdrawals(entries: Iterable[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
     return tuple(
         {
-            (_entry_backend_keys(entry), _shared_capabilities_set_true(entry), _vertex_pass_through_target(entry)): entry
+            (_entry_backend_keys(entry), _shared_capabilities_set_true(entry), _vertex_pass_through_targets(entry)): entry
             for entry in entries
         }.values()
     )
@@ -648,40 +648,89 @@ def _vertex_pass_through_info(entry: Mapping[str, object]) -> tuple[tuple[str, s
     return (str(project), str(location)), credentials
 
 
+_REGISTERED_VERTEX_PASS_THROUGH_TARGETS: dict[str, set[tuple[str, str]]] = {}
+
+
+def _entry_model_id(entry: Mapping[str, object]) -> str | None:
+    model_info: Final = _entry_section(entry, "model_info")
+    model_id: Final = model_info.get("id")
+    return model_id if isinstance(model_id, str) and model_id else None
+
+
+def _record_vertex_pass_through_target(deployment_id: str | None, target: tuple[str, str]) -> None:
+    if isinstance(deployment_id, str) and deployment_id:
+        _REGISTERED_VERTEX_PASS_THROUGH_TARGETS.setdefault(deployment_id, set()).add(target)
+
+
 def _vertex_pass_through_target(entry: Mapping[str, object]) -> tuple[str, str] | None:
     info: Final = _vertex_pass_through_info(entry)
     return info[0] if info is not None else None
 
 
+def _vertex_pass_through_targets(entry: Mapping[str, object]) -> frozenset[tuple[str, str]]:
+    targets: set[tuple[str, str]] = set()
+    current: Final = _vertex_pass_through_target(entry)
+    if current is not None:
+        targets.add(current)
+    model_id: Final = _entry_model_id(entry)
+    if model_id is not None:
+        targets.update(_REGISTERED_VERTEX_PASS_THROUGH_TARGETS.get(model_id, ()))
+    return frozenset(targets)
+
+
 def _withdraw_vertex_pass_through_credentials(
     removed: Mapping[str, object],
     served: Iterable[Mapping[str, object]],
+    replacement: Mapping[str, object] | None = None,
 ) -> None:
+    served_entries: Final = tuple(served)
+    removed_id: Final = _entry_model_id(removed)
+    recorded_targets: Final[set[tuple[str, str]]] = (
+        _REGISTERED_VERTEX_PASS_THROUGH_TARGETS.pop(removed_id, set()) if removed_id is not None else set()
+    )
+    if removed_id is not None:
+        retained: set[tuple[str, str]] = set()
+        if replacement is not None and _entry_model_id(replacement) == removed_id:
+            rep_target = _vertex_pass_through_target(replacement)
+            if rep_target is not None:
+                retained.add(rep_target)
+        for entry in served_entries:
+            if _entry_model_id(entry) == removed_id:
+                entry_target = _vertex_pass_through_target(entry)
+                if entry_target is not None:
+                    retained.add(entry_target)
+        if retained:
+            _REGISTERED_VERTEX_PASS_THROUGH_TARGETS[removed_id] = retained
+
+    targets_to_check: set[tuple[str, str]] = set(recorded_targets)
     removed_info: Final = _vertex_pass_through_info(removed)
-    if removed_info is None:
+    if removed_info is not None:
+        targets_to_check.add(removed_info[0])
+    if not targets_to_check:
         return
-    target: Final = removed_info[0]
+
     from litellm.router_host import router_host
 
-    # When a surviving live deployment still claims the same target, re-register its credentials
-    # so the cache holds the active deployment's service account rather than the retired one.
-    survivor_creds: object = None
-    has_survivor: bool = False
-    for entry in served:
-        entry_info: Final = _vertex_pass_through_info(entry)
-        if entry_info is not None and entry_info[0] == target:
-            has_survivor = True
-            survivor_creds = entry_info[1]
-            break
+    for target in targets_to_check:
+        # When a surviving live deployment still claims the same target, re-register its credentials
+        # so the cache holds the active deployment's service account rather than the retired one.
+        survivor_creds: object = None
+        has_survivor: bool = False
+        for entry in served_entries:
+            entry_info: Final = _vertex_pass_through_info(entry)
+            if entry_info is not None and entry_info[0] == target:
+                has_survivor = True
+                survivor_creds = entry_info[1]
+                break
 
-    if has_survivor:
-        router_host().add_vertex_pass_through_credentials(
-            project_id=target[0],
-            location=target[1],
-            vertex_credentials=survivor_creds,  # pyright: ignore[reportArgumentType]
-        )
-    else:
-        router_host().remove_vertex_pass_through_credentials(project_id=target[0], location=target[1])
+        if has_survivor:
+            router_host().add_vertex_pass_through_credentials(
+                project_id=target[0],
+                location=target[1],
+                vertex_credentials=survivor_creds,  # pyright: ignore[reportArgumentType]
+            )
+        else:
+            router_host().remove_vertex_pass_through_credentials(project_id=target[0], location=target[1])
 
 
 def withdraw_shared_capabilities(
@@ -694,7 +743,7 @@ def withdraw_shared_capabilities(
     ``litellm.model_cost`` row(s) ``removed`` registers onto that still hold it ``True`` to whether ``replacement``,
     a ``served`` deployment registering onto one of them, or the catalog still sets it ``True``."""
     served_entries: Final = tuple(served)
-    _withdraw_vertex_pass_through_credentials(removed, served_entries)
+    _withdraw_vertex_pass_through_credentials(removed, served_entries, replacement=replacement)
     backend: Final = _entry_backend(removed)
     set_true: Final = _shared_capabilities_set_true(removed)
     if backend is None or not set_true:
@@ -1498,6 +1547,7 @@ class HostRegistry(HostModelInfo):
             location=str(location),
             vertex_credentials=credentials,  # pyright: ignore[reportArgumentType]  # the configured credentials
         )
+        _record_vertex_pass_through_target(deployment.model_info.id, (str(project), str(location)))
 
     # -- writes -----------------------------------------------------------------------------------
 
