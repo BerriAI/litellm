@@ -16890,6 +16890,16 @@
         "softBudget": "Soft Budget (USD)",
         "softBudgetAlertingEmails": "Soft Budget Alerting Emails",
         "softBudgetAlertingEmailsHint": "Comma-separated email addresses to receive alerts when the soft budget is reached",
+        "legacySoftBudgetNote": "Legacy (deprecated): the Soft Budget fields below send one fixed dollar alert. Prefer the percentage-based Team Budget Alerts above. Existing soft budget settings keep working.",
+        "teamBudgetAlerts": {
+          "label": "Team Budget Alerts",
+          "hint": "Email the recipients below when the whole team's spend, across all of its keys, reaches a percentage of the team's Max Budget. Add one or more thresholds, each with its own recipients. Recipients are required because a team has no owner. Requires a Max Budget and email alerting to be configured on the proxy.",
+          "thresholdPlaceholder": "% of budget",
+          "recipientsPlaceholder": "Recipients, e.g. finance@example.com",
+          "removeThreshold": "Remove team budget alert threshold",
+          "addThreshold": "Add Team Budget Alert Threshold",
+          "bothConfigured": "Both percentage alerts and the legacy Soft Budget alerts are configured. Each sends its own emails, so recipients can be notified twice."
+        },
         "teamMemberSettings": {
           "title": "Team Member Settings",
           "description": "Optional defaults applied when members join this team. All fields can be overridden per member.",
@@ -16998,6 +17008,7 @@
           "lineWithSpent": "Per-Model Budget ({{model}}): ${{limit}} per {{period}}, spent ${{spent}}"
         },
         "softBudgetAlertingEmails": "Soft Budget Alerting Emails: ",
+        "teamBudgetAlerts": "Team Budget Alerts: ",
         "teamMemberSettings": {
           "title": "Team Member Settings",
           "tooltip": "These are limits on individual team members",

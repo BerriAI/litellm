@@ -2710,6 +2710,130 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
   });
 
+  const openEditorWithTeamBudgetAlerts = async (
+    user: ReturnType<typeof userEvent.setup>,
+    overrides: Record<string, unknown> = {},
+  ) => {
+    const teamOverrides = {
+      models: ["gpt-4"],
+      max_budget: 100,
+      metadata: {
+        cost_center: "eng",
+        max_budget_alert_emails: { "50": ["finance@test.com"], "90": ["lead@test.com"], bogus: ["x@test.com"] },
+      },
+      ...overrides,
+    };
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(teamOverrides));
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  const teamBudgetAlertMetadata = (payload: Record<string, unknown>) =>
+    wireBody(payload).metadata as Record<string, unknown>;
+
+  it("resends the stored team budget alerts, including an entry the rows cannot show, when they are untouched", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithTeamBudgetAlerts(user);
+
+    const metadata = teamBudgetAlertMetadata(await save(user));
+
+    expect(metadata.max_budget_alert_emails).toStrictEqual({
+      "50": ["finance@test.com"],
+      "90": ["lead@test.com"],
+      bogus: ["x@test.com"],
+    });
+    expect(metadata.cost_center).toBe("eng");
+  });
+
+  it("sends edited and added team budget alert thresholds as a percent to recipients map", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithTeamBudgetAlerts(user);
+
+    const thresholds = screen.getAllByPlaceholderText("% of budget");
+    const recipients = screen.getAllByPlaceholderText(/Recipients, e\.g\./);
+    expect(thresholds.map((input) => (input as HTMLInputElement).value)).toStrictEqual(["50", "90"]);
+    fireEvent.change(recipients[0], { target: { value: " a@test.com, b@test.com " } });
+    await user.click(screen.getByRole("button", { name: "Add Team Budget Alert Threshold" }));
+    fireEvent.change(screen.getAllByPlaceholderText("% of budget")[2], { target: { value: "75" } });
+    fireEvent.change(screen.getAllByPlaceholderText(/Recipients, e\.g\./)[2], { target: { value: "c@test.com" } });
+
+    const metadata = teamBudgetAlertMetadata(await save(user));
+
+    const expectedAlerts = {
+      "50": ["a@test.com", "b@test.com"],
+      "90": ["lead@test.com"],
+      "75": ["c@test.com"],
+      bogus: ["x@test.com"],
+    };
+    expect(metadata.max_budget_alert_emails).toStrictEqual(expectedAlerts);
+    expect(metadata.cost_center).toBe("eng");
+  });
+
+  it("clears the team budget alerts key when every row is removed and keeps other metadata", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithTeamBudgetAlerts(user, {
+      metadata: { cost_center: "eng", max_budget_alert_emails: { "50": ["f@test.com"] } },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Remove team budget alert threshold" }));
+    const metadata = teamBudgetAlertMetadata(await save(user));
+
+    expect(metadata).not.toHaveProperty("max_budget_alert_emails");
+    expect(metadata.cost_center).toBe("eng");
+  });
+
+  it("warns only when percentage alerts, a soft budget and legacy recipients are all configured", async () => {
+    const user = userEvent.setup({ delay: null });
+    const alerts = { "50": ["finance@test.com"] };
+    await openEditorWithTeamBudgetAlerts(user, {
+      soft_budget: 15,
+      metadata: { max_budget_alert_emails: alerts },
+    });
+
+    expect(screen.getByText(/Legacy \(deprecated\)/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Soft Budget (USD)")).toHaveValue(15);
+    expect(screen.queryByText(/Each sends its own emails/)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Soft Budget Alerting Emails/), { target: { value: "ops@test.com" } });
+    await screen.findByText(/Each sends its own emails/);
+
+    await user.clear(screen.getByLabelText("Soft Budget (USD)"));
+    await waitFor(() => expect(screen.queryByText(/Each sends its own emails/)).not.toBeInTheDocument());
+  });
+
+  it.each([
+    ["a comma separated string", "ops@test.com, lead@test.com"],
+    ["a list", ["ops@test.com", "lead@test.com"]],
+  ])("shows and resends the legacy soft budget recipients stored as %s", async (_label, stored) => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithTeamBudgetAlerts(user, {
+      soft_budget: 15,
+      metadata: { cost_center: "eng", soft_budget_alerting_emails: stored },
+    });
+
+    expect(screen.getByLabelText(/Soft Budget Alerting Emails/)).toHaveValue("ops@test.com, lead@test.com");
+    const metadata = teamBudgetAlertMetadata(await save(user));
+
+    expect(metadata.soft_budget_alerting_emails).toStrictEqual(["ops@test.com", "lead@test.com"]);
+    expect(metadata.cost_center).toBe("eng");
+  });
+
+  it("blocks the save when a team budget alert threshold is repeated", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithTeamBudgetAlerts(user);
+
+    fireEvent.change(screen.getAllByPlaceholderText("% of budget")[1], { target: { value: "50" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await screen.findAllByText("Duplicate threshold");
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+  });
+
   it("carries every typed value to the update payload, with numeric fields as numbers", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
