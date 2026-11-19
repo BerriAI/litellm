@@ -16,6 +16,7 @@ const NOW = new Date("2024-03-15T12:00:00Z");
 const requests: URL[] = [];
 const creations: unknown[] = [];
 let failed = false;
+let cachePricing: { cache_cost: number; priced_cache_tokens: number } | null = null;
 const original = Array.from({ length: 30 }, (_, index) => ({
   customer_org_id: `customer-${String(index).padStart(2, "0")}`,
   alias: `Customer ${String(index).padStart(2, "0")}`,
@@ -60,6 +61,7 @@ const handleRequest = async (request: Request): Promise<Response> => {
       cache_creation_input_tokens: previous ? 6 : 4,
       cache_cost: spend / 100,
       priced_cache_tokens: previous ? 12 : 14,
+      ...cachePricing,
       total_response_time_ms: 9000,
       timed_requests: 9,
     });
@@ -107,6 +109,7 @@ beforeEach(() => {
   creations.length = 0;
   organizations = [...original];
   failed = false;
+  cachePricing = null;
   const claims = { key: "sk-test", user_id: "admin", user_role: "proxy_admin", exp: NOW.getTime() / 1000 + 3600 };
   document.cookie = `token=${btoa("{}")}.${btoa(JSON.stringify(claims))}.test; Path=/`;
   vi.stubGlobal(
@@ -136,7 +139,7 @@ describe("customer organization overview", () => {
     await screen.findByRole("link", { name: "Customer 29" });
     const spendTable = within(screen.getByRole("table", { name: "Customer organizations" }));
     expect(spendTable.getByRole("columnheader", { name: "Tokens", exact: true })).toBeInTheDocument();
-    expect(spendTable.queryByRole("columnheader", { name: "Cache cost" })).not.toBeInTheDocument();
+    expect(spendTable.queryByRole("columnheader", { name: "Recorded cache cost" })).not.toBeInTheDocument();
     expect(customerLinks()[0]).toHaveTextContent("Customer 29");
     expect(customerLinks()[0]).toHaveAttribute(
       "href",
@@ -164,7 +167,7 @@ describe("customer organization overview", () => {
     expect(within(row).getByText("17% cached")).toBeInTheDocument();
     await user.click(totalTokens);
     expect(await screen.findByRole("dialog", { name: "Token breakdown" })).toHaveTextContent(
-      /Input tokens\s*60\s*Cache read tokens\s*10\s*Cache write tokens\s*4\s*Output tokens\s*40\s*Cache cost\s*\$0\.75/,
+      /Input tokens\s*60\s*Cache read tokens\s*10\s*Cache write tokens\s*4\s*Output tokens\s*40\s*Recorded cache cost\s*\$0\.75/,
     );
     await user.keyboard("{Escape}");
     expect(within(row).getByText("$8.00 / $10.00")).toBeInTheDocument();
@@ -199,7 +202,7 @@ describe("customer organization overview", () => {
       expect(row.getByText("20% cached")).toBeInTheDocument();
       await user.click(row.getByRole("button", { name: "100 total tokens. View breakdown" }));
       expect(await screen.findByRole("dialog", { name: "Token breakdown" })).toHaveTextContent(
-        /Cache read tokens\s*12\s*Cache write tokens\s*6\s*Output tokens\s*40\s*Cache cost\s*\$0\.05\s*Partial cost/,
+        /Cache read tokens\s*12\s*Cache write tokens\s*6\s*Output tokens\s*40\s*Recorded cache cost\s*\$0\.05$/,
       );
       await user.keyboard("{Escape}");
       expect(screen.getByRole("link", { name: "Customer 00" })).toHaveAttribute(
@@ -233,6 +236,19 @@ describe("customer organization overview", () => {
     expect(screen.getByRole("textbox", { name: /Search by name or ID/ })).toHaveValue("");
     expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
     expect(creations).toEqual([expect.objectContaining({ customer_org_id: "new-org", alias: "New organization" })]);
+  });
+
+  it.each([
+    { pricedTokens: 0, display: "—" },
+    { pricedTokens: 14, display: "$0.00" },
+  ])("shows $display for zero cache cost with $pricedTokens priced tokens", async ({ pricedTokens, display }) => {
+    cachePricing = { cache_cost: 0, priced_cache_tokens: pricedTokens };
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPage />);
+    const row = await screen.findByRole("row", { name: /Customer 29/ });
+    await user.click(within(row).getByRole("button", { name: "100 total tokens. View breakdown" }));
+    const breakdown = await screen.findByRole("dialog", { name: "Token breakdown" });
+    expect(breakdown).toHaveTextContent(`Recorded cache cost${display}`);
   });
 
   it("should report failed usage instead of displaying partial totals or zero shares", async () => {

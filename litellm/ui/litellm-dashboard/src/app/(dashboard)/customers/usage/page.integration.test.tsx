@@ -399,7 +399,8 @@ describe("CustomerHierarchyUsagePage", () => {
     expect(trend.getByText("Output tokens")).toBeInTheDocument();
     expect(trend.getByText("700")).toBeInTheDocument();
     expect(trend.getByText("$0.0123")).toBeInTheDocument();
-    expect(trend.getByText("Partial cost")).toBeInTheDocument();
+    expect(trend.getByText("Recorded cache cost")).toBeInTheDocument();
+    expect(trend.queryByText("Partial cost")).not.toBeInTheDocument();
     expect(trend.queryByText("model-a")).not.toBeInTheDocument();
     await user.click(trend.getByRole("radio", { name: "Tokens" }));
     expect(trend.getByText("model-a")).toBeInTheDocument();

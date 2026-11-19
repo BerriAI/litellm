@@ -14,19 +14,12 @@ export default function CustomerCacheCost({
 }) {
   const { t } = useTranslation();
   if (!usage) return "—";
-  const partial = usage.pricedCacheTokens < usage.cacheReadTokens + usage.cacheWriteTokens;
-  if (partial && usage.pricedCacheTokens === 0 && usage.cacheCost === 0) {
-    return <span className="text-muted-foreground">{t("customerPortal.tokenUsage.costUnavailable")}</span>;
+  const hasCacheTokens = usage.cacheReadTokens > 0 || usage.cacheWriteTokens > 0;
+  if (usage.cacheCost === 0 && usage.pricedCacheTokens === 0 && hasCacheTokens) {
+    return "—";
   }
   const format = (val: number) => t("format.number", { val, ...cacheCurrencyFormat });
   return (
-    <>
-      <span>
-        {usage.cacheCost > 0 && usage.cacheCost < 0.000001 ? `<${format(0.000001)}` : format(usage.cacheCost)}
-      </span>
-      {partial && (
-        <span className="block text-xs text-muted-foreground">{t("customerPortal.tokenUsage.partialCost")}</span>
-      )}
-    </>
+    <span>{usage.cacheCost > 0 && usage.cacheCost < 0.000001 ? `<${format(0.000001)}` : format(usage.cacheCost)}</span>
   );
 }
