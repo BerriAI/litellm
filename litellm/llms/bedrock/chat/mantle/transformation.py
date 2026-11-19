@@ -55,9 +55,11 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         )
 
     def chat_uses_native_structured_output(
-        self, model: str, thinking_requested: bool, model_info: Mapping[str, object] | None
+        self, model: str, request_params: Mapping[str, object], model_info: Mapping[str, object] | None
     ) -> bool:
-        return bedrock_chat_opts_into_native_structured_output(model, thinking_requested, model_info=model_info)
+        return bedrock_chat_opts_into_native_structured_output(
+            model, self.will_think(model, "bedrock", request_params), model_info=model_info
+        )
 
     def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
         return (f"bedrock_mantle/{model}", *super()._default_max_tokens_models(model, litellm_params))

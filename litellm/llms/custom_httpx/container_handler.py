@@ -210,7 +210,7 @@ def _prepare_multipart_file_upload(
     Returns:
         Tuple of (files_dict, headers_without_content_type)
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 

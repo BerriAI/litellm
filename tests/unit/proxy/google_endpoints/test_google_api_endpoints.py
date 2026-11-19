@@ -172,7 +172,7 @@ def test_google_count_tokens_unchanged():
     )
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         return_value=fake_response,
     ):
@@ -194,7 +194,7 @@ def test_google_count_tokens_unexpected_failure_uses_the_google_error_envelope()
         pytest.skip(f"Skipping test due to missing dependency: {e}")
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         side_effect=RuntimeError("tokenizer unavailable"),
     ):
@@ -227,7 +227,7 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
     )
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         return_value=fake_response,
     ):
@@ -284,6 +284,7 @@ def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_co
     )
 
     assert (response.status_code, response.json()["totalTokens"]) == (200, 77), response.text
+    assert response.headers.get("x-litellm-call-id") == "count-log-gemini"
     assert token_count_log_lines() == (
         {
             "litellm_call_id": "count-log-gemini",
@@ -318,3 +319,18 @@ def test_google_count_tokens_rejected_body_logs_the_400_it_answers(
             "status_code": 400,
         },
     )
+
+
+@pytest.mark.parametrize("client_call_id", [None, "count-echo-gemini"])
+def test_google_count_tokens_rejected_body_answers_the_call_id_its_count_line_names(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], client_call_id: str | None
+) -> None:
+    response: Final = _build_test_client().post(
+        "/v1beta/models/count-log-claude:countTokens",
+        json={"contents": "not a list"},
+        headers={} if client_call_id is None else {"x-litellm-call-id": client_call_id},
+    )
+
+    (line,) = token_count_log_lines()
+    assert (response.status_code, response.headers.get("x-litellm-call-id")) == (400, line["litellm_call_id"])
+    assert client_call_id in (None, line["litellm_call_id"])

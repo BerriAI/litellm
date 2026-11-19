@@ -13,7 +13,6 @@ from dataclasses import dataclass, replace
 from functools import wraps
 from types import MappingProxyType
 from typing import (
-    Concatenate,
     Final,
     Literal,
     ParamSpec,
@@ -595,46 +594,6 @@ def _mapping_request_kwargs(request_kwargs: object) -> Mapping[str, object] | No
         Mapping[str, object],
         request_kwargs,
     )
-
-
-def resolve_pods_after(
-    fn: Callable[Concatenate[_S, _P], _R],
-) -> Callable[Concatenate[_S, _P], _R]:
-    signature: Final = inspect.signature(fn)
-
-    @wraps(fn)
-    def wrapped(
-        self: _S,
-        *args: _P.args,
-        **kwargs: _P.kwargs,  # kwargs-ok: ParamSpec forwards the wrapped call signature
-    ) -> _R:
-        deployment: Final = fn(self, *args, **kwargs)
-        return self.kubernetes_pod_discovery.resolve_deployment(
-            deployment,
-            _request_kwargs_from_call(signature, self, *args, **kwargs),
-        )
-
-    return wrapped
-
-
-def async_resolve_pods_after(
-    fn: Callable[Concatenate[_S, _P], Awaitable[_R]],
-) -> Callable[Concatenate[_S, _P], Coroutine[object, object, _R]]:
-    signature: Final = inspect.signature(fn)
-
-    @wraps(fn)
-    async def wrapped(
-        self: _S,
-        *args: _P.args,
-        **kwargs: _P.kwargs,  # kwargs-ok: ParamSpec forwards the wrapped call signature
-    ) -> _R:
-        deployment: Final = await fn(self, *args, **kwargs)
-        return await self.kubernetes_pod_discovery.async_resolve_deployment(
-            deployment,
-            _request_kwargs_from_call(signature, self, *args, **kwargs),
-        )
-
-    return wrapped
 
 
 def resolve_pods_after_bound(
