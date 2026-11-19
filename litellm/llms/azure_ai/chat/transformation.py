@@ -333,7 +333,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         supported_params = (
             azureAIGPT5Config.get_supported_openai_params(model)
             if azureAIGPT5Config.is_model_gpt_5_model(model)
-            else _with_reasoning_effort(super().get_supported_openai_params(model), model)
+            else _with_reasoning_effort(
+                cast(  # cast-ok: OpenAIConfig returns parameter names but leaves the list elements untyped
+                    Sequence[str], super().get_supported_openai_params(model)
+                ),
+                model,
+            )
         )
         if not model_supports_tool_choice:
             filtered_supported_params: Final = []
@@ -376,7 +381,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             level_check_waived=bool(declared_reasoning_efforts) or _REASONING_EFFORT in allowed_openai_params,
             drop_params=drop_params or litellm.drop_params is True,
         )
-        return {
+        mapped_params: Final[dict[str, object]] = {  # mutable-ok: returned as required by OpenAIConfig
             **super().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -384,6 +389,12 @@ class AzureAIStudioConfig(OpenAIConfig):
                 drop_params=drop_params,
             ),
             **foundry_effort,
+        }
+        if "gpt-5-chat" not in model.rsplit("/", 1)[-1] or "max_tokens" not in mapped_params:
+            return mapped_params
+        return {
+            **{param: value for param, value in mapped_params.items() if param != "max_tokens"},
+            "max_completion_tokens": mapped_params.get("max_completion_tokens", mapped_params["max_tokens"]),
         }
 
     def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
