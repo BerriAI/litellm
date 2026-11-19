@@ -28,6 +28,8 @@ pub struct NativeReceipt {
     reasoning_cost: f64,
     rates: Option<Py<NativeBilledRates>>,
     cache_savings: Option<f64>,
+    /// Each separately priced part as `(label, cost)`, the cost `None` for a part no price covers
+    parts: Vec<(String, Option<f64>)>,
     total: f64,
 }
 
@@ -75,6 +77,16 @@ impl NativeReceipt {
             reasoning_cost: receipt.breakdown.reasoning,
             rates,
             cache_savings: receipt.cache_savings,
+            parts: receipt
+                .parts
+                .iter()
+                .map(|part| {
+                    (
+                        part.label.to_string(),
+                        part.amount().map(|amount| amount.get()),
+                    )
+                })
+                .collect(),
             total: receipt.total,
         })
     }

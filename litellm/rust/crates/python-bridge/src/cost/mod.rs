@@ -1,13 +1,17 @@
 //! Pricing over one row: lowered once into `litellm-cost` prices, then priced or quoted per call. `query` holds the
 //! whole-call entry points over the live table
 
+mod fees;
 mod kinds;
 mod query;
+mod session;
 
-pub(crate) use kinds::{NativeUnpriced, price_units};
+pub(crate) use fees::price_fee;
+pub(crate) use kinds::{NativeUnpriced, price_many, price_units};
 pub(crate) use query::{
     NativeRateCard, RoutePricing, adjust, adjustment_config, bound, price, rates,
 };
+pub(crate) use session::price_session;
 
 use std::time::Duration;
 

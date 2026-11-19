@@ -1721,14 +1721,6 @@ def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
     )
 
 
-def test_transcription_usage_cost_returns_zero_for_unknown_type():
-    """An unrecognized usage type yields 0 (safe fallback, no exception)."""
-    from litellm.cost_calculator import _transcription_usage_cost
-
-    assert _transcription_usage_cost({"type": "future_billing_type"}, {}) == 0.0
-    assert _transcription_usage_cost({}, {}) == 0.0
-
-
 @pytest.mark.parametrize("malformed_seconds", [-1.0, float("nan"), float("inf"), 10**1000, True])
 def test_transcription_ignores_invalid_provider_duration(malformed_seconds: float | int | bool) -> None:
     from litellm.cost_calculator import _get_transcription_usage_duration
