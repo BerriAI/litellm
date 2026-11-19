@@ -174,6 +174,7 @@ pub struct RouterConfig {
     /// `enable_weighted_failover`: a failed deployment's group is re-picked without it before
     /// any cross-group fallback (simple-shuffle only).
     pub enable_weighted_failover: bool,
+    pub enable_cross_model_group_collision_check: bool,
     /// `fallback_on_unsupported_params`; `None` is Python's default, `True`.
     pub fallback_on_unsupported_params: Option<bool>,
     /// Deployment ids that are a provider's default and never cool down
