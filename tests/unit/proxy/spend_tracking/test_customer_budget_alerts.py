@@ -13,9 +13,16 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.management_helpers.customer_hierarchy import PrismaRecord
 from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.types.integrations.customer_budget import CustomerBudgetEvent, CustomerBudgetScope
+from litellm.types.proxy.management_endpoints.apps import App
+from tests.unit.proxy.management_helpers import test_apps
+from tests.unit.proxy.management_helpers.test_apps import AppDatabase
+from tests.unit.proxy.management_helpers.test_customer_hierarchy import Record
+
+app_store: Final = test_apps.app_store
 
 _NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _PAYLOAD: Final = TypeAdapter(Mapping[str, object])
@@ -34,6 +41,111 @@ _ROWS: Final[Mapping[CustomerBudgetScope, Mapping[str, object]]] = {
         "parent_team_ids": ["team-1", "team-2"],
     },
 }
+
+
+@pytest.mark.parametrize("scope", ("app", "app_customer_org", "app_customer_member"))
+@pytest.mark.parametrize("duration", (None, "1mo", "12mo", "7d"))
+@pytest.mark.parametrize("hard_limit", (None, 10.0))
+@pytest.mark.asyncio
+async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeating(
+    app_store: tuple[AppDatabase, AppStore, App],
+    alerts: DualCache,
+    respx_mock: respx.MockRouter,
+    scope: CustomerBudgetScope,
+    duration: str | None,
+    hard_limit: float | None,
+) -> None:
+    database, store, app = app_store
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    await database.litellm_budgettable.create(
+        {"budget_id": "policy", "max_budget": hard_limit, "soft_budget": 5, "budget_duration": duration}
+    )
+    await database.litellm_apptable.update(
+        {"app_id": app.app_id},
+        {"budget_id": "policy", "default_tier_budget_id": "policy", "default_customer_member_budget_id": "policy"},
+    )
+    await database.litellm_appcustomerorgtable.create({"app_id": app.app_id, "customer_org_id": "org", "spend": 1000})
+    await database.litellm_appcustomermembertable.create(
+        {"app_id": app.app_id, "customer_member_id": "member", "spend": 1000}
+    )
+    entity_id: Final = app.app_id + (
+        ":org" if scope == "app_customer_org" else ":member" if scope == "app_customer_member" else ""
+    )
+    for spend in (4, 6, 11, 12):
+        if duration is None:
+            for table in (
+                database.litellm_apptable,
+                database.litellm_appcustomerorgtable,
+                database.litellm_appcustomermembertable,
+            ):
+                await table.update_many({}, {"spend": spend})
+        else:
+            await database.litellm_apptable.update({"app_id": app.app_id}, {"spend": 1000})
+            database.litellm_budgetwindowspend.rows = {
+                "window": Record(
+                    entity_type=scope, entity_id=entity_id, window_duration=duration, window_start=_NOW, spend=spend
+                )
+            }
+        await CustomerBudgetAlerting.detect_committed_batch(
+            {f"{scope}_list_transactions": {entity_id: 1}}, _RoutedClient(_database({}), database), alerts, now=_NOW
+        )
+    payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
+    expected: Final = (("soft_budget_crossed", 6, 5),) + (
+        (("budget_crossed", 11, 10),) if hard_limit is not None else ()
+    )
+    assert tuple((item["event"], item["spend"], item["budget"]) for item in payloads) == expected
+    assert {(item["scope"], item["app_id"], item["app_alias"], item["budget_duration"]) for item in payloads} == {
+        (scope, app.app_id, "Chat", duration)
+    }
+    assert {item["customer_org_id"] for item in payloads} == ({"org"} if scope == "app_customer_org" else {None})
+    assert {item["customer_member_id"] for item in payloads} == (
+        {"member"} if scope == "app_customer_member" else {None}
+    )
+    if duration is not None:
+        await CustomerBudgetAlerting.detect_committed_batch(
+            {f"{scope}_list_transactions": {entity_id: 1}}, database, alerts, now=_NOW + timedelta(days=400)
+        )
+        assert len(receiver.calls) == len(expected)
+
+
+@pytest.mark.parametrize("scope", ("app_customer_org", "app_customer_member"))
+@pytest.mark.parametrize("expired", (False, True))
+@pytest.mark.asyncio
+async def test_app_alerts_respect_custom_budgets_and_temporary_increase_expiry(
+    app_store: tuple[AppDatabase, AppStore, App],
+    alerts: DualCache,
+    respx_mock: respx.MockRouter,
+    scope: CustomerBudgetScope,
+    expired: bool,
+) -> None:
+    database, store, app = app_store
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    for identity, maximum in (("default", 1), ("custom", 10), ("increase", 20)):
+        await database.litellm_budgettable.create(
+            {"budget_id": identity, "max_budget": maximum, "soft_budget": maximum / 2}
+        )
+    await database.litellm_apptable.update(
+        {"app_id": app.app_id}, {"default_tier_budget_id": "default", "default_customer_member_budget_id": "default"}
+    )
+    fields: Final = {
+        "app_id": app.app_id,
+        "spend": 12,
+        "budget_id": "custom",
+        "budget_override_id": "increase",
+        "budget_override_expires_at": _NOW + timedelta(seconds=-1 if expired else 1),
+    }
+    await database.litellm_appcustomerorgtable.create({**fields, "customer_org_id": "org"})
+    await database.litellm_appcustomermembertable.create({**fields, "customer_member_id": "member"})
+    await CustomerBudgetAlerting.detect_committed_batch(
+        {f"{scope}_list_transactions": {app.app_id + (":org" if scope == "app_customer_org" else ":member"): 1}},
+        database,
+        alerts,
+        now=_NOW,
+    )
+    payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
+    assert {(item["event"], item["budget"]) for item in payloads} == (
+        {("soft_budget_crossed", 5), ("budget_crossed", 10)} if expired else {("soft_budget_crossed", 10)}
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +182,8 @@ class _Database:
 
 @dataclass(frozen=True, slots=True)
 class _RoutedClient:
-    db: _Database
-    writer_db: _Database
+    db: _Database | AppDatabase
+    writer_db: _Database | AppDatabase
 
 
 def _database(records: Mapping[str, PrismaRecord | Exception | None]) -> _Database:

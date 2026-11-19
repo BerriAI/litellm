@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, Protocol, runtime_checkable
@@ -13,6 +13,9 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
+from litellm.proxy.management_helpers.apps import AppStore, app_scope_identity
+from litellm.proxy.management_helpers.customer_budget_usage import app_budget_usage
 from litellm.proxy.management_helpers.customer_hierarchy import (
     PrismaRecord,
     customer_row_reset_at,
@@ -20,7 +23,14 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     related_budget,
     utc_now,
 )
-from litellm.types.integrations.customer_budget import CustomerBudgetEvent, CustomerBudgetEventType, CustomerBudgetScope
+from litellm.types.integrations.customer_budget import (
+    AppBudgetScope,
+    CustomerBudgetEvent,
+    CustomerBudgetEventType,
+    CustomerBudgetScope,
+)
+from litellm.types.proxy.management_endpoints.apps import App, AppFailure, AppMember, AppOrganization
+from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget, CustomerBudgetUsage
 
 
 class CustomerBudgetClaims(Protocol):
@@ -81,6 +91,7 @@ _LEVELS: Final = (
 )
 _CHARGES: Final = TypeAdapter(Mapping[str, float])
 _TABLE: Final = TypeAdapter(InstanceOf[_CustomerBudgetTable])
+_APP_SCOPES: Final[tuple[AppBudgetScope, ...]] = ("app", "app_customer_org", "app_customer_member")
 
 
 def _events(level: _Level, entity_id: str, row: _CustomerRow, now: datetime) -> tuple[CustomerBudgetEvent, ...]:
@@ -137,6 +148,95 @@ async def _detect_customer_events(
         verbose_proxy_logger.exception("Failed to send %s budget alert for %s", level.scope, entity_id)
 
 
+async def _app_entity(
+    store: AppStore, app: App, scope: AppBudgetScope, customer_id: str
+) -> App | AppOrganization | AppMember | AppFailure | None:
+    match scope:
+        case "app":
+            return app
+        case "app_customer_org":
+            return await store.find_organization(app, customer_id)
+        case "app_customer_member":
+            return await store.get_member(app.app_id, customer_id, known_to_app_only=True)
+
+
+async def _app_events(scope: AppBudgetScope, entity_id: str, store: AppStore) -> tuple[CustomerBudgetEvent, ...]:
+    app_id, customer_id = (entity_id, "") if scope == "app" else app_scope_identity(entity_id)
+    app: Final = await store.get(app_id)
+    if isinstance(app, AppFailure):
+        return ()
+    entity: Final = await _app_entity(store, app, scope, customer_id)
+    if entity is None or isinstance(entity, AppFailure):
+        return ()
+    budget: Final = entity.budget if isinstance(entity, App) else entity.effective_budget
+    if budget is None:
+        return ()
+    usages: Final = await app_budget_usage(
+        scope, entity_id, budget, entity.spend, store.customers.window_spend, store.now, store.customers.settings
+    )
+
+    def event(kind: CustomerBudgetEventType, usage: CustomerBudgetUsage, threshold: float) -> CustomerBudgetEvent:
+        return CustomerBudgetEvent(
+            event=kind,
+            scope=scope,
+            entity_id=entity_id,
+            app_id=app.app_id,
+            app_alias=app.alias,
+            customer_org_id=entity.customer_org_id if isinstance(entity, AppOrganization) else None,
+            customer_member_id=entity.customer_member_id if isinstance(entity, AppMember) else None,
+            spend=usage.spend or 0.0,
+            budget=threshold,
+            budget_duration=usage.budget_duration,
+            period=usage.reset_at.isoformat() if usage.reset_at is not None else "lifetime",
+            timestamp=store.now,
+        )
+
+    hard: Final = tuple(
+        event("budget_crossed", usage, usage.max_budget)
+        for usage in usages
+        if usage.spend is not None and usage.spend >= usage.max_budget
+    )
+    if budget.soft_budget is None:
+        return hard
+    existing: Final = tuple(usage for usage in usages if usage.budget_duration == budget.budget_duration)
+    soft_usages: Final = (
+        existing
+        if existing
+        else await app_budget_usage(
+            scope,
+            entity_id,
+            Budget(
+                max_budget=budget.soft_budget,
+                budget_duration=budget.budget_duration,
+                budget_limits=budget.budget_limits,
+            ),
+            entity.spend,
+            store.customers.window_spend,
+            store.now,
+            store.customers.settings,
+        )
+    )
+    soft: Final = tuple(
+        event("soft_budget_crossed", usage, budget.soft_budget)
+        for usage in soft_usages
+        if usage.budget_duration == budget.budget_duration
+        and usage.spend is not None
+        and usage.spend >= budget.soft_budget
+    )
+    return (*soft, *hard)
+
+
+async def _detect_app_events(
+    scope: AppBudgetScope, entity_id: str, database: object, cache: CustomerBudgetClaims, now: datetime
+) -> None:
+    try:
+        store: Final = AppStore(getattr(database, "writer_db", getattr(database, "db", database)), now)
+        for event in await _app_events(scope, entity_id, store):
+            await CustomerBudgetAlerting.emit(event, cache)
+    except Exception:  # noqa: BLE001  # Alert failures must not replay committed spend.
+        verbose_proxy_logger.exception("Failed to send %s budget alert for %s", scope, entity_id)
+
+
 class CustomerBudgetAlerting:
     @staticmethod
     def callbacks() -> tuple[CustomLogger, ...]:
@@ -161,6 +261,25 @@ class CustomerBudgetAlerting:
             for entity_id, cost in _CHARGES.validate_python(transactions.get(level.transactions) or {}).items():
                 if cost > 0:
                     await _detect_customer_events(level, entity_id, database, cache, instant)
+        for scope in _APP_SCOPES:
+            for entity_id, cost in _CHARGES.validate_python(
+                transactions.get(f"{scope}_list_transactions") or {}
+            ).items():
+                if cost > 0:
+                    await _detect_app_events(scope, entity_id, database, cache, instant)
+
+    @staticmethod
+    async def detect_committed_windows(
+        transactions: Sequence[WindowSpendTransaction], database: object, cache: CustomerBudgetClaims
+    ) -> None:
+        if not CustomerBudgetAlerting.callbacks():
+            return
+        now: Final = utc_now()
+        for scope in _APP_SCOPES:
+            for entity_id in frozenset(
+                item["entity_id"] for item in transactions if item["entity_type"] == scope and item["spend"] > 0
+            ):
+                await _detect_app_events(scope, entity_id, database, cache, now)
 
     @staticmethod
     @with_service_target("customer_budget_alerts")
@@ -168,7 +287,10 @@ class CustomerBudgetAlerting:
         callbacks: Final = CustomerBudgetAlerting.callbacks()
         if not callbacks:
             return
-        identity: Final = json.dumps((event.event, event.scope, event.entity_id, event.period))
+        identity: Final = json.dumps(
+            (event.event, event.scope, event.entity_id, event.period)
+            + ((event.budget_duration,) if event.budget_duration is not None else ())
+        )
         key: Final = "customer_budget_alerts:" + hashlib.sha256(identity.encode()).hexdigest()
         ttl: Final = (
             100 * 365 * 24 * 60 * 60

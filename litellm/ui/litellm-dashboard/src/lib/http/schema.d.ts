@@ -34246,6 +34246,8 @@ export interface components {
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
+            /** Soft Budget Duration */
+            soft_budget_duration?: string | null;
             /**
              * Spend
              * @default 0
