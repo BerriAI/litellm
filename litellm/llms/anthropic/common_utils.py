@@ -584,7 +584,7 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     """
     # Check Authorization header (passthrough / forwarded requests)
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
-    oauth_token: Final = anthropic_oauth_token_from_header(auth_header)
+    oauth_token: Final = anthropic_oauth_token_from_header(_DECODED_JSON.validate_python(auth_header))
     if oauth_token is not None:
         api_key = oauth_token
         for name in tuple(
