@@ -1358,9 +1358,9 @@ class TestWebSocketErrorHandling:
         websocket.send_text = AsyncMock()
         handler: Final = ManagedResponsesWebSocketHandler(
             websocket=websocket,
-            model="openai/gpt-5.4-mini",
+            model="openai/gpt-6.2-sol",
             logging_obj=Logging(
-                model="openai/gpt-5.4-mini",
+                model="openai/gpt-6.2-sol",
                 messages=[],
                 stream=True,
                 call_type="aresponses",
