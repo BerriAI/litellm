@@ -73,6 +73,46 @@ RESPONSES_SSE_BODY = (
         ),
         (
             "System prefix",
+            {
+                "store": False,
+                "previous_response_id": "resp_prior",
+                "extra_body": {"previous_response_id": None, "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": "conv_prior",
+                "extra_body": {"conversation": None, "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "previous_response_id": None,
+                "extra_body": {"previous_response_id": "resp_prior", "instructions": "Caller prompt"},
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": None,
+                "extra_body": {"conversation": "conv_prior", "instructions": "Caller prompt"},
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
             {"store": False, "previous_response_id": "resp_previous", "instructions": "Caller prompt"},
             "System prefix\nCaller prompt",
             "user",
