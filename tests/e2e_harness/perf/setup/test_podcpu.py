@@ -218,3 +218,46 @@ def test_collecting_final_cpu_does_not_hold_up_the_other_post_run_snapshots() ->
     snapshots_read.set()
 
     assert sampler.seconds == 40.0
+
+
+@pytest.mark.parametrize(("last_pod", "last_window"), (("gateway", "10s"), ("replacement", "20s")))
+def test_incomplete_cpu_coverage_does_not_become_zero_in_ramp_windows(last_pod: str, last_window: str) -> None:
+    sampler: Final = _sampler(
+        iter((_metrics(_pod("gateway", 4, "4s", "2")), _metrics(_pod(last_pod, 20, last_window, "2"))))
+    )
+    sampler.start()
+    sampler.stop()
+
+    assert sampler.seconds is None
+    assert sampler.series.between(1000.0, 1010.0) is None
+    assert sampler.series.between(1010.0, 1020.0) is None
+
+
+def test_pod_replacement_ends_final_collection_without_waiting_or_reading_again() -> None:
+    paused: Final = threading.Event()
+    extra_read: Final = threading.Event()
+    responses: Final = iter((_metrics(_pod("gateway", 0, "20s", "2")), _metrics(_pod("replacement", 20, "20s", "2"))))
+    times: Final = iter((1000.0, 1020.0))
+
+    def read() -> PodMetricsList | None:
+        response: Final = next(responses, None)
+        if response is None:
+            extra_read.set()
+        return response
+
+    sampler: Final = GatewayCpuSampler(
+        "gateway",
+        "perf",
+        "token",
+        "ca.pem",
+        read_metrics=read,
+        clock=lambda: next(times),
+        pause=lambda _: paused.set(),
+        settle_timeout_s=1.0,
+    )
+    sampler.start()
+    sampler.stop()
+
+    assert sampler.seconds is None
+    assert not paused.is_set()
+    assert not extra_read.is_set()

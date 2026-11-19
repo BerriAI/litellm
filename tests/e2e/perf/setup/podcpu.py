@@ -227,9 +227,11 @@ class GatewayCpuSampler:
         self._sample()
         while not self._stop.wait(_INTERVAL_S):
             self._sample()
+        if self._population_changed:
+            return
         deadline: Final = time.monotonic() + self._settle_timeout_s
         self._sample()
-        while self._covered_samples() is None and time.monotonic() < deadline:
+        while not self._population_changed and self._covered_samples() is None and time.monotonic() < deadline:
             self._pause(min(_INTERVAL_S, max(0.0, deadline - time.monotonic())))
             self._sample()
 
