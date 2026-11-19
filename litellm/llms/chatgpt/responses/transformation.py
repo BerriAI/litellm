@@ -49,7 +49,7 @@ _FALSY_HEADER_VALUES: Final = frozenset({"", "0", "false", "no"})
 _OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
 
-def _responses_lite_reasoning(reasoning: object) -> dict[str, object]:
+def _responses_lite_reasoning(reasoning: object) -> Mapping[str, object]:
     # The Codex backend 400s a Responses-Lite request unless reasoning.context is "all_turns",
     # and Codex 0.144.x can omit the reasoning object entirely.
     return {**(_OBJECT_DICT.validate_python(reasoning) if isinstance(reasoning, dict) else {}), "context": "all_turns"}
