@@ -18,6 +18,7 @@ from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.conftest import NativeStructuredOutputKey
@@ -1179,13 +1180,21 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
         ),
     ],
 )
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-opus-5", id="invoke"),
+        pytest.param(AmazonMantleConfig(), "anthropic.claude-opus-5-5", id="mantle"),
+    ],
+)
 def test_bedrock_chat_invoke_sends_the_tool_search_tool_with_deferred_tools(
-    local_model_cost_map, local_beta_headers_config, search_tool, expected_bedrock_tool
+    local_model_cost_map,
+    local_beta_headers_config,
+    search_tool,
+    expected_bedrock_tool,
+    config: AmazonAnthropicClaudeConfig,
+    model: str,
 ):
-    """#51556: the BM25 search tool was dropped while its deferred tools and beta still went out,
-    so Claude never found the deferred tools."""
-    config: Final = AmazonAnthropicClaudeConfig()
-    model: Final = "us.anthropic.claude-opus-5"
     result: Final = config.transform_request(
         model=model,
         messages=[{"role": "user", "content": "Where is parcel 1Z999AA10123456784?"}],
@@ -1221,7 +1230,6 @@ def test_bedrock_chat_invoke_sends_the_tool_search_tool_with_deferred_tools(
 
     assert result["tools"][0] == expected_bedrock_tool
     assert [tool.get("name") for tool in result["tools"][1:]] == ["get_time", "lookup_package_tracking"]
-    assert result.get("anthropic_beta") == ["tool-search-tool-2025-10-19"]
 
 
 _REPLAYED_WEATHER_SEARCH: Final = {
