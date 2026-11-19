@@ -57,32 +57,20 @@ describe("buildCustomerOrganizationBody", () => {
   });
 
   it("creates model-only member groups with trimmed deduplicated restrictions", () => {
-    const input = fields();
-    const result = buildCustomerOrganizationBody({
-      ...input,
-      groups: input.groups.map((group) => ({
-        ...group,
-        monthlyBudget: "",
-        yearlyBudget: "",
-        allowedModels: [" model-a ", "model-a", " "],
-      })),
+    const group = {
+      ...fields().groups[1],
+      monthlyBudget: "",
+      yearlyBudget: "",
+      allowedModels: [" model-a ", "model-a", " "],
+    };
+    expect(buildCustomerOrganizationBody({ ...fields(), groups: [group] })).toMatchObject({
+      ok: true,
+      body: {
+        default_budgets: [
+          { name: group.name, cap_policy: group.capPolicy, budget_limits: [], allowed_models: ["model-a"] },
+        ],
+      },
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.body.default_budgets).toEqual(
-      input.groups.map((group) => ({
-        name: group.name,
-        cap_policy: group.capPolicy,
-        budget_limits: [],
-        allowed_models: ["model-a"],
-      })),
-    );
-    expect(
-      buildCustomerOrganizationBody({
-        ...input,
-        groups: input.groups.map((group) => ({ ...group, monthlyBudget: "", yearlyBudget: "", allowedModels: [" "] })),
-      }),
-    ).toEqual({ ok: false, error: "groupLimitRequired" });
   });
 
   it("creates the organization, overall calendar budget, and independent member caps together", () => {

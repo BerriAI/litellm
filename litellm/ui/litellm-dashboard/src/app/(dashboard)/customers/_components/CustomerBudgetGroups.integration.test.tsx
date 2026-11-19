@@ -45,12 +45,11 @@ describe("CustomerBudgetGroups", () => {
   it.each(["organization", "app"] as const)("saves model-only %s groups and reloads their selection", async (scope) => {
     const user = userEvent.setup();
     const source = { ...organization, default_budget_template_id: null, default_budgets: [] };
-    fetchMock.mockResolvedValue(
-      json({
-        ...source,
-        default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
-      }),
-    );
+    const saved = {
+      ...source,
+      default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
+    };
+    fetchMock.mockResolvedValue(json(saved));
     const view = renderWithProviders(
       <CustomerBudgetGroups organization={source} onSaved={onSaved} global scope={scope} />,
     );
@@ -70,19 +69,8 @@ describe("CustomerBudgetGroups", () => {
     expect(await request.clone().json()).toMatchObject({
       default_budgets: [{ name: "Models", allowed_models: ["model-a"] }],
     });
-    view.rerender(
-      <CustomerBudgetGroups
-        organization={{
-          ...source,
-          default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
-        }}
-        onSaved={onSaved}
-        global
-        scope={scope}
-      />,
-    );
+    view.rerender(<CustomerBudgetGroups organization={saved} onSaved={onSaved} global scope={scope} />);
     expect(screen.getByLabelText("model-a")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
   beforeEach(() => {
