@@ -794,12 +794,8 @@ mod tests {
         colliding: Registry,
         #[case] specific_deployment: bool,
     ) {
-        let resolved = resolve_checked(
-            &colliding,
-            "openai/shared",
-            specific_deployment,
-            checking(),
-        );
+        let resolved =
+            resolve_checked(&colliding, "openai/shared", specific_deployment, checking());
         assert!(refused_as_ambiguous(&resolved, "openai/shared"));
     }
 
