@@ -44,7 +44,7 @@ from e2e_http import Headers, NoBody, StreamingResponse, unwrap
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from reliability_support import (
     AZURE_MODEL,
     CONTENT_POLICY_PROMPT,
@@ -227,10 +227,14 @@ BEDROCK_MODEL: Final = "bedrock/us.anthropic.claude-haiku-5-5"
 
 
 class ForwardingSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     forward_llm_provider_auth_headers: bool = False
 
 
 class UiSettingsRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     values: ForwardingSettings
 
 

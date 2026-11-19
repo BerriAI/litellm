@@ -15,6 +15,7 @@ from collections.abc import Mapping, MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.utils import server_owned_wif_litellm_params
@@ -101,10 +102,8 @@ _HEADER_CARRIERS: Final = ("headers", "extra_headers")
 
 
 def _names_a_credential_header(headers: object) -> bool:
-    if not isinstance(headers, Mapping):
-        return False
-    names: Final[Mapping[object, object]] = headers
-    return any(isinstance(name, str) and name.lower() in _CREDENTIAL_HEADER_NAMES for name in names)
+    named: Final = as_str_mapping(headers)
+    return named is not None and any(str(name).lower() in _CREDENTIAL_HEADER_NAMES for name in named)
 
 
 def carries_caller_credentials(kwargs: Mapping[str, object]) -> bool:

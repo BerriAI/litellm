@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import Router
@@ -1367,6 +1369,17 @@ _CALLER_ANTHROPIC_KEY: Final = "sk-ant-caller-forwarded-key"
 _CALLER_KEY: Final = "caller-forwarded-key"
 
 
+class _CallerKey(TypedDict, total=False):
+    api_key: ReadOnly[str | None]
+
+
+_RESPX_CALLS: Final = TypeAdapter(tuple[respx.models.Call, ...], config=ConfigDict(arbitrary_types_allowed=True))
+
+
+def _sent(route: respx.Route) -> tuple[httpx.Request, ...]:
+    return tuple(call.request for call in _RESPX_CALLS.validate_python(route.calls))
+
+
 def _anthropic_overloaded_response() -> httpx.Response:
     return httpx.Response(529, json={"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})
 
@@ -1456,7 +1469,7 @@ async def test_fallback_to_another_anthropic_group_keeps_the_callers_key(
         model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
     )
 
-    assert tuple(call.request.headers["x-api-key"] for call in route.calls) == (
+    assert tuple(request.headers["x-api-key"] for request in _sent(route)) == (
         _CALLER_ANTHROPIC_KEY,
         _CALLER_ANTHROPIC_KEY,
     )
@@ -1494,7 +1507,7 @@ async def test_team_model_fallback_to_another_anthropic_group_keeps_the_callers_
         metadata={"user_api_key_team_id": "team-a"},
     )
 
-    assert tuple(call.request.headers["x-api-key"] for call in route.calls) == (
+    assert tuple(request.headers["x-api-key"] for request in _sent(route)) == (
         _CALLER_ANTHROPIC_KEY,
         _CALLER_ANTHROPIC_KEY,
     )
@@ -1557,7 +1570,7 @@ async def test_passthrough_fallback_between_unregistered_models_of_one_provider_
         fallbacks=["hosted_vllm/y"],
     )
 
-    assert tuple(call.request.headers["authorization"] for call in route.calls) == (
+    assert tuple(request.headers["authorization"] for request in _sent(route)) == (
         f"Bearer {_CALLER_KEY}",
         f"Bearer {_CALLER_KEY}",
     )
@@ -1609,7 +1622,7 @@ async def test_complexity_router_fallback_to_another_anthropic_group_keeps_the_c
         model="smart", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
     )
 
-    assert tuple(call.request.headers["x-api-key"] for call in route.calls) == (
+    assert tuple(request.headers["x-api-key"] for request in _sent(route)) == (
         _CALLER_ANTHROPIC_KEY,
         _CALLER_ANTHROPIC_KEY,
     )
@@ -1653,7 +1666,7 @@ async def test_complexity_router_fallback_to_a_bedrock_complexity_router_signs_w
 async def test_admin_fallback_from_a_name_several_teams_share_still_serves(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = Router(
@@ -1680,16 +1693,16 @@ async def test_admin_fallback_from_a_name_several_teams_share_still_serves(
         model="claude",
         messages=[{"role": "user", "content": "hi"}],
         api_key=_CALLER_ANTHROPIC_KEY,
-        metadata={"user_api_key_auth": UserAPIKeyAuth(user_role="proxy_admin")},
+        metadata={"user_api_key_auth": UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)},
     )
 
     assert response.choices[0].message.content == "served by the anthropic backup"
 
 
-@pytest.mark.parametrize("caller_kwargs", ({}, {"api_key": None}), ids=("no_key", "null_key"))
+@pytest.mark.parametrize("caller_kwargs", (_CallerKey(), _CallerKey(api_key=None)), ids=("no_key", "null_key"))
 @pytest.mark.asyncio
 async def test_fallback_without_caller_credentials_keeps_the_requests_headers(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caller_kwargs: dict[str, object]
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, caller_kwargs: _CallerKey
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _anthropic_router(
@@ -1924,3 +1937,34 @@ async def test_stream_recovery_from_a_complexity_routed_primary_keeps_the_caller
 
     assert backup.calls.last.request.headers["authorization"] == f"Bearer {_CALLER_KEY}"
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "backup"
+
+
+@pytest.mark.asyncio
+async def test_wildcard_route_fallback_to_another_anthropic_group_keeps_the_callers_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "tenant-*",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-admin-key"},
+            },
+            {
+                "model_name": "claude-backup",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-backup-admin-key"},
+            },
+        ],
+        fallbacks=[{"tenant-primary": ["claude-backup"]}],
+        num_retries=0,
+    )
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=(_anthropic_overloaded_response(), _anthropic_message_response())
+    )
+
+    response: Final = await router.acompletion(
+        model="tenant-primary", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    assert tuple(request.headers["x-api-key"] for request in _sent(route)) == (_CALLER_ANTHROPIC_KEY,) * 2
+    assert response.choices[0].message.content == "served by the anthropic backup"

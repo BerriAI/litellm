@@ -36,7 +36,6 @@ from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
-from litellm.exceptions import BadRequestError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -5455,10 +5454,7 @@ class _Driver:
         return frozenset(() if named is None else (named,))
 
     def _requested_deployments(self, model: str) -> Sequence[Mapping[str, object]]:
-        try:
-            return self._core._hosted._core_deployments_for_request(model, self._request)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        except BadRequestError:
-            return ()
+        return self._core._routable(model, self._request)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None
