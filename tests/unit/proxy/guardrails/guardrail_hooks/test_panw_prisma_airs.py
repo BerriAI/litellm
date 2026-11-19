@@ -31,8 +31,10 @@ from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
     PanwPrismaAirsHandler,
     initialize_guardrail,
 )
+from litellm.proxy.mcp_server import mcp_server_manager as mcp_manager_module
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import (
     ChatCompletionCustomToolCallPayload,
     ChatCompletionMessageCustomToolCall,
@@ -6596,6 +6598,47 @@ class TestPanwAirsServerToolCalls:
             ]
         }
         assert message.tool_calls is None
+
+
+def _during_hook_proxy_logging(captured: dict[str, dict[str, object]]) -> MagicMock:
+    real: Final = ProxyLogging(user_api_key_cache=DualCache())
+    plo: Final = MagicMock()
+    plo.convert_mcp_to_llm_format.side_effect = real.convert_mcp_to_llm_format
+
+    async def _during_call_hook(
+        *, user_api_key_dict: UserAPIKeyAuth | None, data: dict[str, object], call_type: str
+    ) -> None:
+        del user_api_key_dict, call_type
+        captured["during"] = data
+
+    plo.during_call_hook.side_effect = _during_call_hook
+    return plo
+
+
+@pytest.mark.asyncio
+async def test_during_mcp_call_resolves_the_server_alias_like_pre_mcp_call() -> None:
+    server: Final = MCPServer(
+        server_id="srv-crypto",
+        name="crypto_a",
+        alias="crypto-prices",
+        transport="http",
+        url="https://mcp.example.com/mcp",
+    )
+    captured: Final[dict[str, dict[str, object]]] = {}
+    manager: Final = mcp_manager_module.MCPServerManager.__new__(mcp_manager_module.MCPServerManager)
+
+    await manager._create_during_hook_task(
+        name="get_ticker",
+        arguments={"symbol": "BTC"},
+        server=server,
+        server_name_from_prefix="crypto-prices",
+        user_api_key_auth=None,
+        proxy_logging_obj=_during_hook_proxy_logging(captured),
+        start_time=datetime(2026, 11, 13),
+    )
+
+    during_name: Final = PanwPrismaAirsHandler._get_mcp_server_name(captured["during"], "get_ticker")
+    assert during_name == server.alias, captured["during"].get("mcp_server_name")
 
 
 if __name__ == "__main__":

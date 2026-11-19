@@ -54,6 +54,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.mcp import MCPServerIdentity
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -358,12 +359,18 @@ class CustomCodeGuardrail(CustomGuardrail):
             **_metadata_bucket(request_data, "metadata"),
             **_metadata_bucket(request_data, "litellm_metadata"),
         }
+        mcp_server: Final = request_data.get("mcp_server_identity")
         return {
             "model": request_data.get("model"),
             "user_id": metadata.get("user_api_key_user_id"),
             "team_id": metadata.get("user_api_key_team_id"),
             "end_user_id": metadata.get("user_api_key_end_user_id"),
             "metadata": metadata,
+            **(
+                {"mcp_server_name": mcp_server.name, "mcp_server_url": mcp_server.url}
+                if isinstance(mcp_server, MCPServerIdentity)
+                else {}
+            ),
         }
 
     def _process_result(

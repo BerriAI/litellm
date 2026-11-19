@@ -16,6 +16,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage]  # share the guardrail logging bridge
 )
+from litellm.proxy.mcp_server.oauth_utils import redact_mcp_resource_url
 from litellm.proxy.mcp_server.utils import logging_safe_mcp_headers, strip_known_server_prefix
 from litellm.types.mcp import MCPPreCallRequestObject
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
@@ -44,6 +45,7 @@ class _ScanKwargs(TypedDict):
     server_name: ReadOnly[str]
     guardrail_context: ReadOnly[Mapping[str, object] | None]
     mcp_rate_limit_server_name: ReadOnly[str]
+    mcp_server_url: ReadOnly[str | None]
     user_api_key_auth: ReadOnly[UserAPIKeyAuth | None]
     user_api_key_user_id: ReadOnly[str | None]
     user_api_key_team_id: ReadOnly[str | None]
@@ -231,6 +233,7 @@ async def _guarded_catalog_entry(
         "server_name": server.name,
         "guardrail_context": guardrail_context,
         "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
+        "mcp_server_url": redact_mcp_resource_url(server.url),
         "user_api_key_auth": user_api_key_auth,
         "user_api_key_user_id": user_api_key_auth.user_id if user_api_key_auth else None,
         "user_api_key_team_id": user_api_key_auth.team_id if user_api_key_auth else None,

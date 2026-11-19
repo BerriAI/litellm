@@ -548,11 +548,9 @@ def _upstream_address_port(resource: str | None) -> tuple[str | None, int | None
     when the origin omits it, because a consumer that keys a downstream dependency
     off the address renders a missing port as ``0``.
 
-    The origin is rebuilt without its IPv6 brackets upstream, so reading the port can
-    raise on an address the host check still admits: a zone-scoped ``fe80::1%25eth0``
-    leaves a truthy hostname of ``fe80`` behind. Both halves are read inside the guard
-    so an unparseable origin yields no address rather than propagating out of span
-    construction, matching how the redactor guards the same split.
+    Both halves are read inside the guard so an unparseable origin yields no address
+    rather than propagating out of span construction, matching how the redactor guards
+    the same split.
     """
     if not resource:
         return None, None
