@@ -17,6 +17,7 @@ import prisma
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.proxy.proxy_server as ps
@@ -144,6 +145,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         status = re.fullmatch(r"status = \$(\d+)", cond)
         api_key_not_in = re.fullmatch(r"api_key NOT IN \(\$(\d+), \$(\d+)\)", cond)
         api_key_any = re.fullmatch(r"api_key = ANY\(\$(\d+)::text\[\]\)", cond)
+        organization_any = re.fullmatch(r'"?organization_id"? = ANY\(\$(\d+)::text\[\]\)', cond)
         req_or_call = re.fullmatch(r"\(request_id = \$(\d+) OR litellm_call_id = \$\1\)", cond)
         if req_or_call:
             where["request_id_or_call_id"] = params[int(req_or_call.group(1)) - 1]
@@ -174,6 +176,8 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["status"] = {"equals": params[int(status.group(1)) - 1]}
         elif api_key_any:
             where["api_key_in"] = list(params[int(api_key_any.group(1)) - 1])
+        elif organization_any:
+            where["organization_id"] = {"in": params[int(organization_any.group(1)) - 1]}
         elif api_key_not_in:
             where["api_key_not_in"] = [
                 params[int(api_key_not_in.group(1)) - 1],
@@ -233,7 +237,12 @@ def _emulate_owner_api_key_lookup(mock_spend_logs: list[dict], sql_query: str, p
 
 
 def make_ui_spend_logs_mock_prisma(
-    mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None, owner_api_keys_fn=None
+    mock_spend_logs,
+    filter_fn,
+    team_lookup_fn=None,
+    query_observer=None,
+    owner_api_keys_fn=None,
+    organization_memberships: tuple[SimpleNamespace, ...] = (),
 ):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
@@ -249,6 +258,9 @@ def make_ui_spend_logs_mock_prisma(
     """
 
     class MockDB:
+        async def find_many(self, *, where, **kwargs):
+            return filter_fn(where)
+
         async def count(self, *args, **kwargs):
             return len(filter_fn(kwargs.get("where", {})))
 
@@ -292,9 +304,13 @@ def make_ui_spend_logs_mock_prisma(
 
     class MockPrismaClient:
         read_db = property(lambda self: ReadTargetOf(self.db))
+
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
+            self.db.litellm_organizationmembership = SimpleNamespace(
+                find_many=AsyncMock(return_value=organization_memberships)
+            )
             if team_lookup_fn is not None:
                 self.db.litellm_teamtable = self
                 self.find_unique = team_lookup_fn
@@ -2865,6 +2881,7 @@ async def test_ui_view_spend_logs_id_lookup_scopes_every_non_admin_role(client, 
             "user": "attacker_user",
             "team_id": None,
             "spend": 0.05,
+            "organization_id": "org-b",
             "startTime": now_iso,
             "model": "gpt-4",
         },
@@ -2876,6 +2893,7 @@ async def test_ui_view_spend_logs_id_lookup_scopes_every_non_admin_role(client, 
             "user": "victim_user",
             "team_id": None,
             "spend": 0.07,
+            "organization_id": "org-a",
             "startTime": now_iso,
             "model": "gpt-4",
         },
@@ -2884,9 +2902,19 @@ async def test_ui_view_spend_logs_id_lookup_scopes_every_non_admin_role(client, 
     def filter_fn(where):
         rid_either = where.get("request_id_or_call_id")
         rows = [r for r in corpus if rid_either in (r["request_id"], r["litellm_call_id"])]
-        return [r for r in rows if where.get("user") is None or r["user"] == where["user"]]
+        owned = [r for r in rows if where.get("user") is None or r["user"] == where["user"]]
+        return [
+            r for r in owned if r["organization_id"] in where.get("organization_id", {}).get("in", ("org-a", "org-b"))
+        ]
 
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", make_ui_spend_logs_mock_prisma(corpus, filter_fn))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            corpus,
+            filter_fn,
+            organization_memberships=(SimpleNamespace(organization_id="org-a", user_role="org_admin"),),
+        ),
+    )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.ORG_ADMIN, user_id="victim_user"
     )
@@ -5991,23 +6019,29 @@ async def test_ui_view_spend_logs_team_member_no_permission_blocked(client, monk
 class _CaptureFilterDB:
     """Mock DB that records the `where` filter passed to find_many."""
 
-    def __init__(self):
+    def __init__(self, organization_memberships: tuple[SimpleNamespace, ...] = ()):
         self.litellm_spendlogs = self
+        self.litellm_organizationmembership = self
+        self.organization_memberships = organization_memberships
         self.captured_where = None
         self.captured_params = None
+        self.captured_sql = None
 
     async def find_many(self, *args, **kwargs):
         self.captured_where = kwargs.get("where")
+        if "user_id" in self.captured_where:
+            return self.organization_memberships
         return []
 
     async def query_raw(self, sql_query, *params):
+        self.captured_sql = sql_query
         self.captured_params = params
         return []
 
 
 class _CapturePrismaClient:
-    def __init__(self):
-        self.db = _CaptureFilterDB()
+    def __init__(self, organization_memberships: tuple[SimpleNamespace, ...] = ()):
+        self.db = _CaptureFilterDB(organization_memberships)
 
     def hash_token(self, token):
         return "hashed::" + token
@@ -6109,7 +6143,9 @@ def test_view_spend_logs_deleted_key_filter_preserves_user_scope(
 def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    mock_client: Final = _CapturePrismaClient()
+    mock_client: Final = _CapturePrismaClient(
+        organization_memberships=(SimpleNamespace(organization_id="org-a", user_role=LitellmUserRoles.ORG_ADMIN.value),)
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.ORG_ADMIN,
@@ -6123,6 +6159,77 @@ def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(
         )
         assert response.status_code == 200, response.text
         assert mock_client.db.captured_where["user"] == "member-1"
+        assert mock_client.db.captured_where["organization_id"] == {"in": ["org-a"]}
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2", "/spend/logs/ui"])
+@pytest.mark.parametrize("administers_org", [True, False])
+@pytest.mark.parametrize("filters", [{}, {"user_id": "member-b"}, {"request_id": "request-b"}])
+def test_org_admin_spend_logs_select_stored_organizations(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    administers_org: bool,
+    filters: dict[str, str],
+) -> None:
+    rows: Final = tuple(
+        {
+            "request_id": request_id,
+            "organization_id": org,
+            "user": user,
+            "api_key": "hashed-key",
+            "team_id": None,
+            "spend": 1,
+            "startTime": "2024-06-01T00:00:00+00:00",
+            "model": "test-model",
+        }
+        for request_id, org, user in (
+            ("request-a", "org-a", "member-a"),
+            ("request-b", "org-b", "member-b"),
+            ("request-null", None, "org-admin-1"),
+        )
+    )
+
+    def filtered(where: Mapping[str, object]) -> list[dict[str, object]]:
+        organizations: Final = TypeAdapter(dict[str, tuple[str, ...]] | None).validate_python(where.get("organization_id"))
+        allowed: Final = organizations.get("in", ()) if organizations is not None else ("org-a", "org-b", None)
+        own_org: Final = tuple(row for row in rows if row["organization_id"] in allowed)
+        own_user: Final = tuple(row for row in own_org if where.get("user", row["user"]) == row["user"])
+        legacy_filters: Final = TypeAdapter(tuple[dict[str, str], ...]).validate_python(where.get("OR", ()))
+        request_filter: Final = where.get("request_id_or_call_id") or next(
+            (clause["request_id"] for clause in legacy_filters if "request_id" in clause), None
+        )
+        return [row for row in own_user if request_filter is None or row["request_id"] == request_filter]
+
+    memberships: Final = (
+        SimpleNamespace(organization_id="org-a", user_role="org_admin" if administers_org else "internal_user"),
+        SimpleNamespace(organization_id="org-b", user_role="internal_user"),
+    )
+    monkeypatch.setattr(
+        ps, "prisma_client", make_ui_spend_logs_mock_prisma(rows, filtered, organization_memberships=memberships)
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.ORG_ADMIN, user_id="org-admin-1"
+    )
+    try:
+        response: Final = client.get(
+            route,
+            params={
+                "start_date": "2024-01-01 00:00:00" if route.endswith("/ui") else "2024-01-01",
+                "end_date": "2024-12-31 00:00:00" if route.endswith("/ui") else "2024-12-31",
+                "summarize": "false",
+                **filters,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        data: Final = body if route == "/spend/logs" else body["data"]
+        expected: Final = ["request-a"] if administers_org and not filters else []
+        assert [row["request_id"] for row in data] == expected, response.text
+        if route != "/spend/logs":
+            assert body["total"] == len(expected), response.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
