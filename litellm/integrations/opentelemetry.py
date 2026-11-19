@@ -2323,7 +2323,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             # Get the exception object if available
             exception: Final = kwargs.get("exception")
-            scrubbed: Final = scrubbed_exception_record(kwargs)
+            scrubbed: Final = scrubbed_exception_record(kwargs, self)
 
             if exception is not None and scrubbed is not None:
                 span.record_exception(
