@@ -503,6 +503,56 @@ async def test_a_deployment_flagged_use_litellm_proxy_sends_decisions_to_the_pro
     assert proxy_route.calls[0].request.headers["authorization"] == "Bearer proxy-key"
 
 
+_PROXY_AUDIO: Final = ("data:audio/wav;base64,YQ==", MappingProxyType({"content_type": "audio/wav", "base64": "YQ=="}))
+_PROXY_VIDEOS: Final = (MappingProxyType({"content_type": "video/mp4", "base64": "YQ=="}),)
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_decisions_leave_audio_video_and_box_questions_to_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={**_OPENAI_RESPONSE, "answers": [dict(_CRACK_BOX_ANSWER)]}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        input="Is the screen cracked?",
+        audio=list(_PROXY_AUDIO),
+        videos=list(_PROXY_VIDEOS),
+        questions=[_CRACK_BOX_QUESTION],
+    )
+
+    sent: Final = json.loads(proxy_route.calls.last.request.content)
+    assert sent["audio"] == [_PROXY_AUDIO[0], dict(_PROXY_AUDIO[1])]
+    assert sent["videos"] == [dict(_PROXY_VIDEOS[0])]
+    assert sent["questions"] == [dict(_CRACK_BOX_QUESTION)]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+@pytest.mark.asyncio
+async def test_a_litellm_proxy_deployment_that_turns_box_questions_off_is_refused_before_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['box questions']")):
+        await litellm.adecisions(
+            model="litellm_proxy/gemini/gemini-decision-1",
+            input="Is the screen cracked?",
+            questions=[_CRACK_BOX_QUESTION],
+            model_info={"supports_box_questions": False},
+        )
+
+    assert not proxy_route.called
+
+
 @pytest.mark.asyncio
 async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, decisions_pricing_fields: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)

@@ -1,7 +1,21 @@
 from collections.abc import Mapping
+from dataclasses import replace
+from typing import Final
 
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-from litellm.llms.openai.decisions.transformation import OpenAIDecisionsConfig
+from litellm.llms.openai.decisions.transformation import OpenAIDecisionsConfig, ir_to_openai_request
+from litellm.types.decisions import DecisionsAudio, DecisionsIRRequest, DecisionsVideo, UnsupportedDecisionsRequest
+
+
+def _wire_clip(clip: DecisionsAudio | DecisionsVideo) -> str | Mapping[str, str]:
+    return clip if isinstance(clip, str) else {"content_type": clip.content_type, "base64": clip.base64}
+
+
+def _media_fields(request: DecisionsIRRequest) -> Mapping[str, object]:
+    return {
+        **({"audio": tuple(_wire_clip(clip) for clip in request.audio)} if request.audio else {}),
+        **({"videos": tuple(_wire_clip(clip) for clip in request.videos)} if request.videos else {}),
+    }
 
 
 class LiteLLMProxyDecisionsConfig(OpenAIDecisionsConfig):
@@ -26,3 +40,25 @@ class LiteLLMProxyDecisionsConfig(OpenAIDecisionsConfig):
         self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
     ) -> str | None:
         return api_key
+
+    def supports_box_questions(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str], deployment_flag: bool | None
+    ) -> bool:
+        return deployment_flag is not False
+
+    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+        return True
+
+    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+        return True
+
+    def transform_decisions_request(
+        self,
+        model: str,
+        request: DecisionsIRRequest,
+        custom_llm_provider: str,
+    ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+        body: Final = ir_to_openai_request(self.request_model(model), replace(request, audio=(), videos=()))
+        if isinstance(body, UnsupportedDecisionsRequest):
+            return body
+        return {**body, **_media_fields(request)}
