@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -13,7 +14,7 @@ use litellm_env::Lookup;
 use litellm_host::{
     interceptors::{
         Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
-        ResponseHead, ResultSource, WireRequest,
+        ResponseHead, ResultSource, StreamMeter, WireRequest,
     },
     protocol::UnobservedTail,
 };
@@ -28,8 +29,9 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::formats::messages::{
-    MessagesOptionalParams, MessagesRequest, MessagesResponse,
+    MessagesOptionalParams, MessagesRequest, MessagesResponse, Speed,
 };
+use litellm_llms_types::recognized::Recognized;
 use litellm_secrets::source::Secrets;
 use litellm_tracing::{ByteChunk, REDACTED};
 use serde_json::{Map, Value};
@@ -42,6 +44,7 @@ use super::{
         MESSAGES_CONNECT_TIMEOUT_SECS, MESSAGES_HTTP_ERROR_ATTEMPTS,
         MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
     },
+    pricing::{CallPricing, RequestedPricing},
     route::Messages,
     types::invalid_request,
 };
@@ -67,6 +70,7 @@ struct ProviderCall {
     unencodable_request_header: Option<Vec<u8>>,
     ascii_request_headers: bool,
     connect_retry: bool,
+    requested_pricing: RequestedPricing,
 }
 
 struct NativeOutputFallback {
@@ -123,7 +127,7 @@ pub(super) async fn cached(
         return Ok(None);
     };
     context
-        .result_ready(execution_facts(provider, identity, &output, &source))
+        .result_ready(execution_facts(provider, identity, &output, &source, None))
         .await?;
     Ok(Some(output))
 }
@@ -212,6 +216,8 @@ pub(super) async fn execute(
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
     let caller_keyed = caller_keyed(route).is_some();
+    let pricing_identity = call.shaping.settings.pricing.clone();
+    let inject_stream_cost = call.shaping.settings.inject_stream_cost;
     let request = provider_call(
         CallerCredentials {
             auth: &route.auth,
@@ -237,6 +243,22 @@ pub(super) async fn execute(
         &request.wire,
     );
     let identity = request.identity.clone();
+    let pricing = route
+        .pricing
+        .clone()
+        .zip(pricing_identity)
+        .map(|(pricing, priced)| {
+            Arc::new(CallPricing::new(
+                pricing,
+                priced,
+                identity.provider.clone(),
+                identity.model.clone(),
+                RequestedPricing {
+                    inject_stream_cost,
+                    ..request.requested_pricing.clone()
+                },
+            ))
+        });
     let hit = match caller_keyed {
         true => None,
         false => cache.lookup().await,
@@ -248,14 +270,26 @@ pub(super) async fn execute(
             ResultSource::Provider,
         ),
     };
-    context
-        .result_ready(execution_facts(provider, identity, &output, &source))
-        .await?;
+    let facts = execution_facts(provider, identity, &output, &source, pricing.as_deref());
+    let meter = match &facts.cost {
+        Cost::Metered(meter) => Some(meter.clone()),
+        _ => None,
+    };
+    context.result_ready(facts).await?;
     let output = match source {
         ResultSource::Provider => {
             super::safeguards::stamped(route.safeguards.as_ref(), output).await?
         }
         ResultSource::Cache { .. } | ResultSource::Host => output,
+    };
+    let output = match (output, meter.zip(pricing)) {
+        (MessagesCallResponse::Stream { head, chunks }, Some((meter, pricing))) => {
+            MessagesCallResponse::Stream {
+                head,
+                chunks: pricing.metered_stream(meter, chunks),
+            }
+        }
+        (output, _) => output,
     };
     if !requested_stream && matches!(output, MessagesCallResponse::Stream { .. }) {
         return Ok(output);
@@ -263,11 +297,14 @@ pub(super) async fn execute(
     Ok(cache.finish(output, &source).await)
 }
 
+/// The call's facts. A provider's own figure wins, and otherwise the route prices what it can: a message body now, a
+/// stream through the meter it settles once the stream's usage is final
 fn execution_facts(
     provider: MessagesProvider,
     identity: ProviderIdentity,
     output: &MessagesCallResponse,
     source: &ResultSource,
+    pricing: Option<&CallPricing>,
 ) -> ExecutionFacts {
     let reported = match output {
         MessagesCallResponse::Complete(response) => match response {
@@ -276,9 +313,22 @@ fn execution_facts(
         },
         MessagesCallResponse::Stream { .. } => None,
     };
+    let cost = match (Cost::settle(source, reported), pricing, output) {
+        (
+            Cost::Deferred,
+            Some(pricing),
+            MessagesCallResponse::Complete(MessagesBody::Message(message)),
+        ) if *source == ResultSource::Provider => pricing.message(message),
+        (Cost::Deferred, Some(_), MessagesCallResponse::Stream { .. })
+            if *source == ResultSource::Provider =>
+        {
+            Cost::Metered(StreamMeter::default())
+        }
+        (settled, _, _) => settled,
+    };
     ExecutionFacts {
         provider: identity,
-        cost: Cost::settle(source, reported),
+        cost,
         source: source.clone(),
     }
 }
@@ -338,6 +388,11 @@ async fn provider_call(
     let requested_params =
         serde_json::to_value(config.logged_params(requested.params.clone(), &transform_context)?)
             .map_err(serialize_failure)?;
+    let requested_pricing = RequestedPricing {
+        service_tier: requested.params.service_tier.clone(),
+        fast: requested.params.speed == Some(Recognized::Known(Speed::Fast)),
+        inject_stream_cost: false,
+    };
     let trimmed =
         without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 
@@ -491,6 +546,7 @@ async fn provider_call(
         unencodable_request_header: shaping.settings.unencodable_request_header,
         ascii_request_headers: shaping.settings.ascii_request_headers,
         connect_retry: shaping.settings.connect_retry,
+        requested_pricing,
     })
 }
 
