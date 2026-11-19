@@ -41,6 +41,13 @@ def test_tools_only_for_function_calling_models():
         assert param not in config.get_supported_openai_params("gemma-4-31B-it")
 
 
+@pytest.mark.parametrize("model", ["GLM-5.3", "MiniMax-M3.1-Flash"])
+def test_new_models_expose_tool_and_reasoning_params(model):
+    params = SambanovaConfig().get_supported_openai_params(model)
+    for param in ("tools", "tool_choice", "parallel_tool_calls", "reasoning_effort"):
+        assert param in params
+
+
 def test_max_completion_tokens_mapped_to_max_tokens():
     optional_params = SambanovaConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 128},

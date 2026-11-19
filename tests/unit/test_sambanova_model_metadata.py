@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 
@@ -45,9 +47,10 @@ def test_sambanova_chat_entries_are_consistent():
             assert info.get("supports_function_calling"), name
 
 
-def test_sambanova_minimax_m3_is_routed_to_sambanova():
-    assert "sambanova/MiniMax-M3" in _sambanova_models()
+@pytest.mark.parametrize("model_name", ["MiniMax-M3", "GLM-5.3", "MiniMax-M3.1-Flash"])
+def test_sambanova_model_is_routed_to_sambanova(model_name):
+    assert f"sambanova/{model_name}" in _sambanova_models()
 
-    routed_model, provider, _, _ = get_llm_provider(model="sambanova/MiniMax-M3")
-    assert routed_model == "MiniMax-M3"
+    routed_model, provider, _, _ = get_llm_provider(model=f"sambanova/{model_name}")
+    assert routed_model == model_name
     assert provider == "sambanova"
