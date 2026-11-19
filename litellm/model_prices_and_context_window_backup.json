@@ -54818,6 +54818,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-2",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
@@ -54988,6 +54989,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-2",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
