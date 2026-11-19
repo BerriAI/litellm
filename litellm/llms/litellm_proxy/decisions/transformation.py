@@ -38,6 +38,10 @@ def _media_fields(request: DecisionsIRRequest) -> Mapping[str, object]:
     }
 
 
+def _drop_params_field(request: DecisionsIRRequest) -> Mapping[str, bool]:
+    return {"drop_params": True} if request.drop_params else {}
+
+
 def _response_cost(raw_response: httpx.Response) -> float | None:
     if _COST_HEADER not in raw_response.headers:
         return None
@@ -112,9 +116,13 @@ class LiteLLMProxySystemOneConfig(_LiteLLMProxyHop):
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
         body: Final = super().transform_decisions_request(model, request, custom_llm_provider)
-        if isinstance(body, UnsupportedDecisionsRequest) or request.safety_identifier is None:
+        if isinstance(body, UnsupportedDecisionsRequest):
             return body
-        return {**body, "safety_identifier": request.safety_identifier}
+        return {
+            **body,
+            **({"safety_identifier": request.safety_identifier} if request.safety_identifier is not None else {}),
+            **_drop_params_field(request),
+        }
 
 
 class LiteLLMProxyDecisionsConfig(_LiteLLMProxyHop, OpenAIDecisionsConfig):
@@ -132,7 +140,7 @@ class LiteLLMProxyDecisionsConfig(_LiteLLMProxyHop, OpenAIDecisionsConfig):
         body: Final = ir_to_openai_request(self.request_model(model), replace(request, audio=(), videos=()))
         if isinstance(body, UnsupportedDecisionsRequest):
             return body
-        return {**body, **_media_fields(request)}
+        return {**body, **_media_fields(request), **_drop_params_field(request)}
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = _RESPONSE_ADAPTER.validate_python(payload)

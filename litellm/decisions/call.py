@@ -334,12 +334,16 @@ def validate_router_connection(model: str, provider: str | None, request: Mappin
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
 
 
-def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
+def _ir_request(
+    request: DecisionsRequestFormat, safety_identifier: str | None, drop_params: bool
+) -> DecisionsIRRequest:
     match request:
         case DecisionsRequestBody():
-            return replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
+            return replace(
+                systemone_request_to_ir(request), safety_identifier=safety_identifier, drop_params=drop_params
+            )
         case OpenAIDecisionRequestBody():
-            return openai_request_to_ir(request)
+            return replace(openai_request_to_ir(request), drop_params=drop_params)
         case _:
             assert_never(request)
 
@@ -783,7 +787,9 @@ def prepare_call(
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _without_unsupported_breakpoints(_ir_request(request, request_safety_identifier), provider_config),
+        _without_unsupported_breakpoints(
+            _ir_request(request, request_safety_identifier, _drops_params(kwargs)), provider_config
+        ),
         _drops_params(kwargs),
     )
     if isinstance(caller_ir_request, _MalformedImages):

@@ -747,6 +747,45 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api", "request_kwargs", "proxy_response"),
+    [
+        (
+            "decisions",
+            {"input": "review", "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]},
+            _OPENAI_PREDICATE_RESPONSE,
+        ),
+        ("systemone", {"state": "review", "questions": _QUESTIONS}, _RESPONSE),
+    ],
+    ids=("decisions", "systemone"),
+)
+@pytest.mark.parametrize("scope", ("call", "global", "off"))
+async def test_litellm_proxy_calls_ask_the_proxy_to_drop_what_its_deployment_cannot_take(
+    api: str,
+    request_kwargs: dict[str, object],
+    proxy_response: dict[str, object],
+    scope: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", scope == "global")
+    route: Final = respx_mock.post(f"https://proxy.example/v1/{api}").respond(json=proxy_response)
+
+    await getattr(litellm, f"a{api}")(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        safety_identifier="end-user-1",
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+        **request_kwargs,
+        **({"drop_params": True} if scope == "call" else {}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["safety_identifier"] == "end-user-1"
+    assert sent.get("drop_params") is (True if scope != "off" else None)
+
+
+@pytest.mark.asyncio
 async def test_litellm_proxy_calls_pass_on_answers_the_proxy_returns_without_confidence(
     respx_mock: respx.MockRouter,
 ) -> None:
