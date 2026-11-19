@@ -660,6 +660,22 @@ async def _requeue_daily_spend_the_commit_left_behind(
 # so the roster check below cannot interleave with their writes. A row lock would deadlock with the
 # access-group endpoints, which lock a team row after an access-group lock.
 _TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+ENTITY_TABLES_IN_COMMIT_ORDER: Final = (
+    "LiteLLM_OrganizationTable",
+    "LiteLLM_OrganizationMembership",
+    "LiteLLM_TeamTable",
+    "LiteLLM_UserTable",
+    "LiteLLM_EndUserTable",
+    "LiteLLM_TeamMembership",
+    "LiteLLM_VerificationToken",
+    "LiteLLM_ProjectTable",
+    "LiteLLM_TagTable",
+    "LiteLLM_ModelAccessGroupBudgetTable",
+    "LiteLLM_AgentsTable",
+    "LiteLLM_CustomerOrganizationTable",
+    "LiteLLM_CustomerTeamTable",
+    "LiteLLM_CustomerMemberTable",
+)
 
 # One statement adds every member's cost to their membership row. A missing row is created only
 # while the user is still on the team's roster, so a spend flush landing after a removal never
@@ -2532,6 +2548,11 @@ class DBSpendUpdateWriter:
                             key=f"team_membership:{dict(item.key)['user_id']}:{dict(item.key)['team_id']}"
                         )
 
+    @staticmethod
+    async def lock_charged_teams(transaction: _SpendTransaction, updates: DBSpendUpdateTransactions) -> None:
+        for team_id in _charged_team_ids(updates):
+            _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
+
     async def apply_accounting_entities(
         self,
         prisma_client: PrismaClient,
@@ -2541,8 +2562,7 @@ class DBSpendUpdateWriter:
     ) -> None:
         """Every team advisory lock is taken before the first row lock, the order the team roster writers use, so
         applying a batch of charges cannot deadlock with a concurrent roster change."""
-        for team_id in _charged_team_ids(updates):
-            _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
+        await self.lock_charged_teams(transaction, updates)
         await self._commit_spend_updates_to_db(
             prisma_client, 0, proxy_logging_obj, updates, outer_transaction=transaction
         )

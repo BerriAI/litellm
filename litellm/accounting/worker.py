@@ -9,7 +9,7 @@ from typing import (
 )
 
 from litellm._logging import verbose_proxy_logger
-from litellm.accounting.application import apply_deliveries
+from litellm.accounting.application import apply_deliveries, apply_delivery_isolated
 from litellm.accounting.delivery_projection import entity_transactions
 from litellm.accounting.metrics import record_backlog, record_storage
 from litellm.accounting.projection import Contribution
@@ -48,12 +48,20 @@ def _progressed(result: DeliveryBatchResult) -> bool:
 async def flush_accounting_deliveries(
     writer: "DBSpendUpdateWriter", prisma_client: "PrismaClient", proxy_logging_obj: "ProxyLogging"
 ) -> None:
-    applied: tuple[Contribution, ...] = ()  # rebind-ok: keep committed contributions for cache invalidation
+    rejected: tuple[Contribution, ...] = ()  # rebind-ok: collect a flush's rejected contributions for one alert
 
-    async def apply(transaction: LedgerTransaction, deliveries: tuple[DeliveryProjection, ...]) -> None:
-        nonlocal applied
-        applied = await apply_deliveries(  # rebind-ok: invalidate caches only after the outer transaction commits
+    async def apply(
+        transaction: LedgerTransaction, deliveries: tuple[DeliveryProjection, ...]
+    ) -> tuple[Contribution, ...]:
+        return await apply_deliveries(
             transaction, deliveries, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
+        )
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> tuple[tuple[Contribution, ...], tuple[Contribution, ...]]:
+        return await apply_delivery_isolated(
+            transaction, delivery, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
         )
 
     database: Final = cast(  # cast-ok: PrismaClient.tx owns writer routing and yields the generated transaction
@@ -63,13 +71,23 @@ async def flush_accounting_deliveries(
     started: Final = time.monotonic()
     batch_size: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "500"))
 
-    async def run_batch(*, retry_only: bool) -> DeliveryBatchResult:
-        result: Final = await repository.apply_pending(apply, batch_size=batch_size, retry_only=retry_only)
-        if result.applied:
-            await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
-            await CustomerBudgetAlerting.detect_committed_batch(
-                entity_transactions(applied), prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
-            )
+    async def committed(applied: tuple[Contribution, ...], rejected_here: tuple[Contribution, ...]) -> None:
+        nonlocal rejected
+        rejected = (*rejected, *rejected_here)  # rebind-ok: one repair alert per flush
+        await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
+        await CustomerBudgetAlerting.detect_committed_batch(
+            entity_transactions(applied), prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
+        )
+
+    async def run_batch(*, retry_only: bool, deadline: float) -> DeliveryBatchResult:
+        result: Final = await repository.apply_pending(
+            apply,
+            isolate=isolate,
+            on_commit=committed,
+            continue_splitting=lambda: time.monotonic() < deadline,
+            batch_size=batch_size,
+            retry_only=retry_only,
+        )
         if result.parked:
             verbose_proxy_logger.error(
                 "Accounting delivery parked %d requests after isolated failures", len(result.parked)
@@ -80,14 +98,23 @@ async def flush_accounting_deliveries(
             )
         return result
 
-    fresh_deadline: Final = time.monotonic() + 5
-    for _ in range(batch_size):
-        if not _filled(await run_batch(retry_only=False), batch_size) or time.monotonic() >= fresh_deadline:
-            break
-    retry_deadline: Final = time.monotonic() + 5
-    for _ in range(batch_size):
-        if time.monotonic() >= retry_deadline or not _progressed(await run_batch(retry_only=True)):
-            break
+    try:
+        fresh_deadline: Final = time.monotonic() + 5
+        for _ in range(batch_size):
+            if (
+                not _filled(await run_batch(retry_only=False, deadline=fresh_deadline), batch_size)
+                or time.monotonic() >= fresh_deadline
+            ):
+                break
+        retry_deadline: Final = time.monotonic() + 5
+        for _ in range(batch_size):
+            if time.monotonic() >= retry_deadline or not _progressed(
+                await run_batch(retry_only=True, deadline=retry_deadline)
+            ):
+                break
+    finally:
+        if rejected:
+            await _alert_repair(proxy_logging_obj, rejected)
     acquired: Final = await writer.pod_lock_manager.acquire_lock(cronjob_id=_JOB, allow_reentrant=False)
     if acquired is False:
         return
@@ -131,6 +158,30 @@ async def _report(
             proxy_logging_obj,
             message=f"Accounting deliveries are delayed. Pending={backlog.pending_count}, oldest={backlog.oldest_pending_seconds:.0f}s.",
         )
+
+
+def _budgeted(contribution: Contribution) -> bool:
+    return contribution.table == "LiteLLM_BudgetWindowSpend" or any(entity_transactions((contribution,)).values())
+
+
+async def _alert_repair(alerts: _AccountingAlerts, rejected: tuple[Contribution, ...]) -> None:
+    tables: Final = ", ".join(sorted({item.table for item in rejected}))
+    budgeted: Final = sorted({item.table for item in rejected if _budgeted(item)})
+    impact: Final = (
+        f"Budgeted spend for {', '.join(budgeted)} was not applied and requires repair."
+        if budgeted
+        else "Every budgeted spend total was applied, only usage analytics require repair."
+    )
+    verbose_proxy_logger.error(
+        "Accounting delivery kept %d contributions the database rejected as too large to index, tables: %s",
+        len(rejected),
+        tables,
+    )
+    await _alert(
+        alerts,
+        message=f"Accounting delivery kept {len(rejected)} contributions to {tables} that the database rejected "
+        f"as too large to index as a parked repair record. {impact}",
+    )
 
 
 async def _alert(alerts: _AccountingAlerts, message: str) -> None:

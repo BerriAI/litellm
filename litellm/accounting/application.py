@@ -1,9 +1,15 @@
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.accounting.delivery_projection import entity_transactions, project_deliveries
 from litellm.accounting.projection import Contribution
 from litellm.proxy.db.budget_window_spend_writer import commit_window_spend_updates
-from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
+from litellm.proxy.db.daily_spend_bulk_upsert import (
+    DAILY_SPEND_TABLES,
+    build_bulk_upsert,
+    conflict_key,
+    merge_by_conflict_key,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.db.model_usage_rollup import queue_model_usage_upsert
@@ -15,6 +21,14 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
+_SAVEPOINT: Final = "SAVEPOINT accounting_contribution"
+_ROLLBACK_TO_SAVEPOINT: Final = "ROLLBACK TO SAVEPOINT accounting_contribution"
+_RELEASE_SAVEPOINT: Final = "RELEASE SAVEPOINT accounting_contribution"
+_DAILY_TABLES_BY_NAME: Final = MappingProxyType({table.name: table for table in DAILY_SPEND_TABLES.values()})
+_DAILY_TABLE_ORDER: Final = tuple(sorted(_DAILY_TABLES_BY_NAME))
+_LATER_PHASES: Final = ("LiteLLM_DailyModelUsage", "LiteLLM_DailyGuardrailUsageUnits", "LiteLLM_BudgetWindowSpend")
+
+
 async def apply_deliveries(
     transaction: LedgerTransaction,
     deliveries: tuple[DeliveryProjection, ...],
@@ -23,10 +37,100 @@ async def apply_deliveries(
     writer: "DBSpendUpdateWriter",
     proxy_logging_obj: "ProxyLogging",
 ) -> tuple[Contribution, ...]:
-    from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
-
     contributions: Final = project_deliveries(deliveries)
     await apply_rollup_lock_timeout(transaction)
+    await _apply_contributions(
+        transaction, contributions, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
+    )
+    return contributions
+
+
+async def apply_delivery_isolated(
+    transaction: LedgerTransaction,
+    delivery: DeliveryProjection,
+    *,
+    prisma_client: "PrismaClient",
+    writer: "DBSpendUpdateWriter",
+    proxy_logging_obj: "ProxyLogging",
+) -> tuple[tuple[Contribution, ...], tuple[Contribution, ...]]:
+    """Applies one delivery a contribution at a time, so a value Postgres cannot index loses only its own
+    contribution. Returns the applied and the rejected contributions; any other failure propagates."""
+    contributions: Final = tuple(sorted(project_deliveries((delivery,)), key=_write_order))
+    await apply_rollup_lock_timeout(transaction)
+    await writer.lock_charged_teams(transaction, entity_transactions(contributions))
+    outcomes: Final = tuple(
+        [
+            (
+                item,
+                await _applied_within_savepoint(
+                    transaction, item, prisma_client=prisma_client, writer=writer, proxy_logging_obj=proxy_logging_obj
+                ),
+            )
+            for item in contributions
+        ]
+    )
+    applied: Final = tuple(item for item, was_applied in outcomes if was_applied)
+    rejected: Final = tuple(item for item, was_applied in outcomes if not was_applied)
+    return applied, rejected
+
+
+def _write_order(contribution: Contribution) -> tuple[int, int, tuple[str, ...]]:
+    """Where the batched path writes this contribution, so an isolated retry takes row locks in the same order."""
+    from litellm.proxy.db.db_spend_update_writer import ENTITY_TABLES_IN_COMMIT_ORDER
+
+    if contribution.table in ENTITY_TABLES_IN_COMMIT_ORDER:
+        return (0, ENTITY_TABLES_IN_COMMIT_ORDER.index(contribution.table), tuple(v for _, v in contribution.key))
+    daily: Final = _DAILY_TABLES_BY_NAME.get(contribution.table)
+    if daily is not None:
+        row: Final = {**dict(contribution.key), **dict(contribution.values), **dict(contribution.increments)}
+        return (1, _DAILY_TABLE_ORDER.index(contribution.table), conflict_key(daily, row))
+    return (2, _LATER_PHASES.index(contribution.table), tuple(v for _, v in contribution.key))
+
+
+async def _applied_within_savepoint(
+    transaction: LedgerTransaction,
+    contribution: Contribution,
+    *,
+    prisma_client: "PrismaClient",
+    writer: "DBSpendUpdateWriter",
+    proxy_logging_obj: "ProxyLogging",
+) -> bool:
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+    await _savepoint_command(transaction, _SAVEPOINT)
+    try:
+        await _apply_contributions(
+            transaction,
+            (contribution,),
+            prisma_client=prisma_client,
+            writer=writer,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as error:
+        if not PrismaDBExceptionHandler.is_index_row_size_error(error):
+            raise
+        await _savepoint_command(transaction, _ROLLBACK_TO_SAVEPOINT)
+        await _savepoint_command(transaction, _RELEASE_SAVEPOINT)
+        return False
+    await _savepoint_command(transaction, _RELEASE_SAVEPOINT)
+    return True
+
+
+async def _savepoint_command(transaction: LedgerTransaction, statement: str) -> None:
+    async with db_span("accounting_contribution_savepoint", None):
+        await transaction.execute_raw(statement)
+
+
+async def _apply_contributions(
+    transaction: LedgerTransaction,
+    contributions: tuple[Contribution, ...],
+    *,
+    prisma_client: "PrismaClient",
+    writer: "DBSpendUpdateWriter",
+    proxy_logging_obj: "ProxyLogging",
+) -> None:
+    from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
+
     await writer.apply_accounting_entities(
         prisma_client, proxy_logging_obj, transaction, entity_transactions(contributions)
     )
@@ -57,7 +161,6 @@ async def apply_deliveries(
             )
     windows: Final = tuple(_window(item) for item in contributions if item.table == "LiteLLM_BudgetWindowSpend")
     await commit_window_spend_updates(prisma_client, windows, outer_transaction=transaction)
-    return contributions
 
 
 def _window(item: Contribution) -> WindowSpendTransaction:

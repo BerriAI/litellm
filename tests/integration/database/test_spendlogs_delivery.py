@@ -2,7 +2,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
@@ -17,6 +17,13 @@ from litellm.repositories.accounting_delivery_repository import (
 )
 from litellm.repositories.spend_log_insert import spend_log_insert_statement
 from tests.integration._support.database import scratch_database
+
+if TYPE_CHECKING:
+    from datetime import timedelta
+
+    from prisma.client import TransactionManager
+
+    from litellm.accounting.projection import Contribution
 
 _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm/proxy-extras/litellm_proxy_extras/migrations"
 
@@ -571,3 +578,485 @@ async def test_invalid_worker_settings_preserve_pending_work(delivery_database, 
     assert delivery_database.execute(
         'SELECT request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
     ).fetchall() == [("protected", "pending", 0)]
+
+
+def _incompressible(seed: int, length: int = 8000) -> str:
+    import random
+    import string
+
+    generator: Final = random.Random(seed)
+    return "".join(generator.choice(string.ascii_letters + string.digits) for _ in range(length))
+
+
+async def _charge(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+    await transaction.execute_raw(
+        "UPDATE totals SET spend = spend + $1::float8", sum(float(str(row.row["spend"])) for row in rows)
+    )
+
+
+async def _charge_then_index(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+    await _charge(transaction, rows)
+    for row in rows:
+        if row.row["request_id"] == "oversized":
+            await transaction.execute_raw("INSERT INTO indexed (value) VALUES ($1)", _incompressible(1))
+
+
+def _rejected(value: str) -> "Contribution":
+    from litellm.accounting.projection import Contribution as RejectedContribution
+
+    return RejectedContribution("LiteLLM_DailyTagSpend", (("tag", value),), (("spend", 0.5),))
+
+
+@pytest.mark.asyncio
+async def test_an_index_size_rejection_commits_the_rest_once_and_parks_what_was_rejected(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+    value: Final = _incompressible(2)
+    isolated: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await isolated.put(str(delivery.row["request_id"]))
+        await _charge(transaction, (delivery,))
+        return None, (_rejected(value),)
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    result: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert (result.applied, result.failed, result.parked) == (1, 0, ())
+    assert result.repaired == ("oversized:index-repair",)
+    assert isolated.qsize() == 1
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+    assert delivery_database.execute("SELECT COUNT(*) FROM indexed").fetchone() == (0,)
+    assert delivery_database.execute(
+        "SELECT delivery_id, request_id, state::text, last_error, is_batch, "
+        "accounting_payload->'accounting_repair'->>'delivery_id', "
+        "accounting_payload->'accounting_repair'->>'request_id', "
+        "accounting_payload->'accounting_repair'->'rejected'->0->>'table', "
+        "accounting_payload->'accounting_repair'->'rejected'->0->'key'->0->>1 = %s "
+        'FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id',
+        (value,),
+    ).fetchall() == [
+        ("oversized", "oversized", "applied", None, False, None, None, None, None),
+        (
+            "oversized:index-repair",
+            "oversized:index-repair",
+            "parked",
+            "IndexRowSizeExceeded",
+            False,
+            "oversized",
+            "oversized",
+            "LiteLLM_DailyTagSpend",
+            True,
+        ),
+    ]
+
+    assert (await repository.apply_pending(_charge_then_index, isolate=isolate)).applied == 0
+    delivery_database.execute(
+        "UPDATE \"LiteLLM_SpendLogDelivery\" SET applied_at = CURRENT_TIMESTAMP - INTERVAL '40 days', "
+        "created_at = CURRENT_TIMESTAMP - INTERVAL '40 days'"
+    )
+    assert await repository.cleanup_applied() == 1
+    assert (await repository.backlog()).parked_count == 1
+    delivery_database.execute(
+        "UPDATE \"LiteLLM_SpendLogDelivery\" SET state = 'pending', next_attempt_at = CURRENT_TIMESTAMP"
+    )
+    requeued: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+    assert (requeued.applied, requeued.parked) == (0, ("oversized:index-repair",))
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+    assert isolated.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_a_batch_that_hits_the_index_limit_applies_every_sibling_in_the_same_flush(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, tuple(_row(name) for name in ("a-first", "b-second", "oversized", "z-last")))
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        return None, (_rejected(_incompressible(3)),)
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    result: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert (result.applied, result.failed, result.parked) == (4, 0, ())
+    assert result.repaired == ("oversized:index-repair",)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (2.0,)
+    assert delivery_database.execute(
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
+    ).fetchall() == [
+        ("a-first", "applied", 0),
+        ("b-second", "applied", 0),
+        ("oversized", "applied", 0),
+        ("oversized:index-repair", "parked", 1),
+        ("z-last", "applied", 0),
+    ]
+    assert (await repository.apply_pending(_charge_then_index, isolate=isolate)).applied == 0
+
+
+@pytest.mark.parametrize("failure", ["transient", "data"])
+@pytest.mark.asyncio
+async def test_a_failure_while_isolating_rolls_everything_back_for_the_normal_retry(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma, failure: str
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        if failure == "transient":
+            raise OSError("database connection lost while isolating")
+        raise ValueError("Invalid projected destination")
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    result: Final = await repository.apply_pending(_charge_then_index, isolate=isolate, max_attempts=1)
+
+    assert (result.applied, result.failed, result.repaired) == (0, 1, ())
+    assert result.parked == (("oversized",) if failure == "data" else ())
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+    assert delivery_database.execute(
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchall() == [("oversized", "parked" if failure == "data" else "pending", 1)]
+
+
+@pytest.mark.asyncio
+async def test_other_database_errors_never_take_the_isolation_path(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    _insert(delivery_database, (_row("conflict"),))
+    delivery_database.execute("CREATE TABLE unique_value (value text PRIMARY KEY)")
+    delivery_database.execute("INSERT INTO unique_value VALUES ('taken')")
+    isolated: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def conflicting(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+        await _charge(transaction, rows)
+        await transaction.execute_raw("INSERT INTO unique_value (value) VALUES ('taken')")
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await isolated.put(str(delivery.row["request_id"]))
+        return None, ()
+
+    result: Final = await AccountingDeliveryRepository(delivery_client).apply_pending(conflicting, isolate=isolate)
+
+    assert (result.applied, result.failed, result.repaired) == (0, 1, ())
+    assert isolated.empty()
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_isolation_commits_nothing_and_a_restart_charges_once(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+    charged: Final = asyncio.Event()
+    hold: Final = asyncio.Event()
+
+    async def interrupted(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        charged.set()
+        await hold.wait()
+        return None, (_rejected(_incompressible(4)),)
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    task: Final = asyncio.create_task(repository.apply_pending(_charge_then_index, isolate=interrupted))
+    try:
+        await asyncio.wait_for(charged.wait(), timeout=10)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+    assert delivery_database.execute(
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchall() == [("oversized", "pending", 0)]
+
+    async def complete(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        return None, (_rejected(_incompressible(4)),)
+
+    assert (await repository.apply_pending(_charge_then_index, isolate=complete)).repaired == (
+        "oversized:index-repair",
+    )
+    assert (await repository.apply_pending(_charge_then_index, isolate=complete)).applied == 0
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+@pytest.mark.asyncio
+async def test_a_row_already_at_the_repair_id_rolls_the_delivery_back_until_it_is_removed(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+    delivery_database.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, state, accounting_payload, is_batch) '
+        "VALUES ('oversized:index-repair', 'unrelated', 'parked', '{\"unrelated\": true}', false)"
+    )
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        return None, (_rejected(_incompressible(5)),)
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    blocked: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert (blocked.applied, blocked.failed, blocked.repaired) == (0, 1, ())
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+    assert delivery_database.execute(
+        'SELECT delivery_id, request_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
+    ).fetchall() == [("oversized", "oversized", "pending", 1), ("oversized:index-repair", "unrelated", "parked", 0)]
+
+    delivery_database.execute("DELETE FROM \"LiteLLM_SpendLogDelivery\" WHERE request_id = 'unrelated'")
+    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at = CURRENT_TIMESTAMP')
+    retried: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert retried.repaired == ("oversized:index-repair",)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+class _ClaimedElsewhereBeforeIsolation:
+    """Delegates transactions to the client, but lets another worker claim the delivery between the failed batch
+    and the isolated retry."""
+
+    def __init__(self, client: Prisma, other_worker: psycopg.Connection[tuple[object, ...]]) -> None:
+        self._client = client
+        self._other_worker = other_worker
+        self._opened = 0
+
+    def tx(self, *, timeout: "timedelta") -> "TransactionManager":
+        self._opened += 1
+        if self._opened == 2:
+            self._other_worker.execute('UPDATE "LiteLLM_SpendLogDelivery" SET attempts = attempts + 1')
+        return self._client.tx(timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_an_isolated_retry_skips_a_delivery_another_worker_claimed_meanwhile(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+    isolated: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await isolated.put(str(delivery.row["request_id"]))
+        return None, ()
+
+    repository: Final = AccountingDeliveryRepository(
+        _ClaimedElsewhereBeforeIsolation(delivery_client, delivery_database)
+    )
+    result: Final = await repository.apply_pending(_charge_then_index, isolate=isolate)
+
+    assert (result.applied, result.failed, result.parked, result.repaired) == (0, 0, (), ())
+    assert isolated.empty()
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
+    assert delivery_database.execute(
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery"'
+    ).fetchall() == [("oversized", "pending", 1)]
+
+
+@pytest.mark.asyncio
+async def test_an_isolated_retry_that_accepts_everything_applies_once_without_a_repair_record(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, (_row("oversized"),))
+
+    async def accept_all(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[None, tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        return None, ()
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    first: Final = await repository.apply_pending(_charge_then_index, isolate=accept_all)
+    again: Final = await repository.apply_pending(_charge_then_index, isolate=accept_all)
+
+    assert (first.applied, first.failed, first.repaired) == (1, 0, ())
+    assert (again.applied, again.failed) == (0, 0)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+    assert delivery_database.execute('SELECT delivery_id, state::text FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
+        ("oversized", "applied")
+    ]
+
+
+async def _charge_reject(
+    transaction: LedgerTransaction, delivery: DeliveryProjection
+) -> "tuple[None, tuple[Contribution, ...]]":
+    await _charge(transaction, (delivery,))
+    return None, ((_rejected(_incompressible(6)),) if delivery.row["request_id"] == "oversized" else ())
+
+
+def _states(connection: psycopg.Connection[tuple[object, ...]]) -> list[tuple[object, ...]]:
+    return connection.execute(
+        'SELECT delivery_id, state::text, attempts FROM "LiteLLM_SpendLogDelivery" ORDER BY delivery_id'
+    ).fetchall()
+
+
+@pytest.mark.parametrize(
+    ("allowance", "applied_first", "pending_first"),
+    [
+        ((), ("a-first",), ("b-second", "oversized", "z-last")),
+        ((True,), ("a-first", "b-second"), ("oversized", "z-last")),
+    ],
+    ids=["exhausted-at-entry", "expires-after-first-subset"],
+)
+@pytest.mark.asyncio
+async def test_an_exhausted_recovery_budget_still_makes_progress_and_leaves_the_rest_untouched(
+    delivery_database: psycopg.Connection[tuple[object, ...]],
+    delivery_client: Prisma,
+    allowance: tuple[bool, ...],
+    applied_first: tuple[str, ...],
+    pending_first: tuple[str, ...],
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, tuple(_row(name) for name in ("a-first", "b-second", "oversized", "z-last")))
+    remaining: Final = iter(allowance)
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+
+    bounded: Final = await repository.apply_pending(
+        _charge_then_index, isolate=_charge_reject, continue_splitting=lambda: next(remaining, False)
+    )
+
+    assert (bounded.applied, bounded.failed, bounded.repaired) == (len(applied_first), 0, ())
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5 * len(applied_first),)
+    assert _states(delivery_database) == sorted(
+        [*((name, "applied", 0) for name in applied_first), *((name, "pending", 0) for name in pending_first)]
+    )
+
+    finished: Final = await repository.apply_pending(_charge_then_index, isolate=_charge_reject)
+
+    assert finished.applied == len(pending_first)
+    assert finished.repaired == ("oversized:index-repair",)
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (2.0,)
+    assert (await repository.apply_pending(_charge_then_index, isolate=_charge_reject)).applied == 0
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_split_still_reports_the_subset_it_already_committed(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    delivery_database.execute("CREATE TABLE indexed (value text PRIMARY KEY)")
+    _insert(delivery_database, tuple(_row(name) for name in ("a-first", "b-second", "oversized", "z-last")))
+    entered: Final = asyncio.Event()
+    hold: Final = asyncio.Event()
+    reported: Final[asyncio.Queue[tuple[str, ...]]] = asyncio.Queue()
+
+    async def gated(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> tuple[str, ...]:
+        names: Final = tuple(str(row.row["request_id"]) for row in rows)
+        await _charge_then_index(transaction, rows)
+        if names == ("z-last",):
+            entered.set()
+            await hold.wait()
+        return names
+
+    async def isolate(
+        transaction: LedgerTransaction, delivery: DeliveryProjection
+    ) -> "tuple[tuple[str, ...], tuple[Contribution, ...]]":
+        await _charge(transaction, (delivery,))
+        return (str(delivery.row["request_id"]),), (_rejected(_incompressible(7)),)
+
+    async def on_commit(applied: tuple[str, ...], rejected: "tuple[Contribution, ...]") -> None:
+        await reported.put(applied)
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    task: Final = asyncio.create_task(repository.apply_pending(gated, isolate=isolate, on_commit=on_commit))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert [reported.get_nowait() for _ in range(reported.qsize())] == [("a-first", "b-second"), ("oversized",)]
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (1.5,)
+    assert _states(delivery_database) == [
+        ("a-first", "applied", 0),
+        ("b-second", "applied", 0),
+        ("oversized", "applied", 0),
+        ("oversized:index-repair", "parked", 1),
+        ("z-last", "pending", 0),
+    ]
+
+    restarted: Final = await repository.apply_pending(_charge_then_index, isolate=_charge_reject)
+
+    assert restarted.applied == 1
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (2.0,)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_commit_notification_never_reapplies_the_committed_charge(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    _insert(delivery_database, (_row("notified"),))
+
+    async def failing(applied: None, rejected: "tuple[Contribution, ...]") -> None:
+        raise RuntimeError("cache invalidation failed")
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    with pytest.raises(RuntimeError, match="cache invalidation failed"):
+        await repository.apply_pending(_charge, on_commit=failing)
+
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+    assert _states(delivery_database) == [("notified", "applied", 0)]
+    assert (await repository.apply_pending(_charge, on_commit=failing)).applied == 0
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
+class _ClaimedElsewhereBeforeFailureRecording:
+    """Delegates transactions to the client, but lets another worker lock one claimed delivery after the batch
+    rolled back and before its failure is recorded."""
+
+    def __init__(self, client: Prisma, other_worker: psycopg.Connection[tuple[object, ...]], delivery_id: str) -> None:
+        self._client = client
+        self._other_worker = other_worker
+        self._delivery_id = delivery_id
+        self._opened = 0
+
+    def tx(self, *, timeout: "timedelta") -> "TransactionManager":
+        self._opened += 1
+        if self._opened == 2:
+            self._other_worker.execute(
+                'SELECT 1 FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id = %s FOR UPDATE', (self._delivery_id,)
+            )
+        return self._client.tx(timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_recording_a_failure_skips_a_delivery_another_worker_holds(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    _insert(delivery_database, (_row("free"), _row("held")))
+    url: Final = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
+
+    async def rejected_batch(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+        raise ValueError("Invalid projected destination")
+
+    with psycopg.connect(url) as other_worker:
+        try:
+            repository: Final = AccountingDeliveryRepository(
+                _ClaimedElsewhereBeforeFailureRecording(delivery_client, other_worker, "held")
+            )
+            await asyncio.wait_for(repository.apply_pending(rejected_batch), timeout=30)
+            assert _states(delivery_database) == [("free", "pending", 1), ("held", "pending", 0)]
+        finally:
+            other_worker.rollback()
