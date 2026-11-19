@@ -99,7 +99,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.rust_bridge._native import RustIdentity
+from litellm.rust_bridge._native import RustIdentity, jwt_key_mapping_cache_key
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -535,15 +535,30 @@ class PythonAuthHost:
             raise Exception(f"Failed to fetch OIDC UserInfo: {e}")
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    async def cached_json(self, key: str) -> object:
+    async def cached_document(self, key: str) -> object:
         return await self.user_api_key_cache.async_get_cache(key)
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    async def cache_json(self, key: str, value: object, ttl_seconds: float) -> None:
+    async def cache_document(self, key: str, value: object, ttl_seconds: float) -> None:
+        await self._cache_json(key, value, ttl_seconds)
+
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def cached_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> object:
+        return await self.user_api_key_cache.async_get_cache(
+            jwt_key_mapping_cache_key(claim_field, claim_value, issuer)
+        )
+
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def cache_key_mapping(
+        self, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float
+    ) -> None:
+        await self._cache_json(jwt_key_mapping_cache_key(claim_field, claim_value, issuer), value, ttl_seconds)
+
+    async def _cache_json(self, key: str, value: object, ttl_seconds: float) -> None:
         await self.user_api_key_cache.async_set_cache(key=key, value=value, ttl=ttl_seconds)
 
-    async def forget_json(self, key: str) -> None:
-        await self.user_api_key_cache.async_delete_cache(key)
+    async def forget_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> None:
+        await self.user_api_key_cache.async_delete_cache(jwt_key_mapping_cache_key(claim_field, claim_value, issuer))
 
     async def _team(
         self, team_id: str, *, upsert: bool = False, check_db_only: bool = False
