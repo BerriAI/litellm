@@ -91,7 +91,7 @@ def test_prisma_v25_returns_the_formatted_transcript(respx_mock: MockRouter) -> 
     assert result.text == "₹500"
 
 
-@pytest.mark.parametrize("language", [None, "indic-auto", "en,hi", " "])
+@pytest.mark.parametrize("language", [None, "indic-auto", "INDIC-AUTO", "en,hi", " "])
 def test_prisma_v25_requires_one_explicit_language(language: str | None, respx_mock: MockRouter) -> None:
     with pytest.raises(litellm.BadRequestError, match="one explicit language"):
         litellm.transcription(model="gnani/prisma-v2.5", file=_AUDIO, api_base=_BASE, api_key="test", language=language)
@@ -179,12 +179,27 @@ def test_provider_failure_keeps_its_reason(respx_mock: MockRouter, status: int, 
         {"include": ["logprobs"]},
         {"prompt": "instruction"},
         {"timestamp_granularities": ["word"]},
+        {"known_speaker_names": ["Ada"]},
+        {"known_speaker_references": ["data:audio/wav;base64,AA=="]},
     ],
 )
 def test_unsupported_openai_options_are_rejected(options: dict[str, object], respx_mock: MockRouter) -> None:
     with pytest.raises(litellm.UnsupportedParamsError):
         litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, **options)
     assert not respx_mock.calls
+
+
+def test_global_drop_params_drops_unsupported_options(respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(
+        model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, response_format="srt", temperature=0
+    )
+    assert _form(route.calls.last.request) == {
+        "language_code": b"indic-auto",
+        "model": b"prisma-v3.0",
+        "audio_file": _AUDIO[1],
+    }
 
 
 def test_missing_key_fails_before_upload(respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -224,6 +239,13 @@ def test_dropping_unsupported_options_preserves_native_hints(respx_mock: MockRou
         "model": b"prisma-v3.0",
         "audio_file": _AUDIO[1],
     }
+
+
+@pytest.mark.parametrize(("language", "expected"), [("", b"indic-auto"), (" , ", b"indic-auto"), ("hi,", b"hi-IN")])
+def test_prisma_v3_ignores_blank_language_hints(language: str, expected: bytes, respx_mock: MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, language=language)
+    assert _form(route.calls.last.request)["language_code"] == expected
 
 
 @pytest.mark.parametrize(("model", "content"), [("gnani/unknown", b"data"), (_MODEL, b"")])

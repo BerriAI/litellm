@@ -35,12 +35,12 @@ class _PrismaTranscript(BaseModel):
 
 
 def _language_code(model: str, language: object) -> str:
-    if language is None and model == "prisma-v3.0":
-        return "indic-auto"
     if language is not None and not isinstance(language, str):
         raise UnsupportedParamsError(message="language must be a string", model=model, llm_provider="gnani")
-    hints: Final = tuple(hint.strip() for hint in (language or "").split(","))
-    if model == "prisma-v2.5" and (len(hints) != 1 or hints[0] in ("", "indic-auto")):
+    hints: Final = tuple(filter(None, (hint.strip() for hint in (language or "").split(","))))
+    if not hints and model == "prisma-v3.0":
+        return "indic-auto"
+    if model == "prisma-v2.5" and (len(hints) != 1 or hints[0].lower() == "indic-auto"):
         raise UnsupportedParamsError(
             message="Prisma v2.5 requires one explicit language, for example language='hi'.",
             model=model,
