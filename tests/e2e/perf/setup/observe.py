@@ -124,6 +124,7 @@ class Observation:
     redis_after: RedisCounters | None = None
     redis_commands: tuple[RedisCommand, ...] | None = None
     gateway_cpu_seconds: float | None = None
+    gateway_cpu_coverage: float | None = None
     telemetry_before: GatewayTelemetry | None = None
     telemetry_after: GatewayTelemetry | None = None
     peak_connections: int | None = None
@@ -294,6 +295,9 @@ class Observation:
         after: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(end)
         return WindowReadings(
             cpu_seconds_per_request=None if cpu is None or completed == 0 else cpu / completed,
+            cpu_seconds_per_request_coverage=self.cpu_series.coverage_between(start, end)
+            if isinstance(self.cpu_series, CpuSeries)
+            else None,
             redis_latency_mean_seconds=None
             if before is None or after is None
             else after.minus(before).redis_latency.mean,
@@ -303,6 +307,7 @@ class Observation:
 
 class WindowReadings(TypedDict):
     cpu_seconds_per_request: ReadOnly[float | None]
+    cpu_seconds_per_request_coverage: ReadOnly[float | None]
     redis_latency_mean_seconds: ReadOnly[float | None]
     postgres_peak_connections: ReadOnly[int | None]
 
@@ -512,6 +517,7 @@ class Row:
     floor: float | None = None
     detail: str = ""
     breakdown: tuple[Contributor, ...] = ()
+    coverage: float | None = None
 
     @property
     def label(self) -> str:
@@ -588,6 +594,7 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
                 floor=limit.min if limit else None,
                 detail=_detail(metric, observation, case.background_cap_exempt_tables),
                 breakdown=breakdown(metric, rank, observation, case.background_cap_exempt_tables),
+                coverage=observation.gateway_cpu_coverage if metric == "cpu_seconds_per_request" else None,
             )
         )
     exceeded: Final = [_breach(row) for row in rows if row.over or row.missing]
@@ -617,6 +624,7 @@ def _detail(metric: Metric, observation: Observation, exempt_tables: frozenset[s
 
 def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
     observed: Final = ((row.property_name, row.observed),) if row.observed is not None else ()
+    coverage: Final = ((f"{row.property_name}_coverage", row.coverage),) if row.coverage is not None else ()
     limit: Final = ((f"{row.property_name}_limit", row.limit),) if row.limit is not None else ()
     floor: Final = ((f"{row.property_name}_floor", row.floor),) if row.floor is not None else ()
     contributors: Final = (
@@ -624,7 +632,7 @@ def _row_properties(row: Row) -> tuple[tuple[str, float | str], ...]:
         if row.breakdown
         else ()
     )
-    return observed + limit + floor + contributors
+    return observed + coverage + limit + floor + contributors
 
 
 def junit_properties(rows: Iterable[Row]) -> tuple[tuple[str, float | str], ...]:
@@ -658,7 +666,8 @@ def render(case: PerformanceTestCase, observation: Observation, rows: list[Row])
             if row.missing
             else ""
         )
-        lines.append(f"  {row.label:32} {observed:>12} {row.bound:>12}{flag}")
+        coverage = "" if row.coverage is None else f"  coverage {row.coverage:.4f}"
+        lines.append(f"  {row.label:32} {observed:>12} {row.bound:>12}{flag}{coverage}")
     lines.extend(render_steps(observation.steps()))
     lines.extend(_diagnostics(observation))
     lines.extend(_datastore_lines(observation))

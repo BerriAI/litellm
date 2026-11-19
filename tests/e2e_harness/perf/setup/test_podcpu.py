@@ -4,11 +4,17 @@ import json
 import math
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Final
 
 import pytest
+from cases.small_bodies_5rps import CASE
+from memory_readings import RssCapture
+from setup.observe import Observation, evaluate, junit_properties, render
+from setup.performance_test_case import Limit
 from setup.podcpu import GatewayCpuSampler, PodMetrics, PodMetricsList
+from setup.wire import WireRecord
 
 
 def _pod(name: str, end: float, window: str, *quantities: str) -> PodMetrics:
@@ -38,6 +44,116 @@ def _sampler(responses: Iterator[PodMetricsList | None], *, settle_timeout_s: fl
         pause=lambda _: None,
         settle_timeout_s=settle_timeout_s,
     )
+
+
+@pytest.mark.parametrize(("gap", "expected", "coverage"), ((1.0, 63.0, 0.95), (2.0, 62.0, 0.9)))
+def test_short_internal_gaps_use_both_neighbouring_rates_even_at_ninety_percent(
+    gap: float, expected: float, coverage: float
+) -> None:
+    sampler: Final = _sampler(
+        iter((_metrics(_pod("gateway", 8, "8s", "2")), _metrics(_pod("gateway", 20, f"{12 - gap}s", "4"))))
+    )
+    sampler.start()
+    sampler.stop()
+
+    assert sampler.seconds is not None and math.isclose(sampler.seconds, expected)
+    assert sampler.coverage is not None and math.isclose(sampler.coverage, coverage)
+
+
+def test_a_gap_below_ninety_percent_is_missing_but_a_shorter_boundary_gap_is_bridged() -> None:
+    sampler: Final = _sampler(
+        iter((_metrics(_pod("gateway", 8, "8s", "2")), _metrics(_pod("gateway", 20, "9.8s", "4"))))
+    )
+    sampler.start()
+    sampler.stop()
+
+    assert sampler.seconds is None
+    assert sampler.coverage is not None and math.isclose(sampler.coverage, 0.89)
+    coverage: Final = sampler.series.coverage_between(1010.0, 1020.0)
+    assert coverage is not None and math.isclose(coverage, 0.98)
+    assert math.isclose(sum(sampler.series.between(1010.0, 1020.0) or ()), 40.0)
+
+
+@pytest.mark.parametrize(("first", "last"), ((0, 20), (19, 19)), ids=("start-gap", "end-gap"))
+def test_a_boundary_gap_uses_the_one_available_source_rate(first: int, last: int) -> None:
+    sampler: Final = _sampler(
+        iter((_metrics(_pod("gateway", first, "19s", "3")), _metrics(_pod("gateway", last, "19s", "3"))))
+    )
+    sampler.start()
+    sampler.stop()
+
+    assert sampler.seconds == 60.0
+    assert sampler.coverage == 0.95
+
+
+@pytest.mark.parametrize(("window", "expected", "coverage"), (("19s", 60.0, 0.95), ("17s", None, 0.85)))
+def test_cpu_coverage_is_reported_next_to_the_reading_in_junit_and_logs(
+    capsys: pytest.CaptureFixture[str], window: str, expected: float | None, coverage: float
+) -> None:
+    sampler: Final = _sampler(
+        iter((_metrics(_pod("gateway", 0, "20s", "0")), _metrics(_pod("gateway", 20, window, "3"))))
+    )
+    sampler.start()
+    sampler.stop()
+    record: Final = WireRecord(
+        seq=1,
+        marker="request",
+        caller="key",
+        endpoint="chat_completions",
+        stream=False,
+        blocked=False,
+        started_at=1000.0,
+        status=200,
+        header_s=1.0,
+        first_byte_s=1.0,
+        first_token_s=None,
+        total_s=1.0,
+        text="",
+        ok=True,
+        mock_delay_s=0.0,
+        call_id=None,
+        error=None,
+    )
+    observation: Final = Observation(
+        records=(record,),
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=RssCapture(readings=(), failures=()),
+        rss_after=RssCapture(readings=(), failures=()),
+        wall_seconds=20.0,
+        gateway_cpu_seconds=sampler.seconds,
+        gateway_cpu_coverage=sampler.coverage,
+    )
+    case: Final = replace(CASE, limits=(Limit("cpu_seconds_per_request", max=100.0),))
+    rows, _ = evaluate(case, observation)
+    properties: Final = dict(junit_properties(rows))
+    line: Final = next(
+        line for line in render(case, observation, rows).splitlines() if "cpu_seconds_per_request" in line
+    )
+
+    assert properties["perf_cpu_seconds_per_request_coverage"] == coverage
+    assert properties.get("perf_cpu_seconds_per_request") == expected
+    assert f"coverage {coverage:.4f}" in line
+    assert ("n/a" if expected is None else f"{expected:.4f}") in line
+    assert f'"coverage": {coverage}' in capsys.readouterr().out
+    assert math.isclose(sum(sampler.series.between(1002.9, 1020.0) or ()), 51.3)
+
+
+def test_disjoint_pod_gaps_count_against_the_same_gateway_coverage_budget() -> None:
+    sampler: Final = _sampler(
+        iter(
+            (
+                _metrics(_pod("a", 0, "1s", "0"), _pod("b", 18, "18s", "3")),
+                _metrics(_pod("a", 20, "18s", "2"), _pod("b", 18, "18s", "3")),
+            )
+        )
+    )
+    sampler.start()
+    sampler.stop()
+
+    assert sampler.seconds is None
+    assert sampler.coverage == 0.8
+    assert sum(sampler.series.between(1001.5, 1018.5) or ()) == 85.0
 
 
 @pytest.mark.parametrize(
@@ -103,6 +219,7 @@ def test_cpu_diagnostics_distinguish_population_change_from_unavailable_reads(
     changed.start()
     changed.stop()
     assert changed.seconds is None
+    assert changed.coverage is None
     changed_log: Final = capsys.readouterr().out
     assert '"reason": "pod_population_changed"' in changed_log
     assert '"expected": ["gateway"]' in changed_log
@@ -112,6 +229,7 @@ def test_cpu_diagnostics_distinguish_population_change_from_unavailable_reads(
     unavailable.start()
     unavailable.stop()
     assert unavailable.seconds is None
+    assert unavailable.coverage is None
     unavailable_log: Final = capsys.readouterr().out
     assert '"state": "read_failed"' in unavailable_log
     assert '"reason": "no_pod_metrics"' in unavailable_log
@@ -272,8 +390,9 @@ def test_whole_second_timestamps_do_not_turn_subsecond_rounding_into_a_missing_p
     sampler.start()
     sampler.stop()
 
-    assert sampler.seconds == 50.0
-    assert tuple(sample.at for sample in sampler.series.samples) == (1005.0, 1015.0)
+    assert sampler.seconds == 49.75
+    assert sampler.coverage == 0.975
+    assert tuple(sample.at for sample in sampler.series.samples) == (1005.0, 1010.25, 1015.25)
 
 
 def test_collecting_final_cpu_does_not_hold_up_the_other_post_run_snapshots() -> None:
@@ -308,7 +427,7 @@ def test_incomplete_cpu_coverage_does_not_become_zero_in_ramp_windows(last_pod: 
 
     assert sampler.seconds is None
     assert sampler.series.between(1000.0, 1010.0) is None
-    assert sampler.series.between(1010.0, 1020.0) is None
+    assert sampler.series.between(1010.0, 1020.0) == ((20.0,) if last_pod == "gateway" else None)
 
 
 def test_pod_replacement_ends_final_collection_without_waiting_or_reading_again() -> None:

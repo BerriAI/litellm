@@ -1,9 +1,9 @@
 """Estimate gateway CPU from PodMetrics source windows, clipped to the measured pass. Polling a stale
-response adds no CPU. Reading results waits up to a minute for windows covering the pass's end. Incomplete coverage
-is missing, not zero. The estimate assumes uniform CPU within each source window, including at pass and
+response adds no CPU. Reading results waits up to a minute for windows covering the pass's end. Gaps use
+the mean of their neighbouring rates, or the one available rate at an interval boundary. Less than 90%
+real-window coverage is missing, not zero. The estimate assumes uniform CPU within each source window, including at pass and
 ramp boundaries; only cumulative counters could measure short bursts exactly. The runner's read-only
-service account cannot exec into gateway pods or read kubelet counters. Whole-second source timestamps
-allow apparent gaps below one second, estimated with the next window's average."""
+service account cannot exec into gateway pods or read kubelet counters."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import reduce
-from itertools import chain
+from itertools import chain, pairwise
 from pathlib import Path
 from typing import Final
 from urllib.parse import quote
@@ -28,7 +28,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 SELECTOR_ENV: Final = "E2E_PERF_GATEWAY_POD_SELECTOR"
 _SERVICE_ACCOUNT: Final = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 _INTERVAL_S: Final = 5.0
-_SOURCE_TIME_RESOLUTION_S: Final = 1.0
+_MIN_COVERAGE: Final = 0.9
 _SUFFIX_CORES: Final = {"n": 1e-9, "u": 1e-6, "m": 1e-3}
 _DURATION_PART: Final = re.compile(r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)")
 _DURATION_UNITS: Final = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0}
@@ -114,16 +114,54 @@ class CpuSample:
 
 @dataclass(frozen=True, slots=True)
 class CpuSeries:
-    samples: tuple[CpuSample, ...]
+    windows: tuple[_Window, ...]
+    pods: frozenset[str]
+    start: float
+    stop: float
 
-    def between(self, start: float, end: float) -> tuple[float, ...] | None:
-        if not self.samples:
+    def _real_samples(self, start: float, end: float) -> tuple[tuple[CpuSample, ...], ...]:
+        return tuple(
+            _coverage(
+                tuple(window for window in self.windows if window.pod == pod),
+                max(start, self.start),
+                min(end, self.stop),
+            ).samples
+            for pod in sorted(self.pods)
+        )
+
+    def coverage_between(self, start: float, end: float) -> float | None:
+        """Share of the interval with real source coverage for every selected pod."""
+        if not self.pods or end <= start:
+            return None
+        real: Final = self._real_samples(start, end)
+        boundaries: Final = sorted(
+            {start, end, *(at for sample in chain.from_iterable(real) for at in (sample.start, sample.end))}
+        )
+        covered: Final = sum(
+            right - left
+            for left, right in pairwise(boundaries)
+            if all(any(sample.start <= left and sample.end >= right for sample in pod) for pod in real)
+        )
+        return covered / (end - start)
+
+    @property
+    def samples(self) -> tuple[CpuSample, ...]:
+        return self.samples_between(self.start, self.stop) or ()
+
+    def samples_between(self, start: float, end: float) -> tuple[CpuSample, ...] | None:
+        coverage: Final = self.coverage_between(start, end)
+        if coverage is None or coverage < _MIN_COVERAGE:
             return None
         return tuple(
-            sample.value * (min(end, sample.end) - max(start, sample.start)) / (sample.end - sample.start)
-            for sample in self.samples
-            if min(end, sample.end) > max(start, sample.start)
+            sorted(
+                chain.from_iterable(_bridge(pod, start, end) for pod in self._real_samples(start, end)),
+                key=lambda s: s.at,
+            )
         )
+
+    def between(self, start: float, end: float) -> tuple[float, ...] | None:
+        samples: Final = self.samples_between(start, end)
+        return None if samples is None else tuple(sample.value for sample in samples)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,38 +171,65 @@ class _Coverage:
 
     def extend(self, window: _Window, stop: float) -> _Coverage:
         end: Final = min(window.end, stop)
-        if window.start - self.end >= _SOURCE_TIME_RESOLUTION_S or end <= self.end:
+        start: Final = max(self.end, window.start)
+        if end <= start:
             return self
-        sample: Final = CpuSample(start=self.end, end=end, value=window.rate * (end - self.end))
+        sample: Final = CpuSample(start=start, end=end, value=window.rate * (end - start))
         return _Coverage(end, (*self.samples, sample))
 
 
 def _coverage(windows: tuple[_Window, ...], start: float, stop: float) -> _Coverage:
-    return reduce(lambda acc, window: acc.extend(window, stop), sorted(windows, key=lambda w: w.end), _Coverage(start))
+    return reduce(
+        lambda acc, window: acc.extend(window, stop), sorted(windows, key=lambda w: (w.start, w.end)), _Coverage(start)
+    )
 
 
-def _integrate(windows: tuple[_Window, ...], start: float, stop: float) -> tuple[CpuSample, ...] | None:
-    coverage: Final = _coverage(windows, start, stop)
-    return coverage.samples if coverage.end >= stop else None
+def _gap(left: CpuSample | None, right: CpuSample | None, start: float, stop: float) -> CpuSample | None:
+    begin: Final = start if left is None else left.end
+    end: Final = stop if right is None else right.start
+    neighbours: Final = tuple(
+        sample.value / (sample.end - sample.start) for sample in (left, right) if sample is not None
+    )
+    if end <= begin or not neighbours:
+        return None
+    return CpuSample(begin, end, (end - begin) * sum(neighbours) / len(neighbours))
+
+
+def _bridge(samples: tuple[CpuSample, ...], start: float, stop: float) -> tuple[CpuSample, ...]:
+    gaps: Final = tuple(
+        gap for left, right in pairwise((None, *samples, None)) if (gap := _gap(left, right, start, stop)) is not None
+    )
+    return (*samples, *gaps)
 
 
 def _log_uncovered(pod: str, windows: tuple[_Window, ...], start: float, stop: float) -> None:
     coverage: Final = _coverage(windows, start, stop)
-    if coverage.end >= stop:
+    gap: Final = (
+        next(
+            (
+                uncovered
+                for left, right in pairwise((None, *coverage.samples, None))
+                if (uncovered := _gap(left, right, start, stop)) is not None
+            ),
+            None,
+        )
+        if coverage.samples
+        else CpuSample(start, stop, 0.0)
+    )
+    if gap is None:
         return
     following: Final = next(
-        (window for window in sorted(windows, key=lambda w: w.end) if window.end > coverage.end), None
+        (window for window in sorted(windows, key=lambda w: w.start) if window.start >= gap.end), None
     )
-    gap_end: Final = stop if following is None else min(stop, following.start)
     _log(
         "missing",
         reason="tail_not_covered" if following is None else "source_gap",
         pod=pod,
         started_at=start,
         stopped_at=stop,
-        uncovered_start=coverage.end,
-        uncovered_end=gap_end,
-        gap_seconds=gap_end - coverage.end,
+        uncovered_start=gap.start,
+        uncovered_end=gap.end,
+        gap_seconds=gap.end - gap.start,
         next_window_start=None if following is None else following.start,
         next_window_end=None if following is None else following.end,
     )
@@ -211,7 +276,19 @@ class GatewayCpuSampler:
 
     @property
     def series(self) -> CpuSeries:
-        return CpuSeries(samples=self._finished_samples() or ())
+        self._finished_samples()
+        return self._series()
+
+    @property
+    def coverage(self) -> float | None:
+        self._finished_samples()
+        series: Final = self._series()
+        return series.coverage_between(series.start, series.stop)
+
+    def _series(self) -> CpuSeries:
+        if self._started_at is None or self._ended_at is None or self._population_changed:
+            return CpuSeries((), frozenset(), 0.0, 0.0)
+        return CpuSeries(self._windows, self._pods or frozenset(), self._started_at, self._ended_at)
 
     def _finished_samples(self) -> tuple[CpuSample, ...] | None:
         if self._ended_at is None:
@@ -221,6 +298,12 @@ class GatewayCpuSampler:
         samples: Final = self._covered_samples()
         if samples is None:
             self._log_missing()
+        series: Final = self._series()
+        _log(
+            "reading",
+            cpu_seconds=None if samples is None else sum(sample.value for sample in samples),
+            coverage=series.coverage_between(series.start, series.stop),
+        )
         return samples
 
     def _log_missing(self) -> None:
@@ -269,18 +352,17 @@ class GatewayCpuSampler:
         self._windows = tuple(dict.fromkeys((*self._windows, *windows)))
 
     def _covered_samples(self) -> tuple[CpuSample, ...] | None:
-        start: Final = self._started_at
+        series: Final = self._series()
+        return series.samples_between(series.start, series.stop)
+
+    def _tail_covered(self) -> bool:
         stop: Final = self._ended_at
-        if start is None or stop is None or stop <= start or not self._pods or self._population_changed:
-            return None
-        coverages: Final = tuple(
-            _integrate(tuple(window for window in self._windows if window.pod == pod), start, stop)
-            for pod in self._pods
-        )
-        if any(coverage is None for coverage in coverages):
-            return None
-        return tuple(
-            sorted(chain.from_iterable(coverage for coverage in coverages if coverage is not None), key=lambda s: s.at)
+        return (
+            stop is not None
+            and bool(self._pods)
+            and all(
+                any(window.pod == pod and window.end >= stop for window in self._windows) for pod in self._pods or ()
+            )
         )
 
     def _run(self) -> None:
@@ -291,7 +373,7 @@ class GatewayCpuSampler:
             return
         deadline: Final = time.monotonic() + self._settle_timeout_s
         self._sample()
-        while not self._population_changed and self._covered_samples() is None and time.monotonic() < deadline:
+        while not self._population_changed and not self._tail_covered() and time.monotonic() < deadline:
             self._pause(min(_INTERVAL_S, max(0.0, deadline - time.monotonic())))
             self._sample()
 
@@ -309,6 +391,7 @@ class GatewayCpuSampler:
 class NoSampler:
     seconds: Final[None] = None
     series: Final[None] = None
+    coverage: Final[None] = None
 
     def start(self) -> None:
         return None
