@@ -20,6 +20,7 @@ const organization: Organization = {
       max_budget: 25,
       budget_duration: "7d",
       soft_budget: 20,
+      allowed_models: ["model-a", "model-b"],
       model_tpm_limit: { "model-a": 300 },
       model_rpm_limit: { "model-a": 3 },
       budget_limits: [
@@ -27,21 +28,24 @@ const organization: Organization = {
         { budget_duration: "12mo", max_budget: 100, reset_at: "2027-11-15T00:00:00Z" },
       ],
     },
-    { budget_id: "legacy", name: "Legacy", max_budget: 25, budget_duration: "7d", rpm_limit: 30 },
+    { budget_id: "legacy", name: "Legacy", max_budget: 25, budget_duration: "6days", rpm_limit: 30 },
     { budget_id: "rate", name: "Rate only", tpm_limit: 500 },
   ],
 };
+const storedWindows = organization.default_budgets[0].budget_limits!;
 
 describe("planCustomerBudgetGroups", () => {
   it("keeps custom caps and their reset identity when calendar caps are edited or cleared", () => {
     const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
     const original = {
       ...organization,
-      default_budgets: [{ ...organization.default_budgets[0], budget_limits: [custom] }],
+      default_budgets: [{ ...organization.default_budgets[0], max_budget: null, budget_duration: null, budget_limits: [custom] }],
     };
     const rows = customerBudgetGroupRows(original);
     expect(planCustomerBudgetGroups(original, rows, "standard")).toMatchObject({ changed: false });
-    expect(planCustomerBudgetGroups(original, [{ ...rows[0], monthlyBudget: "5" }], "standard")).toMatchObject({
+    const monthly = { budget_duration: "1mo", max_budget: 5 };
+    const edited = { ...rows[0], budgetWindows: [{ budget: monthly, maxBudget: "5" }, ...rows[0].budgetWindows] };
+    expect(planCustomerBudgetGroups(original, [edited], "standard")).toMatchObject({
       body: { default_budgets: [{ budget_limits: [{ budget_duration: "1mo", max_budget: 5 }, custom] }] },
     });
     const withCalendar = {
@@ -52,35 +56,6 @@ describe("planCustomerBudgetGroups", () => {
     };
     expect(planCustomerBudgetGroups(withCalendar, rows, "standard")).toMatchObject({
       body: { default_budgets: [{ budget_limits: [custom] }] },
-    });
-  });
-
-  it("preserves unchanged models, normalizes edits, and clears only the selected restriction", () => {
-    const source = {
-      ...organization,
-      default_budgets: organization.default_budgets.map((group) => ({
-        ...group,
-        allowed_models: ["model-a", "model-b"],
-      })),
-    };
-    const rows = customerBudgetGroupRows(source);
-    const edits = [
-      { ...rows[0], allowedModels: [" model-b ", "model-a", "model-a"] },
-      { ...rows[1], allowedModels: [" model-c ", "model-c", " "] },
-      { ...rows[2], allowedModels: [] },
-    ];
-    expect(planCustomerBudgetGroups(source, edits, "standard")).toEqual({
-      ok: true,
-      changed: true,
-      body: {
-        expected_revision: source.budget_groups_revision,
-        default_budget_template: "Standard",
-        default_budgets: [
-          { budget_id: "standard", name: "Standard" },
-          { budget_id: "legacy", name: "Legacy", allowed_models: ["model-c"] },
-          { budget_id: "rate", name: "Rate only", allowed_models: null },
-        ],
-      },
     });
   });
 
@@ -149,37 +124,12 @@ describe("planCustomerBudgetGroups", () => {
     });
   });
 
-  it.each(["clear", "edit"])("%s existing calendar caps, preserving untouched rules and reset dates", (action) => {
-    const rows = customerBudgetGroupRows(organization);
-    const budgetWindows =
-      action === "clear" ? [] : [{ ...rows[0].budgetWindows[0], maxBudget: "0" }, rows[0].budgetWindows[1]];
-    const stored = organization.default_budgets[0].budget_limits!;
-    expect(planCustomerBudgetGroups(organization, [{ ...rows[0], budgetWindows }, ...rows.slice(1)], "legacy")).toEqual(
-      {
-        ok: true,
-        changed: true,
-        body: {
-          expected_revision: organization.budget_groups_revision,
-          default_budget_template: "Legacy",
-          default_budgets: [
-            {
-              budget_id: "standard",
-              name: "Standard",
-              budget_limits: action === "clear" ? null : [{ ...stored[0], max_budget: 0 }, stored[1]],
-            },
-            { budget_id: "legacy", name: "Legacy" },
-            { budget_id: "rate", name: "Rate only" },
-          ],
-        },
-      },
-    );
-  });
-
   it.each([
     [{ name: "" }, "groupNameRequired"],
     [{ name: "Legacy" }, "duplicateGroups"],
     [{ maxBudget: "-1" }, "invalidBudget"],
     [{ softBudget: "Infinity" }, "invalidBudget"],
+    [{ budgetDuration: "6mo" }, "invalidBudget"],
   ])("should reject invalid edits before sending a request", (patch, error) => {
     const rows = customerBudgetGroupRows(organization);
     expect(planCustomerBudgetGroups(organization, [{ ...rows[0], ...patch }, ...rows.slice(1)], "standard")).toEqual({
@@ -209,6 +159,19 @@ describe("planCustomerBudgetGroups", () => {
       { max_budget: 0, budget_duration: null },
     ],
     [{ softBudget: "" }, { soft_budget: null }],
+    [{ allowedModels: [" model-b ", "model-a", "model-a"] }, {}],
+    [{ allowedModels: [" model-c ", "model-c", " "] }, { allowed_models: ["model-c"] }],
+    [{ allowedModels: [] }, { allowed_models: null }],
+    [{ budgetWindows: [] }, { budget_limits: null }],
+    [
+      {
+        budgetWindows: storedWindows.map((budget, index) => ({
+          budget,
+          maxBudget: index === 0 ? "0" : String(budget.max_budget),
+        })),
+      },
+      { budget_limits: [{ ...storedWindows[0], max_budget: 0 }, storedWindows[1]] },
+    ],
   ])("patches only edited fields without clearing stored windows or hidden policies", (patch, expected) => {
     const rows = customerBudgetGroupRows(organization);
     const result = planCustomerBudgetGroups(

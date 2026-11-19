@@ -1,4 +1,4 @@
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import {
@@ -39,9 +39,14 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
 }));
 const fetchMock = vi.fn<typeof fetch>();
 const onSaved = vi.fn();
-const limitsFor = (name: string) => within(screen.getByRole("group", { name, exact: true }));
+const limitsFor = (name: string) => within(screen.getByRole("row", { name, exact: true }));
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+async function openLimitEditor(user: UserEvent, group: string) {
+  await user.click(limitsFor(group).getByRole("button", { name: "+ Add Budget Window" }));
+  return screen.findByRole("dialog", { name: "Additional spend limit (USD)" });
+}
 
 describe("CustomerBudgetGroups", () => {
   it.each(["organization", "app", "overall-app"] as const)(
@@ -89,13 +94,21 @@ describe("CustomerBudgetGroups", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it.each([false, true])("saves rate-only edits through the existing group endpoint, global=%s", async (global) => {
-    const source = { ...organization, default_budget_template_id: global ? null : "standard" };
+    const source = {
+      ...organization,
+      default_budget_template_id: global ? null : "standard",
+      default_budgets: organization.default_budgets.map((group) => ({
+        ...group,
+        max_budget: 25,
+        budget_duration: "1mo",
+      })),
+    };
     fetchMock.mockResolvedValue(json(source));
     renderWithProviders(
       global ? (
         <CustomerBudgetGroups organization={source} onSaved={onSaved} global />
       ) : (
-        <CustomerBudgetGroups organization={organization} onSaved={onSaved} />
+        <CustomerBudgetGroups organization={source} onSaved={onSaved} />
       ),
     );
     const tokens = limitsFor("Standard").getByRole("spinbutton", { name: "Tokens per minute" });
@@ -164,7 +177,8 @@ describe("CustomerBudgetGroups", () => {
     });
     renderWithProviders(<CustomerSettings />, { searchParams: `?tab=${tab}` });
     expect(screen.getByRole("tab", { name: tabTitle })).toHaveAttribute("aria-selected", "true");
-    const editor = within(await screen.findByRole("tabpanel", { name: tabTitle }));
+    const panel = within(await screen.findByRole("tabpanel", { name: tabTitle }));
+    const editor = within(await panel.findByRole("form", { name: "Budget groups" }));
     await user.click(await editor.findByRole("button", { name: "Add budget group" }));
     fireEvent.change(editor.getByLabelText("Group name 1"), { target: { value: "Starter" } });
     fireEvent.change(editor.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } });
@@ -206,17 +220,37 @@ describe("CustomerBudgetGroups", () => {
 
   it("should save additions, edited limits, the new default and deletions together", async () => {
     const user = userEvent.setup();
+    const originalWindow = { budget_duration: "1mo" as const, max_budget: 10, reset_at: "2027-01-01T00:00:00Z" };
+    const source = {
+      ...organization,
+      default_budgets: [
+        {
+          ...organization.default_budgets[0],
+          tpm_limit: 1000,
+          rpm_limit: 20,
+          allowed_models: ["model-a"],
+          budget_limits: [originalWindow],
+        },
+        organization.default_budgets[1],
+      ],
+    };
     fetchMock.mockImplementation(async () =>
       json({
-        ...organization,
-        default_budgets: [...organization.default_budgets, { budget_id: "created-id", name: "New" }],
+        ...source,
+        default_budgets: [...source.default_budgets, { budget_id: "created-id", name: "New" }],
       }),
     );
-    renderWithProviders(<CustomerBudgetGroups organization={organization} onSaved={onSaved} />);
+    renderWithProviders(<CustomerBudgetGroups organization={source} onSaved={onSaved} />);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     fireEvent.change(limitsFor("Standard").getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
       target: { value: "15" },
     });
+    const primary = within(await openLimitEditor(user, "Standard"));
+    expect(primary.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ year");
+    expect(primary.getByRole("button", { name: "Add limit" })).toBeDisabled();
+    fireEvent.change(primary.getByRole("spinbutton"), { target: { value: "0" } });
+    await user.click(primary.getByRole("button", { name: "Add limit" }));
+    expect(limitsFor("Standard").getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(0);
     await user.click(screen.getByRole("combobox", { name: "Group 1 at the cap" }));
     await user.click(await screen.findByRole("option", { name: "Pause, allow increase requests" }));
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
@@ -225,9 +259,39 @@ describe("CustomerBudgetGroups", () => {
       target: { value: "30" },
     });
     await chooseSelectOption(user, limitsFor("New").getByRole("combobox", { name: "Reset period" }), "/ year");
+    const monthly = within(await openLimitEditor(user, "New"));
+    expect(monthly.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ month");
+    fireEvent.change(monthly.getByRole("spinbutton"), { target: { value: "0" } });
+    await user.click(monthly.getByRole("button", { name: "Add limit" }));
+    const custom = within(await openLimitEditor(user, "New"));
+    fireEvent.change(custom.getByRole("spinbutton"), { target: { value: "5" } });
+    for (const period of ["6days", "2mo", "6mo"]) {
+      fireEvent.change(custom.getByLabelText("Custom period"), { target: { value: period } });
+      expect(custom.getByRole("button", { name: "Add limit" })).toBeDisabled();
+      expect(custom.getByRole("alert")).toHaveTextContent("Use 6d, 2w, 1mo, or 12mo");
+    }
+    for (const period of ["1mo", "30d", "monthly"]) {
+      fireEvent.change(custom.getByLabelText("Custom period"), { target: { value: period } });
+      expect(custom.getByRole("button", { name: "Add limit" })).toBeDisabled();
+    }
+    fireEvent.change(custom.getByLabelText("Custom period"), { target: { value: "7d" } });
+    await user.click(custom.getByRole("button", { name: "Add limit" }));
+    await user.click(limitsFor("New").getAllByRole("button", { name: "Remove limit" })[0]);
     await user.click(screen.getByRole("combobox", { name: "New members join" }));
     await user.click(await screen.findByRole("option", { name: "New", exact: true }));
     await user.click(screen.getByRole("button", { name: "Remove Old" }));
+    await chooseSelectOption(
+      user,
+      limitsFor("New").getAllByRole("combobox", { name: "Reset period" })[0],
+      "Custom period",
+    );
+    const primaryPeriod = limitsFor("New").getAllByRole("textbox", { name: "Custom period" })[0];
+    fireEvent.change(primaryPeriod, { target: { value: "6days" } });
+    expect(primaryPeriod).toBeInvalid();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(onSaved).not.toHaveBeenCalled();
+    fireEvent.change(primaryPeriod, { target: { value: "12mo" } });
+    expect(primaryPeriod).toBeValid();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
     const requests = fetchMock.mock.calls.map(([request]) => {
@@ -245,9 +309,17 @@ describe("CustomerBudgetGroups", () => {
           budget_id: "standard",
           name: "Standard",
           cap_policy: "pause_allow_increase",
-          budget_limits: [{ budget_duration: "1mo", max_budget: 15 }],
+          max_budget: 0,
+          budget_duration: "12mo",
+          budget_limits: [{ ...originalWindow, max_budget: 15 }],
         },
-        { name: "New", cap_policy: "pause_until_reset", max_budget: 30, budget_duration: "12mo" },
+        {
+          name: "New",
+          cap_policy: "pause_until_reset",
+          max_budget: 30,
+          budget_duration: "12mo",
+          budget_limits: [{ max_budget: 5, budget_duration: "7d" }],
+        },
       ],
     });
   });

@@ -34,6 +34,7 @@ export function CustomerBudgetSourceSelect({
   inheritedOption,
   noTemplate = false,
   custom = true,
+  unavailableSelection,
 }: {
   profiles: Organization["default_budgets"];
   value: string;
@@ -44,6 +45,7 @@ export function CustomerBudgetSourceSelect({
   inheritedOption?: { label: string; summary: string };
   noTemplate?: boolean;
   custom?: boolean;
+  unavailableSelection?: { value: string; label: string; summary: string };
 }) {
   const { t } = useTranslation();
   const profileOptions = profiles.map((group) => {
@@ -100,6 +102,7 @@ export function CustomerBudgetSourceSelect({
   ];
   const selection =
     options.find((option) => option.value === value) ??
+    (unavailableSelection?.value === value ? unavailableSelection : undefined) ??
     (value.startsWith("profile:")
       ? { label: t("customerPortal.hierarchy.unknownTemplate", { id: value.slice("profile:".length) }), summary: "" }
       : undefined);
@@ -111,6 +114,11 @@ export function CustomerBudgetSourceSelect({
         </SelectValue>
       </SelectTrigger>
       <SelectContent className="p-1">
+        {unavailableSelection?.value === value && (
+          <SelectItem value={unavailableSelection.value} disabled className="py-3">
+            <LimitOptionContent label={unavailableSelection.label} summary={unavailableSelection.summary} />
+          </SelectItem>
+        )}
         {loading && (
           <SelectItem value="loading" disabled>
             {t("customerPortal.common.loading")}

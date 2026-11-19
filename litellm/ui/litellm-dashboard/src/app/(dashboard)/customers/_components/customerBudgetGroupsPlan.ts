@@ -25,17 +25,21 @@ export function planCustomerBudgetGroups(
   const originals = customerBudgetGroupRows(organization);
   const validation = validateCustomerBudgetGroups(
     { groups, defaultGroupId },
-    originals.map((group) => group.id),
+    organization.default_budgets,
     memberGroups,
   );
   if (!validation.ok) return validation;
   const default_budgets = groups.map((group) => {
     const original = originals.find((row) => row.id === group.id);
+    const originalBudget = organization.default_budgets.find((budget) => budget.budget_id === group.id);
     return {
       ...(original ? { budget_id: original.id } : {}),
       name: group.name.trim(),
       ...(memberGroups && group.capPolicy !== original?.capPolicy ? { cap_policy: group.capPolicy } : {}),
-      ...budgetChanges(customerBudgetGroupValue(group)!, original ? customerBudgetGroupValue(original) : null),
+      ...budgetChanges(
+        customerBudgetGroupValue(group, originalBudget)!,
+        original ? customerBudgetGroupValue(original, originalBudget) : null,
+      ),
     };
   });
   const body: components["schemas"]["BudgetGroupsUpdate"] = {

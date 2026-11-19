@@ -5,8 +5,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CustomerBudgetGroupFields } from "./customerOrganizationForm";
-import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
+import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
+import CustomerBudgetAmountInput from "./CustomerBudgetAmountInput";
+import CustomerBudgetPeriodSelect from "./CustomerBudgetPeriodSelect";
+import CustomerBudgetWindows from "./CustomerBudgetWindows";
+import { CustomerRateLimitInput, rateFields } from "./CustomerRateLimits";
+
+const columns = [
+  ["customerPortal.createDialog.groupColumn", "w-[13%]", "w-[16%]"],
+  ["customerPortal.createDialog.spendLimitLabel", "w-[28%]", "w-[28%]"],
+  ["customerPortal.createDialog.tpmColumn", "w-[8%]", "w-[10%]"],
+  ["customerPortal.createDialog.rpmColumn", "w-[8%]", "w-[10%]"],
+  ["customerPortal.hierarchy.softBudget", "w-[9%]", "w-[10%]"],
+  ["customerPortal.hierarchy.allowedModels", "w-[17%]", "w-[22%]"],
+] as const;
 
 const capOptions = [
   ["pause_until_reset", "pauseUntilReset"],
@@ -50,99 +64,180 @@ export default function CustomerBudgetGroupsTable({
         </h3>
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
-      <div className="space-y-4">
-        {groups.map((group, index) => (
-          <fieldset
-            key={group.id}
-            aria-label={groupName(group, index)}
-            disabled={disabled}
-            className="min-w-0 space-y-5 rounded-lg border p-4"
-          >
-            <div className="flex items-end gap-3">
-              <div className="min-w-0 flex-1 space-y-2">
-                <Label htmlFor={`${id}-name-${group.id}`} className="font-normal text-muted-foreground">
-                  {t("customerPortal.createDialog.groupColumn")}
-                </Label>
-                <Input
-                  id={`${id}-name-${group.id}`}
-                  aria-label={t("customerPortal.createDialog.groupNameLabel", { index: index + 1 })}
-                  value={group.name}
-                  onChange={(event) => onUpdate(group.id, { name: event.target.value })}
-                  className="h-11"
-                />
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={disabled || (memberGroups && groups.length === 1)}
-                onClick={() => onRemove(group.id)}
-                aria-label={t("customerPortal.createDialog.removeGroup", { name: groupName(group, index) })}
-                className="mb-1.5 text-muted-foreground"
-              >
-                <X className="size-3.5" />
-              </Button>
-            </div>
-            <CustomerBudgetCompactFields
-              fields={group}
-              id={`${id}-${group.id}`}
-              disabled={disabled}
-              onChange={(fields) => onUpdate(group.id, fields)}
-            />
-            {memberGroups && (
-              <div className="max-w-sm space-y-2">
-                <Label htmlFor={`${id}-cap-${group.id}`} className="font-normal text-muted-foreground">
-                  {t("customerPortal.createDialog.capColumn")}
-                </Label>
-                <Select
-                  value={group.capPolicy}
-                  disabled={disabled}
-                  onValueChange={(value) => {
-                    if (value === "pause_until_reset" || value === "pause_allow_increase") {
-                      onUpdate(group.id, { capPolicy: value });
-                    }
-                  }}
+      <div className="overflow-hidden rounded-lg border">
+        <Table className="min-w-[70rem] table-fixed" aria-label={title}>
+          <TableHeader className="bg-muted/40">
+            <TableRow className="hover:bg-transparent">
+              {columns.map(([label, memberWidth, globalWidth]) => (
+                <TableHead
+                  key={label}
+                  scope="col"
+                  className={`${memberGroups ? memberWidth : globalWidth} px-3 text-xs font-normal text-muted-foreground`}
                 >
-                  <SelectTrigger
-                    id={`${id}-cap-${group.id}`}
-                    aria-label={t("customerPortal.budgetGroups.atCapLabel", { index: index + 1 })}
-                    className="w-full"
-                  >
-                    <SelectValue>
-                      {t(
-                        group.capPolicy === "pause_allow_increase"
-                          ? "customerPortal.createDialog.pauseRequest"
-                          : "customerPortal.createDialog.pause",
-                      )}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent align="start" className="w-80 max-w-[calc(100vw-2rem)] p-1">
-                    {capOptions.map(([policy, key]) => (
-                      <SelectItem
-                        key={policy}
-                        value={policy}
-                        label={t(`customerPortal.createDialog.${key}`)}
-                        aria-label={t(`customerPortal.createDialog.${key}`)}
-                        className="items-start rounded-md py-3"
+                  {t(label)}
+                </TableHead>
+              ))}
+              {memberGroups && (
+                <TableHead scope="col" className="w-[13%] px-3 text-xs font-normal text-muted-foreground">
+                  {t("customerPortal.createDialog.capColumn")}
+                </TableHead>
+              )}
+              <TableHead className="w-[4%]">
+                <span className="sr-only">{t("customerPortal.createDialog.groupActions")}</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {groups.map((group, index) => (
+              <TableRow
+                key={group.id}
+                aria-label={groupName(group, index)}
+                className="hover:bg-transparent [&>td]:align-top"
+              >
+                <TableCell className="pl-3">
+                  <Input
+                    aria-label={t("customerPortal.createDialog.groupNameLabel", { index: index + 1 })}
+                    disabled={disabled}
+                    value={group.name}
+                    onChange={(event) => onUpdate(group.id, { name: event.target.value })}
+                    className="font-mono text-xs"
+                  />
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1.5 overflow-x-auto">
+                    <CustomerBudgetAmountInput
+                      id={`${id}-budget-${group.id}`}
+                      label={t("customerPortal.createDialog.spendLimitLabel")}
+                      disabled={disabled}
+                      value={group.maxBudget}
+                      onChange={(maxBudget) => onUpdate(group.id, { maxBudget })}
+                      compact
+                    >
+                      <CustomerBudgetPeriodSelect
+                        value={group.budgetDuration}
+                        disabled={disabled}
+                        onChange={(budgetDuration) => onUpdate(group.id, { budgetDuration })}
+                        unavailablePeriods={group.budgetWindows
+                          .filter(({ maxBudget }) => maxBudget.trim() !== "")
+                          .map(({ budget }) => budget.budget_duration)}
+                        compact
+                      />
+                    </CustomerBudgetAmountInput>
+                    <CustomerBudgetWindows
+                      id={`${id}-${group.id}`}
+                      windows={group.budgetWindows}
+                      onChange={(budgetWindows) => onUpdate(group.id, { budgetWindows })}
+                      primaryPeriod={group.maxBudget.trim() ? group.budgetDuration : undefined}
+                      onAdd={(limit) =>
+                        onUpdate(
+                          group.id,
+                          group.maxBudget.trim()
+                            ? { budgetWindows: [...group.budgetWindows, limit] }
+                            : { maxBudget: limit.maxBudget, budgetDuration: limit.budget.budget_duration },
+                        )
+                      }
+                      disabled={disabled}
+                      compact
+                    />
+                  </div>
+                </TableCell>
+                {rateFields.map((field) => (
+                  <TableCell key={field}>
+                    <CustomerRateLimitInput
+                      aria-label={t(`customerPortal.hierarchy.${field}`)}
+                      disabled={disabled}
+                      value={group[field]}
+                      onChange={(event) => onUpdate(group.id, { [field]: event.target.value })}
+                    />
+                  </TableCell>
+                ))}
+                <TableCell>
+                  <CustomerBudgetAmountInput
+                    id={`${id}-soft-${group.id}`}
+                    label={t("customerPortal.hierarchy.softBudget")}
+                    disabled={disabled}
+                    value={group.softBudget}
+                    onChange={(softBudget) => onUpdate(group.id, { softBudget })}
+                  />
+                </TableCell>
+                <TableCell>
+                  <CustomerAllowedModelsSelect
+                    id={`${id}-models-${group.id}`}
+                    value={group.allowedModels}
+                    onChange={(allowedModels) => onUpdate(group.id, { allowedModels })}
+                    disabled={disabled}
+                    showHint={false}
+                  />
+                </TableCell>
+                {memberGroups && (
+                  <TableCell>
+                    <Select
+                      value={group.capPolicy}
+                      disabled={disabled}
+                      onValueChange={(value) => {
+                        if (value === "pause_until_reset" || value === "pause_allow_increase") {
+                          onUpdate(group.id, { capPolicy: value });
+                        }
+                      }}
+                    >
+                      <SelectTrigger
+                        aria-label={t("customerPortal.budgetGroups.atCapLabel", { index: index + 1 })}
+                        className="w-full text-xs"
                       >
-                        <span className="space-y-1 whitespace-normal">
-                          <span className="block font-medium">{t(`customerPortal.createDialog.${key}`)}</span>
-                          <span className="block text-xs leading-relaxed text-muted-foreground">
-                            {t(`customerPortal.createDialog.${key}Help`)}
+                        <SelectValue className="min-w-0">
+                          <span className="truncate">
+                            {t(
+                              group.capPolicy === "pause_allow_increase"
+                                ? "customerPortal.createDialog.pauseRequest"
+                                : "customerPortal.createDialog.pause",
+                            )}
                           </span>
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </fieldset>
-        ))}
-        <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onAdd}>
-          <Plus className="size-4" />
-          {t("customerPortal.createDialog.addGroup")}
-        </Button>
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent align="end" className="w-80 max-w-[calc(100vw-2rem)] p-1">
+                        {capOptions.map(([policy, key]) => (
+                          <SelectItem
+                            key={policy}
+                            value={policy}
+                            label={t(`customerPortal.createDialog.${key}`)}
+                            aria-label={t(`customerPortal.createDialog.${key}`)}
+                            className="items-start rounded-md py-3"
+                          >
+                            <span className="space-y-1 whitespace-normal">
+                              <span className="block font-medium">{t(`customerPortal.createDialog.${key}`)}</span>
+                              <span className="block text-xs leading-relaxed text-muted-foreground">
+                                {t(`customerPortal.createDialog.${key}Help`)}
+                              </span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                )}
+                <TableCell className="px-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={disabled || (memberGroups && groups.length === 1)}
+                    onClick={() => onRemove(group.id)}
+                    aria-label={t("customerPortal.createDialog.removeGroup", { name: groupName(group, index) })}
+                    className="text-muted-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <div className="border-t p-2">
+          <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={onAdd}>
+            <Plus className="size-4" />
+            {t("customerPortal.createDialog.addGroup")}
+          </Button>
+        </div>
       </div>
       {(memberGroups || scope === "organization") && (
         <div className="grid items-center gap-3 rounded-lg bg-muted/40 p-4 sm:grid-cols-[1fr_14rem]">

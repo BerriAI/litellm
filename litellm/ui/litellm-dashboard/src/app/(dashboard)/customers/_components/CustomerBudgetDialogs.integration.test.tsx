@@ -33,7 +33,7 @@ const organization: Organization = {
     tpm_limit: 1000,
     rpm_limit: 10,
     allowed_models: ["configured-model"],
-    budget_limits: [{ max_budget: 1000, budget_duration: "12mo" }],
+    budget_limits: [{ max_budget: 1000, budget_duration: "12mo", reset_at: "2027-01-01T00:00:00Z" }],
   },
 };
 const memberOrganization: Organization = {
@@ -172,6 +172,28 @@ describe("organization budget dialog", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(await writes()[0].clone().json()).toEqual({ budget_id: "standard" });
+  });
+
+  it.each(["9000", ""])("restores the complete saved budget after discarding a window edit %s", async (amount) => {
+    const user = await openBudget("organization");
+    const source = await screen.findByRole("combobox", { name: "Customer organization limits" });
+    await waitFor(() => expect(source).toBeEnabled());
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "200" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: amount },
+    });
+    await chooseSelectOption(user, source, /^Standard/);
+    await chooseSelectOption(user, source, "Enter custom limits instead");
+    expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(100);
+    expect(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveValue(1000);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+      target: { value: "1200" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(await writes()[0].clone().json()).toEqual({
+      budget: { budget_limits: [{ ...organization.budget!.budget_limits![0], max_budget: 1200 }] },
+    });
   });
 });
 

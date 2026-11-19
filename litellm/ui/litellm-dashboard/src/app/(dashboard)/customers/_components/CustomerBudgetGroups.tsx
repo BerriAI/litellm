@@ -87,7 +87,7 @@ export default function CustomerBudgetGroups(props: Props) {
     });
   };
   return (
-    <form onSubmit={save} className="w-full space-y-5">
+    <form onSubmit={save} aria-label={t("customerPortal.budgetGroups.title")} className="w-full space-y-5">
       <fieldset disabled={pending} className="min-w-0">
         <CustomerBudgetGroupsEditor
           memberGroups={!props.global}

@@ -1,6 +1,7 @@
 import type { components } from "@/lib/http/schema";
 
 import {
+  BUDGET_EDITOR_FIELDS,
   budgetEditorFields,
   compactBudgetEditorFields,
   customerBaseBudget,
@@ -105,12 +106,8 @@ export const newCustomerHierarchyFields = (target: CustomerHierarchyCreateTarget
   };
 };
 
-export const BUDGET_FIELDS = ["budgetEnabled", "maxBudget", "softBudget", "budgetDuration", "tpm", "rpm"] as const;
-
 const budgetChanged = (fields: CustomerHierarchyFields, initial: CustomerHierarchyFields): boolean =>
-  BUDGET_FIELDS.some((key) => fields[key] !== initial[key]) ||
-  JSON.stringify(fields.allowedModels) !== JSON.stringify(initial.allowedModels) ||
-  JSON.stringify(fields.budgetWindows) !== JSON.stringify(initial.budgetWindows);
+  BUDGET_EDITOR_FIELDS.some((key) => JSON.stringify(fields[key]) !== JSON.stringify(initial[key]));
 
 const aliasChanges = (initial: string | null | undefined, value: string): { alias?: string | null } =>
   value === (initial ?? "") ? {} : { alias: value.trim() || null };

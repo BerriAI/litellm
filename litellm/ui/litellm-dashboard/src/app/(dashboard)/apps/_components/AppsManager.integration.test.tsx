@@ -1,5 +1,5 @@
 import { chooseAppOption } from "./appTestUtils";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import {
@@ -12,6 +12,7 @@ import {
   testQueryClient,
 } from "../../../../../tests/test-utils";
 import AppsManager from "./AppsManager";
+import type { App } from "./appForms";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -41,6 +42,7 @@ const overallPreset: BudgetGroups["default_budgets"][number] = {
   allowed_models: ["model-a"],
   budget_limits: [{ max_budget: 1200, budget_duration: "12mo" }],
 };
+const yearly = { max_budget: 1200, budget_duration: "12mo", reset_at: "2027-01-01T00:00:00Z" };
 const paginatedResources = Array.from({ length: 30 }, (_, index) => ({
   resource_type: "team",
   resource_id: `team-${index}`,
@@ -74,13 +76,6 @@ beforeEach(() => {
     if (path.endsWith("/apps/app-chat")) return json(configuredApps[0]);
     if (path.endsWith("/app_budget_groups"))
       return json({ default_budgets: overallPresets, budget_groups_revision: "a".repeat(64) });
-    if (path.endsWith("/customer_organization_budget_groups"))
-      return json({ default_budgets: [{ budget_id: "org-standard", name: "Standard", max_budget: 1000 }] });
-    if (path.endsWith("/app_customer_organization_budget_groups"))
-      return json({
-        default_budgets: [{ budget_id: "standard", name: "Tier 1", max_budget: 100 }],
-        revision: "a".repeat(64),
-      });
     if (path.endsWith("/apps") && request.method === "POST") return json(app);
     if (path.endsWith("/apps")) return json(configuredApps);
     if (path.endsWith("/models")) return json({ data: [] });
@@ -90,11 +85,24 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function openAppSettings() {
+async function openAppSettings(settings?: Partial<App>) {
+  if (settings) {
+    resources = [{ ...resource, app_id: app.app_id }];
+    configuredApps = [{ ...app, ...settings }];
+  }
   const user = userEvent.setup();
   render(<AppsManager />);
   await user.click(await screen.findByRole("button", { name: "chat" }));
   return user;
+}
+
+async function saveAppSettings(user: UserEvent, method: "PATCH" | "POST" = "PATCH", index = 0) {
+  await user.click(screen.getByRole("button", { name: "Save app settings" }));
+  await waitFor(() => expect(requests.filter((request) => request.method === method)).toHaveLength(index + 1));
+  return requests
+    .filter((request) => request.method === method)
+    [index].clone()
+    .json();
 }
 
 describe("Gateway app definition", () => {
@@ -125,48 +133,46 @@ describe("Gateway app definition", () => {
     expect(await screen.findByText("Current definition: Teams")).toBeInTheDocument();
   });
 
-  it("should reuse a shared customer budget group when configuring an existing resource", async () => {
-    const user = await openAppSettings();
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), /^Tier 1/);
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "POST")).toBe(true));
-    const expectedSettings = {
-      resource_id: "team-chat",
-      resource_type: "team",
-      default_tier_budget_id: "standard",
-      default_customer_member_budget: null,
-      auto_create_customers: true,
-    };
-    expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject(expectedSettings);
-    expect(requests.some((request) => new URL(request.url).pathname.includes("/tiers"))).toBe(false);
-  });
+  it.each(["POST", "PATCH"] as const)(
+    "saves app settings via %s without changing the relocated organization default",
+    async (method) => {
+      const user = await openAppSettings(method === "PATCH" ? { default_tier_budget_id: "standard" } : undefined);
+      const form = within(await screen.findByRole("form", { name: "Defaults for chat" }));
+      expect(form.queryByRole("combobox", { name: "Budget group" })).not.toBeInTheDocument();
+      const body = await saveAppSettings(user, method);
+      expect(body).not.toHaveProperty("default_tier_budget_id");
+      expect(body).toMatchObject({
+        ...(method === "POST" ? { resource_id: "team-chat", resource_type: "team" } : {}),
+        default_customer_member_budget: null,
+        auto_create_customers: true,
+      });
+      expect(requests.some((request) => new URL(request.url).pathname.includes("/tiers"))).toBe(false);
+    },
+  );
 
   it("changes app and member-default rates without persisting unchanged displayed spend caps", async () => {
-    resources = [{ ...resource, app_id: app.app_id }];
     const budget = {
       max_budget: 150,
       budget_duration: "1mo",
       rpm_limit: 20,
       budget_limits: [{ max_budget: 1200, budget_duration: "12mo" }],
     };
-    configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
-    const user = await openAppSettings();
+    const user = await openAppSettings({ budget, default_customer_member_budget: budget });
     const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
     const member = within(screen.getByRole("region", { name: "Default per-member budget" }));
     expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     fireEvent.change(member.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "30" } });
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
-    const body = await requests.find((request) => request.method === "PATCH")!.json();
+    const body = await saveAppSettings(user);
     expect(body.budget).toEqual({ rpm_limit: 0 });
     expect(body.default_customer_member_budget).toEqual({ rpm_limit: 30 });
   });
 
   it("keeps overall presets linked until a custom edit and excludes presets from member defaults", async () => {
-    resources = [{ ...resource, app_id: app.app_id }];
-    configuredApps = [{ ...app, budget_id: overallPreset.budget_id, budget: { ...overallPreset, max_budget: 250 } }];
-    const user = await openAppSettings();
+    const user = await openAppSettings({
+      budget_id: overallPreset.budget_id,
+      budget: { ...overallPreset, max_budget: 250 },
+    });
     const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
     await user.click(screen.getByRole("combobox", { name: "Default per-member budget" }));
     expect(await screen.findAllByRole("option")).toHaveLength(2);
@@ -179,30 +185,22 @@ describe("Gateway app definition", () => {
     expect(await screen.findByRole("option", { name: /^App Standard/ })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /^Tier 1/ })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(1));
-    const linked = await requests.find((request) => request.method === "PATCH")!.json();
+    const linked = await saveAppSettings(user);
     expect(linked.budget_id).toBe(overallPreset.budget_id);
     expect(linked).not.toHaveProperty("budget");
     await chooseAppOption(user, source, "Enter custom limits instead");
     expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(2));
-    const custom = await requests.filter((request) => request.method === "PATCH")[1].json();
+    const custom = await saveAppSettings(user, "PATCH", 1);
     expect(custom.budget).toEqual({ max_budget: 150, budget_duration: "1mo", rpm_limit: 0 });
     expect(custom).not.toHaveProperty("budget_id");
     expect(custom.default_customer_member_budget).toBeNull();
   });
 
   it("clears an overall preset with No limit without changing member defaults", async () => {
-    resources = [{ ...resource, app_id: app.app_id }];
-    configuredApps = [{ ...app, budget_id: overallPreset.budget_id, budget: overallPreset }];
-    const user = await openAppSettings();
+    const user = await openAppSettings({ budget_id: overallPreset.budget_id, budget: overallPreset });
     await chooseAppOption(user, screen.getByRole("combobox", { name: "Overall app budget" }), /^No limit/);
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
-    const body = await requests.find((request) => request.method === "PATCH")!.json();
+    const body = await saveAppSettings(user);
     expect(body.budget_id).toBeNull();
     expect(body).not.toHaveProperty("budget");
     expect(body.default_customer_member_budget).toBeNull();
@@ -221,21 +219,16 @@ describe("Gateway app definition", () => {
       cap_policy: "pause_allow_increase",
     };
     overallPresets = [overallPreset, selected];
-    resources = [{ ...resource, app_id: app.app_id }];
-    configuredApps = [
-      {
-        ...app,
-        budget_id: overallPreset.budget_id,
-        budget: {
-          ...overallPreset,
-          soft_budget: 50,
-          model_tpm_limit: { "model-a": 100 },
-          model_rpm_limit: { "model-a": 10 },
-          cap_policy: "pause_until_reset",
-        },
+    const user = await openAppSettings({
+      budget_id: overallPreset.budget_id,
+      budget: {
+        ...overallPreset,
+        soft_budget: 50,
+        model_tpm_limit: { "model-a": 100 },
+        model_rpm_limit: { "model-a": 10 },
+        cap_policy: "pause_until_reset",
       },
-    ];
-    const user = await openAppSettings();
+    });
     const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
     const source = overall.getByRole("combobox", { name: "Overall app budget" });
     await chooseAppOption(user, source, /^App Scale/);
@@ -246,8 +239,6 @@ describe("Gateway app definition", () => {
     await chooseAppOption(user, source, /^No limit/);
     await chooseAppOption(user, source, "Enter custom limits instead");
     expect(overall.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(0);
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
     const expected = {
       budget: {
         max_budget: 250,
@@ -261,22 +252,18 @@ describe("Gateway app definition", () => {
         cap_policy: "pause_allow_increase",
       },
       default_customer_member_budget: null,
-      default_tier_budget_id: null,
       auto_create_customers: true,
       customer_margin: null,
     };
-    expect(await requests.find((request) => request.method === "PATCH")!.json()).toEqual(expected);
+    expect(await saveAppSettings(user)).toEqual(expected);
   });
 
   it.each([
     ["Overall app budget", "budget"],
     ["Default per-member budget", "default_customer_member_budget"],
   ])("recalculates the reset when changing a stored spend period in %s", async (title, key) => {
-    resources = [{ ...resource, app_id: app.app_id }];
-    const yearly = { max_budget: 1200, budget_duration: "12mo", reset_at: "2027-01-01T00:00:00Z" };
     const budget = { rpm_limit: 20, budget_limits: [yearly] };
-    configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
-    const user = await openAppSettings();
+    const user = await openAppSettings({ budget, default_customer_member_budget: budget });
     const editor = within(await screen.findByRole("region", { name: title }));
     const periods = editor.getAllByRole("combobox", { name: "Reset period" });
     await user.click(periods[0]);
@@ -288,11 +275,13 @@ describe("Gateway app definition", () => {
     ]);
     await user.keyboard("{Escape}");
     await user.click(periods[1]);
-    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["/ month", "/ year"]);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "/ month",
+      "/ year",
+      "Custom period",
+    ]);
     await user.click(screen.getByRole("option", { name: "/ month", exact: true }));
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
-    const body = await requests.find((request) => request.method === "PATCH")!.json();
+    const body = await saveAppSettings(user);
     expect(body[key]).toEqual({ budget_limits: [{ ...yearly, budget_duration: "1mo", reset_at: null }] });
     expect(body[key === "budget" ? "default_customer_member_budget" : "budget"]).toEqual({});
   });
@@ -303,15 +292,12 @@ describe("Gateway app definition", () => {
     ["Default per-member budget", "default_customer_member_budget", "clear"],
     ["Default per-member budget", "default_customer_member_budget", "remove"],
   ])("removes only the selected window in %s (%s) using %s", async (title, key, action) => {
-    resources = [{ ...resource, app_id: app.app_id }];
-    const yearly = { max_budget: 1200, budget_duration: "12mo", reset_at: "2027-01-01T00:00:00Z" };
     const budget = {
       tpm_limit: 1000,
       rpm_limit: 20,
       budget_limits: [{ max_budget: 100, budget_duration: "1mo" }, yearly],
     };
-    configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
-    const user = await openAppSettings();
+    const user = await openAppSettings({ budget, default_customer_member_budget: budget });
     const editor = within(await screen.findByRole("region", { name: title }));
     await user.click(editor.getAllByRole("combobox", { name: "Reset period" })[1]);
     expect(await screen.findByRole("option", { name: "/ year", exact: true })).toHaveAttribute("aria-disabled", "true");
@@ -330,9 +316,7 @@ describe("Gateway app definition", () => {
       );
       await user.keyboard("{Escape}");
     } else await user.click(editor.getAllByRole("button", { name: "Remove limit" })[0]);
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
-    const body = await requests.find((request) => request.method === "PATCH")!.json();
+    const body = await saveAppSettings(user);
     expect(body[key]).toEqual({ budget_limits: [yearly] });
     expect(body[key === "budget" ? "default_customer_member_budget" : "budget"]).toEqual({});
   });
@@ -340,9 +324,7 @@ describe("Gateway app definition", () => {
   it("should send the app's customer creation switch turned off when the admin unchecks it", async () => {
     const user = await openAppSettings();
     await user.click(await screen.findByRole("checkbox", { name: "This app may create new customers" }));
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "POST")).toBe(true));
-    expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject({
+    expect(await saveAppSettings(user, "POST")).toMatchObject({
       resource_id: "team-chat",
       auto_create_customers: false,
     });
@@ -352,15 +334,11 @@ describe("Gateway app definition", () => {
     const user = await openAppSettings();
     const field = await screen.findByRole("spinbutton", { name: "Surcharge on customer requests (%)" });
     fireEvent.change(field, { target: { value: "2.5" } });
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.filter((request) => request.method === "POST")).toHaveLength(1));
-    expect(await requests.find((request) => request.method === "POST")!.json()).toMatchObject({
+    expect(await saveAppSettings(user, "POST")).toMatchObject({
       customer_margin: 0.025,
     });
     fireEvent.change(field, { target: { value: "" } });
-    await user.click(screen.getByRole("button", { name: "Save app settings" }));
-    await waitFor(() => expect(requests.filter((request) => request.method === "POST")).toHaveLength(2));
-    expect(await requests.filter((request) => request.method === "POST")[1].json()).toMatchObject({
+    expect(await saveAppSettings(user, "POST", 1)).toMatchObject({
       customer_margin: null,
     });
   });

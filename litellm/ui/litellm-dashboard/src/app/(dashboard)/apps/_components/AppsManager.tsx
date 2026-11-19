@@ -21,13 +21,13 @@ import { extractProxyErrorMessage } from "@/lib/http/client";
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { appSurchargeField, appSurchargeValue, type App, type AppResource } from "./appForms";
-import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources, loadApps } from "./appApi";
+import { useManagedApps } from "./useManagedApps";
+import { invalidateAppBudgets } from "./appApi";
 import { applicationRows, grantedApplicationRows } from "./applications";
 import { readsEveryApp, useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
-import AppProfileSelect from "./AppProfileSelect";
 import { useOverallAppBudgetGroups } from "./useAppBudgetGroups";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
 import { uiHref } from "@/utils/uiHref";
@@ -56,18 +56,7 @@ function GranteeApps() {
 
 function ManagedApps() {
   const { t } = useTranslation();
-  const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition });
-  const resourceType = definition.data?.resource_type ?? null;
-  const resources = useQuery({
-    queryKey: appResourcesKey(resourceType),
-    queryFn: () => loadAppResources(resourceType!),
-    enabled: resourceType !== null,
-  });
-  const apps = useQuery({
-    queryKey: ["apps", resourceType],
-    queryFn: () => loadApps(),
-    enabled: resourceType !== null,
-  });
+  const { definition, resourceType, resources, apps } = useManagedApps();
   const [selected, setSelected] = useQueryState("app", parseAsString);
   const resource = resources.data?.find((row) => row.resource_id === selected);
   if (selected && [definition, resources].some((query) => query.isLoading))
@@ -221,7 +210,6 @@ const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default
       ? `profile:${app?.budget_id}`
       : customSource,
     member: budgetEditorFields(app?.default_customer_member_budget),
-    profile: app?.default_tier_budget_id ?? "",
     autoCreate: app?.auto_create_customers ?? true,
     surcharge: appSurchargeField(app?.customer_margin),
   };
@@ -257,7 +245,6 @@ function AppDefaultsForm({
             ? { budget: { ...budget.value, ...budgetPolicyChanges(fields.policy, app?.budget) } }
             : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
           default_customer_member_budget: member.value,
-          default_tier_budget_id: fields.profile || null,
           auto_create_customers: fields.autoCreate,
           customer_margin: margin.value,
         },
@@ -271,11 +258,7 @@ function AppDefaultsForm({
             body: { ...body, resource_id: resource.resource_id, resource_type: resource.resource_type },
           });
       if (response.data) setFields(appDefaultsFields(response.data, profiles));
-      await Promise.all(
-        ["app-resources", "apps", "app", "app-organization", "app-member"].map((key) =>
-          queryClient.invalidateQueries({ queryKey: [key] }),
-        ),
-      );
+      await invalidateAppBudgets(queryClient);
       setSaved(true);
     },
   });
@@ -313,19 +296,6 @@ function AppDefaultsForm({
       <a href={`${uiHref("customers/settings")}?tab=overall-app`} className="text-xs text-primary hover:underline">
         {t("apps.manageOverallProfiles")}
       </a>
-      <section className="space-y-4 border-t pt-6" aria-labelledby="app-org-default-heading">
-        <div className="space-y-1">
-          <h3 id="app-org-default-heading" className="font-semibold">
-            {t("apps.organizationDefault")}
-          </h3>
-          <p className="text-sm text-muted-foreground">{t("apps.defaultProfileHint")}</p>
-        </div>
-        <AppProfileSelect
-          value={fields.profile}
-          onChange={(value) => update("profile", value)}
-          emptyLabel={t("customerPortal.createDialog.noLimit")}
-        />
-      </section>
       <div className="border-t pt-6">
         <AppBudgetEditor
           modelScope={resource}

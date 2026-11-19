@@ -4,12 +4,11 @@ import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
-  BUDGET_FIELDS,
   type CustomerHierarchyFields,
   type CustomerHierarchyEntity,
   type Organization,
 } from "./customerHierarchyForms";
-import type { BudgetEditorFields } from "./customerBudgetForm";
+import { BUDGET_EDITOR_FIELDS, type BudgetEditorFields } from "./customerBudgetForm";
 import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
 import CustomerOrganizationBudgetFields from "./CustomerOrganizationBudgetFields";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
@@ -53,10 +52,8 @@ export default function CustomerHierarchyBudgetFields({
     update("budgetEnabled", false);
   };
   const updateCompact = (next: BudgetEditorFields) => {
-    for (const key of BUDGET_FIELDS) update(key, next[key]);
+    for (const key of BUDGET_EDITOR_FIELDS) update(key, next[key]);
     update("budgetEnabled", true);
-    update("allowedModels", next.allowedModels);
-    update("budgetWindows", next.budgetWindows);
   };
   return (
     <CustomerBudgetEditor

@@ -1,4 +1,5 @@
 import type { components } from "@/lib/http/schema";
+import { isValidBudgetDuration } from "@/utils/budgetUtils";
 
 export type Budget = components["schemas"]["Budget"];
 const budgetKeys = [
@@ -32,6 +33,17 @@ export interface BudgetEditorFields extends BudgetFields {
   budgetWindows: { budget: BudgetWindow; maxBudget: string }[];
 }
 
+export const BUDGET_EDITOR_FIELDS = [
+  "budgetEnabled",
+  "maxBudget",
+  "softBudget",
+  "budgetDuration",
+  "tpm",
+  "rpm",
+  "allowedModels",
+  "budgetWindows",
+] as const satisfies readonly (keyof BudgetEditorFields)[];
+
 const asText = (value: number | null | undefined): string => (value == null ? "" : String(value));
 
 export const budgetFields = (budget: Budget | null | undefined): BudgetFields => ({
@@ -52,7 +64,13 @@ const numericLimit = (raw: string, integer = false): number | null | undefined =
   return number;
 };
 
-export const parseBudget = (fields: BudgetFields): Budget | null => {
+const validPrimaryPeriod = (fields: BudgetFields, original?: Budget | null): boolean => {
+  const period = fields.budgetDuration.trim();
+  return !period || period === original?.budget_duration?.trim() || isValidBudgetDuration(period);
+};
+
+export const parseBudget = (fields: BudgetFields, original?: Budget | null): Budget | null => {
+  if (!validPrimaryPeriod(fields, original)) return null;
   const max = numericLimit(fields.maxBudget);
   const soft = numericLimit(fields.softBudget);
   const tpm = numericLimit(fields.tpm, true);
@@ -80,14 +98,19 @@ export const budgetEditorFields = (budget?: Budget | null): BudgetEditorFields =
 
 export const budgetEditorValue = (fields: BudgetEditorFields, original?: Budget | null) => {
   if (!fields.budgetEnabled) return { ok: true, value: null } as const;
-  const parsed = parseBudget(fields);
+  if (
+    !validPrimaryPeriod(fields, original) ||
+    fields.budgetWindows.some(({ budget }) => !isValidBudgetDuration(budget.budget_duration))
+  ) {
+    return { ok: false, error: "customerPortal.budgetEditor.invalidPeriod" } as const;
+  }
+  const parsed = parseBudget(fields, original);
   if (!parsed) return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
   const windows: BudgetWindow[] = [];
   for (const window of fields.budgetWindows) {
-    const parsedWindow = parseBudget({ ...fields, maxBudget: window.maxBudget });
-    if (parsedWindow?.max_budget == null)
-      return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
-    windows.push({ ...window.budget, max_budget: parsedWindow.max_budget });
+    const maxBudget = numericLimit(window.maxBudget);
+    if (maxBudget == null) return { ok: false, error: "customerPortal.hierarchy.invalidNumber" } as const;
+    windows.push({ ...window.budget, max_budget: maxBudget });
   }
   return {
     ok: true,
@@ -107,9 +130,9 @@ export const compactBudgetEditorValue = (fields: BudgetEditorFields, original?: 
   );
 
 export const permanentBudgetEditorValue = (fields: BudgetEditorFields, original?: Budget | null) => {
-  const parsed = compactBudgetEditorValue(fields);
+  const parsed = compactBudgetEditorValue(fields, original);
   if (!parsed.ok || parsed.value === null) return parsed;
-  const initial = compactBudgetEditorValue({ ...compactBudgetEditorFields(original), budgetEnabled: true });
+  const initial = compactBudgetEditorValue({ ...compactBudgetEditorFields(original), budgetEnabled: true }, original);
   if (!initial.ok || !initial.value) return parsed;
   return { ok: true, value: budgetChanges(parsed.value, initial.value) } as const;
 };

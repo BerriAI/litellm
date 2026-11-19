@@ -12,6 +12,7 @@ import CustomerBudgetGroups from "../_components/CustomerBudgetGroups";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { uiHref } from "@/utils/uiHref";
+import AppOrganizationDefaults from "../../apps/_components/AppOrganizationDefaults";
 
 const budgetGroupTab = parseAsStringLiteral(["organization", "app", "overall-app"])
   .withDefault("organization")
@@ -52,6 +53,7 @@ function Catalog({ catalog }: { catalog: (typeof catalogs)[number] }) {
       {groups.data && <CustomerBudgetGroups global scope={scope} organization={groups.data} onSaved={saved} />}
       {groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
       {groups.isPending && <p>{t("customerPortal.common.loading")}</p>}
+      {scope === "app" && <AppOrganizationDefaults />}
     </>
   );
 }

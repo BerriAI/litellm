@@ -371,7 +371,8 @@ describe("customer app budgets", () => {
       await user.click(source);
       expect(await screen.findByRole("option", { name: /^Tier 1/ })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: /^Enterprise/ })).not.toBeInTheDocument();
-      await user.click(screen.getByRole("option", { name: /^Standard/ }));
+      expect(screen.getByRole("option", { name: /^Standard/ })).toHaveAttribute("aria-disabled", "true");
+      await user.keyboard("{Escape}");
     }
     await user.click(save);
     await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));

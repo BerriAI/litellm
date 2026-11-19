@@ -3,13 +3,8 @@ import { $api } from "@/lib/http/api";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
 import CustomerBudgetCompactFields from "./CustomerBudgetCompactFields";
-import type { BudgetEditorFields } from "./customerBudgetForm";
-import {
-  BUDGET_FIELDS,
-  customerHierarchyFields,
-  type CustomerHierarchyFields,
-  type Organization,
-} from "./customerHierarchyForms";
+import { BUDGET_EDITOR_FIELDS, type BudgetEditorFields } from "./customerBudgetForm";
+import { customerHierarchyFields, type CustomerHierarchyFields, type Organization } from "./customerHierarchyForms";
 
 export default function CustomerOrganizationBudgetFields({
   organization,
@@ -32,12 +27,9 @@ export default function CustomerOrganizationBudgetFields({
       ? originalGroup
       : profiles.some((group) => group.budget_id === fields.templateId);
   const budgetReady = !organization.budget_id || organization.budget_is_shared === false || Boolean(groups.data);
-  const updateCustom = <K extends keyof CustomerHierarchyFields>(key: K, value: CustomerHierarchyFields[K]) => {
-    onChange("budgetEnabled", true);
-    onChange(key, value);
-  };
   const updateBudgetFields = (next: BudgetEditorFields) => {
-    for (const key of [...BUDGET_FIELDS, "allowedModels", "budgetWindows"] as const) updateCustom(key, next[key]);
+    for (const key of BUDGET_EDITOR_FIELDS) onChange(key, next[key]);
+    onChange("budgetEnabled", true);
   };
   const selectSource = (value: string | null) => {
     if (value === "custom") {
@@ -50,7 +42,7 @@ export default function CustomerOrganizationBudgetFields({
     const profile = profiles.find((group) => `profile:${group.budget_id}` === value);
     if (!profile) return;
     const initial = customerHierarchyFields({ kind: "organization", record: organization });
-    for (const key of [...BUDGET_FIELDS, "allowedModels"] as const) onChange(key, initial[key]);
+    for (const key of BUDGET_EDITOR_FIELDS) onChange(key, initial[key]);
     onChange("templateId", profile.budget_id);
   };
   return (

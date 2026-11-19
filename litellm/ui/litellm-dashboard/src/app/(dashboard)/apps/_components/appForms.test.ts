@@ -24,6 +24,8 @@ const preset = {
     { budget_duration: "12mo", max_budget: 5000, reset_at: "2027-07-01T00:00:00Z" },
   ],
 } satisfies Budget;
+const fields = compactBudgetEditorFields(preset);
+const [monthly, yearly] = fields.budgetWindows;
 
 describe("app budget forms", () => {
   it("saves a rate-only budget and preserves zero limits", () => {
@@ -44,28 +46,15 @@ describe("app budget forms", () => {
   it.each([
     { field: "main spend", changes: { maxBudget: "750" }, expected: { max_budget: 750 } },
     { field: "RPM", changes: { rpm: "" }, expected: { rpm_limit: null } },
+    {
+      field: "additional cap to zero",
+      changes: { budgetWindows: [{ ...monthly, maxBudget: "0" }, yearly] },
+      expected: { budget_limits: [{ ...preset.budget_limits[0], max_budget: 0 }, preset.budget_limits[1]] },
+    },
   ])("preserves stored windows, reset dates and model policy when changing $field", ({ changes, expected }) => {
-    expect(compactBudgetEditorValue({ ...compactBudgetEditorFields(preset), ...changes }, preset)).toEqual({
+    expect(compactBudgetEditorValue({ ...fields, ...changes }, preset)).toEqual({
       ok: true,
       value: { ...preset, ...expected },
-    });
-  });
-
-  it("edits an additional cap to zero without changing the main cap, other window or reset dates", () => {
-    const fields = compactBudgetEditorFields(preset);
-    expect(
-      compactBudgetEditorValue(
-        {
-          ...fields,
-          budgetWindows: fields.budgetWindows.map((window, index) =>
-            index === 0 ? { ...window, maxBudget: "0" } : window,
-          ),
-        },
-        preset,
-      ),
-    ).toEqual({
-      ok: true,
-      value: { ...preset, budget_limits: [{ ...preset.budget_limits[0], max_budget: 0 }, preset.budget_limits[1]] },
     });
   });
 
@@ -95,6 +84,19 @@ describe("app budget forms", () => {
       error: "customerPortal.hierarchy.invalidNumber",
     });
   });
+
+  it.each(["6days", "6mo"])("rejects unsupported primary and additional periods %s", (budgetDuration) => {
+    expect(budgetEditorValue({ ...fields, budgetDuration })).toEqual({
+      ok: false,
+      error: "customerPortal.budgetEditor.invalidPeriod",
+    });
+    expect(
+      budgetEditorValue({
+        ...fields,
+        budgetWindows: [{ ...monthly, budget: { ...monthly.budget, budget_duration: budgetDuration } }],
+      }),
+    ).toEqual({ ok: false, error: "customerPortal.budgetEditor.invalidPeriod" });
+  });
 });
 
 describe("permanent budget patches", () => {
@@ -109,38 +111,25 @@ describe("permanent budget patches", () => {
     },
   );
 
-  it("changes only the main cap so backend snapshots retain untouched preset settings", () => {
-    expect(permanentBudgetEditorValue({ ...compactBudgetEditorFields(preset), maxBudget: "750" }, preset)).toEqual({
-      ok: true,
-      value: { max_budget: 750, budget_duration: "1mo" },
-    });
-  });
-
-  it("keeps explicit clears and zero without resending unchanged spend or model rates", () => {
-    const fields = { ...compactBudgetEditorFields(preset), tpm: "", rpm: "0", allowedModels: [], budgetWindows: [] };
-    expect(permanentBudgetEditorValue(fields, preset)).toEqual({
-      ok: true,
-      value: { tpm_limit: null, rpm_limit: 0, allowed_models: null, budget_limits: null },
-    });
-  });
-
-  it("clears main and additional caps independently", () => {
-    const fields = compactBudgetEditorFields(preset);
-    expect(permanentBudgetEditorValue({ ...fields, maxBudget: " " }, preset)).toEqual({
-      ok: true,
-      value: { max_budget: null },
-    });
-    expect(
-      permanentBudgetEditorValue(
-        {
-          ...fields,
-          budgetWindows: fields.budgetWindows.map((window, index) =>
-            index === 0 ? { ...window, maxBudget: " " } : window,
-          ),
-        },
-        preset,
-      ),
-    ).toEqual({ ok: true, value: { budget_limits: [preset.budget_limits[1]] } });
+  it.each([
+    {
+      change: "main cap",
+      edits: { maxBudget: "750" },
+      expected: { max_budget: 750, budget_duration: "1mo" },
+    },
+    {
+      change: "explicit clears and zero",
+      edits: { tpm: "", rpm: "0", allowedModels: [], budgetWindows: [] },
+      expected: { tpm_limit: null, rpm_limit: 0, allowed_models: null, budget_limits: null },
+    },
+    { change: "clear main cap", edits: { maxBudget: " " }, expected: { max_budget: null } },
+    {
+      change: "clear additional cap",
+      edits: { budgetWindows: [{ ...monthly, maxBudget: " " }, yearly] },
+      expected: { budget_limits: [preset.budget_limits[1]] },
+    },
+  ])("sends only $change without resending unchanged policy", ({ edits, expected }) => {
+    expect(permanentBudgetEditorValue({ ...fields, ...edits }, preset)).toEqual({ ok: true, value: expected });
   });
 
   it.each([null, preset])("omits untouched fields for an enabled budget %#", (original) => {
@@ -151,6 +140,14 @@ describe("permanent budget patches", () => {
       value: {},
     });
   });
+
+  it.each(["monthly", "6days"])("preserves the unchanged stored period %s in sparse edits", (budget_duration) => {
+    const original = { ...preset, budget_duration };
+    expect(permanentBudgetEditorValue({ ...compactBudgetEditorFields(original), rpm: "25" }, original)).toEqual({
+      ok: true,
+      value: { rpm_limit: 25 },
+    });
+  });
 });
 
 describe("app surcharge form", () => {
@@ -159,12 +156,9 @@ describe("app surcharge form", () => {
     [" 2.5 ", 0.025],
     ["0", 0],
     ["1000", 10],
+    ["  ", null],
   ])("should send %s percent as the fraction %s", (text, fraction) => {
     expect(appSurchargeValue(text)).toEqual({ ok: true, value: fraction });
-  });
-
-  it("should send an empty field as null so the app falls back to the gateway surcharge", () => {
-    expect(appSurchargeValue("  ")).toEqual({ ok: true, value: null });
   });
 
   it.each(["-1", "1000.1", "two", "Infinity"])("should refuse %s", (text) => {

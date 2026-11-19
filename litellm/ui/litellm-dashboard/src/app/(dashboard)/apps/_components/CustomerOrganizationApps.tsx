@@ -85,7 +85,7 @@ export default function CustomerOrganizationApps({
       {rows.length > 0 && (
         <OrganizationAppsTable
           rows={rows}
-          groups={groups.data?.default_budgets ?? []}
+          groups={groups.displayBudgets}
           onAppSelect={onAppSelect}
           usageLayout={Boolean(usageContext)}
           usageContext={
@@ -309,6 +309,8 @@ function OrganizationApp({
   const app = apps.data?.find((item) => item.app_id === resource.app_id);
   const presetId = appOrganizationPresetId(association.data, app);
   const groups = useAppBudgetGroups(association.data?.budget ? [] : [presetId]);
+  const catalog = groups.data ?? { default_budgets: [], legacy_budgets: [] };
+  const legacyGroup = catalog.legacy_budgets.find((group) => group.budget_id === presetId);
   const ownsPolicy = organizationBudgetSource(row) === "custom";
   const catalogError = (groups.isError || apps.isError) && (
     <ErrorState
@@ -333,8 +335,9 @@ function OrganizationApp({
         organizationId={organizationId}
         organizationAlias={organizationAlias}
         row={row}
-        groups={groups.data?.default_budgets ?? []}
-        inherited={groups.data?.default_budgets.find((group) => group.budget_id === presetId) ?? null}
+        groups={catalog.default_budgets}
+        inherited={groups.displayBudgets.find((group) => group.budget_id === presetId) ?? null}
+        legacyGroup={legacyGroup}
         pending={pending}
         onPendingChange={onPendingChange}
         onClose={onClose}
@@ -356,6 +359,7 @@ function OrganizationAppForm({
   row,
   groups,
   inherited,
+  legacyGroup,
   pending,
   onPendingChange,
   onClose,
@@ -366,6 +370,7 @@ function OrganizationAppForm({
   row: AppOrganization | null;
   groups: NonNullable<ReturnType<typeof useAppBudgetGroups>["data"]>["default_budgets"];
   inherited: import("../../customers/_components/customerBudgetForm").Budget | null;
+  legacyGroup?: NonNullable<ReturnType<typeof useAppBudgetGroups>["data"]>["legacy_budgets"][number];
   pending: boolean;
   onPendingChange: (pending: boolean) => void;
   onClose: () => void;
@@ -458,6 +463,11 @@ function OrganizationAppForm({
           title: t("apps.source"),
           disabled: pending,
           inheritedOption: { label: t("apps.appDefault"), summary: t("apps.appDefaultHint") },
+          unavailableSelection: legacyGroup && {
+            value: `profile:${legacyGroup.budget_id}`,
+            label: t("apps.legacyOrganizationGroup", { name: legacyGroup.name }),
+            summary: t("apps.legacyOrganizationGroupHint"),
+          },
         }}
       >
         <CustomerBudgetCompactFields

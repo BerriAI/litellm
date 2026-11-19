@@ -4,6 +4,7 @@ import {
   budgetEditorFields,
   compactBudgetEditorValue,
   parseBudget,
+  type Budget,
   type BudgetEditorFields,
 } from "./customerBudgetForm";
 
@@ -65,12 +66,16 @@ const validRate = (value: string): boolean => {
 export const normalizeGroupModels = (models: readonly string[] = []): string[] =>
   [...new Set(models.map((model) => model.trim()).filter(Boolean))].sort();
 
-export const customerBudgetGroupValue = (group: CustomerBudgetGroupFields) => {
-  const parsed = compactBudgetEditorValue({ ...group, allowedModels: normalizeGroupModels(group.allowedModels) });
+export const customerBudgetGroupValue = (group: CustomerBudgetGroupFields, original?: Budget) => {
+  const parsed = compactBudgetEditorValue(
+    { ...group, allowedModels: normalizeGroupModels(group.allowedModels) },
+    original,
+  );
   if (!parsed.ok || !parsed.value) return null;
   return {
     ...parsed.value,
-    budget_duration: parsed.value.max_budget != null ? parsed.value.budget_duration : null,
+    budget_duration:
+      parsed.value.max_budget != null || parsed.value.soft_budget != null ? parsed.value.budget_duration : null,
   };
 };
 
@@ -86,10 +91,11 @@ export type CustomerOrganizationFormError =
 
 export function validateCustomerBudgetGroups(
   fields: Pick<CustomerOrganizationFields, "groups" | "defaultGroupId">,
-  existingGroupIds: readonly string[] = [],
+  existingGroups: readonly components["schemas"]["BudgetTemplate"][] = [],
   requireDefault = true,
 ) {
-  const missingDefault = !fields.defaultGroupId && !existingGroupIds.length;
+  const existingGroupIds = existingGroups.map((group) => group.budget_id);
+  const missingDefault = !fields.defaultGroupId && !existingGroups.length;
   const invalidDefault = fields.defaultGroupId && !fields.groups.some((group) => group.id === fields.defaultGroupId);
   if (requireDefault && (missingDefault || invalidDefault)) {
     return { ok: false, error: "defaultRequired" } as const;
@@ -116,7 +122,15 @@ export function validateCustomerBudgetGroups(
   if (fields.groups.some((group) => !validRate(group.tpm) || !validRate(group.rpm))) {
     return { ok: false, error: "invalidRateLimit" } as const;
   }
-  if (fields.groups.some((group) => !customerBudgetGroupValue(group))) {
+  if (
+    fields.groups.some(
+      (group) =>
+        !customerBudgetGroupValue(
+          group,
+          existingGroups.find((original) => original.budget_id === group.id),
+        ),
+    )
+  ) {
     return { ok: false, error: "invalidBudget" } as const;
   }
   return { ok: true } as const;
@@ -135,7 +149,10 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
   const parsed = useCustom ? parseBudget({ ...fields, maxBudget: fields.budgetAmount }) : null;
   if (useCustom && !parsed) return { ok: false, error: "invalidBudget" } as const;
   const budget = parsed
-    ? budgetChanges({ ...parsed, budget_duration: parsed.max_budget != null ? parsed.budget_duration : null })
+    ? budgetChanges({
+        ...parsed,
+        budget_duration: parsed.max_budget != null || parsed.soft_budget != null ? parsed.budget_duration : null,
+      })
     : {};
   const hasCustomBudget = useCustom && Object.keys(budget).length > 0;
   const body = {

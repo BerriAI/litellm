@@ -10,6 +10,7 @@ export default function CustomerBudgetAmountInput({
   disabled,
   placeholder,
   children,
+  compact = false,
   "aria-describedby": describedBy,
 }: {
   id: string;
@@ -19,13 +20,16 @@ export default function CustomerBudgetAmountInput({
   disabled?: boolean;
   placeholder?: string;
   children?: ReactNode;
+  compact?: boolean;
   "aria-describedby"?: string;
 }) {
   const { t } = useTranslation();
   return (
-    <InputGroup>
+    <InputGroup
+      className={`has-[[role=alert]]:h-auto has-[[role=alert]]:flex-wrap ${compact ? "h-8 w-auto shrink-0 shadow-none" : ""}`}
+    >
       <InputGroupAddon>
-        <InputGroupText>$</InputGroupText>
+        <InputGroupText className={compact ? "text-xs" : undefined}>$</InputGroupText>
       </InputGroupAddon>
       <InputGroupInput
         id={id}
@@ -38,6 +42,12 @@ export default function CustomerBudgetAmountInput({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder ?? t("customerPortal.createDialog.noLimit")}
+        className={
+          compact
+            ? "h-8 flex-none appearance-textfield px-1.5 text-xs md:text-xs [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            : undefined
+        }
+        style={compact ? { width: `calc(${Math.max(value.length, value ? 3 : 7)}ch + 0.75rem)` } : undefined}
       />
       {children}
     </InputGroup>
