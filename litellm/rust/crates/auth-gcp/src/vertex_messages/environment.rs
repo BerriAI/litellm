@@ -178,8 +178,11 @@ impl GoogleEnvironment for SystemGoogleEnvironment {
     }
 
     fn gce_credentials(&self) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
-        SdkCredentials::Metadata.build().map_err(|error| {
-            GoogleLoginFailure::new(PythonException::DefaultCredentials, error.to_string())
+        SdkCredentials::Metadata.build().map_err(|_| {
+            GoogleLoginFailure::new(
+                PythonException::DefaultCredentials,
+                super::failure::UNLOADABLE_CREDENTIALS,
+            )
         })
     }
 

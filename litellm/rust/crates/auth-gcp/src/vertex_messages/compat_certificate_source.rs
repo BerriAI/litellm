@@ -126,7 +126,12 @@ pub(crate) fn load(
                 .and_then(|options| options.token_lifetime_seconds),
         )?
         .build()
-        .map_err(|error| GoogleLoginFailure::new(PythonException::InvalidValue, error.to_string())),
+        .map_err(|_| {
+            GoogleLoginFailure::new(
+                PythonException::InvalidValue,
+                super::failure::UNLOADABLE_CREDENTIALS,
+            )
+        }),
         None => Ok(Arc::new(Compat(login))),
     }
 }

@@ -12,7 +12,13 @@ mod explicit_aws;
 mod failure;
 mod source;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use litellm_auth_types::{Error, ErrorDetail, VertexParams};
 use litellm_python_compat::truthy::first_truthy;
@@ -148,6 +154,21 @@ fn value_failure(message: impl Into<String>) -> GoogleLoginFailure {
     GoogleLoginFailure::new(PythonException::Value, message)
 }
 
+/// The text after "Error:" when a failure carries no login failure's message. The SDK's own error
+/// text can quote the credentials, so it is never logged.
+const UNDESCRIBED_FAILURE: &str = "Vertex: the credentials could not be loaded.";
+
+/// Python's `_load_auth_or_earlier_key_file`, which logs a `load_auth` failure as an error on the
+/// `LiteLLM` logger before it raises it. Only the failure's own message is logged after "Error:".
+fn credentials_failed(error: Error) -> Error {
+    let message = litellm_error::find::<GoogleLoginFailure>(&error)
+        .map_or(UNDESCRIBED_FAILURE, |failure| failure.message.as_str());
+    tracing::error!(
+        "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: {message}"
+    );
+    error
+}
+
 impl VertexMessagesAuth {
     pub fn new(environment: Arc<dyn GoogleEnvironment>) -> Self {
         Self {
@@ -172,9 +193,13 @@ impl VertexMessagesAuth {
             (None, Some(file)) => CredentialCacheKey::versioned(&file.path),
             (None, None) => CredentialCacheKey::metadata(),
         };
+        // Python's `load_auth` loads, mints the first token and resolves the project, and logs
+        // any failure of those; a call served cached credentials ran no `load_auth`.
+        let loaded = AtomicBool::new(false);
         let source = self
             .gcp
             .load_keyed(key.clone(), async {
+                loaded.store(true, Ordering::Relaxed);
                 let login = match credentials {
                     Some(text) => self.explicit(text).await,
                     None => adc::default_credentials(&self.environment, adc).await,
@@ -183,20 +208,32 @@ impl VertexMessagesAuth {
                     .map(|login| Arc::new(login) as Arc<dyn GcpTokenSource>)
                     .map_err(Error::from)
             })
-            .await?;
-        let token = tokio::time::timeout(TOKEN_TIMEOUT, self.gcp.token_evicting(&key, &*source))
             .await
-            .map_err(|_| {
-                GoogleLoginFailure::new(
-                    PythonException::Transport,
-                    "The token request did not finish in time.",
-                )
-            })?
-            .map_err(|error| GoogleLoginFailure::token(&error, &*self.environment))?;
+            .map_err(credentials_failed)?;
+        let token = match tokio::time::timeout(
+            TOKEN_TIMEOUT,
+            self.gcp.token_evicting(&key, &*source),
+        )
+        .await
+        {
+            Err(_) => Err(GoogleLoginFailure::new(
+                PythonException::Transport,
+                "The token request did not finish in time.",
+            )),
+            Ok(token) => {
+                token.map_err(|error| GoogleLoginFailure::token(&error, &*self.environment))
+            }
+        }
+        .map_err(|failure| match loaded.load(Ordering::Relaxed) {
+            true => credentials_failed(failure.into()),
+            false => failure.into(),
+        })?;
         let project_id = project
             .or(source.project_id().await.ok())
             .filter(|project| !project.is_empty())
-            .ok_or_else(|| value_failure("Could not resolve project_id"))?;
+            .ok_or_else(|| {
+                credentials_failed(value_failure("Could not resolve project_id").into())
+            })?;
         Ok(VertexLogin { token, project_id })
     }
 
@@ -1403,5 +1440,81 @@ mod tests {
 
         assert_eq!(failure.exception, PythonException::Refresh);
         assert!(!failure.message.contains("secret-assertion"));
+    }
+
+    const LOAD_FAILED: &str = "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: ";
+
+    #[rstest]
+    #[case::credentials_that_do_not_load(
+        json!({"type": "gdch_service_account", "client_email": CLIENT_EMAIL}),
+        None,
+        Some("project"),
+        Some("The service account key is missing token_uri, private_key.")
+    )]
+    #[case::a_first_token_that_is_refused(
+        authorized_user(json!({})),
+        refused(400, json!({"error": "invalid_grant", "error_description": "secret-refresh-token-echo"})),
+        Some("project"),
+        Some("Vertex: Google refused or could not complete the token refresh.")
+    )]
+    #[case::a_project_that_does_not_resolve(authorized_user(json!({})), None, None, Some("Could not resolve project_id"))]
+    #[case::a_login_that_succeeds(authorized_user(json!({})), None, Some("project"), None)]
+    #[tokio::test]
+    async fn a_failed_load_auth_is_logged_as_python_logs_it(
+        #[future] google: Google,
+        #[case] credentials: Value,
+        #[case] answer: Option<(u16, Value)>,
+        #[case] project: Option<&str>,
+        #[case] logged: Option<&str>,
+    ) {
+        let google = google.await;
+        if let Some((status, body)) = answer {
+            google.queue(status, body);
+        }
+        let errors = Errors::default();
+
+        let login = litellm_tracing::Logger::new(errors.clone())
+            .instrument(
+                auth(at(&google)).login(Some(credentials.to_string()), project.map(str::to_owned)),
+            )
+            .await;
+
+        assert_eq!(login.is_ok(), logged.is_none());
+        let records = errors.0.lock().unwrap().clone();
+        assert_eq!(
+            records,
+            logged
+                .map(|error| format!("{LOAD_FAILED}{error}"))
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        assert!(records.iter().all(|record| !record.contains("secret")));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn credentials_served_from_the_cache_log_only_their_own_failures(
+        #[future] google: Google,
+    ) {
+        let google = google.await;
+        let auth = auth(at(&google));
+        let credentials = authorized_user(json!({})).to_string();
+        auth.login(Some(credentials.clone()), Some("project".into()))
+            .await
+            .unwrap();
+        let errors = Errors::default();
+
+        let login = litellm_tracing::Logger::new(errors.clone())
+            .instrument(auth.login(Some(credentials), None))
+            .await;
+
+        assert_eq!(
+            failure(login.unwrap_err()).message,
+            "Could not resolve project_id"
+        );
+        assert_eq!(
+            *errors.0.lock().unwrap(),
+            [format!("{LOAD_FAILED}Could not resolve project_id")]
+        );
     }
 }
