@@ -1,8 +1,8 @@
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
-from itertools import chain, groupby
+from functools import partial, reduce
+from itertools import chain, dropwhile, groupby
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -278,7 +278,7 @@ def _with_kept_parts(block: object, tool_result: Mapping[str, object], parts: _K
     return {**tool_result, "content": [_restored_part(part, parts.get(index)) for index, part in enumerate(blocks)]}
 
 
-def _entry_tool_use_id(entry: tuple[str, _KeptParts]) -> str:
+def _entry_tool_use_id(entry: tuple[str, object]) -> str:
     return entry[0]
 
 
@@ -382,6 +382,112 @@ def keep_url_documents(rewritten: Sequence[object], original: object) -> Sequenc
     )
     restore: Final = partial(_restored_url_document, originals=originals_in_order)
     return [_with_user_blocks(message, restore) for message in rewritten]
+
+
+def _tool_result_error(block: object) -> tuple[tuple[str, bool | None], ...]:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id), "is_error": bool(is_error)}:
+            return ((sanitize_anthropic_tool_use_id(tool_use_id), is_error),)
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)}:
+            return ((sanitize_anthropic_tool_use_id(tool_use_id), None),)
+        case _:
+            return ()
+
+
+def _entry_is_error(entry: tuple[str, bool | None]) -> bool | None:
+    return entry[1]
+
+
+def _with_tool_result_error(block: object, errors: Mapping[str, Iterator[bool | None]]) -> object:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
+            sanitize_anthropic_tool_use_id(tool_use_id) in errors
+        ):
+            is_error: Final = next(errors[sanitize_anthropic_tool_use_id(tool_use_id)], None)
+            return block if is_error is None else {**tool_result, "is_error": is_error}
+        case _:
+            return block
+
+
+def keep_tool_result_errors(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
+    by_id: Final = tuple(sorted(chain.from_iterable(map(_tool_result_error, blocks)), key=_entry_tool_use_id))
+    if not any(is_error is not None for _, is_error in by_id):
+        return rewritten
+    errors_in_order: Final = MappingProxyType(
+        {
+            tool_use_id: iter(tuple(map(_entry_is_error, group)))
+            for tool_use_id, group in groupby(by_id, key=_entry_tool_use_id)
+        }
+    )
+    return [
+        _with_user_blocks(message, partial(_with_tool_result_error, errors=errors_in_order)) for message in rewritten
+    ]
+
+
+_NO_EXTRAS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _is_system_row(message: object) -> bool:
+    match as_str_mapping(message):
+        case {"role": "system"}:
+            return True
+        case _:
+            return False
+
+
+def _is_non_empty_text_block(block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": "text", "text": str(text)}:
+            return bool(text)
+        case _:
+            return False
+
+
+def _has_text(content: object) -> bool:
+    match content:
+        case str():
+            return bool(content)
+        case _:
+            return any(map(_is_non_empty_text_block, _list_items(content)))
+
+
+def _system_row_extras(message: object) -> Mapping[str, object] | None:
+    match as_str_mapping(message):
+        case {"role": "system", "content": content} as row if _has_text(content):
+            return MappingProxyType({key: value for key, value in row.items() if key not in ("role", "content")})
+        case _:
+            return None
+
+
+def _with_system_extras(message: object, extras: Iterator[Mapping[str, object]]) -> object:
+    match as_str_mapping(message):
+        case {"role": "system"} as row:
+            return {**row, **next(extras, _NO_EXTRAS)}
+        case _:
+            return message
+
+
+def keep_system_message_fields(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    in_sequence: Final = dropwhile(_is_system_row, _list_items(original))
+    extras: Final = tuple(extra for message in in_sequence if (extra := _system_row_extras(message)) is not None)
+    if not any(extras) or sum(map(_is_system_row, rewritten)) != len(extras):
+        return rewritten
+    remaining: Final = iter(extras)
+    return [_with_system_extras(message, remaining) for message in rewritten]
+
+
+_Restorer: TypeAlias = Callable[[Sequence[object], object], Sequence[object]]
+_RESTORERS: Final[tuple[_Restorer, ...]] = (
+    keep_non_string_tool_result_texts,
+    keep_url_documents,
+    keep_tool_result_errors,
+    keep_system_message_fields,
+)
+
+
+def keep_original_fields(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    return reduce(lambda kept, restore: restore(kept, original), _RESTORERS, rewritten)
 
 
 def _without_non_string_text(block: object) -> object:
