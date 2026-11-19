@@ -29,8 +29,26 @@ def _continued_response_id(request: Mapping[str, object]) -> str | None:
         # truncation may cut the stored system message, so the prompt stays in `instructions`
         return None
     if isinstance(instructions, str) and instructions and isinstance(previous_response_id, str):
-        return previous_response_id
+        return _upstream_response_id(previous_response_id, request.get("custom_llm_provider"))
     return None
+
+
+def _upstream_response_id(response_id: str, provider: object) -> str | None:
+    """The provider's own id, or None when the id names a provider other than the request's.
+
+    A LiteLLM-encoded id carries a provider that the listing call would follow, so the caller's id must not
+    choose where the request's credentials are sent."""
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+    embedded_provider: Final = decoded.get("custom_llm_provider")
+    upstream_id: Final = decoded.get("response_id")
+    if embedded_provider is None:
+        return response_id
+    if embedded_provider != provider or not upstream_id:
+        return None
+    nested: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(upstream_id)
+    return upstream_id if nested.get("custom_llm_provider") is None else None
 
 
 _CREDENTIAL_KEYS: Final = (
