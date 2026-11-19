@@ -13092,7 +13092,6 @@
         "mode": "chat",
         "output_cost_per_token": 9e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
-        "successor_model": "azure_ai/mistral-large-4-latest",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -54818,6 +54817,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-2",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
@@ -54988,6 +54988,7 @@
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-11-09",
+        "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-2",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
