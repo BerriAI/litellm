@@ -156,6 +156,7 @@ class _FallbackGeneralizations:
 
     def __init__(self) -> None:
         self.rules: list = []
+        self.version: int = 0
         self.routing_rules: tuple = ()
         self.capability_rules: tuple = ()
         self.fill_missing_rules: tuple[_CapabilityRule, ...] = ()
@@ -164,6 +165,7 @@ class _FallbackGeneralizations:
         installed: Final = rules if isinstance(rules, list) else []
         compiled: Final = tuple(kind for kind in map(_compile_rule, installed) if kind is not None)
         self.rules = installed
+        self.version = self.version + 1
         self.routing_rules = tuple(rule for rule in compiled if isinstance(rule, _RoutingRule))
         self.capability_rules = tuple(rule for rule in compiled if isinstance(rule, _CapabilityRule))
         self.fill_missing_rules = tuple(rule for rule in self.capability_rules if rule.fill_missing_for_providers)
@@ -212,6 +214,11 @@ def set_fallback_generalizations(rules: list | None) -> None:
 def get_fallback_generalization_rules() -> list:
     """Return the raw rule list (read-only view for callers/tests)."""
     return _registry.rules
+
+
+def fallback_generalizations_version() -> int:
+    """How many rule lists have been installed, so a cache of the compiled rules knows when to drop them."""
+    return _registry.version
 
 
 def match_routing_generalization(model: str) -> str | None:
