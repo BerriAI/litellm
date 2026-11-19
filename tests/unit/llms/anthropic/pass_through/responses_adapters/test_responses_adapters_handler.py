@@ -70,6 +70,16 @@ def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
         ),
         (
             "System prefix",
+            {
+                "store": False,
+                "truncation": "auto",
+                "extra_body": {"truncation": "disabled", "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
             {"extra_body": {"store": False, "instructions": "Caller prompt"}},
             "Caller prompt",
             "developer",
