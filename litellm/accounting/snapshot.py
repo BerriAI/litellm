@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import ROUTE_CALL_TYPE_METADATA_KEY
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.proxy._types import SpendLogsPayload
@@ -33,6 +34,7 @@ _METADATA_FIELDS: Final = frozenset(
         "internal_call_origin",
         "billed_retry_attempt",
         "user_api_key_customer_usage",
+        ROUTE_CALL_TYPE_METADATA_KEY,
     }
 )
 

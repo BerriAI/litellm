@@ -18,7 +18,7 @@ from litellm.proxy.common_utils.customer_usage import CUSTOMER_USAGE_METADATA_KE
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.model_usage_rollup import date_from_start_time, utc_date_from_start_time
-from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.route_llm_request import spend_endpoint
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
@@ -213,7 +213,7 @@ def _daily_contributions(row: Mapping[str, object], metadata: Mapping[str, objec
     ):
         return ()
     counters: Final = _daily_counters(row, metadata)
-    endpoint: Final = ROUTE_ENDPOINT_MAPPING.get(_text(row.get("call_type")))
+    endpoint: Final = spend_endpoint(_text(row.get("call_type")), metadata)
     shared_key: Final = (
         ("date", date),
         ("api_key", _text(row.get("api_key"))),
