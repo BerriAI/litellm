@@ -682,7 +682,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.db.connection_budget import RUST_RESERVED_CONNECTIONS
+from litellm.proxy.db.connection_budget import rust_connections
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
@@ -1628,11 +1628,13 @@ async def _connect_to_count_stored_values(resources: AsyncExitStack) -> Supports
 async def _own_database(resources: AsyncExitStack, client: PrismaClient | None) -> database_runtime.Database | None:
     if client is None:
         return None
+    connections: Final = rust_connections(os.environ)
     database: Final = await database_runtime.Database.open(
         client,
         os.environ["DATABASE_URL"],
         os.environ.get("DATABASE_URL_READ_REPLICA") or None,
-        RUST_RESERVED_CONNECTIONS,
+        writer_connections=connections.writer,
+        reader_connections=connections.reader,
     )
     resources.push_async_callback(database.aclose)
     return database
@@ -1651,10 +1653,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
 
 def register_prompt_cache_alerts(
-    settings: Mapping[str, object], prisma: PrismaClient | None, resources: AsyncExitStack
+    settings: Mapping[str, object],
+    prisma: PrismaClient | None,
+    resources: AsyncExitStack,
 ) -> None:
     """Off unless `general_settings.prompt_cache_alerts` is true and a database and a shared salt exist. The logger
-    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends."""
+    reads the shared Redis at each callback and leaves the callback lists when the lifespan ends.
+    """
     if settings.get("prompt_cache_alerts") is not True or prisma is None:
         return
     from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
@@ -3855,12 +3860,17 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
 async def customer_accounting_counters(
     ids: CustomerHierarchyIds | None,
     admitted_scopes: tuple[CustomerScopeAuth, ...] | None = None,
+    *,
+    started_at: datetime | None = None,
 ) -> tuple[BudgetCounter, ...]:
     if ids is None:
         return ()
     from itertools import chain
 
-    from litellm.proxy.auth.customer_hierarchy_auth import get_customer_scopes_for_accounting
+    from litellm.proxy.auth.customer_hierarchy_auth import (
+        get_customer_scopes_for_accounting,
+    )
+    from litellm.proxy.management_helpers.customer_hierarchy import utc_datetime
 
     try:
         scopes: Final = (
@@ -3877,7 +3887,7 @@ async def customer_accounting_counters(
             "Unable to load customer budget windows for spend accounting"
         )
         return ()
-    now: Final = datetime.now(timezone.utc)
+    now: Final = utc_datetime(started_at) if started_at is not None else datetime.now(timezone.utc)
     return tuple(
         chain.from_iterable(
             customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in scopes
@@ -3992,7 +4002,8 @@ async def _increment_spend_counters_batched(
     customer_counters: Sequence[BudgetCounter] = (),
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
-    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
+    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments.
+    """
     committed_counter_keys: Final = (
         tuple(counter_key for counter_key in committed_spend_scope.tracked() if has_committed_twin(counter_key))
         if committed_spend_scope is not None and response_cost is not None and response_cost > 0
@@ -4288,7 +4299,8 @@ def _flatten_spend_scopes(
 @dataclass(frozen=True, slots=True)
 class _ReservationCounterUpdate:
     """The reserved counters the direct increment must skip, and the adjustments that settle them on the actual
-    cost, still to be written; both empty when the reservation could not be reconciled and was dropped."""
+    cost, still to be written; both empty when the reservation could not be reconciled and was dropped.
+    """
 
     reserved_counter_keys: frozenset[str] = frozenset()
     pending: tuple[PendingSpendIncrement, ...] = ()
@@ -4751,7 +4763,8 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
 def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
     """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
     new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
-    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
+    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does.
+    """
     settlement: Final = spend_counter_store.increment_many_post_call(
         tuple((item.counter_key, item.increment) for item in pending)
     )
@@ -4763,9 +4776,12 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     return True
 
 
-async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def increment_spend_counters_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """One INCRBYFLOAT+EXPIRE pipeline for every pending counter, returning each counter's new value in order; on
-    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch."""
+    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch.
+    """
     if not spend_counter_store.has_redis:
         return await run_spend_counter_pipeline(pending=pending)
     try:
@@ -4776,9 +4792,12 @@ async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrem
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+async def run_spend_counter_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """The pipeline behind ``increment_spend_counters_pipeline`` without its invalidation: the caller decides what
-    happens to counters whose increment may or may not have landed when the pipeline fails."""
+    happens to counters whose increment may or may not have landed when the pipeline fails.
+    """
     if not pending:
         return ()
     if not spend_counter_store.has_redis:
@@ -5677,6 +5696,9 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=litellm.default_redis_ttl,
     )
     spend_counter_store.attach_redis(connect(redis_cache))
+    from litellm.vector_stores.fallbacks import vector_store_fallback_cooldowns
+
+    vector_store_fallback_cooldowns.attach_redis_cache(redis_cache)
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -7542,6 +7564,8 @@ class ProxyConfig:
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
                         "access_group_rules",
+                        "customer_org_alias_header",
+                        "customer_member_id_header",
                     )
                     if name in typed_general_settings
                 }
@@ -14324,13 +14348,23 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 @router.post(
     "/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
-    responses={200: {"model": TranscriptionResponse, "content": {"text/event-stream": {"schema": {"type": "string"}}}}},
+    responses={
+        200: {
+            "model": TranscriptionResponse,
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
 )
 async def audio_transcriptions(
     request: Request,
@@ -15590,10 +15624,10 @@ from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTIO
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
-    AccessGroupRepository,
     ConfigOverridesRepository,
     InvitationLinkRepository,
     PromptRepository,
@@ -15736,7 +15770,18 @@ def _deployment_with_request_drop_settings(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
     sent_params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    overrides: Final = {name: sent_params[name] for name in _REQUEST_DROP_SETTINGS if sent_params.get(name) is not None}
+    overrides: Final = {
+        name: sent_params[name]
+        for name in (
+            *_REQUEST_DROP_SETTINGS,
+            "store",
+            "extra_body",
+            "previous_response_id",
+            "conversation",
+            "truncation",
+        )
+        if name in sent_params
+    }
     if not overrides:
         return deployment
     resolved_deployment: Final = deployment or {}
@@ -15833,7 +15878,10 @@ async def _try_native_responses_count(
 
 
 async def _provider_token_count(
-    count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+    count_with: Callable[
+        [str, str | None],
+        Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]],
+    ],
     model_to_use: str,
     request_model: str,
     settings: TokenCountSettings,
@@ -15843,7 +15891,8 @@ async def _provider_token_count(
     """Count with the provider, using the token_count_model in its region when one is set.
 
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
-    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    estimate stands in for it and that failure is the answer if the estimate cannot read the request.
+    """
     count_model: Final = settings.count_model
     counting_model: Final = (
         model_to_use
@@ -16360,6 +16409,12 @@ def _deployment_api_base(
     )
 
 
+def _inference_base_model(deployment: _TokenCountDeployment, responses_request: Mapping[str, object]) -> str | None:
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request).get("base_model")
+    ) or _non_empty_str(deployment.get("model_info", {}).get("base_model"))
+
+
 def _deployment_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
@@ -16693,6 +16748,10 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            base_model=_inference_base_model(deployment_view, routed_request),
+            user_continue_message=_inference_params(deployment_view.get("litellm_params", {}), routed_request).get(
+                "user_continue_message"
+            ),
             deployment_params=deployment_defaults,
         )
     )
@@ -21701,6 +21760,10 @@ def _redact_callback_env_vars(env_vars: dict[str, str | None]) -> dict[str, str 
     }
 
 
+def _configured_callback_row(row: Mapping[str, object], list_key: str) -> Mapping[str, object]:
+    return dict(row, source="config") if proxy_config.litellm_settings.owned_by_config(list_key) else row
+
+
 def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     if is_full_admin:
         return entries
@@ -22464,13 +22527,25 @@ async def get_config(
         """
 
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success", environment_variables), "success_callback"
+                )
+            )
 
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "failure", environment_variables), "failure_callback"
+                )
+            )
 
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            _data_to_return.append(
+                _configured_callback_row(
+                    process_callback(_callback, "success_and_failure", environment_variables), "callbacks"
+                )
+            )
 
         configured_callback_names: Final = frozenset(
             _normalize_callback_alias(callback)

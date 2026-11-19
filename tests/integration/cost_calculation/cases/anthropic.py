@@ -7995,7 +7995,101 @@ CLAUDE_FABLE_5_2_THINKING_ADAPTIVE: Final = _with_real_usage(
     ExactExpected(spend=0.0323048, input_cost=0.0005808, output_cost=0.031724, prompt_tokens=66, completion_tokens=721),
 )
 
+CLAUDE_FABLE_5_2_ANTHROPIC_FAST_MODE: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-anthropic_fast_mode",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "dd7504ab4a95 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5-2",
+            "content": [{"type": "text", "text": "scripted answer dd7504ab4a95"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "speed": "fast"},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.06864, input_cost=0.032384, output_cost=0.036256, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_FABLE_5_2_ANTHROPIC_US_INFERENCE: Final = CostTrackingTestCase(
+    name="claude-fable-5-2-anthropic_us_inference",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-2",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "7dcf31884733 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5-2",
+            "content": [{"type": "text", "text": "scripted answer 7dcf31884733"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "inference_geo": "us"},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.037752, input_cost=0.0178112, output_cost=0.0199408, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_FABLE_5_2_ANTHROPIC_FAST_MODE,
+    CLAUDE_FABLE_5_2_ANTHROPIC_US_INFERENCE,
     CLAUDE_SONNET_5_GENERALIZED_ALIAS,
     CLAUDE_SONNET_5_GENERALIZED_ALIAS_STREAM,
     CLAUDE_SONNET_5_SLASH_ALIAS_STREAM,
