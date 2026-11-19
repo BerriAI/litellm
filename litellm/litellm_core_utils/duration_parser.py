@@ -228,6 +228,24 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
     return current_time, tz
 
 
+_SPELLED_UNIT_MAP: Final[dict[str, str]] = {
+    "months": "mo",
+    "month": "mo",
+    "days": "d",
+    "day": "d",
+    "hours": "h",
+    "hour": "h",
+    "minutes": "m",
+    "minute": "m",
+    "mins": "m",
+    "seconds": "s",
+    "second": "s",
+    "secs": "s",
+    "weeks": "w",
+    "week": "w",
+}
+
+
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
     match: Final = re.match(r"(\d+)([a-z]+)", duration)
@@ -239,7 +257,7 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     try:
         unit = _extract_from_regex(duration)[1] or spelled_unit
     except ValueError:
-        unit = spelled_unit
+        unit = _SPELLED_UNIT_MAP.get(spelled_unit, spelled_unit)
     if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
         return value, spelled_unit
     return value, unit
