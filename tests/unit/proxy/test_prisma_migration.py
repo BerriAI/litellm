@@ -2,6 +2,7 @@ import os
 import sys
 from importlib.machinery import ModuleSpec
 from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -50,7 +51,9 @@ class TestPrismaMigration:
 
         mock_subprocess_run.assert_not_called()
 
-    @patch("litellm.proxy.prisma_migration.subprocess.run")  # test-quality-ok: the spawned argv is the behavior under test
+    @patch(
+        "litellm.proxy.prisma_migration.subprocess.run"
+    )  # test-quality-ok: the spawned argv is the behavior under test
     @patch("litellm.proxy.prisma_migration.run_server")  # test-quality-ok: run_server boots the whole proxy
     def test_prisma_generate_runs_through_the_module_when_the_cli_is_not_on_path(
         self, mock_run_server: MagicMock, mock_subprocess_run: MagicMock, tmp_path: Path
@@ -64,7 +67,9 @@ class TestPrismaMigration:
 
         assert mock_subprocess_run.call_args.args[0] == (sys.executable, "-m", "prisma", "generate")
 
-    @patch("litellm.proxy.prisma_migration.subprocess.run")  # test-quality-ok: the spawned argv is the behavior under test
+    @patch(
+        "litellm.proxy.prisma_migration.subprocess.run"
+    )  # test-quality-ok: the spawned argv is the behavior under test
     @patch("litellm.proxy.prisma_migration.run_server")  # test-quality-ok: run_server boots the whole proxy
     def test_prisma_generate_runs_the_console_script_when_it_is_on_path(
         self, mock_run_server: MagicMock, mock_subprocess_run: MagicMock, tmp_path: Path
@@ -81,7 +86,9 @@ class TestPrismaMigration:
 
         assert mock_subprocess_run.call_args.args[0] == ("prisma", "generate")
 
-    @patch("litellm.proxy.prisma_migration.subprocess.run")  # test-quality-ok: the spawned argv is the behavior under test
+    @patch(
+        "litellm.proxy.prisma_migration.subprocess.run"
+    )  # test-quality-ok: the spawned argv is the behavior under test
     @patch("litellm.proxy.prisma_migration.run_server")  # test-quality-ok: run_server boots the whole proxy
     def test_prisma_generate_is_skipped_when_the_prisma_package_is_not_writable(
         self, mock_run_server: MagicMock, mock_subprocess_run: MagicMock
@@ -104,7 +111,7 @@ class TestPrismaMigration:
     def test_prisma_package_is_writable_only_when_every_package_dir_is(
         self, locations: tuple[str, ...], writable: frozenset[str], expected: bool
     ) -> None:
-        spec = ModuleSpec("prisma", None, is_package=True)
+        spec: Final = ModuleSpec("prisma", None, is_package=True)
         spec.submodule_search_locations = list(locations)
 
         assert (
@@ -124,7 +131,7 @@ class TestPrismaMigration:
         missing_dir: Path = tmp_path / "missing"
 
         def spec_at(location: Path) -> ModuleSpec:
-            spec = ModuleSpec("prisma", None, is_package=True)
+            spec: Final = ModuleSpec("prisma", None, is_package=True)
             spec.submodule_search_locations = [str(location)]
             return spec
 
