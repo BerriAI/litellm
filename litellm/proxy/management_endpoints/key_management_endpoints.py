@@ -27,18 +27,15 @@ from typing import (
     Literal,
     Optional,
     Protocol,
-    SupportsIndex,
-    SupportsInt,
     TypeVar,
     cast,
-    runtime_checkable,
 )
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import Buffer, ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -55,6 +52,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     attribute_or_none,
     has_attributes,
+    int_of,
     require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -397,19 +395,6 @@ def _user_table(prisma_client: PrismaClient) -> TableActions[_UserRowLike]:
 def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialItem]:
     return cast(  # cast-ok: the rotation loop reads and rewrites these rows through CredentialItem names only
         "TableActions[CredentialItem]", CredentialsRepository(prisma_client).table
-    )
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _int_of(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
     )
 
 
@@ -7708,7 +7693,7 @@ async def key_aliases(
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
         count_rows: Final = await query_raw_rows(prisma_client.db, count_sql, *query_params)
-        total_count: Final = _int_of(count_rows[0]["count"]) if count_rows else 0
+        total_count: Final = int_of(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
         limit_idx: Final = len(aliases_params) - 1

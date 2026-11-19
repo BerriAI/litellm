@@ -9,16 +9,15 @@ import os
 from collections.abc import Mapping, MutableMapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, SupportsIndex, SupportsInt, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import TypeAdapter
-from typing_extensions import Buffer
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, iter_items
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, int_of, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
@@ -86,19 +85,6 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _int_of(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 class _UserBatchLister(Protocol):
@@ -377,7 +363,7 @@ async def create_batch(
                 )
             _create_batch_data["output_expires_after"] = {
                 "anchor": "created_at",
-                "seconds": _int_of(_JSON_VALUE_ADAPTER.validate_python(enforced_batch_expiry["seconds"])),
+                "seconds": int_of(_JSON_VALUE_ADAPTER.validate_python(enforced_batch_expiry["seconds"])),
             }
 
         input_file_id: Final = _create_batch_data.get("input_file_id", None)

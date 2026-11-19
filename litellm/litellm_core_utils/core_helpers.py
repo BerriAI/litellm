@@ -8,11 +8,26 @@ import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, overload, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    Protocol,
+    SupportsIndex,
+    SupportsInt,
+    TypeVar,
+    cast,
+    overload,
+    runtime_checkable,
+)
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
+from typing_extensions import (
+    Buffer,
+    TypeIs,  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -223,6 +238,19 @@ def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shap
         return value
     missing: Final = next(name for name in names if not hasattr(value, name))
     raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def int_of(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
 
 
 class KeywordArguments(Protocol):

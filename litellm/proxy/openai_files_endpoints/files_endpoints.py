@@ -19,12 +19,9 @@ from typing import (
     Final,
     NoReturn,
     Protocol,
-    SupportsIndex,
-    SupportsInt,
     TypedDict,
     cast,
     get_args,
-    runtime_checkable,
 )
 
 import httpx
@@ -40,7 +37,7 @@ from fastapi import (
     status,
 )
 from pydantic import TypeAdapter
-from typing_extensions import Buffer, ReadOnly
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -50,7 +47,7 @@ from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model, sh
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes, int_of
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
@@ -202,19 +199,6 @@ _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
-
-
-@runtime_checkable
-class _SupportsTrunc(Protocol):
-    def __trunc__(self) -> int: ...
-
-
-def _int_of(value: object) -> int:
-    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
-        return int(value)
-    raise TypeError(
-        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
-    )
 
 
 class _CarriesPrismaClient(Protocol):
@@ -943,7 +927,7 @@ async def create_file(
                 )
             expires_after = FileExpiresAfter(
                 anchor="created_at",
-                seconds=_int_of(_JSON_VALUE_ADAPTER.validate_python(enforced_file_expiry["seconds"])),
+                seconds=int_of(_JSON_VALUE_ADAPTER.validate_python(enforced_file_expiry["seconds"])),
             )
 
         verbose_proxy_logger.debug("create_file expires_after: %s", expires_after)
