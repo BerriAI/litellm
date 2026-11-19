@@ -6,14 +6,34 @@
 - Test mounting and server lifecycle through public HTTP behavior. Test endpoint semantics in the owning crate
 - Standalone and in front of Python serve the same native app, built by `native` in `src/main.rs`. In front of Python the only addition is `admit` (`src/admit/mod.rs`) around all of it, so never give one mode a layer the other lacks
 - `admit` is the only thing that sends a request to Python. It sees each request before any layer, and every method and path it admits must have a native route, because a request it admits that no route takes gets the native 404 and is never forwarded to Python
-- `Admit` is built once from the config the native app is built from, and judges each request by its route and its caller, where only the master key is checked. A request that passes is answered natively. It does not judge the config's settings or the request's headers and body yet, so a setting or parameter only Python honors is served natively. Those judges, and a config Python can reload from its database, come in a later change, and forwarding must not be turned on for users before it
+- What `admit` leaves to Python is decided by the rules under Admit below
+
+## Admit
+- A request is admitted only when nothing it touches is unjudged. Every other request goes to Python as the client sent it, with why in `x-litellm-gateway`
+- The decision is pure. `survey.rs` turns the config into findings, `plan.rs` holds them and answers for one request, and `request.rs` finds what a request carries. None of them does IO or reads the environment. `mod.rs` is the only part that does: it looks up what the config does not say (the router's deployments, whether there is a database, which environment switches are set), checks the caller and reads the body
+- A finding is one setting the native app does not honor as Python does, with the scope it leaves to Python
+  - `Everything`, for a setting that reaches every request, as a callback or `custom_auth` does
+  - `Group`, for a deployment's own setting or provider. It leaves that model group and every group that can fall back to it, and no other group
+  - `Asking`, for a setting that only matters to a request carrying a trait, as an unset `drop_params` only matters to a coding agent
+- Each config section in `survey.rs` is destructured field by field, so a new config field does not compile until it is honored (`field: _`) or named as a finding. A key the config types do not name is always a finding. Never add a catch-all `..`
+- A setting is honored when the native app reads it as Python does, or when it only shapes what `admit` never admits: another route, or a caller the master key does not authenticate
+- Rules exist only for what the native app lacks. Porting a feature deletes its finding or its trait in the same change, and finding a new gap adds one. Never keep a rule for something the native app already does as Python does
+- Forward only what is opt-in and can be told from the config or the request before any side effect. What sits on the default path has to be ported, and its finding is the list of what still blocks a config from being served natively
+- `MESSAGES_PROVIDERS` in `survey.rs` is the list of providers the native `/v1/messages` has been compared with Python on. Add a provider only with a live comparison
+- A trait in `request.rs` is found from the request alone, and `Trait::is_read` says whether the native app reads it as Python does unless a finding names it. A trait the native app never reads needs no finding
+- A request trait that is admitted only because a setting is refused is tied to that setting. Session headers are admitted because no callback, agent or database reads them, so the change that makes callbacks native has to emit the traits it does not handle yet
+- A model the config does not name is left to Python, which also resolves wildcards, deployment ids and aliases the gateway does not
+- Checks run cheapest first: the settings that leave everything, the route, the caller, the headers, then the body. The body is read only when every earlier check passed
+- The body is parsed once. `admit` judges the parsed object by its keys and hands it to the route as the `JsonObject` extension, so the route does not parse it again. Only an admitted request carries it. Whether each value has the right type is left to the route
+- Boot logs every finding with its setting and its scope, and each refusal logs what it was over at debug. The header keeps the short reason, never a setting name
+- Not judged yet: config Python holds in its database (a database leaves everything to Python), CLI flags Python was started with, a Redis only `REDIS_*` configures, and environment variables outside `Switch`
 
 ## Resources
 - `Resources::build` (`src/resources.rs`) makes what every part is built from, once per config: the environment (the config's `environment_variables` in front of the process environment), the `SecretResolver` over it, the HTTP client config and the inference `CoreResources` with the client pool. Inference, Redis and the database each take what they need from it. Never reach into one part for another part's pool, config or secrets, and never build a second environment overlay
 - A setting that can come from the environment, the secret manager or OIDC is read through `resources.secrets`. `resources.environment` is only for what Python reads straight from `os.environ`
 
 ## State
-- `AppState::build` (`src/state.rs`) builds `Resources` and then what both modes share once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
+- `AppState::build` (`src/state.rs`) builds `Resources` and hands them to `AppState::over`, which builds what both modes share once at boot: inference, the Redis clients and the database pools. `router` takes it and hands it to routes with `with_state`, and a handler or middleware takes the part it needs with `State<RedisClients>` or `State<Option<Pools>>`, which `FromRef` clones out of it. Never build a store inside a route and never give one mode a store the other lacks
 - In front of Python the config is the local YAML file Python loads, which the supervisor names in `LITELLM_FORWARD_CONFIG`. When Python loads no local file, `load_config` cannot load the one it names, or the native app cannot be built from it, `native_state` in `src/main.rs` builds the state from `Config::default()`, so only the environment's `REDIS_*` and `DATABASE_*` are seen, and `Admit::unconfigured` leaves every request to Python. Never fail boot on that file or on what it sets, because the gateway exiting stops Python too. Config stored in the database is not read yet
 
 ## Host

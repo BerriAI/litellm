@@ -20,17 +20,25 @@ pub struct AppState {
 
 impl AppState {
     pub async fn build(config: &Config, environment: &Environment) -> Result<Self, Error> {
-        let resources = Resources::build(config)?;
-        let inference = crate::build_inference(config, &resources).await?;
-        let redis = crate::redis::connect(config, &resources).await?;
+        Self::over(config, environment, &Resources::build(config)?).await
+    }
+
+    /// The state `config` describes, built from the `resources` made for it.
+    pub async fn over(
+        config: &Config,
+        environment: &Environment,
+        resources: &Resources,
+    ) -> Result<Self, Error> {
+        let inference = crate::build_inference(config, resources).await?;
+        let redis = crate::redis::connect(config, resources).await?;
         let database = db::connect(config, &resources.secrets).await?;
-        let entitlements = Arc::new(build_license(config, environment, &resources).await);
+        let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {
             inference,
             redis,
             database,
             entitlements,
-            environment: resources.environment,
+            environment: resources.environment.clone(),
         })
     }
 

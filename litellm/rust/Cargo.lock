@@ -4043,6 +4043,7 @@ dependencies = [
  "litellm-inference-messages",
  "litellm-license",
  "litellm-llms",
+ "litellm-llms-types",
  "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-redis-client",
