@@ -23,12 +23,12 @@ from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
 from types import FunctionType, MappingProxyType, MethodType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
 
 from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
 from openai import Stream as OpenAIStream
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import AllowInfNan, BaseModel, JsonValue, NonNegativeFloat, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
@@ -691,12 +691,12 @@ _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
-_AGENT_PRICE: Final = TypeAdapter(float)
+_AGENT_PRICE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[NonNegativeFloat, AllowInfNan(False)])
 
 
 @dataclass(frozen=True, slots=True)
 class A2AAgentBilling:
-    agent_id: str
+    agent_id: str | None
     cost_per_query: object
 
 
@@ -1625,7 +1625,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if logged_params is not self.litellm_params:
             self.model_call_details["litellm_params"] = {**logged_params, "custom_llm_provider": provider}
 
-    def bill_as_a2a_agent(self, agent_id: str, cost_per_query: object) -> None:
+    def bill_as_a2a_agent(self, agent_id: str | None, cost_per_query: object) -> None:
         self.a2a_agent_billing = A2AAgentBilling(agent_id=agent_id, cost_per_query=cost_per_query)
         self.resume_billing_as_a2a_agent()
 
@@ -1635,7 +1635,8 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         self.a2a_agent_cost_per_query = billing.cost_per_query
         self.a2a_agent_id = billing.agent_id
-        self.model_call_details["agent_id"] = billing.agent_id
+        if billing.agent_id is not None:
+            self.model_call_details["agent_id"] = billing.agent_id
 
     def stop_billing_as_a2a_agent(self) -> None:
         if self.a2a_agent_id is not None:

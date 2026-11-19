@@ -880,22 +880,23 @@ async def test_route_a2a_bridge_agent_price_gets_the_proxys_discount_and_margin(
 
 @respx.mock
 @pytest.mark.parametrize(
-    ("price", "expected_cost"),
-    [({"cost_per_query": "five cents"}, None), ({"cost_per_query": ""}, None), ({"cost_per_query": "nan"}, 0.0)],
+    "cost_per_query",
+    ["five cents", "", "nan", float("inf"), -0.05],
+    ids=["words", "empty", "nan", "inf", "negative"],
 )
 async def test_route_a2a_bridge_agent_with_an_unusable_price_still_answers(
-    httpx_transport: None, price: Mapping[str, object], expected_cost: float | None
+    httpx_transport: None, cost_per_query: object
 ) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
         return_value=httpx.Response(200, json=AGENT_REPLY)
     )
 
     cost, response, logging_obj = await _billed_chat_call(
-        _registry_with(_priced_dbx_agent("odd-price", price)), "odd-price"
+        _registry_with(_priced_dbx_agent("odd-price", {"cost_per_query": cost_per_query})), "odd-price"
     )
 
     assert response.choices[0].message.content == "pong"
-    assert cost == expected_cost
+    assert cost is None
     header_values: Final = cost_headers(response_cost=cost, litellm_logging_obj=logging_obj).values()
     assert all(math.isfinite(float(value)) for value in header_values if value not in (None, "None"))
 
@@ -973,7 +974,10 @@ class _SpendRowCapture(CustomLogger):
 
 
 async def _logged_spend_row(
-    agent: AgentResponse, stream: bool, monkeypatch: pytest.MonkeyPatch
+    agent: AgentResponse,
+    stream: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caller_metadata: Mapping[str, object] = MappingProxyType({}),
 ) -> tuple[SpendLogsPayload, str | None]:
     row: Final[asyncio.Future[SpendLogsPayload]] = asyncio.get_running_loop().create_future()
     capture: Final = _SpendRowCapture(row)
@@ -982,7 +986,7 @@ async def _logged_spend_row(
     data: Final = {
         "model": f"a2a/{agent.agent_name}",
         "messages": [{"role": "user", "content": "ping"}],
-        "metadata": {"user_api_key_hash": "key-hash"},
+        "metadata": {"user_api_key_hash": "key-hash", **caller_metadata},
         "litellm_logging_obj": _proxy_logging_obj(stream=stream),
         "stream": stream,
     }
@@ -1017,6 +1021,72 @@ async def test_route_a2a_bridge_per_query_agent_streamed_call_bills_the_same_as_
     assert streamed_text == plain_text == "pong"
     assert (streamed_row["spend"], streamed_row["agent_id"]) == (pytest.approx(0.05), "per-query-id")
     assert (plain_row["spend"], plain_row["agent_id"]) == (pytest.approx(0.05), "per-query-id")
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-query", PER_QUERY_PRICE), _priced_url_agent("url-per-query", PER_QUERY_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agent_call_from_a_caller_agent_bills_the_agent_and_keeps_the_caller_on_the_spend_row(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch, agent: AgentResponse
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(200, json=A2A_REPLY))
+
+    row, _ = await _logged_spend_row(agent, False, monkeypatch, {"agent_id": "caller-agent-id"})
+
+    assert (row["spend"], row["agent_id"]) == (pytest.approx(0.05), "caller-agent-id")
+
+
+@respx.mock
+async def test_route_a2a_failed_agent_call_from_a_caller_agent_leaves_the_caller_on_the_failure_row(
+    httpx_transport: None,
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(500, json={"error_code": "INTERNAL_ERROR", "message": "agent down"})
+    )
+    logging_obj: Final = _proxy_logging_obj()
+    data: Final = {
+        "model": "a2a/per-query",
+        "messages": [{"role": "user", "content": "ping"}],
+        "metadata": {"user_api_key_hash": "key-hash", "agent_id": "caller-agent-id"},
+        "litellm_logging_obj": logging_obj,
+    }
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)),
+    ):
+        with pytest.raises(litellm.InternalServerError):
+            await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    assert "agent_id" not in _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
+
+
+@respx.mock
+async def test_route_a2a_url_agent_call_leaves_the_agent_url_in_the_request_post_call_hooks_read(
+    httpx_transport: None,
+) -> None:
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(200, json=A2A_REPLY))
+    data: Final = {
+        "model": "a2a/url-per-query",
+        "messages": [{"role": "user", "content": "ping"}],
+        "metadata": {"user_api_key_hash": "key-hash"},
+        "litellm_logging_obj": _proxy_logging_obj(),
+    }
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+        _registry_with(_priced_url_agent("url-per-query", PER_QUERY_PRICE)),
+    ):
+        await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    assert data["api_base"] == AGENT_URL
+    assert "cost_per_query" not in data
 
 
 @respx.mock

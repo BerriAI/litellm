@@ -37,6 +37,7 @@ _CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
 _CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 _PER_SECOND_PRICES: Final = frozenset({"cost_per_second", "input_cost_per_second", "output_cost_per_second"})
 _PROXY_HEADER_PREFIX: Final = "x-litellm-"
+_REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 
 
 def _agent_extra_headers(agent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
@@ -197,11 +198,9 @@ async def route_a2a_agent_request(
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     _bill_as_agent(data, agent, litellm_params)
-    verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, card_params["url"])
-    return _call_route(
-        route_type,
-        {**data, **_agent_prices_the_client_left_unset(litellm_params, data), "api_base": card_params["url"]},
-    )
+    data["api_base"] = card_params["url"]
+    verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
+    return _call_route(route_type, {**data, **_agent_prices_the_client_left_unset(litellm_params, data)})
 
 
 def _bridge_agent_request(
@@ -222,12 +221,20 @@ def _client_sets_price(data: Mapping[str, object]) -> bool:
     )
 
 
+def _caller_names_an_agent(data: Mapping[str, object]) -> bool:
+    return any(
+        _OBJECT_MAPPING.validate_python(data[key]).get("agent_id")
+        for key in _REQUEST_METADATA_KEYS
+        if isinstance(data.get(key), Mapping)
+    )
+
+
 def _bill_as_agent(data: Mapping[str, object], agent: AgentResponse, litellm_params: Mapping[str, object]) -> None:
     logging_obj: Final = data.get("litellm_logging_obj")
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return
     logging_obj.bill_as_a2a_agent(
-        agent_id=agent.agent_id,
+        agent_id=None if _caller_names_an_agent(data) else agent.agent_id,
         cost_per_query=None if _client_sets_price(data) else litellm_params.get("cost_per_query"),
     )
 
