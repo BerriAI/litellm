@@ -261,12 +261,14 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
       <p className="text-xs text-muted-foreground">{t("apps.defaultProfileHint")}</p>
       <div className="grid gap-6 lg:grid-cols-2">
         <AppBudgetEditor
+          modelScope={resource}
           title={t("apps.appBudget")}
           id="app-budget"
           fields={fields.budget}
           onChange={(value) => update("budget", value)}
         />
         <AppBudgetEditor
+          modelScope={resource}
           title={t("apps.memberDefault")}
           id="app-member"
           fields={fields.member}

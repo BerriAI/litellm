@@ -468,6 +468,7 @@ function OrganizationAppForm({
         }}
       >
         <CustomerBudgetCompactFields
+          modelScope={resource}
           fields={fields.budget}
           original={original}
           onChange={(value) => update("budget", value)}
@@ -492,6 +493,7 @@ function OrganizationAppForm({
         </div>
         {fields.member.budgetEnabled && (
           <CustomerBudgetCompactFields
+            modelScope={resource}
             fields={fields.member}
             original={row?.customer_member_budget_id ? row.effective_customer_member_budget : null}
             onChange={(value) => update("member", value)}

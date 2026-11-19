@@ -8,6 +8,7 @@ import { CustomerBudgetAdvancedFields } from "./CustomerBudgetFields";
 import type { Budget } from "./customerBudgetForm";
 import CustomerBudgetWindows from "./CustomerBudgetWindows";
 import { CustomerRateLimitControls } from "./CustomerRateLimits";
+import type { CustomerModelScope } from "./customerModelOptions";
 
 export default function CustomerBudgetCompactFields({
   fields,
@@ -15,12 +16,14 @@ export default function CustomerBudgetCompactFields({
   onChange,
   disabled,
   id,
+  modelScope,
 }: {
   fields: BudgetEditorFields;
   original?: Budget | null;
   onChange: (fields: BudgetEditorFields) => void;
   disabled: boolean;
   id: string;
+  modelScope?: CustomerModelScope;
 }) {
   const { t } = useTranslation();
   const periods = CALENDAR_BUDGET_DURATIONS;
@@ -89,6 +92,7 @@ export default function CustomerBudgetCompactFields({
             onChange={(budgetWindows) => onChange({ ...fields, budgetWindows })}
           />
           <CustomerBudgetAdvancedFields
+            modelScope={modelScope}
             idPrefix={id}
             fields={fields}
             disabled={disabled}

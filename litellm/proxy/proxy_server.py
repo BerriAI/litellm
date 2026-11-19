@@ -13150,6 +13150,27 @@ async def _key_model_listing(
     )
 
 
+async def accessible_model_names(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+
+    listing: Final = await _key_model_listing(
+        auth,
+        await request_caller_aliases(auth),
+        await _listing_hidden_names(None),
+        include_wildcard_routes=True,
+        offered_model_names=llm_router.registry().names(team_id=auth.team_id) if llm_router else (),
+    )
+
+    async def allowed(model: str) -> bool:
+        try:
+            await can_key_call_resolved_model(model, None, auth, llm_router)
+        except ModelAccessDeniedProxyException:
+            return False
+        return True
+
+    return tuple([row["id"] for row in listing.rows if await allowed(row["id"])])
+
+
 async def codex_catalog_rows_for_key(user_api_key_dict: UserAPIKeyAuth) -> tuple[CodexCatalogRow, ...]:
     listing: Final = await _key_model_listing(
         user_api_key_dict,

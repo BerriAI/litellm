@@ -217,6 +217,7 @@ function MemberBudgetForm({
           }}
         >
           <CustomerBudgetCompactFields
+            modelScope={app}
             id={`app-member-${app.app_id}`}
             fields={fields}
             original={original}

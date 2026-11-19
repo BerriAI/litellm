@@ -111,6 +111,32 @@ async function openBudget() {
 const saveBudget = (user: UserEvent) => saveAppBudget(user, requests, "Save app budget");
 
 describe("customer app budgets", () => {
+  it("offers only the app's models and clears the optional allowlist without removing other limits", async () => {
+    bound = true;
+    assigned = true;
+    customAssociation = {
+      ...assignedBudget,
+      budget: { rpm_limit: 10, allowed_models: ["app-model"] },
+    };
+    const serve = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = new URL((input as Request).url);
+      if (url.pathname === `/management/v1/apps/resources/team/${resource.resource_id}/models`)
+        return json(["app-model"]);
+      if (url.pathname.endsWith("/models")) return json({ data: [{ id: "other-model" }] });
+      return serve(input, init);
+    });
+    const user = await openBudget();
+    await user.click(screen.getByText("Advanced limits"));
+    const search = screen.getByRole("combobox", { name: "Search app models" });
+    await user.click(search);
+    expect(await screen.findByRole("option", { name: "app-model" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "other-model" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(within(screen.getByLabelText("app-model")).getByRole("button"));
+    expect(await saveBudget(user)).toEqual({ budget: { allowed_models: null }, customer_member_budget: null });
+  });
+
   it.each([null, { "test-model": 10000 }])(
     "copies the selected preset's hidden policy into Custom %j",
     async (rates) => {

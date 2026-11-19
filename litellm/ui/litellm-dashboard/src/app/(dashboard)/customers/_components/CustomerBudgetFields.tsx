@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { BudgetFields } from "./customerBudgetForm";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
+import type { CustomerModelScope } from "./customerModelOptions";
 import CustomerBudgetAmountInput from "./CustomerBudgetAmountInput";
 import CustomerBudgetPeriodSelect from "./CustomerBudgetPeriodSelect";
 import { CustomerRateLimitControls, CustomerRateLimitFields } from "./CustomerRateLimits";
@@ -15,6 +16,7 @@ interface Props {
   };
   idPrefix: string;
   disabled?: boolean;
+  modelScope?: CustomerModelScope;
 }
 
 function AmountField({ fields, onChange, idPrefix, disabled, name }: Props & { name: "maxBudget" | "softBudget" }) {
@@ -36,7 +38,7 @@ function AmountField({ fields, onChange, idPrefix, disabled, name }: Props & { n
   );
 }
 
-function ModelsField({ fields, onChange, idPrefix, disabled }: Props) {
+function ModelsField({ fields, onChange, idPrefix, disabled, modelScope }: Props) {
   const { t } = useTranslation();
   return (
     <div className="space-y-2">
@@ -48,8 +50,8 @@ function ModelsField({ fields, onChange, idPrefix, disabled }: Props) {
         disabled={disabled}
         value={fields.allowedModels}
         onChange={(models) => onChange("allowedModels", models)}
+        modelScope={modelScope}
       />
-      <p className="text-xs text-muted-foreground">{t("customerPortal.hierarchy.allowedModelsHint")}</p>
     </div>
   );
 }

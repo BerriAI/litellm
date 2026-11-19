@@ -6,17 +6,20 @@ import { Checkbox } from "@/components/ui/checkbox";
 import CustomerBudgetWindows from "../../customers/_components/CustomerBudgetWindows";
 import { useTranslation } from "react-i18next";
 import { CustomerBudgetFields } from "../../customers/_components/CustomerBudgetFields";
+import type { CustomerModelScope } from "../../customers/_components/customerModelOptions";
 
 export default function AppBudgetEditor({
   title,
   fields,
   onChange,
   id,
+  modelScope,
 }: {
   title: string;
   fields: BudgetEditorFields;
   onChange: (fields: BudgetEditorFields) => void;
   id: string;
+  modelScope: CustomerModelScope;
 }) {
   const { t } = useTranslation();
   const update = <K extends keyof BudgetEditorFields>(key: K, value: BudgetEditorFields[K]) =>
@@ -36,7 +39,7 @@ export default function AppBudgetEditor({
             onChange={(windows) => update("budgetWindows", windows)}
             removable
           />
-          <CustomerBudgetFields fields={fields} onChange={update} idPrefix={id} />
+          <CustomerBudgetFields fields={fields} onChange={update} idPrefix={id} modelScope={modelScope} />
         </div>
       )}
     </fieldset>

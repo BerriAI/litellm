@@ -272,7 +272,70 @@ def test_only_proxy_admins_can_discover_or_manage_app_budgets(
     assert http.get("/management/v1/apps").status_code == 403
     assert http.get("/management/v1/apps/definition").status_code == 403
     assert http.get("/management/v1/apps/resources", params={"resource_type": "virtual_key"}).status_code == 403
+    assert http.get("/management/v1/apps/resources/team/chat/models").status_code == 403
     assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("resource", "team_models", "key_models", "project_models", "expected"),
+    (
+        ("team/chat", ["alpha"], [], [], ["alpha"]),
+        ("team/chat", [], [], [], ["alpha", "beta", "other"]),
+        ("team/chat", ["no-default-models"], [], [], []),
+        ("virtual_key/key-id", ["alpha", "beta"], ["alpha"], [], ["alpha"]),
+        ("virtual_key/key-id", ["alpha"], ["beta"], [], []),
+        ("virtual_key/key-id", ["alpha", "beta"], ["all-team-models"], ["beta"], ["beta"]),
+        ("virtual_key/key-id", ["a*"], ["*"], [], ["alpha"]),
+        ("project/project", ["alpha", "beta"], [], ["beta", "other"], ["beta"]),
+    ),
+)
+def test_app_model_options_follow_resource_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    resource: str,
+    team_models: list[str],
+    key_models: list[str],
+    project_models: list[str],
+    expected: list[str],
+) -> None:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import project_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient
+
+    http, store = client()
+    cache: Final = UserApiKeyCache()
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="chat", models=team_models)
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="project", team_id="chat", models=project_models)
+    key: Final = UserAPIKeyAuth(
+        token="token-a", team_id="chat", team_models=team_models, models=key_models, project_id="project"
+    )
+    cache.set_cache("team_id:chat", team, model_type=LiteLLM_TeamTableCachedObj)
+    cache.set_cache(project_cache_key("project"), project, model_type=LiteLLM_ProjectTableCachedObj)
+    cache.set_cache("token-a", key, model_type=UserAPIKeyAuth)
+    asyncio.run(store.keys.update(where={"token": "token-a"}, data={"key_id": "key-id"}))
+    asyncio.run(store.projects.update(where={"project_id": "project"}, data={"team_id": "chat"}))
+    router_models: Final = [
+        {"model_name": name, "litellm_params": {"model": "openai/test-model", "api_key": "test"}}
+        for name in ("alpha", "beta", "other")
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=router_models))
+    monkeypatch.setattr(proxy_server, "llm_model_list", router_models)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient(
+            database_url="postgresql://unused:unused@localhost/unused", proxy_logging_obj=proxy_server.proxy_logging_obj
+        ),
+    )
+    response: Final = http.get(f"/management/v1/apps/resources/{resource}/models")
+    assert response.status_code == 200, response.text
+    assert sorted(response.json()) == expected
+    assert http.get("/management/v1/apps/resources/team/missing/models").status_code == 404
 
 
 @pytest.mark.parametrize("resource_type", ("key", "application", "unknown"))

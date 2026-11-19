@@ -2,7 +2,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import {
-  render,
   renderWithProviders,
   testQueryClient,
   screen,
@@ -52,7 +51,9 @@ describe("CustomerBudgetGroups", () => {
         default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
       }),
     );
-    const view = render(<CustomerBudgetGroups organization={source} onSaved={onSaved} global scope={scope} />);
+    const view = renderWithProviders(
+      <CustomerBudgetGroups organization={source} onSaved={onSaved} global scope={scope} />,
+    );
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
     fireEvent.change(screen.getByLabelText("Group name 1"), { target: { value: "Models" } });
     await user.click(screen.getByRole("combobox", { name: "Search gateway models" }));
@@ -96,7 +97,7 @@ describe("CustomerBudgetGroups", () => {
   it.each([false, true])("saves rate-only edits through the existing group endpoint, global=%s", async (global) => {
     const source = { ...organization, default_budget_template_id: global ? null : "standard" };
     fetchMock.mockResolvedValue(json(source));
-    render(
+    renderWithProviders(
       global ? (
         <CustomerBudgetGroups organization={source} onSaved={onSaved} global />
       ) : (
@@ -197,7 +198,7 @@ describe("CustomerBudgetGroups", () => {
         default_budgets: [...organization.default_budgets, { budget_id: "created-id", name: "New" }],
       }),
     );
-    render(<CustomerBudgetGroups organization={organization} onSaved={onSaved} />);
+    renderWithProviders(<CustomerBudgetGroups organization={organization} onSaved={onSaved} />);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     fireEvent.change(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" }), {
       target: { value: "15" },
@@ -306,7 +307,7 @@ describe("CustomerBudgetGroups", () => {
     fetchMock.mockImplementation(async () =>
       status === 204 ? new Response(null, { status }) : json({ detail: error }, status),
     );
-    render(<CustomerBudgetGroups global={global} organization={source} onSaved={onSaved} />);
+    renderWithProviders(<CustomerBudgetGroups global={global} organization={source} onSaved={onSaved} />);
     fireEvent.change(screen.getByRole("spinbutton", { name: "Group 1 monthly budget (USD)" }), {
       target: { value: "15" },
     });
@@ -325,7 +326,7 @@ describe("CustomerBudgetGroups", () => {
   it("should automatically make the first added group the default", async () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async () => json(organization));
-    render(
+    renderWithProviders(
       <CustomerBudgetGroups
         organization={{ ...organization, default_budgets: [], default_budget_template_id: null }}
         onSaved={onSaved}
@@ -345,7 +346,7 @@ describe("CustomerBudgetGroups", () => {
   });
 
   it("should start with an empty editor and no pending changes for an organization without groups", () => {
-    render(
+    renderWithProviders(
       <CustomerBudgetGroups
         organization={{ ...organization, default_budgets: [], default_budget_template_id: null }}
         onSaved={onSaved}
