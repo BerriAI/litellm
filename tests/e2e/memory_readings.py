@@ -65,11 +65,8 @@ def _pids_on_pod(workers: Mapping[WorkerKey, RssReading], pod: str) -> frozenset
 
 def assert_same_rss_workers(before: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]) -> None:
     known_pods: Final = frozenset(worker[1] for worker in before if worker[1] is not None)
-    after_pods: Final = frozenset(worker[1] for worker in after if worker[1] is not None)
-    new_pods: Final = after_pods - known_pods
-    assert not new_pods or not (known_pods - after_pods), (
-        f"worker death: new pod hostname after the warm window replaced a baseline pod: {sorted(new_pods)}"
-    )
+    new_pods: Final = frozenset(worker[1] for worker in after if worker[1] is not None) - known_pods
+    assert not before or not new_pods, f"worker death: new pod hostname after the warm window: {sorted(new_pods)}"
     replaced_pods: Final = frozenset(
         pod
         for pod in known_pods
