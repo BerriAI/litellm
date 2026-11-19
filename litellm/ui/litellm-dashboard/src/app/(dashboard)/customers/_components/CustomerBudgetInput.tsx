@@ -3,6 +3,7 @@ import { $api } from "@/lib/http/api";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { Label } from "@/components/ui/label";
+import { CustomerRateLimitSummary } from "./CustomerRateLimits";
 
 export default function CustomerBudgetInput({
   id,
@@ -45,6 +46,9 @@ export default function CustomerBudgetInput({
         onValueChange={(value) =>
           options.some((group) => group.value === value) ? onChange(value ?? "", amount) : customAmount(value ?? "")
         }
+      />
+      <CustomerRateLimitSummary
+        limits={groups.data?.default_budgets.find((group) => group.budget_id === selectedGroup?.value)}
       />
       {groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
     </div>

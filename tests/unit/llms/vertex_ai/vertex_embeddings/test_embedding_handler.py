@@ -162,6 +162,7 @@ async def test_vertex_embedding_logs_the_predict_body_as_json_text(
 ) -> None:
     payload: Final = {"predictions": [[0.1, 0.2]], "deployedModelId": "42"}
     logging_obj: Final = _embedding_logging()
+    logging_obj.logger_fn = lambda _details: None
 
     await _embedding_response(run_async, predict_endpoint, BGE, payload, logging_obj)
 
