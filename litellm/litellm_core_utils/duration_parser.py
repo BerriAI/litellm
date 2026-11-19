@@ -403,17 +403,19 @@ def _handle_month_reset(
 ) -> datetime:
     """
     Handle monthly reset times. Resets land on the 1st at `reset_time_of_day`; if the
-    1st of the current month at that time has already passed, roll to the 1st of next month.
+    1st of the current month at that time has already passed, roll forward by `value` months.
 
     Args:
         current_time: Current datetime
         base_midnight: Midnight of current day
-        value: Number of months, 1 for monthly or 12 for annual resets
+        value: Number of months (e.g. 1 for monthly, 12 for annual resets)
         reset_time_of_day: Wall-clock time the reset lands on
 
     Returns:
         datetime: First day of the next reset month at `reset_time_of_day`
     """
+    if value <= 0:
+        return current_time
     if value == 12:
         first_of_year: Final = base_midnight.replace(month=1, day=1)
         annual_candidate: Final = _apply_time_of_day(first_of_year, reset_time_of_day)
@@ -422,11 +424,9 @@ def _handle_month_reset(
             if annual_candidate <= current_time
             else annual_candidate
         )
-    if value != 1:
-        raise ValueError("Calendar resets support 1 month or 12 month intervals")
 
     first_of_this_month: Final = base_midnight.replace(day=1)
     candidate: Final = _apply_time_of_day(first_of_this_month, reset_time_of_day)
     if candidate <= current_time:
-        return _apply_time_of_day(_first_of_next_month(first_of_this_month), reset_time_of_day)
+        return _apply_time_of_day(_shift_months(first_of_this_month, value), reset_time_of_day)
     return candidate
