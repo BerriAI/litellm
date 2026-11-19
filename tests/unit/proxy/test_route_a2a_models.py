@@ -9,6 +9,7 @@ import base64
 import datetime
 import json
 import math
+import time
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Final
@@ -842,7 +843,10 @@ async def test_route_a2a_bridge_agent_call_retries_as_many_times_as_the_caller_a
 async def test_route_a2a_url_agents_bill_their_own_price(httpx_transport: None) -> None:
     respx.post(AGENT_URL).mock(return_value=httpx.Response(200, json=A2A_REPLY))
     registry: Final = AgentRegistry()
-    for agent in (_priced_url_agent("url-per-query", PER_QUERY_PRICE), _priced_url_agent("url-per-token", PER_TOKEN_PRICE)):
+    for agent in (
+        _priced_url_agent("url-per-query", PER_QUERY_PRICE),
+        _priced_url_agent("url-per-token", PER_TOKEN_PRICE),
+    ):
         registry.register_agent(agent)
 
     per_query_cost, _, per_query_logging_obj = await _billed_chat_call(registry, "url-per-query")
@@ -1212,7 +1216,10 @@ async def test_route_a2a_agent_that_answers_its_own_retry_is_billed_and_attribut
     httpx_transport: None, agent: AgentResponse
 ) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
-        side_effect=[httpx.Response(500, json={"error_code": "TEMPORARILY_UNAVAILABLE"}), httpx.Response(200, json=AGENT_REPLY)]
+        side_effect=[
+            httpx.Response(500, json={"error_code": "TEMPORARILY_UNAVAILABLE"}),
+            httpx.Response(200, json=AGENT_REPLY),
+        ]
     )
     respx.post(AGENT_URL).mock(
         side_effect=[httpx.Response(500, json={"error": "agent down"}), httpx.Response(200, json=A2A_REPLY)]
@@ -1226,6 +1233,70 @@ async def test_route_a2a_agent_that_answers_its_own_retry_is_billed_and_attribut
     assert cost == pytest.approx(0.05)
     assert logging_obj.model_call_details["agent_id"] == agent.agent_id
     assert _failure_fields_to_lift({"litellm_logging_obj": logging_obj})["agent_id"] == agent.agent_id
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-query", PER_QUERY_PRICE), _priced_url_agent("url-per-query", PER_QUERY_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agent_that_answers_its_retry_after_a_failed_fallback_model_is_billed_and_attributed_as_the_agent(
+    httpx_transport: None, agent: AgentResponse
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        side_effect=[
+            httpx.Response(500, json={"error_code": "TEMPORARILY_UNAVAILABLE"}),
+            httpx.Response(200, json=AGENT_REPLY),
+        ]
+    )
+    respx.post(AGENT_URL).mock(
+        side_effect=[httpx.Response(500, json={"error": "agent down"}), httpx.Response(200, json=A2A_REPLY)]
+    )
+    respx.post(f"{FALLBACK_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(400, json={"error": {"message": "fallback refused"}})
+    )
+    fallbacks: Final = [
+        {"model": "openai/a2a-fallback-model", "api_base": FALLBACK_API_BASE, "api_key": "sk-fallback"},
+        {"timeout": 30},
+    ]
+
+    cost, response, logging_obj = await _billed_chat_call(
+        _registry_with(agent), agent.agent_name, {"fallbacks": fallbacks}
+    )
+
+    assert response.choices[0].message.content == "pong"
+    assert cost == pytest.approx(0.05)
+    assert logging_obj.model_call_details["agent_id"] == agent.agent_id
+    assert _failure_fields_to_lift({"litellm_logging_obj": logging_obj})["agent_id"] == agent.agent_id
+
+
+CLIENT_COST_PER_SECOND: Final = 1_000_000.0
+
+
+@respx.mock
+@pytest.mark.parametrize("per_second_price", ["cost_per_second", "input_cost_per_second"])
+@pytest.mark.parametrize(
+    "agent",
+    [_priced_dbx_agent("per-token", PER_TOKEN_PRICE), _priced_url_agent("url-per-token", PER_TOKEN_PRICE)],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agents_bill_the_callers_per_second_price_over_their_own_token_price(
+    httpx_transport: None, agent: AgentResponse, per_second_price: str
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(200, json=A2A_REPLY))
+
+    started: Final = time.monotonic()
+    cost, _, _ = await _billed_chat_call(
+        _registry_with(agent), agent.agent_name, {per_second_price: CLIENT_COST_PER_SECOND}
+    )
+    elapsed: Final = time.monotonic() - started
+
+    assert cost is not None
+    assert 1.0 < cost <= CLIENT_COST_PER_SECOND * elapsed
 
 
 @respx.mock

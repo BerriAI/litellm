@@ -197,7 +197,10 @@ async def _fallback_response(plan: _FallbackPlan, attempt: _FallbackAttempt) -> 
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     logging_obj: Final = plan.logging_obj
-    if attempt.model == plan.original_model or not isinstance(logging_obj, Logging):
+    if not isinstance(logging_obj, Logging):
+        return await litellm.acompletion(**attempt.kwargs)
+    if attempt.model == plan.original_model:
+        logging_obj.resume_billing_as_a2a_agent()
         return await litellm.acompletion(**attempt.kwargs)
     logging_obj.stop_billing_as_a2a_agent()
     response: Final = await litellm.acompletion(**attempt.kwargs)

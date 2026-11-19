@@ -692,6 +692,14 @@ _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _AGENT_PRICE: Final = TypeAdapter(float)
+
+
+@dataclass(frozen=True, slots=True)
+class A2AAgentBilling:
+    agent_id: str
+    cost_per_query: object
+
+
 _LoggedResponse: Final = TypeVar("_LoggedResponse")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
@@ -1025,6 +1033,7 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_cost_per_token: CostPerToken | None = None
     custom_cost_per_second: float | None = None
     custom_model_info: ModelInfo | None = None
+    a2a_agent_billing: A2AAgentBilling | None = None
     a2a_agent_cost_per_query: object = None
     a2a_agent_id: str | None = None
     replaced_global_callback_keys: frozenset[str] = frozenset()
@@ -1617,9 +1626,16 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["litellm_params"] = {**logged_params, "custom_llm_provider": provider}
 
     def bill_as_a2a_agent(self, agent_id: str, cost_per_query: object) -> None:
-        self.a2a_agent_cost_per_query = cost_per_query
-        self.a2a_agent_id = agent_id
-        self.model_call_details["agent_id"] = agent_id
+        self.a2a_agent_billing = A2AAgentBilling(agent_id=agent_id, cost_per_query=cost_per_query)
+        self.resume_billing_as_a2a_agent()
+
+    def resume_billing_as_a2a_agent(self) -> None:
+        billing: Final = self.a2a_agent_billing
+        if billing is None:
+            return
+        self.a2a_agent_cost_per_query = billing.cost_per_query
+        self.a2a_agent_id = billing.agent_id
+        self.model_call_details["agent_id"] = billing.agent_id
 
     def stop_billing_as_a2a_agent(self) -> None:
         if self.a2a_agent_id is not None:
