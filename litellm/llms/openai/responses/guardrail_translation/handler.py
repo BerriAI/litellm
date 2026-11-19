@@ -223,12 +223,22 @@ def _answer_output_items(outputs: Sequence[object]) -> tuple[tuple[int, object],
     return tuple((index, item) for index, item in enumerate(outputs) if stream_item_field(item, "type") != "reasoning")
 
 
-def _reasoning_text_inputs(text: str, model: object) -> GenericGuardrailAPIInputs:
+def _reasoning_text_inputs(texts: Sequence[str], model: object) -> GenericGuardrailAPIInputs:
     return (
-        GenericGuardrailAPIInputs(texts=[text], model=model)
+        GenericGuardrailAPIInputs(texts=list(texts), model=model)
         if isinstance(model, str) and model
-        else GenericGuardrailAPIInputs(texts=[text])
+        else GenericGuardrailAPIInputs(texts=list(texts))
     )
+
+
+def _texts_placed_by_index(sent: tuple[str, ...], returned: Sequence[str]) -> tuple[str, ...] | None:
+    if not returned:
+        return sent
+    if len(returned) == len(sent):
+        return tuple(returned)
+    if len(sent) == 1:
+        return (returned[0],)
+    return None
 
 
 def _response_reasoning_texts(response: object) -> tuple[tuple[_ReasoningTextPosition, str], ...]:
@@ -760,6 +770,45 @@ def _reads_like_a_dict(chunk: object) -> bool:
 def _envelope_has_reasoning_text(chunk: object) -> bool:
     outputs: Final = stream_item_items(stream_item_field(chunk, "response"), "output")
     return any(_reasoning_output_texts(item, output_index) for output_index, item in enumerate(outputs))
+
+
+def _reasoning_stream_slots(position: _ReasoningPosition) -> frozenset[tuple[str, int, int]]:
+    match position:
+        case _ReasoningSummaryPosition(output_index=output_index, summary_index=summary_index):
+            return frozenset({("summary", output_index, summary_index)})
+        case _ReasoningContentPosition(output_index=output_index, content_index=content_index, streams_as_summary=True):
+            return frozenset({("content", output_index, content_index), ("summary", output_index, content_index)})
+        case _ReasoningContentPosition(output_index=output_index, content_index=content_index):
+            return frozenset({("content", output_index, content_index)})
+        case _ThinkingBlockPosition(output_index=output_index, block_index=block_index):
+            return frozenset({("thinking", output_index, block_index)})
+
+
+def _envelope_holds_streamed_text(
+    envelope_texts: Sequence[tuple[_ReasoningPosition, str]], position: _ReasoningPosition, text: str
+) -> bool:
+    streamed_slots: Final = _reasoning_stream_slots(position)
+    return any(
+        held.startswith(text) and not streamed_slots.isdisjoint(_reasoning_stream_slots(held_position))
+        for held_position, held in envelope_texts
+    )
+
+
+def _reasoning_streamed_outside_envelope(
+    responses_so_far: Sequence[object], envelope_texts: Sequence[tuple[_ReasoningTextPosition, str]]
+) -> tuple[tuple[_ReasoningPosition, str], ...]:
+    envelope_item_texts: Final = tuple(
+        (position, text) for position, text in envelope_texts if isinstance(position, _REASONING_POSITION_TYPES)
+    )
+    streamed_texts: Final = chain.from_iterable(
+        _reasoning_output_texts(item, output_index)
+        for output_index, item in _released_reasoning_items(responses_so_far).items()
+    )
+    return tuple(
+        (position, text)
+        for position, text in streamed_texts
+        if not _envelope_holds_streamed_text(envelope_item_texts, position, text)
+    )
 
 
 def _is_placeable_stream_text(
@@ -1651,7 +1700,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> Sequence[object]:
@@ -1715,6 +1764,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
 
             reasoning_texts: Final = _response_reasoning_texts(response_obj)
+            reasoning_outside_envelope: Final = _reasoning_streamed_outside_envelope(responses_so_far, reasoning_texts)
             reasoning_in_answer_call: Final = guardrail_to_apply.scans_all_response_texts_in_one_call()
             answer_outside_envelope: Final = (
                 not texts_to_check and not tool_calls_to_check and _has_answer_stream_text(responses_so_far)
@@ -1784,6 +1834,17 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             envelope_has_scannable_content: Final = bool(texts_to_check or tool_calls_to_check or reasoning_texts)
             if envelope_has_scannable_content and not answer_outside_envelope:
+                outside_rewrites: Final = await self._apply_guardrail_to_reasoning_outside_envelope(
+                    responses_so_far=responses_so_far,
+                    envelope=response_obj,
+                    outside_texts=reasoning_outside_envelope,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=litellm_logging_obj,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                )
+                if deliver_ended_stream_rewrites:
+                    self._sync_stream_events_with_output_rewrites(responses_so_far, response_obj, outside_rewrites)
                 return responses_so_far
 
         # ------------------------------------------------------------------ #
@@ -1888,23 +1949,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         request_data: dict[str, object],
     ) -> Mapping[_OutputPosition, str]:
         distinct_texts: Final = tuple(dict.fromkeys(text for _, text in reasoning_texts))
-        guardrailed_texts: Final = await asyncio.gather(
-            *(
-                guardrail_to_apply.apply_guardrail(
-                    inputs=_reasoning_text_inputs(text, stream_item_field(response, "model")),
-                    request_data=request_data,
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
-                for text in distinct_texts
+        model: Final = stream_item_field(response, "model")
+        guardrailed: Final = await guardrail_to_apply.apply_guardrail(
+            inputs=_reasoning_text_inputs(distinct_texts, model),
+            request_data=request_data,
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        placed_texts: Final = _texts_placed_by_index(distinct_texts, guardrailed.get("texts") or ())
+        rewritten_texts: Final = (
+            placed_texts
+            if placed_texts is not None
+            else await self._apply_guardrail_to_each_reasoning_text(
+                distinct_texts, model, guardrail_to_apply, litellm_logging_obj, request_data
             )
         )
-        rewrites: Final = MappingProxyType(
-            {
-                text: next(iter(guardrailed.get("texts") or ()), text)
-                for text, guardrailed in zip(distinct_texts, guardrailed_texts)
-            }
-        )
+        rewrites: Final = MappingProxyType(dict(zip(distinct_texts, rewritten_texts)))
         await self._apply_guardrail_responses_to_output(
             response=response,
             responses=tuple(rewrites[text] for _, text in reasoning_texts),
@@ -1912,6 +1972,51 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         return MappingProxyType(
             {position: rewrites[text] for position, text in reasoning_texts if rewrites[text] != text}
+        )
+
+    async def _apply_guardrail_to_each_reasoning_text(
+        self,
+        texts: tuple[str, ...],
+        model: object,
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        request_data: dict[str, object],
+    ) -> tuple[str, ...]:
+        guardrailed_texts: Final = await asyncio.gather(
+            *(
+                guardrail_to_apply.apply_guardrail(
+                    inputs=_reasoning_text_inputs((text,), model),
+                    request_data=request_data,
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+                for text in texts
+            )
+        )
+        return tuple(
+            next(iter(guardrailed.get("texts") or ()), text) for text, guardrailed in zip(texts, guardrailed_texts)
+        )
+
+    async def _apply_guardrail_to_reasoning_outside_envelope(
+        self,
+        responses_so_far: Sequence[object],
+        envelope: ResponseOutputEnvelope,
+        outside_texts: Sequence[tuple[_ReasoningPosition, str]],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        request_data: dict[str, object] | None,
+        user_api_key_dict: "UserAPIKeyAuth | None",
+    ) -> Mapping[_OutputPosition, str]:
+        if not outside_texts:
+            return MappingProxyType({})
+        return await self._apply_guardrail_to_reasoning_texts(
+            response=ResponseOutputEnvelope(
+                output=_released_stream_output(responses_so_far), model=envelope.get("model")
+            ),
+            reasoning_texts=outside_texts,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            request_data=self._request_data_with_response(request_data, envelope, user_api_key_dict),
         )
 
     def _sync_stream_events_with_output_rewrites(

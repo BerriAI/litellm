@@ -5394,27 +5394,6 @@ class FixedOutputGuardrail(CustomGuardrail):
         return self.output
 
 
-class AllCallsAtOnceGuardrail(CustomGuardrail):
-    def __init__(self, expected_calls: int) -> None:
-        super().__init__(guardrail_name="all-calls-at-once")
-        self.expected_calls = expected_calls
-        self.arrivals = 0
-        self.all_arrived = asyncio.Event()
-
-    async def apply_guardrail(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
-        input_type: Literal["request", "response"],
-        logging_obj: LiteLLMLoggingObj | None = None,
-    ) -> GenericGuardrailAPIInputs:
-        self.arrivals += 1
-        if self.arrivals == self.expected_calls:
-            self.all_arrived.set()
-        await asyncio.wait_for(self.all_arrived.wait(), timeout=2)
-        return inputs
-
-
 def _sent(events: object) -> str:
     return json.dumps(events, default=lambda value: value.model_dump())
 
@@ -6173,6 +6152,51 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert events[1]["delta"] == "I think of a [MASKED]"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "outside_position",
+        [
+            {"item_id": "rs_2", "output_index": 1, "summary_index": 0},
+            {"item_id": "rs_1", "output_index": 0, "summary_index": 1},
+        ],
+        ids=["another-item", "another-summary-part"],
+    )
+    async def test_reasoning_a_partial_envelope_lacks_is_scanned_and_masked(self, outside_position: dict) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        delta: Final = {"type": "response.reasoning_summary_text.delta", "delta": "a persimmon"}
+        envelope: Final = {"id": "resp_1", "output": [_openai_reasoning_item("a persimmon")]}
+        events: Final = [
+            {**delta, "item_id": "rs_1", "output_index": 0, "summary_index": 0},
+            {**delta, **outside_position},
+            {"type": "response.incomplete", "response": envelope},
+        ]
+
+        await _deliver(events, guardrail)
+
+        assert guardrail.scanned_texts == ["a persimmon", "a persimmon"]
+        assert [event["delta"] for event in events[:2]] == ["a [MASKED]", "a [MASKED]"]
+        assert envelope["output"] == [_openai_reasoning_item("a [MASKED]")]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "events",
+        [
+            _claude_stream_events(),
+            [
+                *_claude_stream_events()[:4],
+                {"type": "response.output_item.done", "output_index": 0, "item": _claude_reasoning_item()},
+                _claude_stream_events()[5],
+            ],
+        ],
+        ids=["summary-only-item", "signed-item"],
+    )
+    async def test_a_claude_stream_whose_envelope_holds_its_reasoning_scans_it_once(self, events: list[dict]) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await _deliver(events, guardrail)
+
+        assert guardrail.scanned_texts == ["the fruit is a persimmon", "I think of a persimmon"]
+
+    @pytest.mark.asyncio
     async def test_a_tool_call_between_reasoning_and_the_answer_keeps_every_text_in_place(self) -> None:
         function_call: Final = {
             "type": "function_call",
@@ -6477,24 +6501,25 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert guardrail.calls[1] == {"texts": ["a persimmon"], "model": "test-model"}
 
     @pytest.mark.asyncio
-    async def test_each_distinct_reasoning_text_gets_a_call_of_its_own(self) -> None:
+    async def test_distinct_reasoning_texts_share_one_call(self) -> None:
         guardrail: Final = CallRecordingGuardrail()
 
         await OpenAIResponsesHandler().process_output_response(
             {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
         )
 
-        assert [call["texts"] for call in guardrail.calls] == [["a fig"], ["a plum"]]
+        assert [call["texts"] for call in guardrail.calls] == [["a fig", "a plum"]]
 
     @pytest.mark.asyncio
-    async def test_reasoning_scans_overlap_so_they_cost_one_guardrail_round_trip(self) -> None:
-        guardrail: Final = AllCallsAtOnceGuardrail(expected_calls=3)
+    @pytest.mark.parametrize("guardrail_class", [FirstTextOnlyGuardrail, LastTextOnlyGuardrail])
+    async def test_a_guardrail_reading_one_end_of_many_reasoning_texts_masks_each_in_its_place(
+        self, guardrail_class: type[PersimmonTextMaskingGuardrail]
+    ) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a persimmon", "a fig and a persimmon")]}
 
-        await OpenAIResponsesHandler().process_output_response(
-            {"output": [_openai_reasoning_item("a fig", "a plum", "a pear")]}, guardrail
-        )
+        await OpenAIResponsesHandler().process_output_response(response, guardrail_class())
 
-        assert guardrail.arrivals == 3
+        assert [part["text"] for part in response["output"][0]["summary"]] == ["a [MASKED]", "a fig and a [MASKED]"]
 
     @pytest.mark.asyncio
     async def test_a_reasoning_text_equal_to_the_answer_is_masked_in_both_places(self) -> None:
@@ -6859,7 +6884,12 @@ _REPLAYED_CLAUDE_SEARCH_INPUT: Final = (
         "status": "completed",
         "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}],
     },
-    {"type": "function_call", "call_id": "toolu_01GuardrailWeather", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+    {
+        "type": "function_call",
+        "call_id": "toolu_01GuardrailWeather",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
+    },
     {"type": "function_call_output", "call_id": "toolu_01GuardrailWeather", "output": "14C"},
     {"role": "user", "content": "Thanks"},
 )
@@ -7000,7 +7030,8 @@ class TestRefusalPartsReachTextGuardrails:
 
         assert guardrail.seen_texts == [[*leading_text, _REFUSAL]]
         assert [
-            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+            (part["type"], part.get("text") or part.get("refusal"))
+            for part in result.model_dump()["output"][0]["content"]
         ] == expected_parts
 
     @pytest.mark.asyncio
@@ -7023,7 +7054,8 @@ class TestRefusalPartsReachTextGuardrails:
 
         assert guardrail.seen_texts == [["Jane asked first.", _REFUSAL]]
         assert [
-            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+            (part["type"], part.get("text") or part.get("refusal"))
+            for part in result.model_dump()["output"][0]["content"]
         ] == [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]
 
     @pytest.mark.asyncio
@@ -7037,7 +7069,9 @@ class TestRefusalPartsReachTextGuardrails:
                 part=ContentPartDonePartRefusal(type="refusal", refusal=_REFUSAL),
                 **position,
             ),
-            OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=_refused_message()),
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=_refused_message()
+            ),
             ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=_refused_response()),
         ]
 
