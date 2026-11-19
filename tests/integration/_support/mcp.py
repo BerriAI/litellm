@@ -24,7 +24,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import UrlElicitationRequiredError
 from mcp.types import ElicitRequestURLParams, SamplingMessage, TextContent
 from integration._support.mcp_e2e_upstream_server import add, multiply
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
@@ -827,10 +827,13 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
 def paginated_mcp_peer(
     *,
     page_size: int = 1,
+    tool_page_size: int | None = None,
+    tool_count: int = 3,
     ttl_ms: int = 0,
     repeat_cursor: bool = False,
     fail_listing: bool = False,
     fail_continuation: bool = False,
+    session_bound: bool = False,
     metadata: dict[str, JsonValue] | None = None,
 ) -> Iterator[McpPeer]:
     from contextlib import asynccontextmanager
@@ -851,18 +854,52 @@ def paginated_mcp_peer(
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    def window(params):
+    def window(params, session_id: str | None = None, item_count: int = 3, item_page_size: int | None = None):
         if fail_listing or (fail_continuation and params is not None and params.cursor):
             from mcp import MCPError
             from mcp.types import INTERNAL_ERROR
 
             raise MCPError(code=INTERNAL_ERROR, message="untrusted upstream message")
-        start = int(params.cursor) if params is not None and params.cursor else 0
-        end = min(start + page_size, 3)
-        return range(start, end), "1" if repeat_cursor else str(end) if end < 3 else None
+        if session_id is not None and params is not None and params.cursor:
+            from mcp import MCPError
+            from mcp.types import INVALID_PARAMS
+
+            cursor_session, separator, offset = params.cursor.rpartition(":")
+            if not separator or cursor_session != session_id or not offset.isdecimal():
+                raise MCPError(code=INVALID_PARAMS, message="Cursor belongs to another upstream session")
+            start: Final = int(offset)
+        else:
+            start: Final = int(params.cursor) if params is not None and params.cursor else 0
+        end: Final = min(start + (item_page_size or page_size), item_count)
+        cursor: Final = (
+            "1"
+            if repeat_cursor
+            else f"{session_id}:{end}"
+            if session_id is not None and end < item_count
+            else str(end)
+            if end < item_count
+            else None
+        )
+        return range(start, end), cursor
+
+    session_by_request: dict[int | str, str | None] = {}  # mutable-ok: bind ASGI headers to low-level request IDs
+    session_header_by_request: dict[int | str, bytes | None] = {}
+    payload_adapter: Final = TypeAdapter(dict[str, JsonValue])
 
     async def tools(context, params):
-        indexes, cursor = window(params)
+        request_id: Final = context.request_id
+        session_id: Final = (
+            session_by_request.pop(request_id, None)
+            if session_bound and request_id is not None
+            else None
+        )
+        if session_bound:
+            assert session_id is not None, (
+                request_id,
+                session_by_request,
+                session_header_by_request.get(request_id) if request_id is not None else None,
+            )
+        indexes, cursor = window(params, session_id, tool_count, tool_page_size)
         return ListToolsResult(
             ttl_ms=ttl_ms,
             cache_scope="public",
@@ -929,17 +966,50 @@ def paginated_mcp_peer(
     )
     manager = StreamableHTTPSessionManager(
         service,
-        stateless=True,
+        stateless=not session_bound,
         json_response=True,
         security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
 
     @asynccontextmanager
     async def lifespan(app):
+        AppStatus.should_exit = False
         async with manager.run():
             yield
+        if session_bound:
+            _drain_sse_streams()
+            watchers: Final = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
+            await asyncio.wait_for(asyncio.gather(*watchers), 2)
 
     app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
     observed = queue.Queue()
-    with asgi_server(_capturing(app, observed)) as url:
+
+    async def request_session(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not session_bound:
+            await app(scope, receive, send)
+            return
+        if scope["method"] != "POST":
+            await app(scope, receive, send)
+            return
+        body: Final = await StarletteRequest(scope, receive).body()
+        payload: Final = payload_adapter.validate_json(body) if body else {}
+        raw_session_id: Final = next(
+            (value for name, value in scope["headers"] if name.lower() == b"mcp-session-id"),
+            None,
+        )
+        request_id: Final = payload.get("id")
+        if payload.get("method") == "tools/list" and isinstance(request_id, (int, str)):
+            session_by_request[request_id] = raw_session_id.decode() if raw_session_id is not None else None
+            session_header_by_request[request_id] = raw_session_id
+        pending: Final = iter(({"type": "http.request", "body": body, "more_body": False},))
+
+        async def replay() -> Message:
+            buffered: Final = next(pending, None)
+            if buffered is not None:
+                return buffered
+            return await receive()
+
+        await app(scope, replay, send)
+
+    with asgi_server(_capturing(request_session, observed)) as url:
         yield McpPeer(url + "/mcp/", observed)
