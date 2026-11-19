@@ -463,12 +463,27 @@ def public_wildcard_probe_deployments(
 
 
 _Endpoints: TypeAlias = Sequence[Mapping[str, object]]
+_ProbeTask: TypeAlias = "asyncio.Task[tuple[_Endpoints, _Endpoints]]"
 ProbeOne: TypeAlias = Callable[[Mapping[str, object], bool | None], Awaitable[tuple[_Endpoints, _Endpoints]]]
+ProbeOrder: TypeAlias = Callable[[Sequence[Mapping[str, object]]], Sequence[Mapping[str, object]]]
+WaitForDeadline: TypeAlias = Callable[
+    [Sequence[_ProbeTask], float], Awaitable[tuple[AbstractSet[_ProbeTask], AbstractSet[_ProbeTask]]]
+]
 
 
 async def _probe_one(deployment: Mapping[str, object], details: bool | None) -> tuple[_Endpoints, _Endpoints]:
     healthy, unhealthy, _ = await _perform_health_check([deployment], details)
     return healthy, unhealthy
+
+
+def _shuffled(probes: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+    return random.sample(probes, len(probes))
+
+
+async def _wait_for_deadline(
+    tasks: Sequence[_ProbeTask], deadline_seconds: float
+) -> tuple[AbstractSet[_ProbeTask], AbstractSet[_ProbeTask]]:
+    return await asyncio.wait(tasks, timeout=deadline_seconds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,12 +495,18 @@ class WildcardProbeScope:
     max_concurrency: int | None
     deadline_seconds: float
     probe_one: ProbeOne = _probe_one
+    order: ProbeOrder = _shuffled
+    wait_for_deadline: WaitForDeadline = _wait_for_deadline
 
 
 async def _bounded_probe(
-    scope: WildcardProbeScope, deployment: Mapping[str, object], limit: AbstractAsyncContextManager[object]
+    scope: WildcardProbeScope,
+    deployment: Mapping[str, object],
+    limit: AbstractAsyncContextManager[object],
+    started: asyncio.Event,
 ) -> tuple[_Endpoints, _Endpoints]:
     async with limit:
+        started.set()
         return await scope.probe_one(deployment, scope.details)
 
 
@@ -495,13 +516,10 @@ def _timed_out(probe: Mapping[str, object], deadline_seconds: float) -> tuple[_E
 
 
 def _probe_outcome(
-    probe: Mapping[str, object],
-    task: "asyncio.Task[tuple[_Endpoints, _Endpoints]]",
-    timed_out: bool,
-    deadline_seconds: float,
+    probe: Mapping[str, object], task: _ProbeTask, started: asyncio.Event, timed_out: bool, deadline_seconds: float
 ) -> tuple[_Endpoints, _Endpoints] | None:
     if timed_out:
-        return _timed_out(probe, deadline_seconds)
+        return _timed_out(probe, deadline_seconds) if started.is_set() else None
     if task.cancelled() or task.exception() is not None:
         return None
     return task.result()
@@ -510,14 +528,21 @@ def _probe_outcome(
 async def _probe_outcomes_by_deadline(
     scope: WildcardProbeScope, probes: Sequence[Mapping[str, object]]
 ) -> tuple[tuple[Mapping[str, object], tuple[_Endpoints, _Endpoints]], ...]:
-    """Each probe's endpoints, with a probe still running at the deadline cancelled and reported unhealthy."""
+    """Each probe's endpoints; one that started but was still running at the deadline is reported unhealthy.
+
+    A probe still waiting for a concurrency slot at the deadline never ran, so it writes no row.
+    """
     limit: Final = (
         asyncio.Semaphore(scope.max_concurrency)
         if scope.max_concurrency is not None and scope.max_concurrency > 0
         else nullcontext()
     )
-    tasks: Final = tuple(asyncio.create_task(_bounded_probe(scope, probe, limit)) for probe in probes)
-    _, pending = await asyncio.wait(tasks, timeout=scope.deadline_seconds)
+    ordered: Final = tuple(scope.order(probes))
+    started: Final = tuple(asyncio.Event() for _ in ordered)
+    tasks: Final = tuple(
+        asyncio.create_task(_bounded_probe(scope, probe, limit, event)) for probe, event in zip(ordered, started)
+    )
+    _, pending = await scope.wait_for_deadline(tasks, scope.deadline_seconds)
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
@@ -525,13 +550,13 @@ async def _probe_outcomes_by_deadline(
         logger.warning(
             "background_health_check_wildcard_probes_timed_out timed_out=%d probed=%d deadline_seconds=%s",
             len(pending),
-            len(probes),
+            len(ordered),
             scope.deadline_seconds,
         )
     return tuple(
         (probe, outcome)
-        for probe, task in zip(probes, tasks)
-        if (outcome := _probe_outcome(probe, task, task in pending, scope.deadline_seconds)) is not None
+        for probe, task, event in zip(ordered, tasks, started)
+        if (outcome := _probe_outcome(probe, task, event, task in pending, scope.deadline_seconds)) is not None
     )
 
 

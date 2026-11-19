@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from functools import partial
 from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +19,12 @@ from litellm.llms.chatgpt import authenticator as chatgpt_authenticator
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
-from litellm.proxy.health_check import _same_health_check_model, update_litellm_params_for_health_check
+from litellm.proxy.health_check import (
+    ProbeOrder,
+    WaitForDeadline,
+    _same_health_check_model,
+    update_litellm_params_for_health_check,
+)
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
@@ -1267,9 +1273,23 @@ def _recording_prisma() -> MagicMock:
     return client
 
 
-async def _save_then_probe(prisma_client: MagicMock, router: litellm.Router, deadline_seconds: float) -> bool:
+_ProbeEndpoints: TypeAlias = tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]]]
+
+
+async def _deadline_once_ready_probes_finish(
+    tasks: Sequence["asyncio.Task[_ProbeEndpoints]"], deadline_seconds: float
+) -> tuple[frozenset["asyncio.Task[_ProbeEndpoints]"], frozenset["asyncio.Task[_ProbeEndpoints]"]]:
+    for _ in range(50):
+        await asyncio.sleep(0)
+    return frozenset(t for t in tasks if t.done()), frozenset(t for t in tasks if not t.done())
+
+
+async def _save_then_probe(
+    prisma_client: MagicMock, router: litellm.Router, wait_for_deadline: WaitForDeadline | None = None
+) -> bool:
     from litellm.proxy.health_check import WildcardProbeScope, save_then_probe_public_wildcards
 
+    scope: Final = WildcardProbeScope(("openai/gpt-5.5",), router, None, True, None, 60)
     regular_save: Final = partial(
         save_background_health_checks_to_db,
         prisma_client,
@@ -1283,7 +1303,7 @@ async def _save_then_probe(prisma_client: MagicMock, router: litellm.Router, dea
         regular_save,
         prisma_client,
         "pod-1",
-        WildcardProbeScope(("openai/gpt-5.5",), router, None, True, None, deadline_seconds),
+        scope if wait_for_deadline is None else replace(scope, wait_for_deadline=wait_for_deadline),
     )
 
 
@@ -1291,7 +1311,7 @@ async def _save_then_probe(prisma_client: MagicMock, router: litellm.Router, dea
 async def test_save_then_probe_public_wildcards_saves_the_cycle_rows_first_then_times_probes_from_their_start():
     prisma_client: Final = _recording_prisma()
 
-    persisted: Final = await _save_then_probe(prisma_client, _openai_wildcard_router({"mock_response": "ok"}), 60)
+    persisted: Final = await _save_then_probe(prisma_client, _openai_wildcard_router({"mock_response": "ok"}))
 
     saved: Final = [
         (call.kwargs["model_name"], call.kwargs["response_time_ms"])
@@ -1308,16 +1328,16 @@ async def test_save_then_probe_public_wildcards_keeps_the_cycle_rows_when_probes
     prisma_client: Final = _recording_prisma()
     router: Final = _openai_wildcard_router({"mock_response": "ok", "mock_delay": 30})
 
-    persisted: Final = await _save_then_probe(prisma_client, router, 0.05)
+    persisted: Final = await _save_then_probe(prisma_client, router, _deadline_once_ready_probes_finish)
 
     assert persisted is True
     assert _saved_statuses(prisma_client) == [
         ("exact", "healthy", None),
-        ("openai/gpt-5.5", "unhealthy", "health check did not finish within the health check interval (0.05s)"),
+        ("openai/gpt-5.5", "unhealthy", "health check did not finish within the health check interval (60s)"),
     ]
 
 
-_ProbeEndpoints: TypeAlias = tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]]]
+_TIMED_OUT: Final = "health check did not finish within the health check interval (60s)"
 
 
 def _saved_statuses(prisma_client: MagicMock) -> list[tuple[str, str, str | None]]:
@@ -1361,26 +1381,31 @@ async def _save_then_probe_with(
     probe: _FakeProbe,
     regular_persisted: bool = True,
     max_concurrency: int | None = None,
-    deadline_seconds: float = 60,
+    deadline_passes_early: bool = False,
+    order: ProbeOrder | None = None,
 ) -> bool:
     from litellm.proxy.health_check import WildcardProbeScope, save_then_probe_public_wildcards
 
     async def regular_save() -> bool:
         return regular_persisted
 
+    scope: Final = WildcardProbeScope(
+        public_names=public_names,
+        router=_openai_wildcard_router({}),
+        model_groups=None,
+        details=True,
+        max_concurrency=max_concurrency,
+        deadline_seconds=60,
+        probe_one=probe,
+    )
+    with_deadline: Final = (
+        replace(scope, wait_for_deadline=_deadline_once_ready_probes_finish) if deadline_passes_early else scope
+    )
     return await save_then_probe_public_wildcards(
         regular_save,
         prisma_client,
         "pod-1",
-        WildcardProbeScope(
-            public_names=public_names,
-            router=_openai_wildcard_router({}),
-            model_groups=None,
-            details=True,
-            max_concurrency=max_concurrency,
-            deadline_seconds=deadline_seconds,
-            probe_one=probe,
-        ),
+        with_deadline if order is None else replace(with_deadline, order=order),
     )
 
 
@@ -1403,13 +1428,62 @@ async def test_save_then_probe_public_wildcards_saves_finished_probes_and_cancel
     prisma_client: Final = _recording_prisma()
     probe: Final = _FakeProbe(hanging=frozenset({"openai/hangs"}))
 
-    await _save_then_probe_with(prisma_client, ("openai/hangs", "openai/answers"), probe, deadline_seconds=1)
+    await _save_then_probe_with(prisma_client, ("openai/hangs", "openai/answers"), probe, deadline_passes_early=True)
 
     assert probe.cancelled == ["openai/hangs"]
     assert _saved_statuses(prisma_client) == [
         ("openai/answers", "healthy", None),
-        ("openai/hangs", "unhealthy", "health check did not finish within the health check interval (1s)"),
+        ("openai/hangs", "unhealthy", _TIMED_OUT),
     ]
+
+
+def _in_given_order(probes: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+    return probes
+
+
+@pytest.mark.asyncio
+async def test_save_then_probe_public_wildcards_writes_no_row_for_a_probe_that_never_got_a_slot():
+    prisma_client: Final = _recording_prisma()
+    probe: Final = _FakeProbe(hanging=frozenset({"openai/hangs"}))
+
+    await _save_then_probe_with(
+        prisma_client,
+        ("openai/hangs", "openai/waits"),
+        probe,
+        max_concurrency=1,
+        deadline_passes_early=True,
+        order=_in_given_order,
+    )
+
+    assert probe.calls == ["openai/hangs"]
+    assert _saved_statuses(prisma_client) == [("openai/hangs", "unhealthy", _TIMED_OUT)]
+
+
+class _ReversedEveryOtherRound:
+    def __init__(self) -> None:
+        self.rounds = 0
+
+    def __call__(self, probes: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+        self.rounds += 1
+        return probes if self.rounds % 2 else tuple(reversed(probes))
+
+
+@pytest.mark.asyncio
+async def test_save_then_probe_public_wildcards_reorders_probes_each_round_so_none_is_always_last():
+    probe: Final = _FakeProbe(hanging=frozenset({"openai/first", "openai/second"}))
+    order: Final = _ReversedEveryOtherRound()
+
+    for _ in range(2):
+        await _save_then_probe_with(
+            _recording_prisma(),
+            ("openai/first", "openai/second"),
+            probe,
+            max_concurrency=1,
+            deadline_passes_early=True,
+            order=order,
+        )
+
+    assert probe.calls == ["openai/first", "openai/second"]
 
 
 @pytest.mark.asyncio
