@@ -31,6 +31,8 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMOb
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.plumbing.context import set_request_destinations
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import redacted_response_obj_for_custom_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
@@ -1401,6 +1403,15 @@ class TestDerivedTraceFields:
             TranscriptionResponse(text=""),
         )
 
+        assert "langfuse.observation.output" not in attributes
+
+    def test_opted_out_logger_does_not_export_transcription_text(self) -> None:
+        response: Final = TranscriptionResponse(text="hello world")
+        redacted: Final = redacted_response_obj_for_custom_logger(response, CustomLogger(message_logging=False))
+
+        attributes: Final = _emitted({"call_type": "transcription", "litellm_params": {"metadata": {}}}, redacted)
+
+        assert "hello world" not in json.dumps({key: str(value) for key, value in attributes.items()})
         assert "langfuse.observation.output" not in attributes
 
     def test_tags_merge_caller_request_and_default_tags_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
