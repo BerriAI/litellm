@@ -1,6 +1,7 @@
 # ruff: noqa: T201
 import functools
 import importlib.metadata
+import itertools
 import json
 import logging.config
 import os
@@ -291,16 +292,19 @@ def _proxy_api_key() -> str:
 
 
 def _pick_test_model(api_base: str, api_key: str) -> str:
-    response: Final = httpx.get(url=f"{api_base}/v1/models", headers={"Authorization": f"Bearer {api_key}"})
+    response: Final = httpx.get(
+        url=f"{api_base}/v1/models",
+        params={"return_wildcard_routes": "true"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
     if response.is_error:
         raise click.ClickException(f"GET {response.url} answered {response.status_code}: {response.text}")
-    chat_models: Final = tuple(
-        listed["id"]
-        for listed in _MODEL_LIST.validate_json(response.content)["data"]
-        if listed.get("mode") in (None, "chat")
+    named_models: Final = itertools.takewhile(
+        lambda listed: "*" not in listed["id"], _MODEL_LIST.validate_json(response.content)["data"]
     )
+    chat_models: Final = tuple(listed["id"] for listed in named_models if listed.get("mode") in (None, "chat"))
     if not chat_models:
-        raise click.ClickException(f"the proxy at {api_base} lists no chat model, pass one with --model")
+        raise click.ClickException(f"the proxy at {api_base} lists no chat model by name, pass one with --model")
     return next((model for model in chat_models if not is_cost_map_model_past_deprecation_date(model)), chat_models[0])
 
 
@@ -379,7 +383,6 @@ class ProxyInitializationHelpers:
                     "content": "this is a test request, write a short poem",
                 }
             ],
-            max_tokens=256,
         )
         click.echo(f"\nLiteLLM: response from proxy {response}")
 

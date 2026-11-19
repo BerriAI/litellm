@@ -9,7 +9,7 @@ import runpy
 import sys
 import types
 import urllib.parse as urlparse
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -161,6 +161,10 @@ _CLI_TEST_PROXY_ARGS: Final = ("--host", "127.0.0.1", "--port", "24871")
 
 def _cli_test_completion_reply(request: httpx.Request) -> httpx.Response:
     body: Final = json.loads(request.content)
+    if "max_tokens" in body:
+        return httpx.Response(
+            400, json={"error": {"message": "Unsupported parameter: 'max_tokens' is not supported with this model."}}
+        )
     if request.url.path == "/completions":
         return httpx.Response(
             200,
@@ -182,8 +186,14 @@ def _cli_test_completion_reply(request: httpx.Request) -> httpx.Response:
     )
 
 
-def _mock_cli_test_completions(proxy: str = _CLI_TEST_PROXY) -> respx.models.CallList:
+def _mock_cli_test_completions(proxy: str = _CLI_TEST_PROXY) -> Sequence[respx.models.Call]:
     return respx.post(url__regex=rf"^{proxy}/(chat/)?completions$").mock(side_effect=_cli_test_completion_reply).calls
+
+
+def _mock_cli_test_model_list(models_response: httpx.Response, proxy: str = _CLI_TEST_PROXY) -> respx.Route:
+    return respx.get(f"{proxy}/v1/models", params={"return_wildcard_routes": "true"}).mock(
+        return_value=models_response
+    )
 
 
 @pytest.mark.xdist_group("proxy_cli")
@@ -235,6 +245,15 @@ class TestProxyInitializationHelpers:
                 "retired-chat-model",
                 id="every-chat-model-retired",
             ),
+            pytest.param(
+                [
+                    {"id": "retired-chat-model", "mode": "chat"},
+                    {"id": "*"},
+                    {"id": "wildcard-expanded-chat-model", "mode": "chat"},
+                ],
+                "retired-chat-model",
+                id="never-a-wildcard-expansion",
+            ),
         ],
     )
     @respx.mock
@@ -246,7 +265,7 @@ class TestProxyInitializationHelpers:
     ) -> None:
         monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
         monkeypatch.setitem(litellm.model_cost, "retired-chat-model", {"deprecation_date": "2000-01-01"})
-        models: Final = respx.get(f"{_CLI_TEST_PROXY}/v1/models").respond(json={"data": listed_models})
+        models: Final = _mock_cli_test_model_list(httpx.Response(200, json={"data": listed_models}))
         completions: Final = _mock_cli_test_completions()
 
         run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
@@ -270,7 +289,7 @@ class TestProxyInitializationHelpers:
     def test_test_flag_never_sends_the_openai_key_to_the_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-upstream")
-        respx.get(f"{_CLI_TEST_PROXY}/v1/models").respond(json={"data": [{"id": "served-chat-model", "mode": "chat"}]})
+        _mock_cli_test_model_list(httpx.Response(200, json={"data": [{"id": "served-chat-model", "mode": "chat"}]}))
         _mock_cli_test_completions()
 
         run_server.main(["--test", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
@@ -283,13 +302,27 @@ class TestProxyInitializationHelpers:
         [
             pytest.param(
                 httpx.Response(401, text="Invalid proxy server token passed"),
-                "/v1/models answered 401: Invalid proxy server token passed",
+                "/v1/models?return_wildcard_routes=true answered 401: Invalid proxy server token passed",
                 id="rejected-key",
             ),
             pytest.param(
                 httpx.Response(200, json={"data": [{"id": "embedding-model", "mode": "embedding"}]}),
-                "lists no chat model, pass one with --model",
+                "lists no chat model by name, pass one with --model",
                 id="no-chat-model",
+            ),
+            pytest.param(
+                httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {"id": "embedding-model", "mode": "embedding"},
+                            {"id": "openai/*"},
+                            {"id": "wildcard-expanded-chat-model", "mode": "chat"},
+                        ]
+                    },
+                ),
+                "lists no chat model by name, pass one with --model",
+                id="only-wildcard-routes-serve-chat",
             ),
         ],
     )
@@ -297,7 +330,7 @@ class TestProxyInitializationHelpers:
     def test_test_flag_stops_before_any_completion_when_no_model_can_be_picked(
         self, models_response: httpx.Response, expected_message: str
     ) -> None:
-        respx.get(f"{_CLI_TEST_PROXY}/v1/models").mock(return_value=models_response)
+        _mock_cli_test_model_list(models_response)
         completions: Final = _mock_cli_test_completions()
 
         with pytest.raises(click.ClickException) as raised:
