@@ -392,7 +392,19 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
       issue === "thresholdRange"
         ? t("teams.teamInfo.validation.thresholdRange")
         : t("teams.teamInfo.validation.duplicateThreshold"),
-    ).optional(),
+    )
+      .superRefine((rows, ctx) => {
+        rows.forEach((row, index) => {
+          if (!row.emails.split(",").some((email) => email.trim().length > 0)) {
+            ctx.addIssue({
+              code: "custom",
+              message: t("teams.teamInfo.validation.teamAlertRecipientsRequired"),
+              path: [index, "emails"],
+            });
+          }
+        });
+      })
+      .optional(),
     soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
     default_team_member_models: z.array(z.string()).optional(),
     team_member_budget: numericInputSchema,

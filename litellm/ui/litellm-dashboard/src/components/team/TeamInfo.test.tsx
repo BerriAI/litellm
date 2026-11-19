@@ -2724,7 +2724,12 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       ...overrides,
     };
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(teamOverrides));
-    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+    const updatedTeam = {
+      ...createMockTeamData().team_info,
+      organization_id: "org-123",
+      keys: [],
+    } satisfies networking.Team;
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: updatedTeam, team_id: "123" });
 
     renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
@@ -2821,6 +2826,17 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
     expect(metadata.soft_budget_alerting_emails).toStrictEqual(["ops@test.com", "lead@test.com"]);
     expect(metadata.cost_center).toBe("eng");
+  });
+
+  it.each(["", " ,  , "])("blocks team alerts with no recipients (%j)", async (emails) => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithTeamBudgetAlerts(user);
+
+    fireEvent.change(screen.getAllByPlaceholderText(/Recipients, e\.g\./)[0], { target: { value: emails } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await screen.findByText("Enter at least one recipient for this team alert");
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
   });
 
   it("blocks the save when a team budget alert threshold is repeated", async () => {
