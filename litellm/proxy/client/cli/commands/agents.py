@@ -32,6 +32,7 @@ from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, is_pkce_login, load_token, login
 from .claude_settings import (
+    ANTHROPIC_DEFAULT_MODEL_ENV_KEYS,
     API_KEY_HELPER_KEY,
     ENV_KEY,
     LAUNCH_KEY_OVERLAY_PREFIX,
@@ -66,6 +67,15 @@ ENABLE_TOOL_SEARCH_ENV: Final = "ENABLE_TOOL_SEARCH"
 ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
+ANTHROPIC_MODEL_ENV: Final = "ANTHROPIC_MODEL"
+CLAUDE_CODE_SUBAGENT_MODEL_ENV: Final = "CLAUDE_CODE_SUBAGENT_MODEL"
+CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV: Final = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+CLAUDE_CODE_AUTO_COMPACT_WINDOW_ENV: Final = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+CLAUDE_CODE_MAX_OUTPUT_TOKENS_ENV: Final = "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
+_CLAUDE_MIN_AUTO_COMPACT_WINDOW: Final = 100_000
+_CLAUDE_MAX_AUTO_COMPACT_WINDOW: Final = 1_000_000
+_CLAUDE_MAX_OUTPUT_TOKENS: Final = 128_000
+_MODEL_FLAG: Final = "--model"
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
@@ -885,6 +895,81 @@ def opencode_model_sync_env(
     return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups)})
 
 
+def _model_flag_values(command: Sequence[str]) -> tuple[str, ...]:
+    args: Final = tuple(command[1:])
+    options: Final = tuple(args[: args.index("--")]) if "--" in args else args
+    spaced: Final = tuple(
+        options[index + 1] for index, arg in enumerate(options) if arg == _MODEL_FLAG and index + 1 < len(options)
+    )
+    assigned: Final = tuple(arg.partition("=")[2] for arg in options if arg.startswith(_MODEL_FLAG + "="))
+    return spaced + assigned
+
+
+@dataclass(frozen=True, slots=True)
+class _ClaudeModelChoice:
+    name: str
+    explicit: bool
+
+
+def _claude_requested_model(command: Sequence[str], base_env: Mapping[str, str]) -> _ClaudeModelChoice | None:
+    flagged: Final = tuple(value.strip() for value in _model_flag_values(command) if value.strip())
+    if flagged:
+        return _ClaudeModelChoice(flagged[-1], True)
+    inherited: Final = base_env.get(ANTHROPIC_MODEL_ENV, "").strip()
+    return _ClaudeModelChoice(inherited, False) if inherited else None
+
+
+def _claude_limit_env(limits: ModelLimits) -> Mapping[str, str]:
+    context: Final = limits.context_window
+    output: Final = limits.max_tokens
+    window: Final = {CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV: str(context)} if context else {}
+    compact: Final = (
+        {CLAUDE_CODE_AUTO_COMPACT_WINDOW_ENV: str(min(context, _CLAUDE_MAX_AUTO_COMPACT_WINDOW))}
+        if context and context >= _CLAUDE_MIN_AUTO_COMPACT_WINDOW
+        else {}
+    )
+    capped_output: Final = (
+        {CLAUDE_CODE_MAX_OUTPUT_TOKENS_ENV: str(min(output, _CLAUDE_MAX_OUTPUT_TOKENS))} if output else {}
+    )
+    return MappingProxyType({**window, **compact, **capped_output})
+
+
+def claude_model_sync_env(
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    model: str | None,
+    *,
+    explicit: bool = False,
+    get: Callable[..., requests.Response] = requests.get,
+) -> Mapping[str, str] | ModelSyncSkipped:
+    """Env that sizes Claude Code to a proxy model group, or why it was skipped.
+
+    Claude Code assumes a 1,000,000-token window for a model id it does not
+    know, so a gateway model is sized from /model_group/info: its context
+    window, an auto-compact window no wider than the model, its output cap,
+    and the same model for every tier and for subagents so a launch never
+    reaches for an Anthropic model the proxy does not serve. `explicit` means
+    the model came from --model, which then replaces sizing already in the
+    environment; otherwise a value already in the environment is left alone.
+    """
+    if not model:
+        return _NO_EXTRA_ENV
+    groups: Final = fetch_model_limits(base_url, api_key, get=get)
+    limits: Final = groups.get(model)
+    if limits is None:
+        return ModelSyncSkipped(f"{base_url.rstrip('/')}/model_group/info lists no model group {model!r}")
+    values: Final = MappingProxyType(
+        {
+            **{name: model for name in (*ANTHROPIC_DEFAULT_MODEL_ENV_KEYS, CLAUDE_CODE_SUBAGENT_MODEL_ENV)},
+            **_claude_limit_env(limits),
+        }
+    )
+    if explicit:
+        return values
+    return MappingProxyType({name: value for name, value in values.items() if name not in base_env})
+
+
 def _codex_row(
     model: ListedModel,
     upstream: ModelUpstream | None,
@@ -1112,6 +1197,7 @@ def agent_model_sync_env(
     base_url: str,
     api_key: str,
     skip_verify: bool,
+    command: Sequence[str] = (),
     *,
     get: Callable[..., requests.Response] = requests.get,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -1119,17 +1205,23 @@ def agent_model_sync_env(
     """Extra env or args an agent needs to see the proxy's model list.
 
     binary is the resolved path the launch will run (`codex.cmd` on a Windows
-    npm install). OpenCode takes the list as env, Codex as a `-c` override that
-    binary has read back first; Claude Code discovers models itself through
-    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY. skip_verify means the caller
-    wants no pre-launch proxy call at all, so the listing is skipped too rather
-    than hanging on an offline proxy.
+    npm install) and command is the argv it will get. OpenCode takes the list as
+    env, Codex as a `-c` override that binary has read back first; Claude Code
+    discovers models itself through CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
+    and is sized for the model its --model flag names. skip_verify means the
+    caller wants no pre-launch proxy call at all, so the listing is skipped too
+    rather than hanging on an offline proxy.
     """
     agent: Final = os.path.splitext(os.path.basename(binary))[0]
-    if agent not in ("opencode", "codex"):
+    if agent not in ("opencode", "codex", "claude"):
+        return _NO_EXTRA_ENV
+    choice: Final = _claude_requested_model(command, base_env) if agent == "claude" else None
+    if agent == "claude" and choice is None:
         return _NO_EXTRA_ENV
     if skip_verify:
         return ModelSyncSkipped(f"{_SKIP_VERIFY_FLAG} was passed")
+    if choice is not None:
+        return claude_model_sync_env(base_env, base_url, api_key, choice.name, explicit=choice.explicit, get=get)
     if agent == "codex":
         return codex_model_sync_args(base_env, base_url, api_key, binary=binary, get=get, run=run)
     return opencode_model_sync_env(base_env, base_url, api_key, get=get)
@@ -1271,7 +1363,9 @@ def run_agent(
     which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
     verify_subscription: Callable[[str, str], None] = verify_subscription_key,
-    sync_models: Callable[[str, Mapping[str, str], str, str, bool], ModelSyncResult] = agent_model_sync_env,
+    sync_models: Callable[
+        [str, Mapping[str, str], str, str, bool, Sequence[str]], ModelSyncResult
+    ] = agent_model_sync_env,
     warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
@@ -1322,7 +1416,7 @@ def run_agent(
         )
     )
     synced: Final = (
-        _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
+        _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify, command)
     )
     if isinstance(synced, ModelSyncSkipped):
         warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
@@ -1483,6 +1577,7 @@ __all__ = [
     "agent_model_sync_env",
     "agent_profile",
     "build_agent_env",
+    "claude_model_sync_env",
     "claude_settings_files",
     "opencode_model_sync_env",
     "opencode_provider_config",

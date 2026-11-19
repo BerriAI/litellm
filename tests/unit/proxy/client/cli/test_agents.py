@@ -27,6 +27,7 @@ from litellm.proxy.client.cli.commands.agents import (
     agent_model_sync_env,
     agent_profile,
     build_agent_env,
+    claude_model_sync_env,
     codex_model_sync_args,
     opencode_model_sync_env,
     run_agent,
@@ -725,9 +726,9 @@ class TestOpencodeModelSync:
         assert "unexpected body" in result.reason
 
     @pytest.mark.parametrize("command", ["claude", "pi", "/usr/bin/claude"])
-    def test_only_opencode_and_codex_sync(self, command):
+    def test_agents_without_a_model_to_size_are_left_alone(self, command):
         def boom(*a, **k):
-            raise AssertionError("no agent other than opencode or codex should call the proxy")
+            raise AssertionError("no agent without a model to size should call the proxy")
 
         assert agent_model_sync_env(command, {}, "http://localhost:4000", "sk-key", False, get=boom) == {}
 
@@ -754,6 +755,192 @@ class TestOpencodeModelSync:
     def test_default_http_client_is_requests_get(self):
         assert _default_of(agent_model_sync_env, "get") is requests.get
         assert _default_of(opencode_model_sync_env, "get") is requests.get
+
+
+class TestClaudeModelSync:
+    @staticmethod
+    def _sync(command, base_env=None, groups=(), binary="claude"):
+        captured = {}
+        result = agent_model_sync_env(
+            binary,
+            base_env or {},
+            "http://localhost:4000",
+            "sk-key",
+            False,
+            command,
+            get=_routed_get(captured, None, groups),
+        )
+        return captured, result
+
+    def test_model_group_limits_become_claude_code_env(self):
+        groups = (
+            {
+                "model_group": "deepseek-v4.1-flash",
+                "max_input_tokens": 1048576,
+                "max_output_tokens": 16384,
+            },
+        )
+        captured, env = self._sync(["claude", "--model", "deepseek-v4.1-flash"], groups=groups)
+
+        assert captured["urls"] == ["http://localhost:4000/model_group/info"]
+        assert captured["headers"] == {"Authorization": "Bearer sk-key"}
+        assert dict(env) == {
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4.1-flash",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4.1-flash",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4.1-flash",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4.1-flash",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4.1-flash",
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
+        }
+
+    @pytest.mark.parametrize(
+        ("context", "compact"),
+        [(1048576, "1000000"), (131072, "131072"), (65536, None)],
+        ids=["above-the-cap", "between-the-bounds", "below-the-floor"],
+    )
+    def test_auto_compact_window_never_exceeds_the_model(self, context, compact):
+        _, env = self._sync(
+            ["claude", "--model", "m"],
+            groups=({"model_group": "m", "max_input_tokens": context, "max_output_tokens": 1},),
+        )
+        assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == str(context)
+        assert env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") == compact
+
+    def test_output_tokens_are_capped_at_128k(self):
+        _, env = self._sync(
+            ["claude", "--model", "m"],
+            groups=({"model_group": "m", "max_input_tokens": 200000, "max_output_tokens": 200000},),
+        )
+        assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "200000"
+        assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "128000"
+
+    @pytest.mark.parametrize(
+        ("command", "model"),
+        [
+            (["claude", "--model", "m"], "m"),
+            (["claude", "--model=m"], "m"),
+            (["claude", "-p", "hi", "--model", "m"], "m"),
+            (["claude", "--model", "first", "--model", "second"], "second"),
+        ],
+        ids=["spaced", "assigned", "after-other-args", "last-flag-wins"],
+    )
+    def test_the_model_flag_names_the_group_to_size(self, command, model):
+        _, env = self._sync(command, groups=({"model_group": model},))
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == model
+
+    def test_anthropic_model_env_names_the_group_when_no_flag_is_given(self):
+        _, env = self._sync(
+            ["claude"],
+            base_env={"ANTHROPIC_MODEL": "env-model"},
+            groups=({"model_group": "env-model"},),
+        )
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "env-model"
+
+    def test_a_model_flag_wins_over_the_anthropic_model_env(self):
+        _, env = self._sync(
+            ["claude", "--model", "flag-model"],
+            base_env={"ANTHROPIC_MODEL": "env-model"},
+            groups=({"model_group": "flag-model"}, {"model_group": "env-model"}),
+        )
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "flag-model"
+
+    def test_arguments_after_the_option_terminator_are_not_a_model(self):
+        _, env = self._sync(
+            ["claude", "--", "--model", "not-a-model"],
+            base_env={"ANTHROPIC_MODEL": "env-model"},
+            groups=({"model_group": "env-model"},),
+        )
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "env-model"
+
+    def test_no_model_makes_no_proxy_call(self):
+        def boom(*a, **k):
+            raise AssertionError("a launch without a model must not ask the proxy")
+
+        assert agent_model_sync_env("claude", {}, PROXY, "sk-key", False, ["claude"], get=boom) == {}
+        assert (
+            agent_model_sync_env("claude", {"ANTHROPIC_MODEL": ""}, PROXY, "sk-key", False, ["claude"], get=boom) == {}
+        )
+
+    def test_a_model_flag_replaces_inherited_sizing(self):
+        inherited = {
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "other:cloud",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "other:cloud",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "other:cloud",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "other:cloud",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "other:cloud",
+        }
+        _, env = self._sync(
+            ["claude", "--model", "m"],
+            base_env=inherited,
+            groups=({"model_group": "m", "max_input_tokens": 200000, "max_output_tokens": 200000},),
+        )
+        assert dict(env) == {
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "m",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "m",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "m",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "m",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "m",
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000",
+        }
+
+    def test_a_model_from_the_environment_leaves_existing_sizing_alone(self):
+        base_env = {
+            "ANTHROPIC_MODEL": "m",
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "9000",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus",
+        }
+        _, env = self._sync(
+            ["claude"],
+            base_env=base_env,
+            groups=({"model_group": "m", "max_input_tokens": 200000, "max_output_tokens": 200000},),
+        )
+        assert dict(env) == {
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "m",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "m",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "m",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "m",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000",
+        }
+
+    def test_a_group_without_limits_still_pins_the_tiers(self):
+        _, env = self._sync(["claude", "--model", "m"], groups=({"model_group": "m"},))
+        assert dict(env) == {
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "m",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "m",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "m",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "m",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "m",
+        }
+
+    def test_an_unknown_model_group_is_reported_not_raised(self):
+        _, result = self._sync(["claude", "--model", "not-served"], groups=())
+        assert isinstance(result, ModelSyncSkipped)
+        assert "not-served" in result.reason
+
+    def test_skip_verify_keeps_a_claude_launch_offline(self):
+        def boom(*a, **k):
+            raise AssertionError("--skip-verify must not touch the proxy")
+
+        result = agent_model_sync_env("claude", {}, PROXY, "sk-key", True, ["claude", "--model", "m"], get=boom)
+        assert isinstance(result, ModelSyncSkipped)
+        assert "--skip-verify" in result.reason
+
+    def test_full_path_claude_syncs(self):
+        _, env = self._sync(["claude", "--model", "m"], groups=({"model_group": "m"},), binary="/opt/bin/claude")
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "m"
+
+    def test_defaults(self):
+        assert _default_of(claude_model_sync_env, "get") is requests.get
+        assert _default_of(claude_model_sync_env, "explicit") is False
+        assert _default_of(agent_model_sync_env, "command") == ()
 
 
 class TestCodexModelSync:
@@ -1666,15 +1853,15 @@ class TestRunAgent:
         order = []
         calls = {}
 
-        def fake_sync(command, base_env, base_url, api_key, skip_verify):
+        def fake_sync(binary, base_env, base_url, api_key, skip_verify, command):
             order.append("sync")
-            calls["args"] = (command, dict(base_env), base_url, api_key, skip_verify)
+            calls["args"] = (binary, dict(base_env), base_url, api_key, skip_verify, tuple(command))
             return {"OPENCODE_CONFIG_CONTENT": '{"provider":{"litellm":{}}}'}
 
         run_agent(
             "http://localhost:4000",
             "sk-key",
-            ["opencode"],
+            ["opencode", "--model", "m"],
             base_env={"HOME": "/home/me"},
             sync_models=fake_sync,
             which=lambda name: "/usr/local/bin/opencode",
@@ -1688,6 +1875,7 @@ class TestRunAgent:
             "http://localhost:4000",
             "sk-key",
             False,
+            ("opencode", "--model", "m"),
         )
 
     def test_unreachable_proxy_is_not_asked_for_models(self):
@@ -1713,7 +1901,7 @@ class TestRunAgent:
         warnings = []
         calls = {}
 
-        def fake_sync(command, base_env, base_url, api_key, skip_verify):
+        def fake_sync(binary, base_env, base_url, api_key, skip_verify, command):
             calls["skip_verify"] = skip_verify
             return ModelSyncSkipped("offline")
 
