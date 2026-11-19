@@ -639,6 +639,7 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
 def admin_client(client_and_mocks):
     client, mock_prisma, mock_table = client_and_mocks
     mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_customerorganizationtable = MagicMock(
         find_many=AsyncMock(return_value=[]), count=AsyncMock(return_value=0)
     )
@@ -682,3 +683,21 @@ async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_
 
     assert resp.status_code == 200, resp.text
     mock_table.delete.assert_awaited_once_with(where={"budget_id": "tpl-1"})
+
+
+@pytest.mark.asyncio
+async def test_delete_budget_unlinks_it_from_teams_and_evicts_their_cache(admin_client, monkeypatch):
+    client, mock_prisma, mock_table = admin_client
+    mock_prisma.db.query_raw = AsyncMock(return_value=[{"team_id": "team-1"}])
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    await cache.async_set_cache(key="team_id:team-1", value={"team_id": "team-1"})
+
+    resp: Final = client.post("/budget/delete", json={"id": "tpl-1"})
+
+    assert resp.status_code == 200, resp.text
+    mock_table.delete.assert_awaited_once_with(where={"budget_id": "tpl-1"})
+    query, budget_id = mock_prisma.db.query_raw.await_args.args
+    assert "team_member_budget_id" in query
+    assert budget_id == "tpl-1"
+    assert await cache.async_get_cache(key="team_id:team-1") is None

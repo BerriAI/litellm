@@ -58,6 +58,9 @@ from litellm.repositories.table_repositories import (
 
 router: Final = APIRouter()
 _WRITE_VALUES: Final = TypeAdapter(Mapping[str, object])
+_UNLINK_TEAM_MEMBER_BUDGET: Final = """UPDATE "LiteLLM_TeamTable" SET metadata = metadata - 'team_member_budget_id'
+WHERE metadata->>'team_member_budget_id' = $1 RETURNING team_id"""
+_UNLINKED_TEAM_ROWS: Final = TypeAdapter(tuple[Mapping[str, str], ...])
 
 
 async def new_budget(
@@ -460,7 +463,7 @@ async def delete_budget(
     Parameters:
     - id: str - The budget id to delete
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -494,5 +497,16 @@ async def delete_budget(
         )
 
     response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
+
+    unlinked_teams: Final = _UNLINKED_TEAM_ROWS.validate_python(
+        await prisma_client.writer_db.query_raw(_UNLINK_TEAM_MEMBER_BUDGET, data.id)
+    )
+    with service_target("team_member_budgets"):
+        try:
+            for team in unlinked_teams:
+                await user_api_key_cache.async_delete_cache(key=f"team_id:{team['team_id']}")
+            await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{data.id}")
+        except Exception:  # noqa: BLE001  # Cache failure must not fail a committed budget delete.
+            verbose_proxy_logger.warning("Failed to evict team caches for the deleted budget", exc_info=True)
 
     return response
