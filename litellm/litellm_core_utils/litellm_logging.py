@@ -2616,7 +2616,12 @@ class Logging(LiteLLMLoggingBaseClass):
         subscription_usage: Final = claude_subscription_usage(self.model_call_details, result)
         if subscription_usage is not None and not subscription_usage["is_overage"]:
             self.cost_breakdown = None
-            return 0.0
+            subscription_additional_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+            return (
+                subscription_additional_cost
+                if isinstance(subscription_additional_cost, (int, float)) and subscription_additional_cost > 0
+                else 0.0
+            )
 
         if isinstance(result, (OpenAIStream, OpenAIAsyncStream)):
             return None

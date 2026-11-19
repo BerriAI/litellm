@@ -457,6 +457,8 @@ def logging_obj():
 
 @pytest.mark.parametrize("call_type", ("completion", "anthropic_messages"))
 @pytest.mark.parametrize("header_source", ("raw", "hidden"))
+@pytest.mark.parametrize("additional_cost", (None, 0.0, 0.25, -1.0, "invalid"))
+@pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize(
     "signals, oauth, covered",
     (
@@ -474,6 +476,8 @@ def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
     signals: dict[str, str],
     oauth: bool,
     covered: bool,
+    additional_cost: object,
+    stream: bool,
 ) -> None:
     model: Final = "claude-subscription-pricing-test"
     monkeypatch.setitem(
@@ -484,7 +488,7 @@ def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
     logger: Final = LitellmLogging(
         model=model,
         messages=[],
-        stream=False,
+        stream=stream,
         call_type=call_type,
         start_time=datetime.datetime(2025, 1, 1),
         litellm_call_id="subscription",
@@ -497,6 +501,7 @@ def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
         litellm_params={"metadata": {"used_client_oauth_token": oauth}},
     )
     headers: Final = {f"anthropic-ratelimit-unified-{key}": value for key, value in signals.items()}
+    logger.model_call_details["additional_response_cost"] = additional_cost
     response: Final = litellm.ModelResponse(
         model=model, usage=litellm.Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110)
     )
@@ -507,7 +512,8 @@ def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
 
     cost: Final = logger.response_cost_calculator(response)
 
-    assert cost == pytest.approx(0.0 if covered else 100 * 0.01 + 10 * 0.02)
+    expected_additional: Final = additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    assert cost == pytest.approx((0.0 if covered else 100 * 0.01 + 10 * 0.02) + expected_additional)
 
 
 @pytest.mark.asyncio
