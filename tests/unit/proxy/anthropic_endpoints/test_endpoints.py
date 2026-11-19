@@ -22,15 +22,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.endpoints import _count_tokens_body_options
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.proxy_server import _deployment_with_request_count_settings
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
 
 
 def test_count_tokens_carries_placement_settings_into_the_deployment() -> None:
-    from litellm.proxy.anthropic_endpoints.endpoints import _count_tokens_body_options
-    from litellm.proxy.proxy_server import _deployment_with_request_count_settings
-
     settings: Final = {
         "store": False,
         "truncation": "auto",
