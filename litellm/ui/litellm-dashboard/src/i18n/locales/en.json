@@ -1,4 +1,133 @@
 {
+  "apps": {
+    "title": "Applications",
+    "list": {
+      "title": "All applications",
+      "searchPlaceholder": "Search applications",
+      "count_one": "{{count}} application",
+      "count_other": "{{count}} applications",
+      "loading": "Loading applications…",
+      "noMatches": "No applications match your search.",
+      "back": "Back to applications",
+      "gatewaySurcharge": "Gateway default",
+      "customersAllowed": "Allowed",
+      "customersBlocked": "Blocked",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "columns": {
+        "application": "Application",
+        "spend": "Spend",
+        "surcharge": "Surcharge",
+        "newCustomers": "New customers"
+      }
+    },
+    "settingsTitle": "Applications",
+    "settingsHint": "Every application in your Gateway, with its spend, budget, customer surcharge and whether it may create new customers. Open one to change its settings.",
+    "alias": "App",
+    "edit": "Edit",
+    "cancel": "Cancel",
+    "close": "Close",
+    "save": "Save app settings",
+    "saved": "App settings saved.",
+    "autoCreateCustomers": "This app may create new customers",
+    "autoCreateCustomersHint": "When off, a request from this app that names an unknown customer organization or member is refused with 403. Known customers keep working.",
+    "surcharge": "Surcharge on customer requests (%)",
+    "surchargePlaceholder": "Use the gateway surcharge",
+    "surchargeHint": "Added to the cost of every request this app makes for a customer. It replaces the gateway surcharge for this app, so 0 turns the surcharge off for it. Leave empty to use the gateway surcharge.",
+    "surchargeInvalid": "Enter a surcharge between 0 and 1000 percent, or leave it empty.",
+    "saveFailed": "The app settings could not be saved.",
+    "retry": "Retry",
+    "spend": "Tracked spend (USD)",
+    "appBudget": "Overall app budget",
+    "memberDefault": "Default per-member budget",
+    "actions": "Actions",
+    "none": "None",
+    "unlimited": "No spend limit",
+    "loading": "Loading app budgets…",
+    "selectApp": "Select an app",
+    "profile": "Budget group",
+    "manageProfiles": "Manage customer organization budget groups",
+    "chooseProfile": "Select a budget group",
+    "noDefaultProfile": "No default budget group",
+    "defaultProfileHint": "Customers without their own app budget or selected budget group inherit this group.",
+    "defaultsTitle": "App defaults",
+    "defaultsHint": "Select an existing app to set its default customer budget group and per-member allowance.",
+    "defaultsFor": "Defaults for {{alias}}",
+    "noResources": "No resources found at this Gateway layer. Create one in the corresponding Gateway page.",
+    "organizationTitle": "App budgets",
+    "allApps": "All apps",
+    "filterApp": "App",
+    "viewUsage": "View usage",
+    "viewUsageFor": "View usage for {{alias}}",
+    "organizationHint": "Set a separate budget for this customer in each app. The global organization budget above also applies.",
+    "addBudget": "Add app budget",
+    "defineFirst": "Define what an app is in your Gateway before adding app budgets. Choose Teams, Projects, or Virtual keys in Applications.",
+    "noOrganizationBudgets": "No app budgets assigned to this customer yet.",
+    "organizationSettings": "Customer app budget",
+    "budgetFor": "Budget for {{alias}}",
+    "customer": "Customer organization",
+    "effectiveBudget": "Budget & usage",
+    "month": "month",
+    "monthly": "Monthly",
+    "yearly": "Yearly",
+    "usedOf": "{{used}} of {{limit}} used",
+    "remaining": "{{amount}} remaining",
+    "overBudget": "{{amount}} over budget",
+    "periodUsageUnavailable": "Period usage unavailable",
+    "budgetDetails": "Budget details",
+    "budgetUsed": "App budget used",
+    "exhausted": "Budget exhausted",
+    "preciseSpend": "Exact usage: {{amount}}",
+    "resetsOn": "Resets {{date}}",
+    "lifetimeSpend": "lifetime spend",
+    "lifetimeTotal": "Lifetime spend: {{amount}}",
+    "year": "year",
+    "rpmLimit": "{{count}} RPM",
+    "windowBudget": "{{period}} spend limit (USD)",
+    "removeWindow": "Remove limit",
+    "source": "Budget source",
+    "customBudget": "Custom budget",
+    "appDefault": "App default",
+    "editBudgetFor": "Edit budget for {{alias}}",
+    "currentPeriod": "Current budget period",
+    "cumulative": "Cumulative spend",
+    "noReset": "No scheduled reset",
+    "organizationMemberDefault": "Per-member default for this customer",
+    "memberDefaultHint": "When disabled, members inherit this app’s default allowance. Existing member overrides keep their own budgets.",
+    "onlyThisPair": "Applies only to {{customer}} in {{alias}}. The organization-wide budget also applies.",
+    "saveBudget": "Save app budget",
+    "memberTitle": "Member app budgets",
+    "memberHint": "Member spend in each app. App-specific member overrides take priority over customer organization and app defaults.",
+    "memberBudget": "Member budget & usage",
+    "memberOverride": "Member override",
+    "inheritedBudget": "Inherited from customer organization or app",
+    "inheritedCustomer": "Customer member default",
+    "inheritedApp": "App member default",
+    "noInheritedBudget": "No member limit",
+    "editMemberBudget": "Edit member budget for {{alias}}",
+    "saveMemberBudget": "Save member app budget",
+    "memberOverrideHint": "Disable the override to inherit the customer organization’s per-member default, or the app default if none is set. Other apps keep their own budgets.",
+    "noMemberApps": "No app budgets are configured yet.",
+    "resourceTypes": {
+      "team": "Teams",
+      "project": "Projects",
+      "virtual_key": "Virtual keys"
+    },
+    "definition": {
+      "autoCreateWithoutApp": "Requests with no app may create new customers",
+      "autoCreateWithoutAppHint": "When off, a request that belongs to no app and names an unknown customer organization or member is refused with 403. Known customers keep working.",
+      "title": "Define apps for your Gateway",
+      "hint": "Choose which existing Gateway resources represent your apps. This setting applies to every customer.",
+      "label": "Apps are represented by",
+      "choose": "Choose Teams, Projects, or Virtual keys",
+      "save": "Save app definition",
+      "configured": "Current definition: {{type}}",
+      "discovering": "Discovering existing resources…",
+      "discovered": "{{count}} existing resources found in {{type}}",
+      "more": "and {{count}} more",
+      "lockHint": "This choice is fixed after a resource has been configured with app budget settings."
+    }
+  },
   "format": {
     "number": "{{val, number}}",
     "compactNumber": "{{val, compact}}",
@@ -3650,6 +3779,7 @@
     "addMarginForm": {
       "provider": {
         "global": "Global (All Providers)",
+        "customer": "Customer requests (surcharge on requests made for a customer)",
         "label": "Provider",
         "hint": "Select 'Global' to apply margin to all providers, or select a specific provider",
         "placeholder": "Select provider or 'Global'",
@@ -3689,7 +3819,9 @@
     },
     "marginTable": {
       "global": "Global",
+      "customer": "Customer requests",
       "globalAllProviders": "Global (All Providers)",
+      "customerRequests": "Customer requests",
       "columns": {
         "provider": "Provider",
         "margin": "Margin",
@@ -3718,6 +3850,7 @@
     },
     "marginConfig": {
       "global": "Global",
+      "customer": "Customer requests",
       "toasts": {
         "fetchFailed": "Failed to fetch margin configuration",
         "updated": "Margin configuration updated successfully",
@@ -3727,7 +3860,8 @@
         "invalidProvider": "Invalid provider selected",
         "duplicate": "Margin for {{name}} already exists. Edit it in the table above.",
         "percentageOutOfRange": "Percentage must be between 0% and 1000%",
-        "fixedNegative": "Fixed amount must be non-negative"
+        "fixedNegative": "Fixed amount must be non-negative",
+        "customerPercentageOnly": "A margin for customer requests must be a percentage"
       }
     },
     "blockUnpricedConfig": {
@@ -6735,6 +6869,7 @@
         "columns": {
           "name": "Callback Name",
           "mode": "Mode",
+          "source": "Source",
           "actions": "Actions"
         },
         "modes": {
@@ -6742,6 +6877,11 @@
           "failure": "Failure",
           "successAndFailure": "Success & Failure"
         },
+        "sources": {
+          "config": "Config",
+          "db": "DB"
+        },
+        "configOwnedHint": "Set in config.yaml. Remove it from the file to delete it.",
         "readOnly": "Read only",
         "readOnlyHint": "Active callback that was not added through the dashboard. Edit it where it was configured.",
         "actions": {
@@ -8455,7 +8595,7 @@
       "aiGateway": "AI Gateway",
       "chatDescription": "Chat UI for using LLMs, MCPs, Agents",
       "chatDisabled": "Admins can enable in Settings",
-      "moyaiDescription": "Cloud Coding Agent",
+      "lensDescription": "Agent traces and findings",
       "trigger": "Switch workspace, current: {{workspace}}"
     },
     "navDisplayName": {
@@ -20812,6 +20952,12 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "organizationGroups": {
+      "title": "Organization budget groups",
+      "help": "Create reusable budgets, then assign them to customer organizations.",
+      "placeholder": "Select a group or enter a dollar amount",
+      "custom": "Use this custom budget"
+    },
     "budgetGroups": {
       "atCap": "At the cap",
       "atCapLabel": "Group {{index}} at the cap",
@@ -20867,7 +21013,7 @@
       "budgetTitle": "Budget and limits",
       "budgetHint": "Leave a limit blank for no limit. Zero is a valid limit.",
       "memberBudgetHint": "Blank limits inherit from the budget template. Without a template, blank means no limit.",
-      "budgetEnabled": "Set a budget and limits",
+      "budgetEnabled": "Set custom limits",
       "maxBudget": "Spend limit (USD)",
       "softBudget": "Soft budget (USD)",
       "budgetDuration": "Reset period",
@@ -21018,14 +21164,14 @@
       "alias": "Alias",
       "aliasPlaceholder": "Optional display name",
       "customerIdHelp": "Leave blank to generate an ID.",
-      "maxBudget": "Customer monthly budget (USD)",
+      "maxBudget": "Customer budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
       "tpm": "TPM limit",
       "rpm": "RPM limit",
       "noLimit": "No limit",
       "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
       "groups": "Member budget groups",
-      "groupsHelp": "Limits in USD per member. Blank means no limit.",
+      "groupsHelp": "Each member gets their own spend and rate limits. Blank means no limit.",
       "groupName": "Group name",
       "groupNameLabel": "Group {{index}} name",
       "monthly": "Monthly budget",
@@ -21043,12 +21189,18 @@
         "nameRequired": "Enter a customer name.",
         "groupNameRequired": "Give each budget group a name.",
         "duplicateGroups": "Use a unique name for each budget group.",
-        "groupLimitRequired": "Set at least one monthly or yearly limit for each budget group.",
+        "groupLimitRequired": "Set at least one spend or rate limit for each budget group.",
         "invalidBudget": "Enter budget amounts of zero or more.",
         "invalidRateLimit": "Rate limits must be whole numbers of zero or more.",
         "defaultRequired": "Choose a default budget group."
       },
       "submit": "Create customer"
+    },
+    "rateLimits": {
+      "title": "Rate limits",
+      "group": "Group {{index}} rate limits",
+      "hint": "Spend limits are optional. Other applicable limits still apply.",
+      "noSpendLimit": "No spend limit"
     },
     "editDialog": {
       "title": "Edit customer",
@@ -21126,6 +21278,9 @@
       "yearlySpend": "Yearly spend / limit",
       "customerSpendShare": "Share of customer spend",
       "noMonthlyLimit": "No monthly limit",
+      "spendBreakdown": "Spend breakdown",
+      "baseCost": "Base cost",
+      "surcharge": "Surcharge",
       "noYearlyLimit": "No yearly limit",
       "reachedLimit": "Reached limit",
       "withinMonthlyBudget": "Within monthly limit",
