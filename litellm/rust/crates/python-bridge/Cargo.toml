@@ -72,6 +72,7 @@ litellm-router-types.workspace = true
 litellm-router-core.workspace = true
 litellm-config.workspace = true
 litellm-gateway-auth-core.workspace = true
+chrono.workspace = true
 http.workspace = true
 jiff.workspace = true
 litellm-coroutine.workspace = true
@@ -81,7 +82,7 @@ litellm-model-catalog.workspace = true
 litellm-model-catalog-refresh.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 indexmap = "2.14.0"
-pyo3 = { workspace = true, features = ["indexmap"] }
+pyo3 = { workspace = true, features = ["chrono", "indexmap"] }
 prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
