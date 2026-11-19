@@ -173,6 +173,25 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             {"store": False, "truncation": "disabled", "extra_body": {"truncation": "auto"}},
             {"store": False, "truncation": "auto"},
             True,
+        ),        (
+            {"store": False, "previous_response_id": "resp_prior", "extra_body": {"previous_response_id": None}},
+            {"store": False, "previous_response_id": None},
+            False,
+        ),
+        (
+            {"store": False, "conversation": "conv_prior", "extra_body": {"conversation": None}},
+            {"store": False, "conversation": None},
+            False,
+        ),
+        (
+            {"store": False, "previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+            {"store": False, "previous_response_id": "resp_prior"},
+            True,
+        ),
+        (
+            {"store": False, "conversation": None, "extra_body": {"conversation": "conv_prior"}},
+            {"store": False, "conversation": "conv_prior"},
+            True,
         ),
     ],
 )
