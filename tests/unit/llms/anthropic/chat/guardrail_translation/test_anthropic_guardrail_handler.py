@@ -3097,7 +3097,7 @@ class TestStructuredWriteBackKeepsToolResults:
         ]
 
     async def test_rewrite_keeps_tool_result_is_error_and_system_row_fields(self):
-        data = {
+        data: Final = {
             "model": "claude-fable-5",
             "messages": [
                 {"role": "user", "content": "run the checks"},
@@ -3130,7 +3130,7 @@ class TestStructuredWriteBackKeepsToolResults:
             data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
         )
 
-        messages = data["messages"]
+        messages: Final = data["messages"]
         assert messages[1] == {"role": "system", "content": "Stay terse.", "output_config": {"effort": "low"}}
         assert messages[3]["content"] == [
             {"type": "tool_result", "tool_use_id": "toolu_01", "content": "boom", "is_error": True}
