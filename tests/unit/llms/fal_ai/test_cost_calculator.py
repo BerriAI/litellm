@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -517,3 +518,37 @@ def test_deployment_unit_price_replaces_the_catalog_unit_price(
 def test_passthrough_does_not_price_a_submission_billed_by_reported_units(model: str, body: dict[str, object]) -> None:
     assert litellm.model_cost[f"fal_ai/{model}"]["output_cost_per_image"] > 0
     assert fal_ai_passthrough_cost(model, body) is None
+
+
+def _register_fal_row(name: str, prices: Mapping[str, object]) -> str:
+    litellm.register_model(
+        {f"fal_ai/{name}": {"litellm_provider": "fal_ai", **prices}},
+        persist_across_reloads=False,
+    )
+    return name
+
+
+def test_passthrough_clip_cell_written_as_a_numeric_string_bills_like_the_number() -> None:
+    body: Final = {"duration": 5, "resolution": "720p"}
+    as_number: Final = fal_ai_passthrough_cost(
+        _register_fal_row("clip-number-cell", {"output_cost_per_video_clip": {"5s": {"720p": 0.3}}}), body
+    )
+    as_text: Final = fal_ai_passthrough_cost(
+        _register_fal_row("clip-text-cell", {"output_cost_per_video_clip": {"5s": {"720p": "0.3"}}}), body
+    )
+
+    assert as_text == as_number
+    assert as_number is not None and as_number > 0.0
+
+
+def test_billable_unit_price_written_as_a_numeric_string_bills_nothing_at_submit_like_the_number() -> None:
+    per_image: Final = {"mode": "image_generation", "output_cost_per_image": 0.04}
+    by_number: Final = fal_ai_passthrough_cost(
+        _register_fal_row("units-number", {**per_image, "output_cost_per_billable_unit": 0.05}), {}
+    )
+    by_text: Final = fal_ai_passthrough_cost(
+        _register_fal_row("units-text", {**per_image, "output_cost_per_billable_unit": "0.05"}), {}
+    )
+
+    assert by_text == by_number
+    assert by_number != fal_ai_passthrough_cost(_register_fal_row("units-none", per_image), {})

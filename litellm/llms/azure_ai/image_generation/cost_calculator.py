@@ -1,24 +1,18 @@
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import ImageDocument, price_units
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
-    get_cost_per_unit,
     resolve_image_model_info,
 )
+from litellm.rust_bridge._native import NativeReceipt
 from litellm.types.utils import ImageResponse, ModelInfo
 
-
-def _input_cost_per_pixel(resolved: ModelInfo) -> float:
-    deployment_price: Final = get_cost_per_unit(resolved, "input_cost_per_pixel", default_value=None)
-    if deployment_price is not None:
-        return deployment_price
-    model_cost_key: Final = resolved.get("key")
-    shared_entry: Final = litellm.model_cost.get(model_cost_key) if model_cost_key is not None else None
-    if shared_entry is None:
-        return 0.0
-    return shared_entry.get("input_cost_per_pixel") or 0.0
+_ROW: Final = TypeAdapter(Mapping[str, object])
 
 
 def cost_calculator(
@@ -49,11 +43,25 @@ def cost_calculator(
             return token_based_cost
 
         num_images: Final = n if n is not None else len(image_response.data or ())
-        output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
-        if output_cost_per_image:
-            return output_cost_per_image * num_images
-
-        if _input_cost_per_pixel(_model_info):
+        model_cost_key: Final = _model_info.get("key")
+        raw_shared_entry: Final[object] = litellm.model_cost.get(model_cost_key) if model_cost_key is not None else None
+        shared_entry: Final = _ROW.validate_python(raw_shared_entry) if isinstance(raw_shared_entry, Mapping) else None
+        outcome: Final = price_units(
+            ImageDocument(
+                kind="image",
+                model=model,
+                provider=litellm.LlmProviders.AZURE_AI.value,
+                calculator="azure_ai",
+                images=num_images,
+                pixels=0,
+                input_images=0,
+            ),
+            (shared_entry,) if shared_entry is not None else (),
+            _model_info,
+        )
+        if isinstance(outcome, NativeReceipt):
+            return outcome.total
+        if outcome.reason == "not_ported":
             from litellm.cost_calculator import default_image_cost_calculator
 
             width: Final = optional_params.get("width") if optional_params else None

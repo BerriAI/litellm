@@ -149,11 +149,38 @@ class ImageDocument(TypedDict):
     kind: ReadOnly[Literal["image"]]
     model: ReadOnly[str]
     provider: ReadOnly[str | None]
-    calculator: ReadOnly[Literal["default", "per_image", "per_image_and_input"]]
+    calculator: ReadOnly[Literal["default", "per_image", "per_image_and_input", "xai", "azure_ai"]]
     images: ReadOnly[int]
     pixels: ReadOnly[int]
     input_images: ReadOnly[int]
     vertex_location: ReadOnly[NotRequired[str | None]]
+    size: ReadOnly[NotRequired[str | None]]
+    reported_usd: ReadOnly[NotRequired[float | None]]
+
+
+class FalImageFacts(TypedDict):
+    target: ReadOnly[tuple[int, int]]
+    pixels: ReadOnly[int | None]
+
+
+class FalImageDocument(TypedDict):
+    kind: ReadOnly[Literal["fal_image"]]
+    model: ReadOnly[str]
+    quality: ReadOnly[str]
+    images: ReadOnly[Sequence[FalImageFacts]]
+    billable_units: ReadOnly[float | None]
+    resolution: ReadOnly[str | None]
+    deployment: ReadOnly[bool]
+    fallback: ReadOnly[bool]
+
+
+class FalSubmitDocument(TypedDict):
+    kind: ReadOnly[Literal["fal_submit"]]
+    model: ReadOnly[str]
+    seconds: ReadOnly[float | None]
+    clip_resolution: ReadOnly[str | None]
+    image_resolution: ReadOnly[str | None]
+    images: ReadOnly[int]
 
 
 class WritesByTtl(TypedDict):
@@ -878,6 +905,16 @@ def price_units(
     """A per-unit call priced from ``document``'s facts, or why no row prices it. ``tables`` are the deployment's own
     price tables, read in order ahead of ``catalog``, the row ``get_model_info`` found for the call."""
     return model_cost_inputs.price_units(document, tables, catalog)
+
+
+def price_fal(
+    document: FalImageDocument | FalSubmitDocument,
+    tables: Sequence[Mapping[str, object]] = (),
+    catalog: Mapping[str, object] | None = None,
+) -> NativeReceipt | NativeUnpriced:
+    """A fal.ai image response or queue submission priced from ``document``'s facts. ``catalog`` is the
+    ``fal_ai/<model>`` row, ``tables`` the deployment's own prices and the fallback row the document flags."""
+    return model_cost_inputs.price_fal(document, tables, catalog)
 
 
 def per_image_cost(

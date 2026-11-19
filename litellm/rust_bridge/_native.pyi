@@ -186,6 +186,8 @@ class NativeRateCard:
     @property
     def output_cost_per_token(self) -> float | None: ...
     @property
+    def input_cost_per_character(self) -> float | None: ...
+    @property
     def token_rate_key(self) -> bool: ...
     @property
     def positive_cost_per_key(self) -> bool: ...
@@ -243,6 +245,12 @@ class NativeModelCostMap:
         self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]
     ) -> tuple[float | None, float | None]: ...
     def price_units(
+        self,
+        document: Mapping[str, object],
+        tables: Sequence[Mapping[str, object]] = ...,
+        catalog: Mapping[str, object] | None = None,
+    ) -> NativeReceipt | NativeUnpriced: ...
+    def price_fal(
         self,
         document: Mapping[str, object],
         tables: Sequence[Mapping[str, object]] = ...,

@@ -6,6 +6,7 @@ mod calculate;
 pub mod call;
 mod engine;
 mod error;
+mod fal;
 mod guardrail;
 mod image;
 mod mcp;
