@@ -46,6 +46,7 @@ export const CUSTOMER_HIERARCHY_FORM_ERRORS = {
   budgetRequired: "customerPortal.hierarchy.budgetRequired",
   invalidIdentifier: "customerPortal.hierarchy.invalidIdentifier",
   invalidTemplate: "customerPortal.hierarchy.invalidTemplate",
+  conflictingBudgetSources: "customerPortal.hierarchy.conflictingBudgetSources",
 } as const;
 
 type FormError = keyof typeof CUSTOMER_HIERARCHY_FORM_ERRORS;
@@ -89,11 +90,7 @@ const hierarchyEditorBudget = (
   organization?: Organization,
 ): Budget | null | undefined => {
   if (entity.kind !== "member") return entity.record.budget;
-  if (entity.record.budget_override != null) {
-    return entity.record.budget_override_expires_at == null
-      ? entity.record.effective_budget
-      : entity.record.budget_override;
-  }
+  if (entity.record.budget_override != null) return entity.record.budget_override;
   const preset = organization?.default_budgets.some((template) => template.budget_id === entity.record.budget_id);
   return preset ? null : entity.record.budget;
 };
@@ -187,6 +184,11 @@ const budgetChanged = (fields: CustomerHierarchyFields, initial: CustomerHierarc
   BUDGET_FIELDS.some((key) => fields[key] !== initial[key]) ||
   JSON.stringify(fields.allowedModels) !== JSON.stringify(initial.allowedModels);
 
+const conflictingMemberBudgetSources = (fields: CustomerHierarchyFields, initial: CustomerHierarchyFields): boolean => {
+  const selectingPreset = fields.templateId !== "" && fields.templateId !== initial.templateId;
+  return selectingPreset && fields.budgetEnabled && budgetChanged(fields, initial);
+};
+
 const aliasChanges = (initial: string | null | undefined, value: string): { alias?: string | null } =>
   value === (initial ?? "") ? {} : { alias: value.trim() || null };
 
@@ -254,10 +256,14 @@ const memberPatch = (
   const retainedBase = temporaryEdit && !templateChanged && member.budget_id;
   if (!fields.templateId && !fields.budgetEnabled && !retainedBase) return { ok: false, error: "budgetRequired" };
   if (temporaryEdit) return temporaryMemberPatch(fields, initial, { ...alias, ...templateSelection });
+  if (conflictingMemberBudgetSources(fields, initial)) return { ok: false, error: "conflictingBudgetSources" };
   if (templateChanged && fields.templateId)
     return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearOverride } } };
   if (!changed) return { ok: true, patch: { kind: "member", body: { ...alias, ...templateSelection } } };
-  return permanentMemberPatch(fields, !initial.budgetEnabled || clearsExpiry, { ...alias, ...clearOverride });
+  return permanentMemberPatch(fields, !initial.budgetEnabled || member.budget_override != null, {
+    ...alias,
+    ...clearOverride,
+  });
 };
 
 const organizationBudget = (original: Budget | null | undefined, parsed: Budget, groupChanged: boolean): Budget => {
