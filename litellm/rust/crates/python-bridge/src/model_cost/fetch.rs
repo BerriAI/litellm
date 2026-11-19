@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use litellm_http::{ClientVariant, HttpClientConfig};
 use litellm_model_catalog_refresh::{
-    Access, Failed, Fetched, GcsAccess, RemoteSource, RetryPolicy, S3Access, Source,
+    Access, Failed, Fetched, GcsAccess, Remote, RemoteSource, RetryPolicy, S3Access, Source,
+    redacted,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -26,6 +27,10 @@ pub(super) struct Connection {
 }
 
 impl Connection {
+    pub(super) fn url(&self) -> &str {
+        &self.url
+    }
+
     /// On the shared runtime's pooled client, for workers after the fork
     pub(super) fn pooled(&self, policy: RetryPolicy) -> PyResult<RemoteSource> {
         let client = crate::http::pool()
@@ -62,6 +67,28 @@ impl NativeCostMapSource {
             url,
             http: crate::http::settings_config(py, use_http_settings)?,
         }))
+    }
+
+    /// The source at `url`, or `None` when the local override or offline mode turns the remote cost map off
+    #[staticmethod]
+    #[pyo3(signature = (url, *, local_only, offline, use_http_settings))]
+    fn remote(
+        py: Python<'_>,
+        url: String,
+        local_only: bool,
+        offline: bool,
+        use_http_settings: bool,
+    ) -> PyResult<Option<Self>> {
+        match Remote::new(url.into(), local_only, offline) {
+            Remote::Off => Ok(None),
+            Remote::At(url) => Self::new(py, url.expose().to_owned(), use_http_settings).map(Some),
+        }
+    }
+
+    /// The URL as source info and logs show it, without the credentials a presigned URL carries
+    #[getter]
+    fn shown_url(&self) -> String {
+        redacted(&self.0.url).into_owned()
     }
 
     /// Fetches on a throwaway runtime with a client of its own
@@ -102,24 +129,27 @@ pub(crate) struct NativeFetchPolicy(pub(super) RetryPolicy);
 impl NativeFetchPolicy {
     #[new]
     /// Retries wait an exponential backoff with jitter from `min_delay_seconds` up to `max_wait_seconds`, or the
-    /// server's `Retry-After` up to that cap
-    #[pyo3(signature = (*, max_attempts, max_wait_seconds, timeout_seconds, min_delay_seconds))]
+    /// server's `Retry-After` up to that cap. An argument left out takes its value from `RetryPolicy::DEFAULT`
+    #[pyo3(signature = (*, max_attempts = None, max_wait_seconds = None, timeout_seconds = None, min_delay_seconds = None))]
     fn new(
-        max_attempts: u32,
-        max_wait_seconds: f64,
-        timeout_seconds: f64,
-        min_delay_seconds: f64,
+        max_attempts: Option<u32>,
+        max_wait_seconds: Option<f64>,
+        timeout_seconds: Option<f64>,
+        min_delay_seconds: Option<f64>,
     ) -> PyResult<Self> {
+        let default = RetryPolicy::DEFAULT;
+        let max_attempts = max_attempts.unwrap_or(default.max_attempts);
         if max_attempts == 0 {
             return Err(PyValueError::new_err("max_attempts must be at least 1"));
         }
-        let seconds = |name: &str, value: f64| {
-            Duration::try_from_secs_f64(value).map_err(|_| {
+        let seconds = |name: &str, value: Option<f64>, default: Duration| match value {
+            None => Ok(default),
+            Some(value) => Duration::try_from_secs_f64(value).map_err(|_| {
                 PyValueError::new_err(format!("{name} must be a non-negative number of seconds"))
-            })
+            }),
         };
-        let min_delay = seconds("min_delay_seconds", min_delay_seconds)?;
-        let max_delay = seconds("max_wait_seconds", max_wait_seconds)?;
+        let min_delay = seconds("min_delay_seconds", min_delay_seconds, default.min_delay)?;
+        let max_delay = seconds("max_wait_seconds", max_wait_seconds, default.max_delay)?;
         if min_delay > max_delay {
             return Err(PyValueError::new_err(
                 "min_delay_seconds must not exceed max_wait_seconds",
@@ -127,10 +157,16 @@ impl NativeFetchPolicy {
         }
         Ok(Self(RetryPolicy {
             max_attempts,
-            timeout: seconds("timeout_seconds", timeout_seconds)?,
+            timeout: seconds("timeout_seconds", timeout_seconds, default.timeout)?,
             min_delay,
             max_delay,
         }))
+    }
+
+    /// The attempt limit, the default's when the caller left it out
+    #[getter]
+    fn max_attempts(&self) -> u32 {
+        self.0.max_attempts
     }
 }
 
@@ -210,7 +246,12 @@ mod tests {
         #[case] accepted: bool,
     ) {
         Python::initialize();
-        let policy = NativeFetchPolicy::new(3, max_wait_seconds, 5.0, min_delay_seconds);
+        let policy = NativeFetchPolicy::new(
+            Some(3),
+            Some(max_wait_seconds),
+            Some(5.0),
+            Some(min_delay_seconds),
+        );
         assert_eq!(policy.is_ok(), accepted);
     }
 
@@ -233,7 +274,7 @@ mod tests {
         Python::attach(|py| {
             let source = NativeCostMapSource::new(py, url, false).unwrap();
             let policy =
-                Bound::new(py, NativeFetchPolicy::new(3, 30.0, 5.0, 2.0).unwrap()).unwrap();
+                Bound::new(py, NativeFetchPolicy::new(None, None, None, None).unwrap()).unwrap();
             let outcome = source.fetch_blocking(py, policy.borrow()).unwrap();
             let fetched = outcome.bind(py).cast::<NativeFetched>().unwrap().get();
             assert_eq!(fetched.body.bind(py).as_bytes(), b"{}");
