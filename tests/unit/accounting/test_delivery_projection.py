@@ -45,6 +45,110 @@ def _spend(contributions: tuple[Contribution, ...], table: str) -> tuple[float, 
     return tuple(float(dict(item.increments)["spend"]) for item in contributions if item.table == table)
 
 
+def test_app_charge_is_additional_to_global_customers_and_daily_attribution() -> None:
+    row: Final = {
+        "request_id": "request",
+        "startTime": _NOW,
+        "spend": 0.25,
+        "api_key": "key",
+        "model": "model",
+        "custom_llm_provider": "provider",
+        "model_group": "model",
+        "metadata": {
+            "accounting_entities": {
+                "app_id": "app",
+                "customer_org_id": "org",
+                "customer_team_id": "team",
+                "customer_member_id": "member",
+            }
+        },
+    }
+    contributions: Final = project_deliveries((DeliveryProjection(row),))
+    totals: Final = entity_transactions(contributions)
+    assert totals["customer_org_list_transactions"] == {"org": 0.25}
+    assert totals["customer_team_list_transactions"] == {"team": 0.25}
+    assert totals["customer_member_list_transactions"] == {"member": 0.25}
+    assert totals["app_list_transactions"] == {"app": 0.25}
+    assert totals["app_customer_org_list_transactions"] == {"app:org": 0.25}
+    assert totals["app_customer_member_list_transactions"] == {"app:member": 0.25}
+    daily: Final = tuple(item for item in contributions if item.table == "LiteLLM_DailyCustomerMemberSpend")
+    assert len(daily) == 1 and dict(daily[0].key)["app_id"] == "app"
+
+
+def _app_delivery(app_id: str, organization_id: str, member_id: str, spend: float) -> DeliveryProjection:
+    return DeliveryProjection(
+        {
+            "request_id": f"{app_id}-{organization_id}-{member_id}",
+            "startTime": _NOW,
+            "spend": spend,
+            "api_key": "key",
+            "model": "model",
+            "custom_llm_provider": "provider",
+            "model_group": "model",
+            "metadata": {
+                "accounting_entities": {
+                    "app_id": app_id,
+                    "customer_org_id": organization_id,
+                    "customer_member_id": member_id,
+                }
+            },
+        }
+    )
+
+
+def test_one_customers_spend_across_apps_keeps_one_global_total_and_distinct_daily_rows() -> None:
+    contributions: Final = project_deliveries(
+        (
+            _app_delivery("chat", "org", "member", 0.25),
+            _app_delivery("search", "org", "member", 0.5),
+        )
+    )
+    totals: Final = entity_transactions(contributions)
+    assert totals["customer_org_list_transactions"] == {"org": 0.75}
+    assert totals["customer_member_list_transactions"] == {"member": 0.75}
+    assert totals["app_list_transactions"] == {"chat": 0.25, "search": 0.5}
+    assert totals["app_customer_org_list_transactions"] == {
+        "chat:org": 0.25,
+        "search:org": 0.5,
+    }
+    assert totals["app_customer_member_list_transactions"] == {
+        "chat:member": 0.25,
+        "search:member": 0.5,
+    }
+    daily: Final = {
+        dict(item.key)["app_id"]: dict(item.increments)["spend"]
+        for item in contributions
+        if item.table == "LiteLLM_DailyCustomerMemberSpend"
+    }
+    assert daily == {"chat": 0.25, "search": 0.5}
+    assert sum(daily.values()) == totals["customer_org_list_transactions"]["org"]
+
+
+def test_customer_balances_within_one_app_remain_independent() -> None:
+    totals: Final = entity_transactions(
+        project_deliveries(
+            (
+                _app_delivery("chat", "first", "member-a", 0.25),
+                _app_delivery("chat", "second", "member-b", 0.5),
+            )
+        )
+    )
+    assert totals["customer_org_list_transactions"] == {"first": 0.25, "second": 0.5}
+    assert totals["customer_member_list_transactions"] == {
+        "member-a": 0.25,
+        "member-b": 0.5,
+    }
+    assert totals["app_list_transactions"] == {"chat": 0.75}
+    assert totals["app_customer_org_list_transactions"] == {
+        "chat:first": 0.25,
+        "chat:second": 0.5,
+    }
+    assert totals["app_customer_member_list_transactions"] == {
+        "chat:member-a": 0.25,
+        "chat:member-b": 0.5,
+    }
+
+
 def test_deliveries_for_one_destination_sum_and_keep_the_earliest_request_start() -> None:
     later: Final = _NOW + timedelta(hours=1)
 

@@ -34,6 +34,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.skill_submission_rows import SubmissionRows
 
 NAME: Final = "portable-notes"
@@ -84,8 +85,7 @@ class HubClient:
 
 @pytest.fixture
 async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
-    prisma: Final = MagicMock()
-    prisma.writer_db = prisma.db
+    prisma: Final = prisma_with_empty_config()
     prisma.db.execute_raw = AsyncMock(return_value=1)
     prisma.get_data = AsyncMock(return_value=None)
     prisma.db.litellm_skillstable.find_many = AsyncMock(return_value=[])

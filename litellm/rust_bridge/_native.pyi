@@ -1888,6 +1888,76 @@ class RustModelAccessGroupRepository:
     def budgets(self, names: Sequence[str]) -> Future[list[tuple[str, float, float | None, bool]]]: ...
 
 @final
+class RustBudgetRepository:
+    def __new__(cls, database: NativeDatabase) -> RustBudgetRepository: ...
+    def find_end_user_default_budget(self, budget_id: str) -> Future[str | None]: ...
+    def find_team_member_default_budget(self, budget_id: str) -> Future[str | None]: ...
+
+@final
+class RustEndUserRepository:
+    def __new__(cls, database: NativeDatabase) -> RustEndUserRepository: ...
+    def find_with_budget_and_object_permission(self, end_user_id: str) -> Future[str | None]: ...
+    def find_restricted_ids(self, limit: int) -> Future[list[str]]: ...
+
+@final
+class RustUserRepository:
+    def __new__(cls, database: NativeDatabase) -> RustUserRepository: ...
+    def resolve(
+        self,
+        user_id: str,
+        *,
+        sso_user_id: str | None = None,
+        user_email: str | None = None,
+        email_verified: bool | None = None,
+        links_any_user: bool,
+        use_writer: bool = False,
+    ) -> Future[str | None]: ...
+    def email_belongs_to_another_user(self, user_email: str, user_id: str) -> Future[bool]: ...
+    def backfill_email(self, user_id: str, user_email: str, *, links_any_user: bool) -> Future[str | None]: ...
+
+@final
+class RustTeamRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamRepository: ...
+    def find_with_model_aliases(self, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
+class RustTeamMembershipRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTeamMembershipRepository: ...
+    def find_with_budget(self, user_id: str, team_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustOrganizationRepository:
+    def __new__(cls, database: NativeDatabase) -> RustOrganizationRepository: ...
+    def find_with_optional_budget(
+        self, organization_id: str, *, include_budget_table: bool = False
+    ) -> Future[str | None]: ...
+    def find_up_to_two_by_alias(self, alias: str) -> Future[list[str]]: ...
+
+@final
+class RustProjectRepository:
+    def __new__(cls, database: NativeDatabase) -> RustProjectRepository: ...
+    def find_with_budget(self, project_id: str) -> Future[str | None]: ...
+
+@final
+class RustTagRepository:
+    def __new__(cls, database: NativeDatabase) -> RustTagRepository: ...
+    def names(self, limit: int) -> Future[list[str]]: ...
+    def find_many_with_budgets(self, names: Sequence[str]) -> Future[list[str]]: ...
+
+@final
+class RustAccessGroupRepository:
+    def __new__(cls, database: NativeDatabase) -> RustAccessGroupRepository: ...
+    def find_by_access_group_id(self, access_group_id: str, *, use_writer: bool = False) -> Future[str | None]: ...
+
+@final
+class RustObjectPermissionRepository:
+    def __new__(cls, database: NativeDatabase) -> RustObjectPermissionRepository: ...
+    def find_by_object_permission_id(
+        self, object_permission_id: str, *, use_writer: bool = False
+    ) -> Future[str | None]: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
@@ -2172,13 +2242,16 @@ __all__ = [
     "ResponsesWebSocketConnection",
     "RouterCall",
     "RouterCoreHandle",
+    "RustAccessGroupRepository",
     "RustAuth",
     "RustAuthOutcome",
     "RustAuthSettings",
     "RustAuthStep",
     "RustBridgeDeclined",
+    "RustBudgetRepository",
     "RustClaimIdentity",
     "RustDenial",
+    "RustEndUserRepository",
     "RustIdentity",
     "RustJwtKeyMappingRepository",
     "RustJwtMapping",
@@ -2186,9 +2259,16 @@ __all__ = [
     "RustKeyRepository",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",
+    "RustObjectPermissionRepository",
+    "RustOrganizationRepository",
     "RustPlan",
+    "RustProjectRepository",
+    "RustTagRepository",
     "RustTeamGrant",
+    "RustTeamMembershipRepository",
+    "RustTeamRepository",
     "RustUpstreamError",
+    "RustUserRepository",
     "SpendRead",
     "TokenCounter",
     "Tokenizer",
