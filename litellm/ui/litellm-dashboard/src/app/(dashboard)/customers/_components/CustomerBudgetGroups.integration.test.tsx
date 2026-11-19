@@ -30,12 +30,60 @@ const organization: Organization = {
     { budget_id: "old", name: "Old", budget_limits: [{ budget_duration: "1mo", max_budget: 20 }] },
   ],
 };
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useAllProxyModels: () => ({
+    data: { data: [{ id: "model-a", owned_by: "openai" }] },
+    isLoading: false,
+    isError: false,
+  }),
+}));
 const fetchMock = vi.fn<typeof fetch>();
 const onSaved = vi.fn();
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 describe("CustomerBudgetGroups", () => {
+  it.each(["organization", "app"] as const)("saves model-only %s groups and reloads their selection", async (scope) => {
+    const user = userEvent.setup();
+    const source = { ...organization, default_budget_template_id: null, default_budgets: [] };
+    fetchMock.mockResolvedValue(
+      json({
+        ...source,
+        default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
+      }),
+    );
+    const view = render(<CustomerBudgetGroups organization={source} onSaved={onSaved} global scope={scope} />);
+    await user.click(screen.getByRole("button", { name: "Add budget group" }));
+    fireEvent.change(screen.getByLabelText("Group name 1"), { target: { value: "Models" } });
+    await user.click(screen.getByRole("combobox", { name: "Search gateway models" }));
+    await user.click(await screen.findByRole("option", { name: "model-a" }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    const request = fetchMock.mock.calls[0][0] as Request;
+    expect(new URL(request.url).pathname).toBe(
+      scope === "app"
+        ? "/management/v1/app_customer_organization_budget_groups"
+        : "/management/v1/customer_organization_budget_groups",
+    );
+    expect(await request.clone().json()).toMatchObject({
+      default_budgets: [{ name: "Models", allowed_models: ["model-a"] }],
+    });
+    view.rerender(
+      <CustomerBudgetGroups
+        organization={{
+          ...source,
+          default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
+        }}
+        onSaved={onSaved}
+        global
+        scope={scope}
+      />,
+    );
+    expect(screen.getByLabelText("model-a")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
   beforeEach(() => {
     testQueryClient.clear();
     registerBaseUrlGetter(() => "http://localhost");

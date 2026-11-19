@@ -73,6 +73,9 @@ export function CustomerBudgetSourceSelect({
       summary: [
         ...(spendSummary.length ? spendSummary : [t("customerPortal.rateLimits.noSpendLimit")]),
         ...rateSummary,
+        ...(group.allowed_models?.length
+          ? [`${t("customerPortal.hierarchy.allowedModels")}: ${group.allowed_models.join(", ")}`]
+          : []),
       ].join(" · "),
     };
   });

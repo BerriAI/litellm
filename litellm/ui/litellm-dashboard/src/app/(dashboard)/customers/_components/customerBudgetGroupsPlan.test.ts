@@ -49,6 +49,72 @@ describe("planCustomerBudgetGroups", () => {
     });
   });
 
+  it("loads models and omits normalized, reordered unchanged restrictions", () => {
+    const source = {
+      ...organization,
+      default_budgets: [{ ...organization.default_budgets[0], allowed_models: ["model-a", "model-b"] }],
+    };
+    const rows = customerBudgetGroupRows(source);
+    expect(rows[0].allowedModels).toEqual(["model-a", "model-b"]);
+    expect(
+      planCustomerBudgetGroups(
+        source,
+        [{ ...rows[0], allowedModels: [" model-b ", "model-a", "model-a"] }],
+        "standard",
+      ),
+    ).toMatchObject({
+      ok: true,
+      changed: false,
+      body: { default_budgets: [{ budget_id: "standard", name: "Standard" }] },
+    });
+  });
+
+  it("patches only changed models and clears restrictions with null", () => {
+    const source = {
+      ...organization,
+      default_budgets: organization.default_budgets.map((group) => ({ ...group, allowed_models: ["model-a"] })),
+    };
+    const rows = customerBudgetGroupRows(source);
+    const result = planCustomerBudgetGroups(
+      source,
+      [{ ...rows[0], allowedModels: [" model-b ", "model-b", " "] }, { ...rows[1], allowedModels: [] }, rows[2]],
+      "standard",
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      body: {
+        default_budgets: [
+          { budget_id: "standard", name: "Standard", allowed_models: ["model-b"] },
+          { budget_id: "legacy", name: "Legacy", allowed_models: null },
+          { budget_id: "rate", name: "Rate only" },
+        ],
+      },
+    });
+    if (!result.ok) return;
+    expect(result.body.default_budgets[2]).not.toHaveProperty("allowed_models");
+  });
+
+  it("allows model-only shared groups but rejects whitespace-only restrictions", () => {
+    const group = {
+      ...customerBudgetGroupRows(organization)[0],
+      id: "new",
+      name: "Models",
+      monthlyBudget: "",
+      yearlyBudget: "",
+      allowedModels: [" model-a ", "model-a"],
+    };
+    expect(planCustomerBudgetGroups(organization, [group], "", false)).toMatchObject({
+      ok: true,
+      changed: true,
+      body: { default_budgets: [{ name: "Models", allowed_models: ["model-a"] }] },
+    });
+    expect(planCustomerBudgetGroups(organization, [{ ...group, allowedModels: [" "] }], "", false)).toEqual({
+      ok: false,
+      error: "groupLimitRequired",
+    });
+  });
+
   it("should preserve an explicitly unset default while editing existing groups", () => {
     const original = { ...organization, default_budget_template_id: null };
     const rows = customerBudgetGroupRows(original);

@@ -16,7 +16,7 @@ import { customerUsageEntity } from "./customerUsageApi";
 import type { Member, Organization } from "./customerHierarchyForms";
 
 const audit = { created_at: "", updated_at: "", created_by: "", updated_by: "", spend: 10 };
-const standard = { budget_id: "standard", name: "Standard", max_budget: 500 };
+const standard = { budget_id: "standard", name: "Standard", max_budget: 500, allowed_models: ["preset-model"] };
 const organization: Organization = {
   customer_org_id: "org-1",
   alias: "Example",
@@ -154,6 +154,7 @@ describe("organization budget dialog", () => {
     const source = await screen.findByRole("combobox", { name: "Customer organization limits" });
     await waitFor(() => expect(source).toBeEnabled());
     await chooseSelectOption(user, source, /^Standard/);
+    expect(source).toHaveTextContent("Allowed models: preset-model");
     expect(screen.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(writes()).toHaveLength(1));

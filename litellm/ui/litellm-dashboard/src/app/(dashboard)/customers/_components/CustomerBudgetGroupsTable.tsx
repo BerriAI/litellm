@@ -9,13 +9,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import type { CustomerBudgetGroupFields } from "./customerOrganizationForm";
 import CustomerBudgetAmountInput from "./CustomerBudgetAmountInput";
 import { CustomerRateLimitInput, rateFields } from "./CustomerRateLimits";
+import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
 
 const columns = [
-  ["groupColumn", "w-[21%]", "w-[26%]"],
-  ["monthlyColumn", "w-[13%]", "w-[18%]"],
-  ["yearlyColumn", "w-[13%]", "w-[18%]"],
-  ["tpmColumn", "w-[12%]", "w-[16%]"],
-  ["rpmColumn", "w-[12%]", "w-[16%]"],
+  ["groupColumn", "w-[16%]", "w-[20%]"],
+  ["monthlyColumn", "w-[11%]", "w-[13%]"],
+  ["yearlyColumn", "w-[11%]", "w-[13%]"],
+  ["tpmColumn", "w-[10%]", "w-[12%]"],
+  ["rpmColumn", "w-[10%]", "w-[12%]"],
 ] as const;
 const budgetFields = [
   ["monthlyBudget", "monthly"],
@@ -64,7 +65,7 @@ export default function CustomerBudgetGroupsTable({
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
       <div className="overflow-hidden rounded-lg border">
-        <Table className={`${memberGroups ? "min-w-[60rem]" : "min-w-[48rem]"} table-fixed`} aria-label={title}>
+        <Table className={`${memberGroups ? "min-w-[72rem]" : "min-w-[60rem]"} table-fixed`} aria-label={title}>
           <TableHeader className="bg-muted/40">
             <TableRow className="hover:bg-transparent">
               {columns.map(([key, memberWidth, globalWidth]) => (
@@ -76,8 +77,11 @@ export default function CustomerBudgetGroupsTable({
                   {t(`customerPortal.createDialog.${key}`)}
                 </TableHead>
               ))}
+              <TableHead scope="col" className="w-[24%] px-3 text-xs text-muted-foreground">
+                {t("customerPortal.hierarchy.allowedModels")}
+              </TableHead>
               {memberGroups && (
-                <TableHead scope="col" className="w-[23%] px-3 text-xs text-muted-foreground">
+                <TableHead scope="col" className="w-[12%] px-3 text-xs text-muted-foreground">
                   {t("customerPortal.createDialog.capColumn")}
                 </TableHead>
               )}
@@ -116,6 +120,16 @@ export default function CustomerBudgetGroupsTable({
                     />
                   </TableCell>
                 ))}
+                <TableCell className="p-2">
+                  <Label htmlFor={`${id}-models-${group.id}`} className="sr-only">
+                    {t("customerPortal.hierarchy.allowedModels")} ({groupName(group, index)})
+                  </Label>
+                  <CustomerAllowedModelsSelect
+                    id={`${id}-models-${group.id}`}
+                    value={group.allowedModels ?? []}
+                    onChange={(allowedModels) => onUpdate(group.id, { allowedModels })}
+                  />
+                </TableCell>
                 {memberGroups && (
                   <TableCell className="p-2">
                     <Select
