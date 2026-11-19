@@ -18,7 +18,7 @@ from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from models import SpendLogsParams
 from proxy_client import ProxyClient
-from setup.datastore import connections_sampler, read_db_counters, read_redis_counters, redis_monitor
+from setup.datastore import connections_sampler, read_db_counters, read_redis_counters, redis_monitor, spendlogs_storage
 from setup.event_loop import (
     LOG_FILE_ENV,
     OPT_IN_ENV,
@@ -173,6 +173,7 @@ def test_perf_case(
         stall_properties(case.event_loop, stall_rows) if case.event_loop is not None else junit_properties(rows)
     )
     item.user_properties.extend(step_properties(observation.steps()))
+    item.user_properties.extend(spendlogs_storage())
     print(render(case, observation, rows))
     if case.event_loop is not None:
         print(render_stalls(case.event_loop, stall_rows))

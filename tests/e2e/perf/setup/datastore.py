@@ -37,10 +37,26 @@ _STATEMENTS_QUERY: Final = (
 )
 _CREATE_EXTENSION: Final = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
 _CONNECTIONS_QUERY: Final = (
-    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
-    "AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
+    "SELECT coalesce(host(client_addr), 'local'), application_name, coalesce(state, 'unknown'), count(*) "
+    "FROM pg_stat_activity WHERE datname = current_database() "
+    "AND backend_type = 'client backend' AND pid <> pg_backend_pid() GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
 )
 _CONNECTIONS_SAMPLE_SECONDS: Final = 1.0
+_CONNECTION_OWNERS: Final = TypeAdapter(list[tuple[str, str, str, int]])
+_SPENDLOGS_STORAGE_QUERY: Final = """
+    SELECT (SELECT count(*) FROM "LiteLLM_SpendLogs"),
+           pg_table_size('"LiteLLM_SpendLogs"'),
+           pg_total_relation_size('"LiteLLM_SpendLogs"'),
+           count(*) FILTER (WHERE compression = 'pglz'),
+           count(*) FILTER (WHERE compression = 'lz4')
+    FROM "LiteLLM_SpendLogs"
+    CROSS JOIN LATERAL (VALUES (pg_column_compression(messages)),
+                               (pg_column_compression(response)),
+                               (pg_column_compression(metadata)),
+                               (pg_column_compression(request_tags)),
+                               (pg_column_compression(proxy_server_request))) AS stored(compression)
+"""
+_SPENDLOGS_STORAGE_ROW: Final = TypeAdapter(tuple[int, int, int, int, int])
 _COMMITS_ROW: Final = TypeAdapter(tuple[int])
 _STATEMENT_ROWS: Final = TypeAdapter(list[tuple[int, int, str, float]])
 _INFO: Final = TypeAdapter(dict[str, object])
@@ -213,7 +229,10 @@ class ConnectionsSampler:
 
         with psycopg.connect(self._url, autocommit=True) as conn:
             while not self._stop.is_set():
-                (count,) = _COMMITS_ROW.validate_python(conn.execute(_CONNECTIONS_QUERY).fetchone())
+                owners: Final = tuple(_CONNECTION_OWNERS.validate_python(conn.execute(_CONNECTIONS_QUERY).fetchall()))
+                count: Final = sum(size for _, _, _, size in owners)
+                if self.peak is None or count > self.peak:
+                    print(f"Postgres connection owners at sample peak {count}: {owners!r}")
                 self._counts.record(count)
                 _ = self._stop.wait(_CONNECTIONS_SAMPLE_SECONDS)
 
@@ -248,6 +267,23 @@ def calls_in(bucket: Bucket, items: tuple[StatementCalls, ...] | tuple[RedisComm
 
 def _count(item: StatementCalls | RedisCommand) -> int:
     return item.calls if isinstance(item, StatementCalls) else item.count
+
+
+def spendlogs_storage() -> tuple[tuple[str, int], ...]:
+    url: Final = os.environ["DATABASE_URL"]
+    import psycopg
+
+    with psycopg.connect(url) as conn:
+        rows, table_bytes, total_bytes, pglz_values, lz4_values = _SPENDLOGS_STORAGE_ROW.validate_python(
+            conn.execute(_SPENDLOGS_STORAGE_QUERY).fetchone()
+        )
+    return (
+        ("perf_probe_spendlogs_rows", rows),
+        ("perf_probe_spendlogs_table_bytes", table_bytes),
+        ("perf_probe_spendlogs_total_bytes", total_bytes),
+        ("perf_probe_spendlogs_pglz_values", pglz_values),
+        ("perf_probe_spendlogs_lz4_values", lz4_values),
+    )
 
 
 def read_db_counters() -> DbCounters | None:
