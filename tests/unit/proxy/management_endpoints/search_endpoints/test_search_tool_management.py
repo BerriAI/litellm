@@ -28,6 +28,16 @@ from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stub
 client = TestClient(app)
 
 
+def test_dashboard_discovers_seltz_with_its_display_name() -> None:
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
+        response: Final = client.get("/search_tools/ui/available_providers")
+
+    assert response.status_code == 200, response.text
+    assert [provider for provider in response.json()["providers"] if provider["provider_name"] == "seltz"] == [
+        {"provider_name": "seltz", "ui_friendly_name": "Seltz"}
+    ]
+
+
 def test_dashboard_discovers_webiq_with_its_display_name() -> None:
     with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
         response: Final = client.get("/search_tools/ui/available_providers")

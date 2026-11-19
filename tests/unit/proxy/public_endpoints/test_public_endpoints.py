@@ -1306,6 +1306,18 @@ def test_get_supported_endpoints_lists_streamlake_on_chat_messages_and_responses
     assert "embeddings" not in streamlake_endpoints
 
 
+def test_get_supported_endpoints_lists_seltz_search(reset_endpoints_cache: None) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response: Final = client.get("/public/endpoints")
+    assert response.status_code == 200, response.text
+
+    search: Final = next(endpoint for endpoint in response.json()["endpoints"] if endpoint["key"] == "search")
+    assert search["endpoint"] == "/search"
+    assert {"slug": "seltz", "display_name": "Seltz"} in search["providers"]
+
+
 def test_get_supported_endpoints_lists_webiq_search(reset_endpoints_cache: None) -> None:
     app: Final = FastAPI()
     app.include_router(router)
