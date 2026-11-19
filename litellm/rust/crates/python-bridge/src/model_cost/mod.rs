@@ -12,6 +12,7 @@ use litellm_model_catalog::{
     CapabilityRules, CostMap, FallbackRule, IntegrityLimits, Landed, Pass, Placed, PricingContext,
     Provenance, RegistrationTable, Registrations, Store, write_pass,
 };
+use litellm_model_catalog_refresh::{Refreshed, refresh};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyMapping};
@@ -103,6 +104,14 @@ pub(crate) struct NativeRejected {
     integrity: bool,
 }
 
+/// A fetched document that passed its checks and is installed nowhere yet
+#[pyclass(
+    frozen,
+    name = "CostMapRefreshed",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct CostMapRefreshed(CostMap);
+
 /// A finished registration pass, with the registrations no built-in row matched, by registered key
 #[pyclass(
     frozen,
@@ -176,6 +185,29 @@ impl NativeModelCostMap {
             Ok(cost_map) => self.install_document(py, cost_map),
             Err(error) => rejected(py, &error),
         }
+    }
+
+    /// Fetches and reads the document on the shared runtime, off the GIL, and installs nothing. The result is a
+    /// `CostMapRefreshed`, a `NativeFetchFailed` or a `NativeRejected`
+    fn refresh<'py>(
+        &self,
+        py: Python<'py>,
+        source: PyRef<'_, NativeCostMapSource>,
+        policy: PyRef<'_, NativeFetchPolicy>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (source, limits) = (source.0.pooled(policy.0)?, self.limits);
+        crate::execution::run_async_value(
+            py,
+            async move { Ok(Outcome(refresh(&source, limits).await)) },
+        )
+    }
+
+    fn install_refreshed(
+        &self,
+        py: Python<'_>,
+        refreshed: PyRef<'_, CostMapRefreshed>,
+    ) -> PyResult<Py<PyAny>> {
+        self.install_document(py, refreshed.0.clone())
     }
 
     /// A caller's document as a table, read without size limits and installed nowhere
@@ -488,6 +520,28 @@ fn built(py: Python<'_>, cost_map: &CostMap) -> PyResult<NativeInstalled> {
         rows: rows.unbind(),
         fallback_generalizations,
     })
+}
+
+struct Outcome(Refreshed);
+
+impl<'py> IntoPyObject<'py> for Outcome {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        match self.0 {
+            Refreshed::Replaced(cost_map) => {
+                Bound::new(py, CostMapRefreshed(cost_map)).map(Bound::into_any)
+            }
+            Refreshed::Unavailable(failed) => {
+                Bound::new(py, NativeFetchFailed(failed)).map(Bound::into_any)
+            }
+            Refreshed::Rejected(error) => {
+                rejected(py, &error).map(|rejected| rejected.into_bound(py))
+            }
+        }
+    }
 }
 
 fn rejected(py: Python<'_>, error: &litellm_model_catalog::Error) -> PyResult<Py<PyAny>> {

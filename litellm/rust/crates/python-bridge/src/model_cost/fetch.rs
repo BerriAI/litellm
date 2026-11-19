@@ -16,9 +16,41 @@ use pyo3::types::PyBytes;
     name = "NativeCostMapSource",
     module = "litellm.rust_bridge._native"
 )]
-pub(crate) struct NativeCostMapSource {
+pub(crate) struct NativeCostMapSource(pub(super) Connection);
+
+/// What a `RemoteSource` is built from. Plain data, so a caller can clone it and build the source off the GIL
+#[derive(Clone)]
+pub(super) struct Connection {
     url: String,
     http: HttpClientConfig,
+}
+
+impl Connection {
+    /// On the shared runtime's pooled client, for workers after the fork
+    pub(super) fn pooled(&self, policy: RetryPolicy) -> PyResult<RemoteSource> {
+        let client = crate::http::pool()
+            .client(&self.http, ClientVariant::Provider)
+            .map_err(crate::http::client_error)?;
+        Ok(RemoteSource::new(
+            self.url.clone(),
+            client,
+            access(),
+            policy,
+        ))
+    }
+
+    /// With a client of its own, so an importing process can still fork
+    pub(super) fn unpooled(&self, policy: RetryPolicy) -> PyResult<RemoteSource> {
+        let client = crate::http::pool()
+            .unpooled(&self.http, ClientVariant::Provider)
+            .map_err(crate::http::client_error)?;
+        Ok(RemoteSource::new(
+            self.url.clone(),
+            client,
+            access(),
+            policy,
+        ))
+    }
 }
 
 #[pymethods]
@@ -26,23 +58,10 @@ impl NativeCostMapSource {
     #[new]
     #[pyo3(signature = (url, *, use_http_settings))]
     fn new(py: Python<'_>, url: String, use_http_settings: bool) -> PyResult<Self> {
-        Ok(Self {
+        Ok(Self(Connection {
             url,
             http: crate::http::settings_config(py, use_http_settings)?,
-        })
-    }
-
-    /// Fetches on the shared runtime with a pooled client
-    fn fetch<'py>(
-        &self,
-        py: Python<'py>,
-        policy: PyRef<'_, NativeFetchPolicy>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let client = crate::http::pool()
-            .client(&self.http, ClientVariant::Provider)
-            .map_err(crate::http::client_error)?;
-        let source = RemoteSource::new(self.url.clone(), client, access(), policy.0);
-        crate::execution::run_async_value(py, async move { Ok(Outcome(source.fetch().await)) })
+        }))
     }
 
     /// Fetches on a throwaway runtime with a client of its own. `resume_from` continues a fetch whose first attempt
@@ -55,14 +74,11 @@ impl NativeCostMapSource {
         resume_from: Option<PyRef<'_, NativeFetchFailed>>,
     ) -> PyResult<Py<PyAny>> {
         let resumed = resume_from.map(|failed| failed.0.clone());
-        let (config, url, policy) = (self.http.clone(), self.url.clone(), policy.0);
+        let (remote, policy) = (self.0.clone(), policy.0);
         let logger = crate::logger::capture(py);
         let fetched = litellm_host_python::release_gil(py, move || {
             logger.scope(|| {
-                let client = crate::http::pool()
-                    .unpooled(&config, ClientVariant::Provider)
-                    .map_err(crate::http::client_error)?;
-                let source = RemoteSource::new(url, client, access(), policy);
+                let source = remote.unpooled(policy)?;
                 let source = match resumed {
                     Some(failed) => source.resuming(failed),
                     None => source,
@@ -88,7 +104,7 @@ fn access() -> Access {
     name = "NativeFetchPolicy",
     module = "litellm.rust_bridge._native"
 )]
-pub(crate) struct NativeFetchPolicy(RetryPolicy);
+pub(crate) struct NativeFetchPolicy(pub(super) RetryPolicy);
 
 #[pymethods]
 impl NativeFetchPolicy {
@@ -140,7 +156,7 @@ pub(crate) struct NativeFetched {
     name = "NativeFetchFailed",
     module = "litellm.rust_bridge._native"
 )]
-pub(crate) struct NativeFetchFailed(Failed);
+pub(crate) struct NativeFetchFailed(pub(super) Failed);
 
 #[pymethods]
 impl NativeFetchFailed {
