@@ -35,14 +35,15 @@ def _spend_reaches(team_id: str, calls: int) -> None:
     eventually(lambda: _team_spend(team_id), lambda spend: spend == pytest.approx(calls * CALL_COST), seconds=70)
 
 
+@pytest.mark.parametrize("alerting", [("email",), ("webhook", "email")])
 def test_team_budget_thresholds_email_configured_recipients_once_across_rotating_keys(
-    gateway: Gateway, tmp_path: Path
+    gateway: Gateway, tmp_path: Path, alerting: tuple[str, ...]
 ) -> None:
     owner_email: Final = f"owner-{uuid.uuid4().hex}@integration.test"
     recipients: Final = {pct: f"p{pct}-{uuid.uuid4().hex}@integration.test" for pct in ("50", "75", "90")}
     other_recipient: Final = f"other-{uuid.uuid4().hex}@integration.test"
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    configuration["general_settings"]["alerting"] = ["email"]
+    configuration["general_settings"]["alerting"] = list(alerting)
     path: Final = tmp_path / "email-alerting.yaml"
     path.write_text(yaml.safe_dump(configuration))
     with smtp_sink() as mailbox:

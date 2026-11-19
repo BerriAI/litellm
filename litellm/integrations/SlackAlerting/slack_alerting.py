@@ -570,9 +570,7 @@ class SlackAlerting(CustomBatchLogger):
             return
 
         # Get the appropriate budget alert type handler
-        budget_alert_class: Final = get_budget_alert_type(
-            "team_budget" if type == "max_budget_alert" and user_info.event_group == Litellm_EntityType.TEAM else type
-        )
+        budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
         user_info_str: Final = self._get_user_info_str(user_info)
         event_message = (
@@ -1408,13 +1406,6 @@ Model Info:
 
         Returns -> True if sent, False if not.
         """
-        if (
-            webhook_event.event_group == Litellm_EntityType.TEAM
-            and webhook_event.event == "threshold_crossed"
-            and webhook_event.max_budget_alert_emails
-        ):
-            return False
-
         from litellm.proxy.proxy_server import premium_user
         from litellm.proxy.utils import send_email
 

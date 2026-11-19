@@ -403,34 +403,6 @@ def _slack_alerting_with_env_resolution() -> SlackAlerting:
 
 
 @pytest.mark.asyncio
-async def test_team_max_budget_alert_is_labelled_and_deduped_per_team_not_per_key():
-    slack_alerting: Final = _slack_alerting_with_env_resolution()
-    slack_alerting.send_alert = AsyncMock()
-
-    def team_alert(team_id: str, team_alias: str) -> CallInfo:
-        return CallInfo(
-            spend=95.0,
-            max_budget=100.0,
-            team_id=team_id,
-            team_alias=team_alias,
-            event_group=Litellm_EntityType.TEAM,
-            max_budget_alert_emails={"90": ["lead@co.com"]},
-        )
-
-    key_alert: Final = CallInfo(
-        spend=95.0, max_budget=100.0, token="hashed_key", event_group=Litellm_EntityType.KEY
-    )
-    for info in (team_alert("team_a", "Platform"), team_alert("team_b", "Data"), team_alert("team_a", "Platform"), key_alert):
-        await slack_alerting.budget_alerts(type="max_budget_alert", user_info=info)
-
-    sent: Final = [call.kwargs["message"] for call in slack_alerting.send_alert.await_args_list]
-    assert len(sent) == 3, sent
-    assert [message.startswith("Team Budget: ") for message in sent] == [True, True, False]
-    assert sent[2].startswith("Key Budget: ")
-    assert "Platform" in sent[0] and "Data" in sent[1]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "event_group, expected_prefix",
     [
@@ -1293,34 +1265,3 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
-
-
-@pytest.mark.asyncio
-async def test_team_percentage_webhook_does_not_email_members_before_hard_budget():  # test-quality-ok: delivery-boundary assertions verify no premature email and preserved hard-budget event
-    alerting: Final = SlackAlerting(alerting=["webhook", "email"], internal_usage_cache=DualCache())
-    alerting.periodic_started = True
-    with (
-        patch.object(alerting, "send_webhook_alert", new_callable=AsyncMock) as webhook,
-        patch("litellm.proxy.utils.send_email", new_callable=AsyncMock) as send_email,
-        patch("litellm.integrations.email_alerting.send_team_budget_alert", new_callable=AsyncMock) as team_email,
-    ):
-        await alerting.budget_alerts(
-            type="max_budget_alert",
-            user_info=CallInfo(
-                spend=90, max_budget=100, team_id="team-percentage", event_group=Litellm_EntityType.TEAM,
-                max_budget_alert_emails={"50": ["finance@example.com"]},
-            ),
-        )
-        assert webhook.await_args.kwargs["webhook_event"].event == "threshold_crossed"
-        send_email.assert_not_awaited()
-        team_email.assert_not_awaited()
-
-        await alerting.budget_alerts(
-            type="team_budget",
-            user_info=CallInfo(
-                spend=110, max_budget=100, team_id="team-percentage", event_group=Litellm_EntityType.TEAM,
-            ),
-        )
-        assert webhook.await_count == 2
-        team_email.assert_awaited_once()
-        assert team_email.await_args.kwargs["webhook_event"].event == "budget_crossed"

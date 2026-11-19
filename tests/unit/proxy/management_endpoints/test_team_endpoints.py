@@ -11378,27 +11378,52 @@ async def test_update_team_rejects_malformed_alert_recipients(recipient, disable
     ],
 )
 @pytest.mark.asyncio
-async def test_new_team_rejects_budget_alert_config_that_could_never_send(max_budget, metadata):
+async def test_new_team_rejects_budget_alert_config_that_could_never_send(
+    max_budget, metadata, mock_db_client, mock_admin_auth, monkeypatch
+):
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
+    import litellm
+    from litellm.proxy._types import NewTeamRequest, ProxyException
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-    ):
-        with pytest.raises(ProxyException) as exc_info:
-            await new_team(
-                data=NewTeamRequest(team_alias="alerts", max_budget=max_budget, metadata=metadata),
-                http_request=MagicMock(spec=Request),
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user", models=[]
-                ),
-            )
+    monkeypatch.setattr(litellm, "default_team_params", None)
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    _wire_new_team_prisma(mock_db_client)
+    with pytest.raises(ProxyException) as exc_info:
+        await new_team(
+            data=NewTeamRequest(team_alias="alerts", max_budget=max_budget, metadata=metadata),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
 
     assert exc_info.value.code == "400"
     assert "max_budget_alert_emails" in str(exc_info.value.message)
+
+
+@pytest.mark.parametrize("use_legacy_defaults", [False, True])
+@pytest.mark.asyncio
+async def test_new_team_percentage_alerts_use_inherited_budget(
+    mock_db_client, mock_admin_auth, monkeypatch, use_legacy_defaults
+):
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr(litellm, "default_team_params", None if use_legacy_defaults else {"max_budget": 100.0})
+    monkeypatch.setattr(litellm, "default_team_settings", [{"max_budget": 100.0}] if use_legacy_defaults else None)
+    create: Final = _wire_new_team_prisma(mock_db_client)
+    metadata: Final = {"max_budget_alert_emails": {"50": ["finance@example.com"]}}
+    await new_team(
+        data=NewTeamRequest(team_alias="inherited-alerts", metadata=metadata),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+    saved: Final = create.call_args.kwargs["data"]
+    assert saved["max_budget"] == 100.0
+    assert saved["metadata"]["max_budget_alert_emails"] == metadata["max_budget_alert_emails"]
 
 
 @pytest.mark.asyncio

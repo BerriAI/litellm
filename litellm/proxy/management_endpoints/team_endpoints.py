@@ -1859,13 +1859,6 @@ async def new_team(
                         },
                     )
 
-        _reject_invalid_team_budget_alert_emails(
-            metadata=_as_object(getattr(data, "metadata", None)),
-            stored_metadata=None,
-            max_budget=data.max_budget,
-            stored_max_budget=None,
-        )
-
         enforce_output_token_estimates_are_admin_only(
             data=data,
             existing_metadata=None,
@@ -1948,6 +1941,13 @@ async def new_team(
                 default_budget: Final = litellm.default_team_settings[0].get("max_budget")
                 if default_budget is not None:
                     data.max_budget = default_budget
+
+        _reject_invalid_team_budget_alert_emails(
+            metadata=_as_object(getattr(data, "metadata", None)),
+            stored_metadata=None,
+            max_budget=data.max_budget,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy default_team_settings is a bare dict
+            stored_max_budget=None,
+        )
 
         # check org key limits - done here to handle inheriting org id from team
         if data.organization_id is not None and prisma_client is not None:

@@ -1603,3 +1603,30 @@ async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without
     assert 'href="' in body
     assert "secret-token-hash" not in body
     assert "sk-raw-secret" not in body
+
+
+@pytest.mark.parametrize("spend", [90.0, 100.0, 110.0])
+@pytest.mark.asyncio
+async def test_team_percentage_emails_survive_mixed_webhook_routing_at_hard_limit(
+    base_email_logger, mock_send_email, spend
+):
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    logging.alerting = ["webhook", "email"]
+    logging.email_logging_instance = base_email_logger
+    logging.slack_alerting_instance = SlackAlerting(alerting=["webhook", "email"], internal_usage_cache=DualCache())
+    logging.slack_alerting_instance.periodic_started = True
+    with mock.patch.object(logging.slack_alerting_instance, "send_webhook_alert", new_callable=mock.AsyncMock) as webhook:
+        await logging.budget_alerts(type="max_budget_alert", user_info=_team_alert("team_a", "Platform", spend=spend))
+
+    assert webhook.await_count == 0
+    delivered: Final = [call.kwargs for call in mock_send_email.call_args_list]
+    assert len(delivered) == 2
+    assert {call["subject"] for call in delivered} == {
+        "LiteLLM: Team Budget Alert - 50% of Team Budget Reached",
+        "LiteLLM: Team Budget Alert - 90% of Team Budget Reached",
+    }
+    assert sorted(delivered[0]["to_email"]) == ["finance@co.com"]
