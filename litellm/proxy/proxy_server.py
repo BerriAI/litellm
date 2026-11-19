@@ -5313,7 +5313,11 @@ async def _run_background_health_check():
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
         _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
-        if scoped_model_groups is not None and not _llm_model_list:
+        if (
+            scoped_model_groups is not None
+            and not _llm_model_list
+            and scoped_model_groups.isdisjoint(litellm.public_model_groups or ())
+        ):
             verbose_proxy_logger.warning(
                 "background_health_check_model_groups matched no deployments; groups=%s",
                 sorted(scoped_model_groups),

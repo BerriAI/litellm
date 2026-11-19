@@ -848,3 +848,54 @@ async def test_run_background_health_check_hands_public_model_groups_to_the_db_s
     assert scheduled["wildcard_scope"] == WildcardProbeScope(
         ("bedrock/us.anthropic.claude-opus-4-8",), router, frozenset({"bedrock/*"}), False, 3
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "public_model_groups,warned",
+    [(["bedrock/us.anthropic.claude-opus-4-8"], False), (["bedrock/us.anthropic.claude-sonnet-4-6"], True)],
+)
+async def test_run_background_health_check_warns_only_when_model_groups_match_nothing_it_probes(
+    monkeypatch, public_model_groups, warned
+):
+    import litellm
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", True)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(litellm, "public_model_groups", public_model_groups)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            settings=lambda: RouterSettings(
+                background_health_check_model_groups=frozenset({"bedrock/us.anthropic.claude-opus-4-8"})
+            )
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "bedrock/*", "model_info": {"id": "wc"}}])
+    monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
+
+    async def _fake_direct(*_a, **_kw):
+        return ([], [], {})
+
+    warnings = []
+    monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
+    monkeypatch.setattr(proxy_server.verbose_proxy_logger, "warning", lambda msg, *a: warnings.append(msg))
+
+    async def _stop_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert any("matched no deployments" in msg for msg in warnings) is warned
