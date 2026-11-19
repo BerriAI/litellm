@@ -665,8 +665,7 @@ async def new_user(
         data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
             data_json=data_json,
             prisma_client=prisma_client,
-            can_grant_apps=isinstance(user_api_key_dict, UserAPIKeyAuth)
-            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
         data_json.pop("password", None)
         teams = data.teams
