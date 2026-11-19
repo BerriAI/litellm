@@ -1793,7 +1793,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                 master_key_boot_verdict(
                     master_key=master_key,
                     environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
-                    general_settings=general_settings,
+                    general_settings=settings,
                     config_file_path=user_config_file_path,
                     override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
                     salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
