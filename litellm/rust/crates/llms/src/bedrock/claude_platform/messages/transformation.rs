@@ -13,6 +13,7 @@ use litellm_llms_types::{
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
+use serde::de::Error as _;
 use serde_json::Value;
 
 use crate::{
@@ -44,6 +45,8 @@ const WORKSPACE_ENVS: &[&str] = &["ANTHROPIC_AWS_WORKSPACE_ID", "ANTHROPIC_WORKS
 const REGION_ENVS: &[&str] = &["AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"];
 const WORKSPACE_HEADER: &str = "anthropic-workspace-id";
 const DEFAULT_UNSUPPORTED: &[&str] = &["context_management"];
+/// The region botocore signs in when nothing names one.
+const DEFAULT_SIGNING_REGION: &str = "us-west-2";
 
 /// The workspace Python's config requires before it builds the call, raising `AuthenticationError`.
 static WORKSPACE: ParamSpec = ParamSpec {
@@ -169,12 +172,22 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         Ok(messages_url(&base))
     }
 
+    /// Python's transform sends the model without its route and warns when it drops a
+    /// disabled thinking on an always-thinking model.
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, context)
+        let model = request
+            .model
+            .strip_prefix(ROUTE)
+            .unwrap_or(&request.model)
+            .to_string();
+        transform_messages_request(
+            MessagesRequest { model, ..request },
+            &context.warning_dropped_disabled_thinking(),
+        )
     }
 
     /// Python's `filter_claude_platform_request_body`: `context_management` by default, or the
@@ -184,6 +197,11 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         request: MessagesRequest,
         params: &LitellmParams,
     ) -> Result<MessagesRequest, Error> {
+        if let Some(type_name) = params.claude_platform.ignored_override_type() {
+            litellm_tracing::warn!(
+                "bedrock/claude_platform: ignoring claude_platform_unsupported_params of type {type_name}; expected a list of param names. Using the default unsupported-param set."
+            );
+        }
         let unsupported: Vec<&str> = match params.claude_platform.unsupported_params() {
             Some(names) => names.iter().map(String::as_str).collect(),
             None => DEFAULT_UNSUPPORTED.to_vec(),
@@ -212,24 +230,12 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         update_headers_with_safeguards_beta(headers, request, BetaProvider::Anthropic)
     }
 
-    /// The model keeps its `claude_platform/` route until it is sent, so the call is billed on
-    /// the `bedrock/claude_platform/` rows as Python bills it.
-    fn wire_body(&self, body: Value) -> Value {
-        let Value::Object(fields) = body else {
-            return body;
-        };
-        Value::Object(
-            fields
-                .into_iter()
-                .map(|(name, value)| match (name.as_str(), &value) {
-                    ("model", Value::String(model)) => {
-                        let sent = model.strip_prefix(ROUTE).unwrap_or(model).to_string();
-                        (name, Value::String(sent))
-                    }
-                    _ => (name, value),
-                })
-                .collect(),
-        )
+    /// The call is billed on the `bedrock/claude_platform/` rows, as Python bills it.
+    fn logged_model(&self, model: &str) -> String {
+        match model.starts_with(ROUTE) {
+            true => model.to_string(),
+            false => format!("{ROUTE}{model}"),
+        }
     }
 }
 
@@ -285,10 +291,11 @@ fn signing_region(
     });
     match host_region {
         Some(region) => checked_region(region),
-        None => resolve_aws_region(None, &params.aws, env)
-            .or_else(|| resolve_non_empty(None, env, &["AWS_DEFAULT_REGION"]))
-            .ok_or_else(|| Error::Auth(REGION.missing(PROVIDER)))
-            .and_then(checked_region),
+        None => checked_region(
+            resolve_aws_region(None, &params.aws, env)
+                .or_else(|| resolve_non_empty(None, env, &["AWS_DEFAULT_REGION"]))
+                .unwrap_or_else(|| DEFAULT_SIGNING_REGION.to_string()),
+        ),
     }
 }
 
@@ -303,16 +310,31 @@ fn checked_region(region: String) -> Result<String, Error> {
 
 /// The request without the params the endpoint rejects, which Python drops before its transform.
 fn without_params(request: MessagesRequest, names: &[&str]) -> Result<MessagesRequest, Error> {
-    let kept = match serde_json::to_value(request).map_err(invalid_request)? {
-        Value::Object(fields) => Value::Object(
-            fields
-                .into_iter()
-                .filter(|(name, _)| !names.contains(&name.as_str()))
-                .collect(),
-        ),
-        other => other,
+    let Value::Object(fields) = serde_json::to_value(request).map_err(invalid_request)? else {
+        return Err(Error::InvalidRequest(ErrorDetail::invalid(
+            "Messages request",
+            serde_json::Error::custom("not an object"),
+        )));
     };
-    serde_json::from_value(kept).map_err(invalid_request)
+    let (dropped, kept): (Vec<_>, Vec<_>) = fields
+        .into_iter()
+        .partition(|(name, _)| names.contains(&name.as_str()));
+    if !dropped.is_empty() {
+        litellm_tracing::warn!(
+            "bedrock/claude_platform: dropping unsupported Messages API param(s) {} from the request body; the Claude Platform on AWS endpoint rejects unknown fields. The request will proceed without them.",
+            python_tuple(dropped.iter().map(|(name, _)| name.as_str()))
+        );
+    }
+    serde_json::from_value(Value::Object(kept.into_iter().collect())).map_err(invalid_request)
+}
+
+/// How Python prints the tuple of dropped param names in its warning.
+fn python_tuple<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let quoted: Vec<String> = names.map(|name| format!("'{name}'")).collect();
+    match quoted.as_slice() {
+        [only] => format!("({only},)"),
+        _ => format!("({})", quoted.join(", ")),
+    }
 }
 
 fn invalid_request(error: serde_json::Error) -> Error {
@@ -455,6 +477,7 @@ mod tests {
 
     #[rstest]
     #[case::configured_region(json!({"aws_region_name": "eu-west-1"}), "eu-west-1")]
+    #[case::botocore_default(json!({"api_base": "https://gw.example"}), "us-west-2")]
     #[case::public_host_names_its_region(
         json!({"aws_region_name": "eu-west-1", "api_base": "https://aws-external-anthropic.us-west-2.api.aws"}),
         "us-west-2"
@@ -598,13 +621,21 @@ mod tests {
                 &MessagesTransformContext::default(),
             )
             .unwrap();
+        assert_eq!(transformed.model, "claude-test");
         assert_eq!(
             BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.logged_model(&transformed.model),
             "claude_platform/claude-test"
         );
-        let wire = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .wire_body(serde_json::to_value(transformed).unwrap());
-        assert_eq!(wire["model"], "claude-test");
+    }
+
+    #[rstest]
+    #[case::one(&["context_management"], "('context_management',)")]
+    #[case::two(&["temperature", "top_p"], "('temperature', 'top_p')")]
+    fn dropped_params_are_named_as_python_prints_its_tuple(
+        #[case] names: &[&str],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(python_tuple(names.iter().copied()), expected);
     }
 
     #[rstest]

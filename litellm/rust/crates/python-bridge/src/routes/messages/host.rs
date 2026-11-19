@@ -187,6 +187,8 @@ pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.mess
 const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
 /// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
 const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
+/// The model a refusal names when it differs from the call's, as for a missing Claude Platform region.
+const MESSAGES_RAISED_MODEL: &str = "messages_raised_model";
 /// The model Python's handler logs a Mantle call under before the config transforms the request.
 const MESSAGES_LOGGED_MODEL: &str = "messages_logged_model";
 /// The provider litellm's error names when it is not the route's: none for a call refused while
@@ -1123,6 +1125,7 @@ impl MessagesPythonHost {
                 value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
                 if missing_platform_region {
                     value.setattr(crate::errors::MESSAGES_LATE_REJECTION, true)?;
+                    value.setattr(MESSAGES_RAISED_MODEL, "")?;
                 }
                 if value
                     .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)?

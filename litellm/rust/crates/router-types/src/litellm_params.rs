@@ -121,7 +121,19 @@ impl ClaudePlatformParams {
     pub fn unsupported_params(&self) -> Option<&[String]> {
         match self.claude_platform_unsupported_params.as_ref()? {
             UnsupportedParams::Names(names) => Some(names),
-            UnsupportedParams::Other(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The Python type name of an override that is not a list, which Python warns it ignores.
+    pub fn ignored_override_type(&self) -> Option<&'static str> {
+        match self.claude_platform_unsupported_params.as_ref()? {
+            UnsupportedParams::Names(_) | UnsupportedParams::MixedList(_) => None,
+            UnsupportedParams::Flag(_) => Some("bool"),
+            UnsupportedParams::Integer(_) => Some("int"),
+            UnsupportedParams::Float(_) => Some("float"),
+            UnsupportedParams::Text(_) => Some("str"),
+            UnsupportedParams::Mapping(_) => Some("dict"),
         }
     }
 }
@@ -150,7 +162,12 @@ impl WorkspaceId {
 #[serde(untagged)]
 pub enum UnsupportedParams {
     Names(Vec<String>),
-    Other(serde::de::IgnoredAny),
+    MixedList(Vec<serde::de::IgnoredAny>),
+    Flag(bool),
+    Integer(i64),
+    Float(f64),
+    Text(String),
+    Mapping(serde::de::IgnoredAny),
 }
 
 /// The `litellm_params` keys no field names, kept as written. Its `Debug` lists the keys
@@ -227,6 +244,21 @@ mod tests {
                 .map(|names| names.iter().map(String::as_str).collect::<Vec<_>>()),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::list(json!({"claude_platform_unsupported_params": ["a"]}), None)]
+    #[case::mixed_list(json!({"claude_platform_unsupported_params": ["a", 1]}), None)]
+    #[case::text(json!({"claude_platform_unsupported_params": "a"}), Some("str"))]
+    #[case::integer(json!({"claude_platform_unsupported_params": 1}), Some("int"))]
+    #[case::float(json!({"claude_platform_unsupported_params": 1.5}), Some("float"))]
+    #[case::flag(json!({"claude_platform_unsupported_params": true}), Some("bool"))]
+    #[case::mapping(json!({"claude_platform_unsupported_params": {"a": 1}}), Some("dict"))]
+    fn an_ignored_override_is_named_by_its_python_type(
+        #[case] fields: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(platform(fields).ignored_override_type(), expected);
     }
 
     #[rstest]

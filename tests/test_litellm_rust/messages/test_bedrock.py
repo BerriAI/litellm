@@ -1599,6 +1599,61 @@ async def test_claude_platform_refusals_raise_what_python_raises(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_platform_env")
+async def test_claude_platform_missing_region_names_no_model_as_python_does(server: RecordingServer) -> None:
+    with pytest.raises(litellm.AuthenticationError) as rust_raised:
+        await _platform(server, api_key="k", api_base=None)
+
+    assert getattr(rust_raised.value, "model", None) == ""
+    assert server.requests == []
+
+
+_DROPPED_CONTEXT_MANAGEMENT: Final = (
+    "bedrock/claude_platform: dropping unsupported Messages API param(s) ('context_management',) from the request "
+    "body; the Claude Platform on AWS endpoint rejects unknown fields. The request will proceed without them."
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env")
+@pytest.mark.parametrize(
+    ("request_params", "expected"),
+    (
+        pytest.param({}, [], id="nothing-dropped"),
+        pytest.param({"context_management": _CONTEXT_MANAGEMENT}, [_DROPPED_CONTEXT_MANAGEMENT], id="default-drop"),
+        pytest.param(
+            {"context_management": _CONTEXT_MANAGEMENT, "claude_platform_unsupported_params": []},
+            [],
+            id="override-keeps-it",
+        ),
+        pytest.param(
+            {"context_management": _CONTEXT_MANAGEMENT, "claude_platform_unsupported_params": "context_management"},
+            [
+                "bedrock/claude_platform: ignoring claude_platform_unsupported_params of type str; expected a list "
+                "of param names. Using the default unsupported-param set.",
+                _DROPPED_CONTEXT_MANAGEMENT,
+            ],
+            id="override-not-a-list",
+        ),
+    ),
+)
+async def test_claude_platform_warns_what_python_warns(
+    server: RecordingServer, request_params: Mapping[str, object], expected: list[str]
+) -> None:
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    warnings: Final = _Warnings()
+    logger: Final = logging.getLogger("LiteLLM")
+    logger.addHandler(warnings)
+    try:
+        await _platform(server, api_key="k", **request_params)
+    finally:
+        logger.removeHandler(warnings)
+
+    assert [message for message in warnings.messages if "claude_platform" in message] == expected
+    assert_served_natively(server)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_platform_env")
 async def test_claude_platform_upstream_failure_raises_the_bedrock_exception(server: RecordingServer) -> None:
     server.default_response = ResponseSpec(body=RATE_LIMITED, status=429)
 

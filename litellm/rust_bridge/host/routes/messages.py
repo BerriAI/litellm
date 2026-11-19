@@ -1285,7 +1285,9 @@ def map_failure(
             litellm.AuthenticationError(
                 message=optional_str(getattr(error, "messages_missing_param", None)) or _MISSING_KEY,
                 llm_provider=request_provider,
-                model=str(request["model"]).removeprefix(f"{request_provider}/"),
+                model=str(
+                    getattr(error, "messages_raised_model", str(request["model"]).removeprefix(f"{request_provider}/"))
+                ),
             ),
             request_provider,
         )
