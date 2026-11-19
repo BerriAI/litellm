@@ -16029,7 +16029,8 @@
         "cancel": "Cancel",
         "exporting": "Exporting...",
         "exportFormat": "Export {{format}}",
-        "includeMetadata": "Include key and user metadata"
+        "includeMetadata": "Include key and user metadata",
+        "includeMetadataNote": "Metadata is exported as stored and may contain credentials or other sensitive values. Known credential patterns are redacted, but not every secret can be caught."
       },
       "format": {
         "label": "Format",

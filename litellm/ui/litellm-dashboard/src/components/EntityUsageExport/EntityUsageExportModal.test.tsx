@@ -20,6 +20,7 @@ describe("EntityUsageExportModal", () => {
     dateRange: { from: new Date("2025-10-01"), to: new Date("2025-10-14") },
     selectedFilters: [],
     customTitle: "Export Tag Usage",
+    canIncludeMetadata: true,
   };
 
   beforeEach(() => {
@@ -63,6 +64,26 @@ describe("EntityUsageExportModal", () => {
     await user.click(screen.getByRole("button", { name: /Export CSV/i }));
 
     expect(baseProps.onExport).toHaveBeenCalledWith("daily", "csv", true);
+  });
+
+  it("warns next to the metadata checkbox that exported metadata may contain credentials", () => {
+    renderWithProviders(<EntityUsageExportModal {...baseProps} />);
+
+    expect(screen.getByRole("checkbox", { name: /Include key and user metadata/i })).toHaveAccessibleDescription(
+      "Metadata is exported as stored and may contain credentials or other sensitive values. Known credential patterns are redacted, but not every secret can be caught.",
+    );
+  });
+
+  it("hides the metadata option from callers who cannot export metadata and never asks for it", async () => {
+    const user = userEvent.setup();
+
+    renderWithProviders(<EntityUsageExportModal {...baseProps} canIncludeMetadata={false} />);
+
+    expect(screen.queryByRole("checkbox", { name: /Include key and user metadata/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/may contain credentials/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
+
+    expect(baseProps.onExport).toHaveBeenCalledWith("daily", "csv", false);
   });
 
   it("keeps the modal open and reports the error when onExport rejects", async () => {

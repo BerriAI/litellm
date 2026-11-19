@@ -35,6 +35,7 @@ interface UsageExportHeaderProps {
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
+  canIncludeMetadata: boolean;
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -51,6 +52,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   customTitle,
   compactLayout = false,
   teams = [],
+  canIncludeMetadata,
 }) => {
   const { t } = useTranslation();
   const anchor = useComboboxAnchor();
@@ -144,6 +146,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         selectedFilters={selectedFilters}
         customTitle={customTitle}
         teams={teams}
+        canIncludeMetadata={canIncludeMetadata}
       />
     </>
   );

@@ -14,4 +14,5 @@ export interface EntityUsageExportModalProps {
   selectedFilters?: readonly string[];
   customTitle?: string;
   teams?: Team[];
+  canIncludeMetadata: boolean;
 }

@@ -865,6 +865,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
         dateRange={dateValue}
         selectedFilters={[]}
         customTitle={t("usage.pageView.exportTitle")}
+        canIncludeMetadata={isAdmin}
       />
     </div>
   );

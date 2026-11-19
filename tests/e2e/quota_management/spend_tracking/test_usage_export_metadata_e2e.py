@@ -67,8 +67,8 @@ class UsageExportRow(BaseModel, frozen=True):
 
 
 class UsageExportRawMetadataRow(BaseModel, frozen=True):
-    key_metadata: dict[str, object]
-    user_metadata: dict[str, object]
+    key_metadata: dict[str, object] | None = None
+    user_metadata: dict[str, object] | None = None
 
 
 _EXPORT_ROWS: Final = TypeAdapter(list[UsageExportRow])
@@ -199,6 +199,6 @@ class TestUsageExportMetadata:
         own_rows: Final = _RAW_METADATA_ROWS.validate_json(own_view.body)
         assert own_rows, f"{EXPORT_ROUTE} returned no rows for the key's own user: {own_view.body}"
         for row in own_rows:
-            assert (row.key_metadata, row.user_metadata) == ({}, {}), (
-                f"a caller without admin view got metadata objects: {row}"
+            assert (row.key_metadata, row.user_metadata) == (None, None), (
+                f"a caller without admin view got metadata fields: {row}"
             )

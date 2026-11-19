@@ -390,7 +390,7 @@ def test_admin_export_carries_redacted_key_and_user_metadata_as_json_and_csv(
     _assert_no_secret(as_csv.text)
 
 
-def test_admin_viewer_sees_metadata_and_non_admin_callers_get_empty_objects(
+def test_admin_viewer_sees_metadata_and_other_exports_keep_the_default_shape(
     gateway: Gateway, scenario: Scenario
 ) -> None:
     usage: Final = _seed(gateway, scenario, key_metadata=dict(_KEY_METADATA), user_metadata=dict(_USER_METADATA))
@@ -405,23 +405,23 @@ def test_admin_viewer_sees_metadata_and_non_admin_callers_get_empty_objects(
     )
 
     not_opted_in: Final = _export(gateway, usage, user_route, include_metadata=False)
-    assert _metadata_of(_json_rows(not_opted_in)) == [({}, {})], not_opted_in.text
+    assert _metadata_of(_json_rows(not_opted_in)) == [("absent", "absent")], not_opted_in.text
     _assert_no_secret(not_opted_in.text)
 
     own: Final = _export(gateway, usage, user_route, key=usage.key)
     own_rows: Final = _json_rows(own)
     assert [row["api_key"] for row in own_rows] == [usage.digest], own.text
-    assert _metadata_of(own_rows) == [({}, {})], own.text
+    assert _metadata_of(own_rows) == [("absent", "absent")], own.text
 
     own_csv: Final = _export(gateway, usage, user_route, key=usage.key, file_format="csv")
     assert own_csv.status_code == 200, own_csv.text
     header, line = tuple(csv.reader(io.StringIO(own_csv.text)))
-    assert (tuple(header[-2:]), tuple(line[-2:])) == (("key_metadata", "user_metadata"), ("{}", "{}")), own_csv.text
+    assert (tuple(header), len(line)) == (_BASE_COLUMNS, len(_BASE_COLUMNS)), own_csv.text
 
     team: Final = _export(gateway, usage, team_route, key=team_admin_key)
     team_rows: Final = _json_rows(team)
     assert [row["api_key"] for row in team_rows] == [usage.digest], team.text
-    assert _metadata_of(team_rows) == [({}, {})], team.text
+    assert _metadata_of(team_rows) == [("absent", "absent")], team.text
     for response in (own, own_csv, team):
         _assert_no_secret(response.text)
         assert "cc-7" not in response.text and "research" not in response.text, response.text

@@ -30,6 +30,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   dateRange,
   selectedFilters = [],
   customTitle,
+  canIncludeMetadata,
 }) => {
   const { t } = useTranslation();
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
@@ -70,14 +71,22 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
           <ExportSummary dateRange={dateRange} selectedFilters={selectedFilters} />
           <ExportTypeSelector value={exportType} onChange={setExportType} entityType={entityType} />
           <ExportFormatSelector value={exportFormat} onChange={setExportFormat} />
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="usage-export-include-metadata"
-              checked={includeMetadata}
-              onCheckedChange={(checked) => setIncludeMetadata(checked === true)}
-            />
-            <Label htmlFor="usage-export-include-metadata">{t("usage.export.modal.includeMetadata")}</Label>
-          </div>
+          {canIncludeMetadata && (
+            <div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="usage-export-include-metadata"
+                  checked={includeMetadata}
+                  onCheckedChange={(checked) => setIncludeMetadata(checked === true)}
+                  aria-describedby="usage-export-include-metadata-note"
+                />
+                <Label htmlFor="usage-export-include-metadata">{t("usage.export.modal.includeMetadata")}</Label>
+              </div>
+              <p id="usage-export-include-metadata-note" className="text-xs text-muted-foreground mt-1 ml-6">
+                {t("usage.export.modal.includeMetadataNote")}
+              </p>
+            </div>
+          )}
           <div className="flex items-center justify-end gap-2 pt-4 border-t">
             <Button variant="outline" onClick={onClose} disabled={isExporting}>
               {t("usage.export.modal.cancel")}
