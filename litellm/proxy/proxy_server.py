@@ -14708,6 +14708,29 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     return await count_request_tokens(request=request, call_endpoint=call_endpoint)
 
 
+def _deployment_for_messages_responses_count(
+    deployment: Mapping[str, object] | None,
+    router: Router | None,
+    request_litellm_params: Mapping[str, JsonValue],
+) -> Mapping[str, object] | None:
+    if deployment is None:
+        return None
+
+    from litellm.llms.anthropic.pass_through.responses_adapters.handler import SYSTEM_PLACEMENT_PARAMS
+
+    defaults: Final = router.default_litellm_params if router is not None else {}
+    overrides: Final = {
+        key: request_litellm_params[key] if key in request_litellm_params else defaults.get(key)
+        for key in SYSTEM_PLACEMENT_PARAMS
+        if key in request_litellm_params or defaults.get(key) is not None
+    }
+    if not overrides:
+        return deployment
+
+    params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+    return {**deployment, "litellm_params": {**params, **overrides}}
+
+
 async def count_request_tokens(
     request: TokenCountRequest,
     call_endpoint: bool = False,
@@ -14792,7 +14815,11 @@ async def count_request_tokens(
                 custom_llm_provider,
                 messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
                 contents=None if prompt_as_message else contents,
-                deployment=deployment,
+                deployment=(
+                    _deployment_for_messages_responses_count(deployment, llm_router, request_litellm_params)
+                    if messages_format == "anthropic" and custom_llm_provider == litellm.LlmProviders.OPENAI.value
+                    else deployment
+                ),
                 request_model=request.model,
                 tools=tools,
                 system=system,
