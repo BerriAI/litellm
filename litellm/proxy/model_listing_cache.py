@@ -3,8 +3,8 @@
 Both routes rebuild their answer on every call, on the worker's event loop: a deep
 copy of every deployment, the team table parsed row by row, pricing lookups per
 model. With `general_settings.model_listing_cache_ttl_seconds` set, a worker
-answers the same caller and query from memory until the TTL passes or its
-deployments change.
+answers the same caller and query from memory until the TTL passes or the
+router's registry version moves, which it does on every deployment change.
 """
 
 from __future__ import annotations
@@ -46,26 +46,27 @@ def listing_cache_key(route: str, user_api_key_dict: UserAPIKeyAuth, params: Map
 
 
 class ModelListingCache(Generic[_Listing]):
-    """Listings of one route, kept until their TTL passes or `clear` says the deployments changed."""
+    """Listings of one route, each kept until its TTL passes or the registry version it was built from moves."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock: Final = clock
-        self._entries: Final[dict[str, tuple[float, _Listing]]] = {}  # mutable-ok: the cache is the state
+        self._entries: Final[dict[str, tuple[float, int, _Listing]]] = {}  # mutable-ok: the cache is the state
 
-    def get(self, key: str) -> _Listing | None:
+    def get(self, key: str, registry_version: int) -> _Listing | None:
         entry: Final = self._entries.get(key)
         if entry is None:
             return None
-        expires_at, listing = entry
-        if self._clock() > expires_at:
+        expires_at, version, listing = entry
+        if version != registry_version or self._clock() > expires_at:
             self._entries.pop(key, None)
             return None
         return listing
 
-    def put(self, key: str, listing: _Listing, ttl_seconds: float) -> None:
+    def put(self, key: str, listing: _Listing, registry_version: int, ttl_seconds: float) -> None:
         if len(self._entries) >= _MAX_ENTRIES:
             self._entries.pop(next(iter(self._entries)))
-        self._entries[key] = (self._clock() + ttl_seconds, listing)
+        self._entries[key] = (self._clock() + ttl_seconds, registry_version, listing)
 
     def clear(self) -> None:
+        """Forget every listing: the router was replaced, so its registry versions start over."""
         self._entries.clear()

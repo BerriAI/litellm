@@ -27,6 +27,8 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable, UserAPIKeyAuth
+from litellm.router_api import ChangeSet
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.litellm_core_utils.model_cost_table import publish
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
@@ -179,6 +181,19 @@ def _router_with(*model_names: str) -> litellm.Router:
     )
 
 
+def _deployment(name: str) -> Deployment:
+    return Deployment(
+        model_name=name,
+        litellm_params=LiteLLM_Params(model=f"openai/{name}", api_key="local-key"),
+        model_info=ModelInfo(id=f"{name}-deployment"),
+    )
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, router: litellm.Router) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+
+
 def _listed_names(client: TestClient, path: str) -> tuple[str, ...]:
     response: Final = client.get(path)
     assert response.status_code == 200, response.text
@@ -188,14 +203,13 @@ def _listed_names(client: TestClient, path: str) -> tuple[str, ...]:
 
 
 @pytest.mark.parametrize("path", ("/model/info", "/model_group/info"))
-def test_listing_is_served_from_memory_within_the_ttl_and_recomputed_after_a_deployment_change(
+def test_listing_is_served_from_memory_within_the_ttl_and_recomputed_when_a_deployment_changes(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
     monkeypatch: pytest.MonkeyPatch,
     path: str,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha"))
-    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    _serve(monkeypatch, _router_with("alpha"))
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", 60)
@@ -204,12 +218,14 @@ def test_listing_is_served_from_memory_within_the_ttl_and_recomputed_after_a_dep
     with auth_as():
         assert _listed_names(client, path) == ("alpha",)
 
-        monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha", "beta"))
-        monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+        # A fresh router with as many deployments sits at the same registry version.
+        router: Final = _router_with("beta")
+        _serve(monkeypatch, router)
         assert _listed_names(client, path) == ("alpha",), "within the TTL the worker answers from memory"
 
-        proxy_server.invalidate_model_listings()
-        assert _listed_names(client, path) == ("alpha", "beta"), "a deployment change drops the entry"
+        router.apply(ChangeSet(upsert=[_deployment("gamma")]))
+        monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+        assert _listed_names(client, path) == ("beta", "gamma"), "a deployment change moves the registry version"
 
 
 @pytest.mark.parametrize("path", ("/model/info", "/model_group/info"))
@@ -219,8 +235,7 @@ def test_listing_is_computed_on_every_call_without_the_setting(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha"))
-    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    _serve(monkeypatch, _router_with("alpha"))
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.delitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", raising=False)
@@ -228,9 +243,8 @@ def test_listing_is_computed_on_every_call_without_the_setting(
 
     with auth_as():
         assert _listed_names(client, path) == ("alpha",)
-        monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha", "beta"))
-        monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
-        assert _listed_names(client, path) == ("alpha", "beta")
+        _serve(monkeypatch, _router_with("beta"))
+        assert _listed_names(client, path) == ("beta",), "without the setting every call is computed"
 
 
 def test_listing_cache_is_per_caller(
@@ -238,8 +252,7 @@ def test_listing_cache_is_per_caller(
     auth_as: Callable[..., AbstractContextManager[object]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha"))
-    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    _serve(monkeypatch, _router_with("alpha"))
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", 60)
@@ -247,10 +260,11 @@ def test_listing_cache_is_per_caller(
 
     with auth_as(user_id="first"):
         assert _listed_names(client, "/model/info") == ("alpha",)
-    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha", "beta"))
-    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    _serve(monkeypatch, _router_with("beta"))
     with auth_as(user_id="second"):
-        assert _listed_names(client, "/model/info") == ("alpha", "beta"), "another caller gets a fresh listing"
+        assert _listed_names(client, "/model/info") == ("beta",), "another caller gets a fresh listing"
+    with auth_as(user_id="first"):
+        assert _listed_names(client, "/model/info") == ("alpha",), "the first caller is still served from memory"
 
 
 # ---------------------------------------------------------------------------

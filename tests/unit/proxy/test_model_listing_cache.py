@@ -35,20 +35,22 @@ def test_listing_cache_key_separates_callers_routes_and_queries() -> None:
     )
 
 
-def test_listing_is_served_until_the_ttl_passes_or_the_cache_is_cleared() -> None:
+def test_listing_is_served_until_the_ttl_passes_the_registry_moves_or_the_cache_is_cleared() -> None:
     now: Final[list[float]] = [100.0]  # mutable-ok: the fake clock the test advances
     cache: Final = ModelListingCache[tuple[str, ...]](clock=lambda: now[0])
 
-    assert cache.get("k") is None
-    cache.put("k", ("gpt-4o",), ttl_seconds=30)
-    assert cache.get("k") == ("gpt-4o",)
+    assert cache.get("k", registry_version=3) is None
+    cache.put("k", ("gpt-4o",), registry_version=3, ttl_seconds=30)
+    assert cache.get("k", registry_version=3) == ("gpt-4o",)
+    assert cache.get("k", registry_version=4) is None, "a deployment change moves the registry version"
 
+    cache.put("k", ("gpt-4o",), registry_version=4, ttl_seconds=30)
     now[0] = 129.0
-    assert cache.get("k") == ("gpt-4o",)
+    assert cache.get("k", registry_version=4) == ("gpt-4o",)
     now[0] = 131.0
-    assert cache.get("k") is None, "a listing older than the TTL is recomputed"
+    assert cache.get("k", registry_version=4) is None, "a listing older than the TTL is recomputed"
 
     now[0] = 200.0
-    cache.put("k", ("gpt-4o", "gpt-4.1"), ttl_seconds=30)
+    cache.put("k", ("gpt-4o", "gpt-4.1"), registry_version=4, ttl_seconds=30)
     cache.clear()
-    assert cache.get("k") is None, "a deployment change clears every listing"
+    assert cache.get("k", registry_version=4) is None, "a replaced router clears every listing"

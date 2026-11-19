@@ -3295,6 +3295,7 @@ model_group_listing_cache: Final = ModelListingCache[dict[str, list[ModelGroupIn
 
 
 def invalidate_model_listings() -> None:
+    """Forget every listing: a reload built a new router, whose registry versions start over."""
     model_info_listing_cache.clear()
     model_group_listing_cache.clear()
 
@@ -8325,7 +8326,6 @@ class ProxyConfig:
         for model_id in router_model_ids:
             if model_id not in combined_id_list and model_id not in kept_config_ids:
                 llm_router.apply(ChangeSet(delete=[model_id]))
-        invalidate_model_listings()
         return frozenset(combined_id_list) | kept_config_ids
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:
@@ -8385,7 +8385,6 @@ class ProxyConfig:
 
             if added is not None:
                 added_models += 1
-        invalidate_model_listings()
         return added_models
 
     def decrypt_model_list_from_db(self, new_models: list) -> list:
@@ -19312,7 +19311,10 @@ async def model_info_v1(
         user_api_key_dict,
         {"include_team_models": include_team_models, "teamId": teamId, "healthy_only": healthy_only},
     )
-    cached_listing: Final = model_info_listing_cache.get(listing_key) if listing_ttl else None
+    registry_version: Final = llm_router.registry().version
+    cached_listing: Final = (
+        model_info_listing_cache.get(listing_key, registry_version) if listing_ttl else None
+    )
     if cached_listing is not None:
         return _model_info_json_response(cached_listing)
 
@@ -19407,7 +19409,7 @@ async def model_info_v1(
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
     if listing_ttl:
-        model_info_listing_cache.put(listing_key, visible_models, listing_ttl)
+        model_info_listing_cache.put(listing_key, visible_models, registry_version, listing_ttl)
     return _model_info_json_response(visible_models)
 
 
@@ -19686,7 +19688,10 @@ async def model_group_info(
 
     listing_ttl: Final = listing_cache_ttl(current_general_settings())
     listing_key: Final = listing_cache_key("model_group_info", user_api_key_dict, {"model_group": model_group})
-    cached_listing: Final = model_group_listing_cache.get(listing_key) if listing_ttl else None
+    registry_version: Final = llm_router.registry().version
+    cached_listing: Final = (
+        model_group_listing_cache.get(listing_key, registry_version) if listing_ttl else None
+    )
     if cached_listing is not None:
         return cached_listing
 
@@ -19806,7 +19811,7 @@ async def model_group_info(
         ]
     }
     if listing_ttl:
-        model_group_listing_cache.put(listing_key, listing, listing_ttl)
+        model_group_listing_cache.put(listing_key, listing, registry_version, listing_ttl)
     return listing
 
 
