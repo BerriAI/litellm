@@ -304,7 +304,7 @@ class MistralTokenCounter(BaseTokenCounter):
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
-                input_items, _, counted_tools, text = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+                anthropic_items, _, counted_tools, text = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
                     model=model_to_use,
                     messages=tuple(map(_with_tool_result_text_joins, messages)),
                     system=None,
@@ -319,10 +319,10 @@ class MistralTokenCounter(BaseTokenCounter):
                             "role": "developer",
                             "content": [{"type": "input_text", "text": system_text}],
                         },
-                        *input_items,
+                        *anthropic_items,
                     )
                     if system_text
-                    else input_items,
+                    else anthropic_items,
                     None,
                     counted_tools,
                     text,
