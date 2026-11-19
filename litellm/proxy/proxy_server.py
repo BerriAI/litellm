@@ -14278,7 +14278,7 @@ async def _try_provider_token_count(
     deployment: Mapping[str, object] | None,
     request_model: str,
     tools: list | None = None,
-    system: str | None = None,
+    system: str | list[object] | None = None,  # mutable-ok: Anthropic system blocks
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
@@ -14610,7 +14610,7 @@ def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[
 
 
 def _messages_count_bridges(deployment: _TokenCountDeployment, request_model: str) -> bool:
-    from litellm.llms.anthropic.pass_through.messages.handler import _native_messages_config
+    from litellm.llms.anthropic.pass_through.messages.handler import messages_request_bridges
 
     params: Final = deployment.get("litellm_params", {})
     try:
@@ -14621,7 +14621,7 @@ def _messages_count_bridges(deployment: _TokenCountDeployment, request_model: st
         )
     except litellm.BadRequestError:
         return False
-    return _native_messages_config(model, provider, dict(deployment.get("model_info", {}))) is None
+    return messages_request_bridges(model, provider, dict(deployment.get("model_info", {})))
 
 
 def _non_empty_str(value: object) -> str | None:
