@@ -1,5 +1,7 @@
 import time
 import traceback
+from typing import Final
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import requests
@@ -368,9 +370,19 @@ def test_info_request_minimal(client, base_url, api_key):
     """Test info request with minimal parameters"""
     request = client.info(key="test-key", return_request=True)
     assert request.method == "GET"
-    assert request.url == f"{base_url}/key/info?key=test-key"
+    assert request.prepare().url == f"{base_url}/key/info?key=test-key"
     assert request.headers["Content-Type"] == "application/json"
     assert request.headers["Authorization"] == f"Bearer {api_key}"
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["sk-custom-key-a+b", "sk-custom-key-a&b", "sk-custom-key-a#b", "sk-custom-key-a%2Fb"],
+)
+def test_info_preserves_reserved_characters_in_key(client: KeysManagementClient, key: str) -> None:
+    request: Final = client.info(key=key, return_request=True)
+    assert isinstance(request, requests.Request)
+    assert parse_qs(urlsplit(request.prepare().url).query) == {"key": [key]}
 
 
 @responses.activate

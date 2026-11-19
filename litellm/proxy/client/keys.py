@@ -307,8 +307,8 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url: Final = f"{self._base_url}/key/info?key={key}"
-        request: Final = requests.Request("GET", url, headers=self._get_headers())
+        url: Final = f"{self._base_url}/key/info"
+        request: Final = requests.Request("GET", url, headers=self._get_headers(), params={"key": key})
 
         if return_request:
             return request
