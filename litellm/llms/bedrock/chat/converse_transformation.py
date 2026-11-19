@@ -73,12 +73,14 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
+from litellm.llms.bedrock.chat.converse_to_openai import as_json_object
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_opts_into_native_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_converse_rejects_assistant_prefill,
+    bedrock_model_is_in_catalog,
     bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
@@ -248,6 +250,11 @@ def _has_native_text_format(output_config: object) -> bool:
         return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
     except ValidationError:
         return False
+
+
+def _text_with_strict_format(caller_text: object) -> Mapping[str, object]:
+    text: Final = as_json_object(caller_text) or {}
+    return {**text, "format": {**(as_json_object(text.get("format")) or {}), "strict": True}}
 
 
 def _guard_content_as_system_text(block: SystemContentBlock) -> SystemContentBlock | None:
@@ -651,6 +658,16 @@ class AmazonConverseConfig(BaseConfig):
     @staticmethod
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
         return re.search(r"openai\.gpt-\d", model) is not None
+
+    @classmethod
+    def _deployment_is_openai_gpt(cls, model: str, base_model: str | None) -> bool:
+        if cls._is_openai_gpt_reasoning_model(model):
+            return True
+        return (
+            base_model is not None
+            and not bedrock_model_is_in_catalog(model)
+            and cls._is_openai_gpt_reasoning_model(base_model)
+        )
 
     @staticmethod
     def _requires_min_max_tokens(model: str) -> bool:
@@ -1607,8 +1624,8 @@ class AmazonConverseConfig(BaseConfig):
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
                 json_schema=dict(native_schema),
-                name=name,
-                description=description,
+                name=name if isinstance(name, str) else None,
+                description=description if isinstance(description, str) else None,
             )
             optional_params["outputConfig"] = output_config
         elif json_schema is not None:
@@ -2148,6 +2165,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         drop_params: bool = False,
         model_info: Mapping[str, object] | None = None,
+        deployment_base_model: str | None = None,
     ) -> tuple[dict, dict, dict, OutputConfigBlock | None]:
         """Prepare and separate request parameters."""
         # Consume the internal ``_output_config_normalized`` marker set by
@@ -2250,6 +2268,9 @@ class AmazonConverseConfig(BaseConfig):
                     if effort is not None:
                         self._validate_anthropic_adaptive_effort(model=model, effort=effort)
                     additional_request_params["output_config"] = anthropic_output_config
+
+        if _has_native_text_format(output_config) and self._deployment_is_openai_gpt(model, deployment_base_model):
+            additional_request_params["text"] = _text_with_strict_format(additional_request_params.get("text"))
 
         return (
             inference_params,
@@ -2509,7 +2530,13 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
-        ) = self._prepare_request_params(optional_params, model, drop_params, deployment_model_info(litellm_params))
+        ) = self._prepare_request_params(
+            optional_params,
+            model,
+            drop_params,
+            deployment_model_info(litellm_params),
+            self._deployment_base_model(litellm_params or {}),
+        )
 
         original_tools: Final = inference_params.pop("tools", [])
 
