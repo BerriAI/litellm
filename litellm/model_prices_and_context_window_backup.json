@@ -121684,7 +121684,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "thinking_always_on": true
+        "thinking_always_on": true,
+        "token_count_model": {"model":"anthropic.claude-fable-5-1","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
@@ -121718,11 +121719,7 @@
         "supports_tool_search": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "token_count_model": {
-            "litellm_provider": "bedrock_mantle",
-            "model": "anthropic.claude-opus-4-8",
-            "region": "us-east-1"
-        }
+        "token_count_model": {"model":"anthropic.claude-opus-4-8","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -121756,11 +121753,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "thinking_on_by_default": true,
-        "token_count_model": {
-            "litellm_provider": "bedrock_mantle",
-            "model": "anthropic.claude-opus-5",
-            "region": "us-east-1"
-        }
+        "token_count_model": {"model":"anthropic.claude-opus-5","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -121795,11 +121788,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "thinking_on_by_default": true,
-        "token_count_model": {
-            "litellm_provider": "bedrock_mantle",
-            "model": "anthropic.claude-sonnet-5",
-            "region": "us-east-1"
-        }
+        "token_count_model": {"model":"anthropic.claude-sonnet-5","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "fal_ai/fal-ai/veo3": {
         "litellm_provider": "fal_ai",
