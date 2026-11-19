@@ -2254,3 +2254,55 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
     else:
         assert entered.is_set()
         assert cleaned.is_set()
+
+
+class _ResponseHeadersCapture(CustomLogger):
+    seen: tuple[dict[str, object], UserAPIKeyAuth, object] | None = None
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        self.seen = (data, user_api_key_dict, response)
+        return {"x-custom-header": "custom-value", "Content-Length": "0"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_answered", [True, False])
+async def test_native_tool_call_response_headers_hook_sees_the_recorded_response_or_none_when_the_gateway_rejected(
+    tool_answered: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcp.types import CallToolRequestParams, CallToolResult
+
+    from litellm.proxy.mcp_server.mcp_debug import MCPCallbackResponseHeaders
+
+    capture: Final = _ResponseHeadersCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    holder: Final = MCPCallbackResponseHeaders()
+    answer: Final = CallToolResult(content=[], is_error=True)
+    caller: Final = UserAPIKeyAuth(api_key="hashed-key")
+    if tool_answered:
+        holder.data = {"name": "lookup", "arguments": {"record": "r-1"}, "metadata": {"user_api_key": "hashed-key"}}
+        holder.response = answer
+
+    await operations._record_callback_response_headers(
+        holder,
+        prepare_context(user_api_key_auth=caller if tool_answered else None),
+        CallToolRequestParams(name="lookup", arguments={"record": "r-1"}),
+        ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+    )
+
+    assert capture.seen is not None
+    data, auth, response = capture.seen
+    assert dict(holder.headers()) == {"x-custom-header": "custom-value"}
+    assert response is (answer if tool_answered else None)
+    assert auth == (caller if tool_answered else UserAPIKeyAuth())
+    assert data == {
+        "name": "lookup",
+        "arguments": {"record": "r-1"},
+        "model": "MCP: lookup",
+        **({"metadata": {"user_api_key": "hashed-key"}} if tool_answered else {}),
+    }

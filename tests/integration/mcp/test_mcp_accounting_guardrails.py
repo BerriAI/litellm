@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from collections.abc import Generator, Iterator, Mapping
@@ -34,6 +35,8 @@ from integration._support.mcp import (
 )
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -269,6 +272,18 @@ class HookRecorder(CustomLogger):
                 "content": [item.model_dump() for item in response_obj.mcp_tool_call_response],
             }}
         )
+
+    async def async_post_call_response_headers_hook(self, data, user_api_key_dict, response, request_headers=None):
+        await _post(
+            {{
+                "stage": "response_headers",
+                "model": data.get("model"),
+                "user_api_key": (data.get("metadata") or {{}}).get("user_api_key"),
+                "caller": user_api_key_dict.api_key,
+                "response": None if response is None else response.model_dump(mode="json"),
+            }}
+        )
+        return {{"x-custom-header": "custom-value"}}
 
 
 class SinkGuardrail(CustomGuardrail):
@@ -691,3 +706,92 @@ def test_an_adapter_returning_the_wrong_number_of_texts_fails_closed_before_the_
             ("call_mcp_tool", "failure"),
         ], rows
         assert _tool_metadata(rows[1])["arguments"] == {"record": COUNT_MISMATCH}, rows[1]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCall:
+    key: str
+    name: str
+    result: dict[str, JsonValue]
+    headers: Mapping[str, httpx.Headers]
+
+
+def _native_lookup(gateway: Gateway, scenario: Scenario, peer: McpPeer, record: str) -> NativeCall:
+    alias: Final = "hdr" + uuid.uuid4().hex[:8]
+    identity: Final = register_mcp(scenario, peer, alias)
+    key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+    seen: Final[dict[str, httpx.Headers]] = {}
+
+    async def remember(response: httpx.Response) -> None:
+        if response.request.method == "POST":
+            seen[json.loads(response.request.content).get("method")] = response.headers
+
+    async def run() -> NativeCall:
+        client: Final = httpx.AsyncClient(
+            headers={"x-litellm-api-key": key, "x-mcp-servers": alias},
+            timeout=30,
+            trust_env=False,
+            event_hooks={"response": [remember]},
+        )
+        url: Final = str(gateway.client.base_url).rstrip("/") + "/mcp"
+        async with streamable_http_client(url, http_client=client) as streams:
+            async with ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+                name: Final = next(tool.name for tool in (await session.list_tools()).tools if "lookup" in tool.name)
+                result: Final = await session.call_tool(name, {"record": record})
+                return NativeCall(key, name, JSON_OBJECT.validate_python(result.model_dump(mode="json")), seen)
+
+    return asyncio.run(run())
+
+
+def _raw_native_call(gateway: Gateway, call: NativeCall, record: str) -> httpx.Response:
+    return gateway.client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": call.name, "arguments": {"record": record}},
+        },
+        headers={"x-litellm-api-key": call.key, "Accept": "application/json, text/event-stream"},
+    )
+
+
+def test_native_tool_call_carries_callback_response_headers_and_the_result_a_gateway_without_the_callback_returns(
+    hooks_rig: HooksRig, gateway: Gateway
+) -> None:
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as hooked, gateway.scenario() as plain:
+        hooks_rig.sunk()
+        with_callback: Final = _native_lookup(hooks_rig.sibling, hooked, peer, "r-1")
+        sunk: Final = hooks_rig.sunk()
+        without_callback: Final = _native_lookup(gateway, plain, peer, "r-1")
+        raw_with: Final = _raw_native_call(hooks_rig.sibling, with_callback, "r-1")
+        raw_without: Final = _raw_native_call(gateway, without_callback, "r-1")
+    assert with_callback.headers["tools/call"].get("x-custom-header") == "custom-value", with_callback.headers
+    assert "x-custom-header" not in without_callback.headers["tools/call"], without_callback.headers
+    assert "x-custom-header" not in with_callback.headers["tools/list"], with_callback.headers
+    assert "x-custom-header" not in with_callback.headers["initialize"], with_callback.headers
+    assert with_callback.result == without_callback.result, with_callback.result
+    assert _texts(with_callback.result["content"]) == ["found"], with_callback.result
+    assert raw_with.headers.get("x-custom-header") == "custom-value", raw_with.headers
+    assert raw_with.content == raw_without.content, raw_with.text
+    saw: Final = _only(_native(sunk, "response_headers"))
+    assert saw["model"] == f"MCP: {with_callback.name}", saw
+    assert saw["user_api_key"] == saw["caller"] == _digest(with_callback.key), saw
+    assert saw["response"] == with_callback.result, saw
+
+
+def test_native_tool_call_the_gateway_rejects_carries_callback_response_headers_and_the_callback_sees_no_response(
+    hooks_rig: HooksRig,
+) -> None:
+    with scripted_peer(_lookup_tool()) as peer, hooks_rig.sibling.scenario() as scenario:
+        hooks_rig.sunk()
+        blocked: Final = _native_lookup(hooks_rig.sibling, scenario, peer, COUNT_MISMATCH)
+        sunk: Final = hooks_rig.sunk()
+        assert tool_calls(peer.drain()) == (), "the blocked call reached the peer"
+    assert blocked.headers["tools/call"].get("x-custom-header") == "custom-value", blocked.headers
+    assert blocked.result["is_error"] is True, blocked.result
+    assert "the redaction cannot be mapped back" in str(blocked.result["content"]), blocked.result
+    saw: Final = _only(_native(sunk, "response_headers"))
+    assert (saw["model"], saw["response"]) == (f"MCP: {blocked.name}", None), saw
+    assert saw["user_api_key"] == saw["caller"] == _digest(blocked.key), saw
