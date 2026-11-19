@@ -21,6 +21,7 @@ import pytest
 
 import litellm.proxy.proxy_server as proxy_server
 from litellm.constants import BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME
+from litellm.proxy.health_check import WildcardProbeScope
 from litellm.router_api import RouterSettings
 from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
@@ -767,8 +768,7 @@ async def test_schedule_background_health_check_db_save_saves_a_public_wildcard_
         model_list=[exact],
         healthy_endpoints=[{"model": served, "model_id": "exact"}],
         unhealthy_endpoints=[],
-        public_names=(served,),
-        probe_router=router,
+        wildcard_scope=WildcardProbeScope((served,), router, None, True, None),
     )
     await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
 
@@ -795,8 +795,9 @@ async def test_schedule_background_health_check_db_save_still_saves_regular_rows
         model_list=[{"model_name": "opus", "litellm_params": {"model": "openai/opus"}, "model_info": {"id": "exact"}}],
         healthy_endpoints=[{"model": "openai/opus", "model_id": "exact"}],
         unhealthy_endpoints=[],
-        public_names=("bedrock/us.anthropic.claude-opus-4-8",),
-        probe_router=_RegistryUnavailableRouter(),
+        wildcard_scope=WildcardProbeScope(
+            ("bedrock/us.anthropic.claude-opus-4-8",), _RegistryUnavailableRouter(), None, True, None
+        ),
     )
     await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
 
@@ -804,3 +805,46 @@ async def test_schedule_background_health_check_db_save_still_saves_regular_rows
         (call.kwargs["model_name"], call.kwargs["model_id"], call.kwargs["status"])
         for call in prisma_client.save_health_check_result.await_args_list
     ] == [("opus", "exact", "healthy")]
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_hands_public_model_groups_to_the_db_save(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 3)
+    monkeypatch.setattr(proxy_server, "health_check_details", False)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(litellm, "public_model_groups", ["bedrock/us.anthropic.claude-opus-4-8"])
+    router = SimpleNamespace(
+        settings=lambda: RouterSettings(background_health_check_model_groups=frozenset({"bedrock/*"}))
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "bedrock/*", "model_info": {"id": "wc"}}])
+    monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
+
+    async def _fake_direct(*_a, **_kw):
+        return ([], [], {})
+
+    scheduled = {}
+    monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _fake_direct)
+    monkeypatch.setattr(
+        proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: scheduled.update(kw)
+    )
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
+
+    async def _stop_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert scheduled["wildcard_scope"] == WildcardProbeScope(
+        ("bedrock/us.anthropic.claude-opus-4-8",), router, frozenset({"bedrock/*"}), False, 3
+    )

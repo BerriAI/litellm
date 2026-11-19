@@ -733,10 +733,12 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    WildcardProbeScope,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
+    probe_wildcards_and_save_background_health_checks,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -5100,112 +5102,29 @@ def _schedule_background_health_check_db_save(
     unhealthy_endpoints: list,
     pod_lock_manager: PodLockManager | None = None,
     lock_ttl: int | None = None,
-    public_names: Sequence[str] = (),
-    probe_router: Router | None = None,
-    model_groups: AbstractSet[str] | None = None,
-    details: bool | None = True,
-    max_concurrency: int | None = None,
+    wildcard_scope: WildcardProbeScope | None = None,
 ) -> None:
     """Fire-and-forget: persist health check results to DB if prisma is available.
 
-    Public names a wildcard alone serves are probed here, inside the window-gated save, so their
-    results reach only the DB and a failure there never reaches the background loop.
+    Public wildcard models in ``wildcard_scope`` are probed inside this save, so their results reach only the DB.
     """
     if prisma_client is None:
         return
     import time as time_module
 
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        save_background_health_checks_to_db,
-    )
-
     checked_by: Final = shared_health_manager.pod_id if shared_health_manager is not None else "background_health_check"
     start_time: Final = time_module.time()
-    save: Final = (
-        partial(
-            _probe_wildcards_and_save,
-            prisma_client,
-            model_list,
-            healthy_endpoints,
-            unhealthy_endpoints,
-            start_time,
-            checked_by,
-            _WildcardProbeScope(public_names, probe_router, model_groups, details, max_concurrency),
-        )
-        if public_names and probe_router is not None
-        else partial(
-            save_background_health_checks_to_db,
-            prisma_client,
-            model_list,
-            healthy_endpoints,
-            unhealthy_endpoints,
-            start_time,
-            checked_by=checked_by,
-        )
+    save: Final = partial(
+        probe_wildcards_and_save_background_health_checks,
+        prisma_client,
+        model_list,
+        healthy_endpoints,
+        unhealthy_endpoints,
+        start_time,
+        checked_by,
+        wildcard_scope,
     )
     asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
-
-
-@dataclass(frozen=True, slots=True)
-class _WildcardProbeScope:
-    public_names: Sequence[str]
-    router: Router
-    model_groups: AbstractSet[str] | None
-    details: bool | None
-    max_concurrency: int | None
-
-
-_Endpoints: TypeAlias = Sequence[Mapping[str, object]]
-
-
-async def _wildcard_probe_results(scope: _WildcardProbeScope) -> tuple[_Endpoints, _Endpoints, _Endpoints] | None:
-    """The probes and their healthy and unhealthy endpoints, or None when there is nothing to save for them."""
-    from litellm.proxy.health_check import probe_public_wildcard_deployments, public_wildcard_probe_deployments
-
-    try:
-        probes: Final = public_wildcard_probe_deployments(scope.public_names, scope.router, scope.model_groups)
-        if not probes:
-            return None
-        healthy, unhealthy = await probe_public_wildcard_deployments(probes, scope.details, scope.max_concurrency)
-        return probes, healthy, unhealthy
-    except Exception as e:
-        verbose_proxy_logger.warning("background_health_check_wildcard_probe_failed error=%s", str(e))
-        return None
-
-
-async def _probe_wildcards_and_save(
-    prisma_client: PrismaClient,
-    model_list: _Endpoints,
-    healthy_endpoints: _Endpoints,
-    unhealthy_endpoints: _Endpoints,
-    start_time: float,
-    checked_by: str,
-    scope: _WildcardProbeScope,
-) -> bool:
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        save_background_health_checks_to_db,
-    )
-
-    probing_started: Final = time.time()
-    results: Final = await _wildcard_probe_results(scope)
-    if results is None:
-        return await save_background_health_checks_to_db(
-            prisma_client,
-            list(model_list),
-            list(healthy_endpoints),
-            list(unhealthy_endpoints),
-            start_time,
-            checked_by=checked_by,
-        )
-    probes, probe_healthy, probe_unhealthy = results
-    return await save_background_health_checks_to_db(
-        prisma_client,
-        [*model_list, *probes],
-        [*healthy_endpoints, *probe_healthy],
-        [*unhealthy_endpoints, *probe_unhealthy],
-        start_time + (time.time() - probing_started),
-        checked_by=checked_by,
-    )
 
 
 def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
@@ -5502,11 +5421,17 @@ async def _run_background_health_check():
             unhealthy_endpoints,
             pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             lock_ttl=health_check_interval,
-            public_names=tuple(litellm.public_model_groups or ()),
-            probe_router=llm_router,
-            model_groups=scoped_model_groups,
-            details=details_bool,
-            max_concurrency=health_check_concurrency,
+            wildcard_scope=(
+                WildcardProbeScope(
+                    tuple(litellm.public_model_groups or ()),
+                    llm_router,
+                    scoped_model_groups,
+                    details_bool,
+                    health_check_concurrency,
+                )
+                if llm_router is not None and litellm.public_model_groups
+                else None
+            ),
         )
 
         # Write health state to router cache for health-check-driven routing

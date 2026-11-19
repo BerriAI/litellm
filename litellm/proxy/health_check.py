@@ -6,8 +6,9 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
@@ -17,6 +18,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 
 logger: Final = logging.getLogger(__name__)
@@ -418,7 +420,8 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
     return frozenset(ident for entry in resolved if (ident := _deployment_id(entry)))
 
 
-_WILDCARD_PROBE_DROPPED_INFO: Final = frozenset({"id", "health_check_model"})
+def _is_probe_tuning(key: str) -> bool:
+    return key in ("id", "mode") or key.startswith("health_check_")
 
 
 def _wildcard_probe(public_name: str, row: Mapping[str, object]) -> Mapping[str, object]:
@@ -428,11 +431,7 @@ def _wildcard_probe(public_name: str, row: Mapping[str, object]) -> Mapping[str,
         **row,
         "model_name": public_name,
         "litellm_params": dict(params) if isinstance(params, Mapping) else {},
-        "model_info": (
-            {k: v for k, v in info.items() if k not in _WILDCARD_PROBE_DROPPED_INFO}
-            if isinstance(info, Mapping)
-            else {}
-        ),
+        "model_info": {k: v for k, v in info.items() if not _is_probe_tuning(k)} if isinstance(info, Mapping) else {},
     }
 
 
@@ -455,21 +454,71 @@ def _wildcard_probes_for(
 def public_wildcard_probe_deployments(
     public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
 ) -> tuple[Mapping[str, object], ...]:
-    """Id-less copies of the wildcards serving each public name nothing else serves, probing that exact model.
-
-    The ids must match exactly, so a name an exact deployment, alias or routing group serves is left out.
-    """
+    """One id-less probe per wildcard for each public name that only a wildcard serves."""
     return tuple(
         chain.from_iterable(_wildcard_probes_for(name, router, model_groups) for name in dict.fromkeys(public_names))
     )
 
 
-async def probe_public_wildcard_deployments(
-    probes: Sequence[Mapping[str, object]], details: bool | None, max_concurrency: int | None
-) -> tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]]]:
-    """Healthy and unhealthy endpoints for ``probes``, never filtered by id since they carry none."""
-    healthy, unhealthy, _ = await _perform_health_check(list(probes), details, max_concurrency)
-    return healthy, unhealthy
+@dataclass(frozen=True, slots=True)
+class WildcardProbeScope:
+    public_names: tuple[str, ...]
+    router: "Router"
+    model_groups: AbstractSet[str] | None
+    details: bool | None
+    max_concurrency: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _WildcardProbeResults:
+    probes: Sequence[Mapping[str, object]]
+    healthy: Sequence[Mapping[str, object]]
+    unhealthy: Sequence[Mapping[str, object]]
+    seconds: float
+
+
+_NO_WILDCARD_PROBE_RESULTS: Final = _WildcardProbeResults((), (), (), 0.0)
+
+
+async def _wildcard_probe_results(
+    scope: WildcardProbeScope | None, clock: Callable[[], float]
+) -> _WildcardProbeResults:
+    if scope is None:
+        return _NO_WILDCARD_PROBE_RESULTS
+    started: Final = clock()
+    try:
+        probes: Final = public_wildcard_probe_deployments(scope.public_names, scope.router, scope.model_groups)
+        if not probes:
+            return _NO_WILDCARD_PROBE_RESULTS
+        healthy, unhealthy, _ = await _perform_health_check(list(probes), scope.details, scope.max_concurrency)
+    except Exception as e:
+        logger.warning("background_health_check_wildcard_probe_failed error=%s", str(e))
+        return _NO_WILDCARD_PROBE_RESULTS
+    return _WildcardProbeResults(probes, healthy, unhealthy, clock() - started)
+
+
+async def probe_wildcards_and_save_background_health_checks(
+    prisma_client: "PrismaClient",
+    model_list: Sequence[Mapping[str, object]],
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
+    start_time: float,
+    checked_by: str,
+    scope: WildcardProbeScope | None,
+    clock: Callable[[], float] = time.time,
+) -> bool:
+    """Save the cycle's rows plus any public wildcard probes; the probes' run time is kept out of the cycle's rows."""
+    from litellm.proxy.health_endpoints._health_endpoints import save_background_health_checks_to_db
+
+    results: Final = await _wildcard_probe_results(scope, clock)
+    return await save_background_health_checks_to_db(
+        prisma_client,
+        [*model_list, *results.probes],
+        [*healthy_endpoints, *results.healthy],
+        [*unhealthy_endpoints, *results.unhealthy],
+        start_time + results.seconds,
+        checked_by=checked_by,
+    )
 
 
 def _dependency_failure(
