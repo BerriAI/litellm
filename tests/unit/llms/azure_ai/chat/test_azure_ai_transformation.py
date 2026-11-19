@@ -183,6 +183,49 @@ CHAT_COMPLETION_PAYLOAD: Final = {
 
 
 @pytest.mark.parametrize(
+    ("model", "max_tokens", "max_completion_tokens", "wire_limit"),
+    (
+        pytest.param("gpt-5-chat", 256, None, {"max_completion_tokens": 256}, id="gpt-5-chat"),
+        pytest.param("gpt-5-chat-latest", 64, None, {"max_completion_tokens": 64}, id="gpt-5-chat-suffix"),
+        pytest.param("gpt-5-chat", 32, 64, {"max_completion_tokens": 64}, id="explicit-limit-wins"),
+        pytest.param("gpt-5-chat", None, 64, {"max_completion_tokens": 64}, id="explicit-limit-only"),
+        pytest.param("gpt-5-chat", None, None, {}, id="no-limit"),
+        pytest.param("gpt-4o", 256, None, {"max_tokens": 256}, id="legacy-model"),
+        pytest.param("gpt-5", 256, None, {"max_completion_tokens": 256}, id="reasoning-model"),
+    ),
+)
+def test_foundry_chat_sends_the_expected_token_limit(
+    respx_mock: respx.MockRouter,
+    model: str,
+    max_tokens: int | None,
+    max_completion_tokens: int | None,
+    wire_limit: Mapping[str, int],
+) -> None:
+    route: Final = respx_mock.post(f"{FOUNDRY_RESOURCE_BASE}/models/chat/completions").mock(
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
+    )
+    messages: Final = [{"role": "user", "content": "Reply with 42."}]
+    temperature: Final = {} if model == "gpt-5" else {"temperature": 0.25}
+
+    litellm.completion(
+        model=f"azure_ai/{model}",
+        messages=messages,
+        api_key="azure-ai-test-key",
+        api_base=FOUNDRY_RESOURCE_BASE,
+        max_tokens=max_tokens,
+        max_completion_tokens=max_completion_tokens,
+        **temperature,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": model,
+        "messages": messages,
+        **temperature,
+        **wire_limit,
+    }
+
+
+@pytest.mark.parametrize(
     ("api_base", "api_version", "expected_path", "expected_query"),
     [
         pytest.param(FOUNDRY_RESOURCE_BASE, None, "/models/chat/completions", b"", id="resource-root"),
