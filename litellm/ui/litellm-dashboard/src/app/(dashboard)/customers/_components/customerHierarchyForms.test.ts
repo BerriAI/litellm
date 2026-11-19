@@ -156,14 +156,13 @@ describe("customer hierarchy settings payloads", () => {
   it("should save a preset change together with a temporary limit and expiry edit", () => {
     const entity: CustomerHierarchyEntity = { kind: "member", record: member };
     const expiry = "2026-12-02T12:00";
-    expect(
-      buildCustomerHierarchyPatch(entity, {
-        ...customerHierarchyFields(entity),
-        templateId: "template-2",
-        maxBudget: "30",
-        overrideExpiry: expiry,
-      }),
-    ).toEqual({
+    const fields = {
+      ...customerHierarchyFields(entity),
+      templateId: "template-2",
+      maxBudget: "30",
+      overrideExpiry: expiry,
+    };
+    expect(buildCustomerHierarchyPatch(entity, fields)).toEqual({
       ok: true,
       patch: {
         kind: "member",

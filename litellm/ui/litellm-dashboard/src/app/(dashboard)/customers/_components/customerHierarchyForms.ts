@@ -172,6 +172,28 @@ const aliasChanges = (initial: string | null | undefined, value: string): { alia
 const legacyMemberBudgetClear = (member: Member): { budget_override?: null } =>
   member.budget_override != null && member.budget_override_expires_at == null ? { budget_override: null } : {};
 
+const permanentMemberPatch = (
+  member: Member,
+  fields: CustomerHierarchyFields,
+  budget: Budget | null,
+  organization?: Organization,
+): PatchResult => {
+  const alias = aliasChanges(member.alias, fields.alias);
+  const clearLegacy = legacyMemberBudgetClear(member);
+  if (fields.templateId && fields.templateId !== member.budget_id)
+    return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearLegacy } } };
+  const permanentBudget = {
+    ...(clearLegacy.budget_override === null ? member.effective_budget : {}),
+    ...budget,
+  };
+  const preset =
+    organization?.default_budgets.find((template) => template.budget_id === fields.templateId)?.budget_id ??
+    organization?.default_budget_template_id;
+  if (!fields.budgetEnabled && !preset) return { ok: false, error: "budgetRequired" };
+  const selection = fields.budgetEnabled ? { budget: permanentBudget } : { budget_id: preset };
+  return { ok: true, patch: { kind: "member", body: { ...alias, ...selection, ...clearLegacy } } };
+};
+
 const memberPatch = (
   member: Member,
   fields: CustomerHierarchyFields,
@@ -216,18 +238,7 @@ const memberPatch = (
       },
     };
   }
-  if (templateChanged && fields.templateId)
-    return { ok: true, patch: { kind: "member", body: { ...alias, ...templateSelection, ...clearLegacy } } };
-  const permanentBudget = {
-    ...(clearLegacy.budget_override === null ? member.effective_budget : {}),
-    ...budget,
-  };
-  const preset =
-    organization?.default_budgets.find((template) => template.budget_id === fields.templateId)?.budget_id ??
-    organization?.default_budget_template_id;
-  if (!fields.budgetEnabled && !preset) return { ok: false, error: "budgetRequired" };
-  const selection = fields.budgetEnabled ? { budget: permanentBudget } : { budget_id: preset };
-  return { ok: true, patch: { kind: "member", body: { ...alias, ...selection, ...clearLegacy } } };
+  return permanentMemberPatch(member, fields, budget, organization);
 };
 
 const organizationBudget = (original: Budget | null | undefined, parsed: Budget, groupChanged: boolean): Budget => {
