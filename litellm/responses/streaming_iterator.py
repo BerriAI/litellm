@@ -2777,10 +2777,10 @@ class ResponsesWebSocketStreaming:
                 # and the text-bearing "done" events. Per-fragment Presidio
                 # cannot reliably catch PII spanning multiple delta chunks (e.g.
                 # "alice@" + "example.com"), and the done events carry the full
-                # output text that response.completed already delivers in
-                # fully-masked form; forwarding them would leak unmasked PII
-                # before response.completed arrives. The client receives only the
-                # masked response.completed.
+                # output text that the terminal event (response.completed or
+                # response.incomplete) already delivers in fully-masked form;
+                # forwarding them would leak unmasked PII before it arrives. The
+                # client receives only the masked terminal event.
                 if self.output_guardrail_callbacks:
                     try:
                         _evt_payload: Mapping[str, object] = _load_json_object(response_str)
@@ -2993,8 +2993,9 @@ class ResponsesWebSocketStreaming:
 
     async def _mask_response_completed(self, response_str: str) -> str:
         """
-        Apply Presidio output masking (apply_to_output=True) to the
-        ``response.completed`` event before it is forwarded to the client.
+        Apply Presidio output masking (apply_to_output=True) to the terminal
+        ``response.completed`` or ``response.incomplete`` event before it is
+        forwarded to the client.
 
         Walks ``response.output[*].content[*].text`` and masks every text block,
         as well as ``response.output[*].arguments`` on function-call items and
@@ -3011,7 +3012,7 @@ class ResponsesWebSocketStreaming:
         except (json.JSONDecodeError, TypeError):
             return response_str
 
-        if evt_obj.get("type") != "response.completed":
+        if evt_obj.get("type") not in _HISTORY_TERMINAL_EVENT_TYPES:
             return response_str
 
         modified = False
