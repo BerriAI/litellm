@@ -1884,10 +1884,13 @@ class ResetBudgetJob:
             return False
         budget_duration: Final = window["budget_duration"]
         annual: Final = isinstance(budget_duration, str) and is_annual_budget_duration(budget_duration)
-        saved_reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
-        reset_at: Final = _as_utc(saved_reset_at) if annual else saved_reset_at.replace(tzinfo=None)
-        cutoff: Final = _as_utc(now) if annual else now
-        if reset_at > cutoff:
+        # Keep the parsed offset. Dropping it left the wall-clock reading of a
+        # "+08:00" boundary compared against a UTC now, which delays the reset by
+        # the offset; compute_budget_reset_at writes those offsets itself whenever
+        # the configured budget timezone is not UTC. _as_utc only fills in a
+        # tzinfo for legacy rows written naive, which always meant UTC.
+        reset_at: Final = _as_utc(datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")))
+        if reset_at > _as_utc(now):
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
         try:
@@ -1981,7 +1984,7 @@ class ResetBudgetJob:
 
         from litellm.proxy.proxy_server import spend_counter_store
 
-        now: Final = datetime.utcnow()
+        now: Final = datetime.now(timezone.utc)
         for source in _WINDOW_SOURCES:
             try:
                 await self._reset_windows_for(source=source, now=now, spend_counter_store=spend_counter_store)
