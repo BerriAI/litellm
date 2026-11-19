@@ -110,6 +110,10 @@ pub trait BaseMessagesConfig: Sync {
 
     fn secret_names(&self) -> &'static [&'static str];
 
+    fn has_own_credentials(&self, _litellm_params: &LitellmParams) -> bool {
+        false
+    }
+
     /// The model Python's handler logs the call under, once `get_llm_provider` has resolved it.
     fn logged_model(&self, model: &str) -> String {
         model.to_string()

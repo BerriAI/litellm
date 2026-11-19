@@ -1,3 +1,6 @@
+use litellm_router_types::LitellmParams;
+use serde_json::Value;
+
 use crate::{Error, ErrorDetail};
 
 pub const AZURE_OPENAI_API_KEY_ENV: &str = "AZURE_OPENAI_API_KEY";
@@ -14,6 +17,18 @@ pub const ENTRA_ID_PARAMS: &[&str] = &[
     "azure_password",
     "azure_scope",
 ];
+
+const ENTRA_CREDENTIAL_PARAMS: &[&str] = &["azure_ad_token", "client_secret", "azure_password"];
+
+pub fn has_entra_credentials(litellm_params: &LitellmParams) -> bool {
+    ENTRA_CREDENTIAL_PARAMS.iter().any(|name| {
+        litellm_params
+            .extra
+            .get(*name)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    })
+}
 
 /// Set by a host whose call names an `azure_ad_token_provider`: [`CALLABLE_TOKEN_PROVIDER`]
 /// when Python would call it, any other string when Python only counts it as present.

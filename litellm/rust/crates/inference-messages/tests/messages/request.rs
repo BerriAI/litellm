@@ -234,6 +234,38 @@ async fn credentials_become_exactly_one_auth_header(
     &[],
     &[("x-api-key", "sk-call")],
 )]
+#[case::deployment_entra_token_over_the_environment_keys(
+    None,
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    None,
+    &[("AZURE_OPENAI_API_KEY", "sk-openai"), ("AZURE_API_KEY", "sk-azure")],
+    &[("authorization", "Bearer entra-token")],
+)]
+#[case::deployment_entra_token_over_the_module_key(
+    Some(""),
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    Some("sk-module"),
+    &[("AZURE_API_KEY", "sk-azure")],
+    &[("authorization", "Bearer entra-token")],
+)]
+#[case::call_key_over_the_deployment_entra_token(
+    Some("sk-call"),
+    &[],
+    json!({"azure_ad_token": "entra-token"}),
+    Some("sk-module"),
+    &[("AZURE_API_KEY", "sk-azure")],
+    &[("x-api-key", "sk-call")],
+)]
+#[case::empty_deployment_entra_token_keeps_the_environment_key(
+    None,
+    &[],
+    json!({"azure_ad_token": ""}),
+    None,
+    &[("AZURE_API_KEY", "sk-azure")],
+    &[("x-api-key", "sk-azure")],
+)]
 #[case::no_credential_is_sent_unauthenticated(None, &[], json!({}), None, &[], &[])]
 #[tokio::test]
 async fn azure_credentials_resolve_in_pythons_order(
@@ -347,6 +379,42 @@ async fn an_azure_deployment_without_a_key_or_a_python_host_is_a_missing_key(
         ))
     );
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::client_secret(json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}))]
+#[case::static_token(json!({"azure_ad_token": "entra-token"}))]
+#[tokio::test]
+async fn an_azure_deployment_with_entra_credentials_and_no_python_host_keeps_the_environment_key(
+    call: MessagesCall,
+    #[case] params: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let Value::Object(params) = params else {
+        panic!("case params are an object")
+    };
+
+    run_with(
+        Arc::new(RecordingSecrets::new([("AZURE_API_KEY", "sk-azure")])),
+        MessagesCall {
+            custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: litellm_inference_messages::litellm_params(
+                [("model".to_string(), json!(MODEL))]
+                    .into_iter()
+                    .chain(params)
+                    .collect(),
+            )
+            .expect("valid params"),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+    )
+    .await
+    .expect("the environment key authenticates");
+
+    let request = only_request(&upstream).await;
+    assert_eq!(request.header_values("x-api-key"), ["sk-azure"]);
+    assert_eq!(request.header("authorization"), None);
 }
 
 /// Python reads `AZURE_USERNAME` and `AZURE_PASSWORD` with `os.getenv`, so only the process

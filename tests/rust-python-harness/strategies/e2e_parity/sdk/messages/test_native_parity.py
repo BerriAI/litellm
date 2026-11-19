@@ -3420,6 +3420,24 @@ AZURE_AUTH_CASES: Final = (
         env=MappingProxyType({"AZURE_AD_TOKEN": "entra-env-token"}),
     ),
     Case("azure_ai_key_outranks_entra_token", _kw(azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_entra_token_outranks_module_key",
+        _kw(api_key=None, azure_ad_token="entra-token"),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"api_key": "sk-module"}),
+    ),
+    Case(
+        "azure_ai_entra_token_outranks_environment_key",
+        _kw(api_key=None, azure_ad_token="entra-token"),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case(
+        "azure_ai_empty_entra_token_keeps_environment_key",
+        _kw(api_key=None, azure_ad_token=""),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
     Case("azure_ai_entra_token_provider", _kw(api_key=None, azure_ad_token_provider=_entra_token), model=AZURE_CLAUDE),
     Case(
         "azure_ai_entra_token_provider_outranks_token",

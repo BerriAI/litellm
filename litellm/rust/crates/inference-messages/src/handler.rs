@@ -316,7 +316,10 @@ async fn provider_call(
         ..litellm_params
     };
     let config = provider.config();
-    let env_lookup = |key: &str| secrets.get(key);
+    let python_host = credentials.azure_ad_token_hosts.host.is_some();
+    let reads_process_wide_keys = !(python_host && config.has_own_credentials(&connection_params));
+    let readable = |key: &str| reads_process_wide_keys || !config.secret_names().contains(&key);
+    let env_lookup = |key: &str| secrets.get(key).filter(|_| readable(key));
 
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
@@ -347,7 +350,12 @@ async fn provider_call(
         extra_headers.unwrap_or_default(),
         scoped,
     ])))?;
-    let configured_key = match shaping.settings.module_api_key.as_ref() {
+    let configured_key = match shaping
+        .settings
+        .module_api_key
+        .as_ref()
+        .filter(|_| reads_process_wide_keys)
+    {
         Some(module_key) => api_key
             .as_deref()
             .filter(|key| !key.is_empty())
@@ -357,7 +365,7 @@ async fn provider_call(
     let deferred = match (
         credentials.deferred_secrets,
         config.deferred_secret_names(
-            credentials.azure_ad_token_hosts.host.is_some(),
+            python_host,
             &forwarded,
             configured_key,
             api_base.as_deref(),
@@ -372,6 +380,7 @@ async fn provider_call(
         secrets
             .get(key)
             .or_else(|| deferred.as_ref().and_then(|deferred| deferred.get(key)))
+            .filter(|_| readable(key))
     };
     let validated = match config.validate_federated_environment(
         forwarded,

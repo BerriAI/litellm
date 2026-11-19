@@ -28,8 +28,8 @@ use crate::{
         AZURE_AD_TOKEN_ENV, AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, AZURE_CLIENT_ID_ENV,
         AZURE_CLIENT_SECRET_ENV, AZURE_OPENAI_API_KEY_ENV, AZURE_PASSWORD_ENV, AZURE_SCOPE_ENV,
         AZURE_TENANT_ID_ENV, AZURE_USERNAME_ENV, CALLABLE_TOKEN_PROVIDER,
-        CALLER_TOKEN_PROVIDER_PARAM, TOKEN_REFRESH_PARAM, resolve_azure_api_base,
-        resolve_azure_api_key,
+        CALLER_TOKEN_PROVIDER_PARAM, TOKEN_REFRESH_PARAM, has_entra_credentials,
+        resolve_azure_api_base, resolve_azure_api_key,
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -98,6 +98,10 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
 
     fn secret_names(&self) -> &'static [&'static str] {
         &[AZURE_OPENAI_API_KEY_ENV, AZURE_API_KEY_ENV]
+    }
+
+    fn has_own_credentials(&self, litellm_params: &LitellmParams) -> bool {
+        has_entra_credentials(litellm_params)
     }
 
     /// `AZURE_AD_TOKEN`, which Python reads through `get_secret_str` only when there is no key,
@@ -563,6 +567,24 @@ mod tests {
                 .map(|(_, value)| value.to_string())
         };
         assert_eq!(resolve_azure_api_key(api_key, &lookup).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::client_secret(json!({"tenant_id": "t", "client_id": "c", "client_secret": "s"}), true)]
+    #[case::static_token(json!({"azure_ad_token": "entra-token"}), true)]
+    #[case::password(json!({"azure_username": "u", "azure_password": "p"}), true)]
+    #[case::ids_without_a_secret(json!({"tenant_id": "t", "client_id": "c"}), false)]
+    #[case::empty_secret(json!({"client_secret": ""}), false)]
+    #[case::scope_only(json!({"azure_scope": "https://ai.azure.com/.default"}), false)]
+    #[case::nothing(json!({}), false)]
+    fn own_credentials_are_the_entra_secrets_python_checks(
+        #[case] params: serde_json::Value,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG.has_own_credentials(&litellm_params(params)),
+            expected
+        );
     }
 
     fn validated(forwarded: &[(&str, &str)], api_key: Option<&str>) -> ValidatedEnvironment {
