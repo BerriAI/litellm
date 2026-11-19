@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import gzip
 import json
 import random
@@ -2073,6 +2074,201 @@ def test_a_compressed_body_naming_a_model_outside_the_key_is_refused_by_auth(
     assert response.status_code == 403, response.text
     assert "not-on-this-key" in response.text
     assert not upstream.called
+
+
+_PNG: Final = b"\x89PNG\r\n\x1a\n" + b"png image bytes"
+_JPEG: Final = b"\xff\xd8\xff\xe0" + b"jpeg image bytes"
+_IMAGE_REQUEST: Final[Mapping[str, object]] = {
+    "model": "jev",
+    "state": {"photo": "photo-1"},
+    "assets": {"photo-1": {"type": "image", "part": "asset-0"}},
+    "questions": {"has_red_square": {"type": "noul", "instructions": "Is there a red square in `photo`?"}},
+}
+_IMAGE_RESPONSE: Final[Mapping[str, object]] = {
+    **_RESPONSE,
+    "answers": {"has_red_square": {"type": "noul", "noul": 0.98}},
+}
+_IMAGES_HEADER: Final[Mapping[str, str]] = {"TypeSafe-Danger-Zone-Images": "true"}
+_MultipartFiles = Mapping[str, tuple[str | None, bytes, str]]
+
+
+@pytest.fixture
+def typesafe_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "jev", "litellm_params": {"model": "typesafe/jev-1.14.0", "api_key": "k"}}]
+        ),
+    )
+
+
+def _multipart(
+    request: Mapping[str, object], *parts: tuple[str, bytes, str], request_filename: str | None = None
+) -> _MultipartFiles:
+    return {
+        "request": (request_filename, json.dumps(request).encode(), "application/json"),
+        **{name: (name, content, content_type) for name, content, content_type in parts},
+    }
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/systemone"))
+@pytest.mark.parametrize(
+    ("image", "content_type", "image_format"),
+    ((_PNG, "image/png", "png"), (_JPEG, "application/octet-stream", "jpeg")),
+    ids=("png", "unlabeled-jpeg"),
+)
+@pytest.mark.parametrize("request_filename", (None, "request.json"), ids=("request-field", "request-file"))
+def test_a_multipart_systemone_request_reaches_typesafe_with_its_image_inline(
+    client: TestClient,
+    typesafe_router: None,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    image: bytes,
+    content_type: str,
+    image_format: str,
+    request_filename: str | None,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_IMAGE_RESPONSE)
+
+    response: Final = client.post(
+        endpoint,
+        files=_multipart(_IMAGE_REQUEST, ("asset-0", image, content_type), request_filename=request_filename),
+        headers=_IMAGES_HEADER,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _IMAGE_RESPONSE["answers"]
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "jev-1.14.0",
+        "state": {"photo": "photo-1"},
+        "assets": {
+            "photo-1": {"type": "image", "format": image_format, "data_base64": base64.b64encode(image).decode()}
+        },
+        "questions": _IMAGE_REQUEST["questions"],
+    }
+
+
+def test_a_multipart_systemone_request_with_no_asset_parts_reaches_typesafe_as_sent(
+    client: TestClient,
+    typesafe_router: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_IMAGE_RESPONSE)
+    text_request: Final = {
+        "model": "jev",
+        "state": {"caption": "a red square on white"},
+        "questions": {"has_red_square": {"type": "noul", "instructions": "Does `caption` mention a red square?"}},
+    }
+
+    response: Final = client.post("/v1/systemone", files=_multipart(text_request))
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {**text_request, "model": "jev-1.14.0"}
+
+
+def test_an_inline_asset_next_to_a_multipart_asset_reaches_typesafe_unchanged(
+    client: TestClient,
+    typesafe_router: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_IMAGE_RESPONSE)
+    inline_asset: Final = {"type": "image", "format": "jpeg", "data_base64": base64.b64encode(_JPEG).decode()}
+    request: Final = {
+        **_IMAGE_REQUEST,
+        "state": {"photo": "photo-1", "reference": "photo-2"},
+        "assets": {"photo-1": {"type": "image", "part": "asset-0"}, "photo-2": inline_asset},
+    }
+
+    response: Final = client.post(
+        "/v1/systemone", files=_multipart(request, ("asset-0", _PNG, "image/png")), headers=_IMAGES_HEADER
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content)["assets"] == {
+        "photo-1": {"type": "image", "format": "png", "data_base64": base64.b64encode(_PNG).decode()},
+        "photo-2": inline_asset,
+    }
+
+
+@pytest.mark.parametrize(
+    "files",
+    (
+        _multipart(_IMAGE_REQUEST),
+        _multipart(_IMAGE_REQUEST, ("asset-0", _PNG, "image/png"), ("asset-1", _PNG, "image/png")),
+        _multipart(
+            {
+                **_IMAGE_REQUEST,
+                "assets": {"a": {"type": "image", "part": "asset-0"}, "b": {"type": "image", "part": "asset-0"}},
+            },
+            ("asset-0", _PNG, "image/png"),
+        ),
+        {**_multipart(_IMAGE_REQUEST), "asset-0": (None, _PNG, "image/png")},
+        {"asset-0": ("asset-0", _PNG, "image/png")},
+        {"request": (None, b"{not json", "application/json"), "asset-0": ("asset-0", _PNG, "image/png")},
+        _multipart({**_IMAGE_REQUEST, "assets": ["asset-0"]}, ("asset-0", _PNG, "image/png")),
+    ),
+    ids=(
+        "missing-part",
+        "unclaimed-part",
+        "part-claimed-twice",
+        "text-part",
+        "no-request-part",
+        "request-not-json",
+        "assets-not-an-object",
+    ),
+)
+def test_a_multipart_systemone_request_typesafe_would_reject_is_refused_before_calling_it(
+    client: TestClient,
+    typesafe_router: None,
+    respx_mock: respx.MockRouter,
+    files: _MultipartFiles,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/systemone", files=files, headers=_IMAGES_HEADER)
+
+    assert response.status_code == 400, response.text
+    assert not upstream.called
+
+
+def test_a_multipart_body_naming_a_model_outside_the_key_is_refused_by_auth(
+    client: TestClient,
+    typesafe_router: None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_key: Final = "sk-decider-only"
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key), models=["decider"])
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma_with_empty_config())
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/systemone",
+        files=_multipart(_IMAGE_REQUEST, ("asset-0", _PNG, "image/png")),
+        headers={**_IMAGES_HEADER, "authorization": f"Bearer {user_key}"},
+    )
+
+    assert response.status_code == 403, response.text
+    assert "jev" in response.text
+    assert not upstream.called
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/decisions", "/v1/extraction"))
+def test_a_multipart_body_on_a_json_only_route_is_a_client_error(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+) -> None:
+    response: Final = client.post(endpoint, files=_multipart(_REQUEST))
+
+    assert response.status_code == 400, response.text
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.parametrize(

@@ -109,7 +109,7 @@ def _normalize_media_type(content_type: str) -> str:
     return content_type.split(";", 1)[0].strip().lower()
 
 
-def _is_form_content_type(content_type: str) -> bool:
+def is_form_content_type(content_type: str) -> bool:
     """
     True iff Starlette's ``request.form()`` will actually parse this body.
 
@@ -118,6 +118,14 @@ def _is_form_content_type(content_type: str) -> bool:
     the auth-time pre-read and the handler's read seeing different payloads.
     """
     return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
+
+
+def _request_content_type(request: Request) -> str:
+    match safe_get_request_headers(request=request).get("content-type"):
+        case str() as content_type:
+            return content_type
+        case _:
+            return ""
 
 
 def is_json_content_type(content_type: str) -> bool:
@@ -291,14 +299,13 @@ async def read_request_body(request: Request | None) -> dict:
         if _cached_request_body is not None:
             return _cached_request_body
 
-        _request_headers: Final[dict] = safe_get_request_headers(request=request)
-        content_type: Final = _request_headers.get("content-type", "")
+        content_type: Final = _request_content_type(request)
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
             binary_body: Final = await request.body()
             _mark_body_received(len(binary_body))
             parsed_body = _parse_binary_body(binary_body)
-        elif _is_form_content_type(content_type):
+        elif is_form_content_type(content_type):
             form_body: Final = dict(await _read_form_data(request))
             raw_metadata: Final = form_body.get("metadata")
             parsed_body = (
@@ -425,8 +432,7 @@ def is_opaque_pass_through_request(route: str, content_type: str) -> bool:
 async def read_raw_json_body(request: Request | None) -> bytes | None:
     if request is None or _safe_get_request_parsed_body(request=request) is None:
         return None
-    content_type: Final = safe_get_request_headers(request=request).get("content-type", "")
-    if _is_form_content_type(content_type):
+    if is_form_content_type(_request_content_type(request)):
         return None
     try:
         return await request.body()
@@ -467,7 +473,7 @@ _safe_get_request_query_params: Final = safe_get_request_query_params
 
 def safe_set_request_parsed_body(
     request: Request | None,
-    parsed_body: dict,
+    parsed_body: Mapping[str, object],
 ) -> None:
     try:
         if request is None:
@@ -680,7 +686,7 @@ async def get_request_body(request: Request) -> dict[str, object]:
         content_type: Final = request.headers.get("content-type", "")
         if is_json_content_type(content_type):
             return await read_request_body(request)
-        elif _is_form_content_type(content_type):
+        elif is_form_content_type(content_type):
             return await get_form_data(request)
         else:
             raise ValueError(f"Unsupported content type: {content_type}")

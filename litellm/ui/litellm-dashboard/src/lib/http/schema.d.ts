@@ -17734,7 +17734,9 @@ export interface paths {
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
          *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
          *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
-         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. A `multipart/form-data`
+         *     body works too, the way the TypeSafe SDK sends images: the JSON goes in a `request` part, and each asset names
+         *     the file part holding its image in `part`. Requests that break
          *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
@@ -24157,7 +24159,9 @@ export interface paths {
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
          *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
          *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
-         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. A `multipart/form-data`
+         *     body works too, the way the TypeSafe SDK sends images: the JSON goes in a `request` part, and each asset names
+         *     the file part holding its image in `part`. Requests that break
          *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *

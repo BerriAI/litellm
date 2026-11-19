@@ -1,16 +1,26 @@
+import base64
+from collections import Counter
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
 from pydantic import TypeAdapter, ValidationError
+from starlette.datastructures import FormData, UploadFile
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.llms.base_llm.decisions.transformation import without_raw_prompt_cache_breakpoints
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    is_form_content_type,
+    read_request_body,
+    safe_set_request_parsed_body,
+)
 from litellm.types.decisions import (
     DecisionsRequest,
     DecisionsRequestBody,
@@ -23,6 +33,9 @@ from litellm.types.extraction import ExtractionRequest, ExtractionRequestBody, E
 
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_FORM_ASSETS_ADAPTER: Final[TypeAdapter[Mapping[str, Mapping[str, object]]]] = TypeAdapter(
+    Mapping[str, Mapping[str, object]]
+)
 _DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(
     OpenAIDecisionRequestBody
@@ -96,7 +109,7 @@ _RouteType: TypeAlias = Literal["adecisions", "asystemone", "aextraction"]
 
 async def _invalid_request(
     raw_data: Mapping[str, object],
-    error: ValidationError,
+    error: ValidationError | str,
     user_api_key_dict: UserAPIKeyAuth,
     api_name: _ApiName,
 ) -> Exception:
@@ -132,14 +145,125 @@ def _fields_checked_before_routing(data: Mapping[str, object], route_type: _Rout
 
 
 _DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info"})
+_FORM_REQUEST_PART: Final = "request"
 
 
-async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName) -> dict[str, object]:
-    body: Final = await request.body()
+@dataclass(frozen=True, slots=True)
+class _FormBody:
+    data: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidFormBody:
+    message: str
+
+
+_SystemOneFormBody: TypeAlias = _FormBody | _InvalidFormBody | None
+
+
+async def _part_bytes(part: UploadFile | str) -> bytes:
+    if isinstance(part, str):
+        return part.encode()
+    return await part.read()
+
+
+def _claimed_part(asset: Mapping[str, object]) -> str | None:
+    part: Final = asset.get("part")
+    return part if isinstance(part, str) else None
+
+
+def _form_assets(assets: object) -> Mapping[str, Mapping[str, object]]:
     try:
-        data: Final = _REQUEST_DATA_ADAPTER.validate_json(body)
+        return _FORM_ASSETS_ADAPTER.validate_python(assets)
+    except ValidationError:
+        return {}
+
+
+async def _inline_asset(asset: Mapping[str, object], files: Mapping[str, UploadFile]) -> Mapping[str, object]:
+    part: Final = _claimed_part(asset)
+    if part is None:
+        return asset
+    image: Final = await files[part].read()
+    detected_format: Final = get_image_type(image)
+    return {
+        **{key: value for key, value in asset.items() if key != "part"},
+        **({} if detected_format is None else {"format": detected_format}),
+        "data_base64": base64.b64encode(image).decode(),
+    }
+
+
+async def _with_inlined_assets(
+    body: Mapping[str, object], parts: tuple[tuple[str, UploadFile | str], ...]
+) -> _FormBody | _InvalidFormBody:
+    assets: Final = _form_assets(body.get("assets"))
+    claimed: Final = tuple(part for asset in assets.values() if (part := _claimed_part(asset)) is not None)
+    if Counter(claimed) != Counter(name for name, _ in parts):
+        return _InvalidFormBody(
+            f"every part after `{_FORM_REQUEST_PART}` must be named by exactly one asset's `part`, but the parts are "
+            + f"{sorted(name for name, _ in parts)} and the assets name {sorted(claimed)}"
+        )
+    text_parts: Final = sorted(name for name, value in parts if isinstance(value, str))
+    if len(text_parts) > 0:
+        return _InvalidFormBody(f"the asset parts {text_parts} must be sent as files, with a filename")
+    if len(claimed) == 0:
+        return _FormBody(body)
+    files: Final = {name: value for name, value in parts if isinstance(value, UploadFile)}
+    return _FormBody({**body, "assets": {name: await _inline_asset(asset, files) for name, asset in assets.items()}})
+
+
+async def _form_body(form: FormData) -> _FormBody | _InvalidFormBody:
+    items: Final = form.multi_items()
+    request_parts: Final = tuple(value for name, value in items if name == _FORM_REQUEST_PART)
+    if len(request_parts) != 1:
+        return _InvalidFormBody(f"a multipart body needs exactly one `{_FORM_REQUEST_PART}` part holding the JSON")
+    try:
+        body: Final = _REQUEST_DATA_ADAPTER.validate_json(await _part_bytes(request_parts[0]))
+    except ValidationError as error:
+        return _InvalidFormBody(f"the `{_FORM_REQUEST_PART}` part must be a JSON object: {error}")
+    return await _with_inlined_assets(body, tuple((name, value) for name, value in items if name != _FORM_REQUEST_PART))
+
+
+async def _systemone_form_body(request: Request) -> _SystemOneFormBody:
+    if not is_form_content_type(request.headers.get("content-type", "")):
+        return None
+    await read_request_body(request)
+    form_body: Final = await _form_body(await request.form())
+    if isinstance(form_body, _FormBody):
+        safe_set_request_parsed_body(request, form_body.data)
+    return form_body
+
+
+async def _json_request_data(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
+) -> Mapping[str, object]:
+    if is_form_content_type(request.headers.get("content-type", "")):
+        raise await _invalid_request(
+            raw_data={}, error="the body must be JSON", user_api_key_dict=user_api_key_dict, api_name=api_name
+        )
+    try:
+        return _REQUEST_DATA_ADAPTER.validate_json(await request.body())
     except ValidationError as error:
         raise await _invalid_request(raw_data={}, error=error, user_api_key_dict=user_api_key_dict, api_name=api_name)
+
+
+async def _request_body(
+    request: Request, form_body: _SystemOneFormBody, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
+) -> Mapping[str, object]:
+    match form_body:
+        case _FormBody(data=form_data):
+            return form_data
+        case _InvalidFormBody(message=message):
+            raise await _invalid_request(
+                raw_data={}, error=message, user_api_key_dict=user_api_key_dict, api_name=api_name
+            )
+        case None:
+            return await _json_request_data(request, user_api_key_dict, api_name)
+
+
+async def _request_data(
+    request: Request, form_body: _SystemOneFormBody, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
+) -> dict[str, object]:
+    data: Final = await _request_body(request, form_body, user_api_key_dict, api_name)
     return {key: value for key, value in data.items() if key not in _DEPLOYMENT_ONLY_FIELDS}
 
 
@@ -151,6 +275,7 @@ async def _process_decisions(
         TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody] | TypeAdapter[ExtractionRequestBody]
     ),
     route_type: _RouteType,
+    form_body: _SystemOneFormBody,
 ) -> object:
     from litellm.proxy.proxy_server import (
         general_settings as proxy_general_settings,
@@ -174,7 +299,7 @@ async def _process_decisions(
     )
 
     api_name: Final[_ApiName] = "Extraction" if route_type == "aextraction" else "Decisions"
-    data: Final = await _request_data(request, user_api_key_dict, api_name)
+    data: Final = await _request_data(request, form_body, user_api_key_dict, api_name)
     try:
         body_adapter.validate_python(_fields_checked_before_routing(data, route_type))
     except ValidationError as error:
@@ -215,7 +340,7 @@ async def _process_decisions(
 
 @router.post(
     "/v1/systemone",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(_systemone_form_body), Depends(user_api_key_auth)],
     response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
     tags=["decisions"],
     summary="Ask named questions about a state (System One format)",
@@ -224,7 +349,7 @@ async def _process_decisions(
 )
 @router.post(
     "/systemone",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(_systemone_form_body), Depends(user_api_key_auth)],
     response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
     tags=["decisions"],
     summary="Ask named questions about a state (System One format)",
@@ -235,6 +360,7 @@ async def systemone(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    form_body: Annotated[_SystemOneFormBody, Depends(_systemone_form_body)],
 ):
     """
     Judge a `state` against one or more named `questions` and get one calibrated answer per question name.
@@ -242,7 +368,9 @@ async def systemone(
     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
-    TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+    TypeSafe models also take images in `assets`, each one referenced by its key in `state`. A `multipart/form-data`
+    body works too, the way the TypeSafe SDK sends images: the JSON goes in a `request` part, and each asset names
+    the file part holding its image in `part`. Requests that break
     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
 
@@ -254,6 +382,7 @@ async def systemone(
         user_api_key_dict=user_api_key_dict,
         body_adapter=_DECISIONS_REQUEST_BODY_ADAPTER,
         route_type="asystemone",
+        form_body=form_body,
     )
 
 
@@ -298,6 +427,7 @@ async def decisions(
         user_api_key_dict=user_api_key_dict,
         body_adapter=_OPENAI_DECISION_REQUEST_BODY_ADAPTER,
         route_type="adecisions",
+        form_body=None,
     )
 
 
@@ -348,4 +478,5 @@ async def extraction(
         user_api_key_dict=user_api_key_dict,
         body_adapter=_EXTRACTION_REQUEST_BODY_ADAPTER,
         route_type="aextraction",
+        form_body=None,
     )

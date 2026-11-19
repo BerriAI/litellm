@@ -17,7 +17,7 @@ import litellm
 import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
-    _is_form_content_type,
+    is_form_content_type,
     read_request_body,
     safe_get_request_headers,
     _safe_get_request_parsed_body,
@@ -53,7 +53,7 @@ def _starlette_request(
         "method": "POST",
         "path": path,
         "headers": [
-            (b"content-type", content_type.encode()),
+            *(((b"content-type", content_type.encode()),) if content_type else ()),
             (b"content-encoding", content_encoding.encode()),
             (b"content-length", content_length.encode()),
         ],
@@ -234,6 +234,15 @@ async def test_read_raw_json_body_is_none_until_the_body_has_been_parsed():
 
     assert await read_raw_json_body(request) is None
     assert await read_raw_json_body(None) is None
+
+
+@pytest.mark.asyncio
+async def test_a_body_sent_without_a_content_type_is_parsed_as_json() -> None:
+    body: Final = b'{"model": "claude-sonnet-5"}'
+    request: Final = _starlette_request(body, "")
+
+    assert await read_request_body(request) == {"model": "claude-sonnet-5"}
+    assert await read_raw_json_body(request) == body
 
 
 @pytest.mark.asyncio
@@ -1188,7 +1197,7 @@ class TestIsFormContentType:
         ],
     )
     def test_form_types_match(self, content_type):
-        assert _is_form_content_type(content_type) is True
+        assert is_form_content_type(content_type) is True
 
     @pytest.mark.parametrize(
         "content_type",
@@ -1205,7 +1214,7 @@ class TestIsFormContentType:
         ],
     )
     def test_non_form_types_rejected(self, content_type):
-        assert _is_form_content_type(content_type) is False
+        assert is_form_content_type(content_type) is False
 
 
 class TestReadRequestBodyNonCanonicalContentType:
