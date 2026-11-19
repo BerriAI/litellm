@@ -782,6 +782,23 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
 
 
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_long_decode_carries_only_the_last_hops_finish_reason_on_its_chunks(is_async: bool):
+    chunks: Final = await _collect_stream(is_async, _stream_hops(), [])
+
+    choice_fields: Final = [
+        fields
+        for choice in chain.from_iterable(chunk.choices for chunk in chunks)
+        if (fields := getattr(choice, "provider_specific_fields", None))
+    ]
+    assert choice_fields
+    assert all(fields == {"native_finish_reason": "STOP"} for fields in choice_fields), choice_fields
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+    assert rebuilt is not None
+    assert rebuilt.choices[0].provider_specific_fields == {"native_finish_reason": "STOP"}
+
+
 TOOL_CALL_PART: Final = {
     "functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
     "thoughtSignature": "c2lnLTI=",

@@ -53,6 +53,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_customer_cost_margin_to_estimate,
+    key_customer_cost_margin,
+)
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
@@ -83,7 +87,10 @@ from litellm.redis.stores.spend_counters import (
 )
 from litellm.redis.stores.spend_counters.types import customer_window_counter
 from litellm.router import Router
-from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
+from litellm.types.proxy.auth.customer_hierarchy import (
+    AppDurationLimit,
+    CustomerScopeKey,
+)
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import CallTypes
@@ -109,7 +116,7 @@ _BudgetCounter: TypeAlias = BudgetCounter
 def customer_window_counters(
     scope_key: CustomerScopeKey,
     entity_id: str,
-    budget_limits: Sequence[BudgetLimit],
+    budget_limits: Sequence[BudgetLimit | AppDurationLimit],
     *,
     now: datetime | None = None,
     reset_settings: BudgetResetSettings | None = None,
@@ -123,7 +130,7 @@ def customer_window_counters(
 def _customer_window_counter(
     scope_key: CustomerScopeKey,
     entity_id: str,
-    limit: BudgetLimit,
+    limit: BudgetLimit | AppDurationLimit,
     now: datetime,
     settings: BudgetResetSettings,
 ) -> _BudgetCounter:
@@ -285,12 +292,15 @@ async def reserve_budget_for_request(
         path_params=path_params,
     )
 
-    reservation_cost: Final = estimate_request_max_cost(
-        request_body=request_body,
-        route=route,
-        llm_router=llm_router,
-        input_token_counts=input_token_counts,
-        path_params=path_params,
+    reservation_cost: Final = apply_customer_cost_margin_to_estimate(
+        estimate_request_max_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+            path_params=path_params,
+        ),
+        key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -302,12 +312,15 @@ async def reserve_budget_for_request(
         valid_token=valid_token,
         reservation_cost=reservation_cost,
         input_token_counts=input_token_counts,
-        input_cost=estimate_request_input_cost(
-            request_body=request_body,
-            route=route,
-            llm_router=llm_router,
-            input_token_counts=input_token_counts,
-            path_params=path_params,
+        input_cost=apply_customer_cost_margin_to_estimate(
+            estimate_request_input_cost(
+                request_body=request_body,
+                route=route,
+                llm_router=llm_router,
+                input_token_counts=input_token_counts,
+                path_params=path_params,
+            ),
+            key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )
@@ -945,7 +958,8 @@ async def _initialize_reservation_counters(
     fail_closed_budget_enforcement: bool,
 ) -> tuple[_BudgetCounter, ...]:
     """The counters whose current value is loaded, in order; one that cannot be loaded is skipped (or rejects the
-    request under fail-closed enforcement) exactly as it was when each counter was reserved on its own."""
+    request under fail-closed enforcement) exactly as it was when each counter was reserved on its own.
+    """
     return tuple([counter async for counter in _loaded_reservation_counters(counters, fail_closed_budget_enforcement)])
 
 

@@ -3476,3 +3476,43 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
     assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
+
+
+@pytest.fixture
+def clamping_response_cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "modify_params", True)
+    return cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_async", [True, False], ids=["acompletion", "completion"])
+@pytest.mark.parametrize(
+    "first_request_controls",
+    [{}, {"cache": {"no-cache": True}}],
+    ids=["first_request_reads_the_cache", "first_request_skips_the_cache_read"],
+)
+async def test_a_repeat_of_a_request_whose_max_tokens_was_clamped_is_served_from_the_cache(
+    clamping_response_cache: Cache, call_async: bool, first_request_controls: Mapping[str, object]
+) -> None:
+    model: Final = "gpt-5.6"
+    max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
+    assert max_output_tokens is not None
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": f"clamped {uuid.uuid4()}"}],
+        "max_tokens": max_output_tokens * 10,
+        "mock_response": "fresh",
+    }
+
+    async def send(controls: Mapping[str, object]) -> ModelResponse:
+        if call_async:
+            return await litellm.acompletion(**request, **controls)
+        return litellm.completion(**request, **controls)
+
+    first: Final = await send(first_request_controls)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeat: Final = await send({})
+
+    assert repeat.id == first.id

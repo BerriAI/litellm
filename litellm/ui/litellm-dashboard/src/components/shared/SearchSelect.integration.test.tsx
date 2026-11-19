@@ -114,6 +114,39 @@ describe("SearchSelect", () => {
     expect(onValueChange).toHaveBeenLastCalledWith("team-*");
   });
 
+  it("commits editable custom text while preserving a selected option's identity", async () => {
+    const user = userEvent.setup();
+    const changed = vi.fn();
+    function Controlled() {
+      const [value, setValue] = useState<string | null>("team-2");
+      return (
+        <SearchSelect
+          options={OPTIONS}
+          value={value}
+          onValueChange={setValue}
+          customValue={{ hint: "Custom", accepts: () => true }}
+          inputValue={OPTIONS.find((option) => option.value === value)?.label ?? value ?? ""}
+          onInputChange={(text) => {
+            setValue(text);
+            changed(text);
+          }}
+        />
+      );
+    }
+    render(<Controlled />);
+    const input = screen.getByRole("combobox");
+    await user.clear(input);
+    await user.type(input, "25");
+    await user.keyboard("{Escape}");
+    await user.tab();
+    expect(input).toHaveValue("25");
+    expect(changed).toHaveBeenLastCalledWith("25");
+    await chooseSelectOption(user, input, "Growth");
+    await user.tab();
+    expect(input).toHaveValue("Growth");
+    expect(changed).not.toHaveBeenLastCalledWith("Growth");
+  });
+
   it("filters the options client-side as you type", async () => {
     const user = userEvent.setup();
     render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);

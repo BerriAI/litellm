@@ -16,7 +16,7 @@ from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.customers import get_customer_hierarchy, get_user_api_key_cache
 from litellm.proxy.management_helpers.customer_hierarchy import CustomerHierarchy
-from litellm.types.proxy.management_endpoints.customer_hierarchy import CustomerMember
+from litellm.types.proxy.management_endpoints.customer_hierarchy import BudgetGroups, CustomerMember
 from tests.unit.proxy.management_helpers.test_customer_hierarchy import (
     NOW,
     BoundedChildrenTable,
@@ -331,6 +331,8 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         ("POST", "/customer_organizations", {}),
         ("POST", "/customer_organizations/upsert", {"alias": "customer"}),
         ("GET", "/customer_organizations", None),
+        ("GET", "/customer_organization_budget_groups", None),
+        ("PATCH", "/customer_organization_budget_groups", {}),
         ("GET", "/customer_organizations/id", None),
         ("PATCH", "/customer_organizations/id", {}),
         ("DELETE", "/customer_organizations/id", None),
@@ -2058,10 +2060,18 @@ def test_grouped_configuration_keeps_window_clocks_and_invalidates_member_cache(
     )
 
 
-@pytest.mark.parametrize("case", ("duplicate_id", "foreign_id", "duplicate_name", "missing_default"))
-def test_invalid_grouped_configuration_leaves_existing_groups_untouched(case: str) -> None:
+@pytest.mark.parametrize("scope", ("member", "organization"))
+@pytest.mark.parametrize("case", ("duplicate_id", "foreign_id", "duplicate_name", "missing_default", "stale"))
+def test_invalid_grouped_configuration_leaves_existing_groups_untouched(case: str, scope: str) -> None:
     http: Final = client()
-    org: Final = family(http)
+    org: Final = (
+        family(http)
+        if scope == "member"
+        else organization_groups(http, {"name": "standard"}, {"name": "second"}).model_dump(mode="json")
+    )
+    path: Final = "/management/v1/" + (
+        "customer_organizations/org/default_budgets" if scope == "member" else "customer_organization_budget_groups"
+    )
     first, second = org["default_budgets"]
     groups: Final = [
         {"budget_id": first["budget_id"], "name": "changed", "max_budget": 999},
@@ -2074,16 +2084,19 @@ def test_invalid_grouped_configuration_leaves_existing_groups_untouched(case: st
             "name": "changed" if case == "duplicate_name" else "second",
         },
     ]
+    invalid_default: Final = "missing" if scope == "member" else "changed"
     response: Final = http.patch(
-        "/management/v1/customer_organizations/org/default_budgets",
+        path,
         json={
-            "expected_revision": org["budget_groups_revision"],
+            "expected_revision": "0" * 64 if case == "stale" else org["budget_groups_revision"],
             "default_budgets": groups,
-            "default_budget_template": "missing" if case == "missing_default" else "changed",
+            "default_budget_template": invalid_default
+            if case == "missing_default"
+            else ("changed" if scope == "member" else None),
         },
     )
-    assert response.status_code == 422, response.text
-    assert http.get("/management/v1/customer_organizations/org").json() == org
+    assert response.status_code == (409 if case == "stale" else 422), response.text
+    assert http.get("/management/v1/customer_organizations/org" if scope == "member" else path).json() == org
 
 
 class FailingBudgetInsertTable(Table):
@@ -2095,26 +2108,32 @@ class FailingBudgetInsertTable(Table):
         return await super().create(data, include)
 
 
-def test_grouped_configuration_rolls_back_earlier_writes_when_a_later_database_write_fails() -> None:
+@pytest.mark.parametrize("scope", ("member", "organization"))
+def test_grouped_configuration_rolls_back_earlier_writes_when_a_later_database_write_fails(scope: str) -> None:
     database: Final = Database()
     database.litellm_budgettable = FailingBudgetInsertTable("budget_id", database)
     http: Final = client(database=database)
-    org: Final = family(http)
+    org: Final = (
+        family(http) if scope == "member" else organization_groups(http, {"name": "standard"}).model_dump(mode="json")
+    )
+    path: Final = "/management/v1/" + (
+        "customer_organizations/org/default_budgets" if scope == "member" else "customer_organization_budget_groups"
+    )
     before_budgets: Final = dict(database.litellm_budgettable.rows)
     response: Final = http.patch(
-        "/management/v1/customer_organizations/org/default_budgets",
+        path,
         json={
             "expected_revision": org["budget_groups_revision"],
             "default_budgets": [
-                {"budget_id": org["default_budget_template_id"], "name": "changed", "max_budget": 999},
+                {"budget_id": org["default_budgets"][0]["budget_id"], "name": "changed", "max_budget": 999},
                 {"name": "created-first", "max_budget": 1},
                 {"name": "failed-insert", "max_budget": 2},
             ],
-            "default_budget_template": "created-first",
+            "default_budget_template": "created-first" if scope == "member" else None,
         },
     )
     assert response.status_code == 409, response.text
-    assert http.get("/management/v1/customer_organizations/org").json() == org
+    assert http.get("/management/v1/customer_organizations/org" if scope == "member" else path).json() == org
     assert database.litellm_budgettable.rows == before_budgets
 
 
@@ -2261,3 +2280,104 @@ def test_member_team_replacement_checks_only_added_team_capacity(premium: bool) 
     )
     full: Final = http.patch("/management/v1/customer_members/moving", json={"parent_team_ids": ["team"]})
     assert full.status_code == (200 if premium else 403), full.text
+
+
+def organization_groups(http: TestClient, *groups: Mapping[str, object]) -> BudgetGroups:
+    path: Final = "/management/v1/customer_organization_budget_groups"
+    current: Final = http.get(path).json()
+    response: Final = http.patch(
+        path,
+        json={
+            "expected_revision": current["budget_groups_revision"],
+            "default_budget_template": None,
+            "default_budgets": groups,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return BudgetGroups.model_validate_json(response.content)
+
+
+@pytest.mark.parametrize("method", ("PATCH", "POST"))
+def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> None:
+    database: Final = Database()
+    cache: Final = UserApiKeyCache()
+    http: Final = client(database=database, cache=cache)
+    family(http)
+    group: Final = organization_groups(
+        http,
+        {
+            "name": "Shared",
+            "max_budget": 100,
+            "budget_limits": [{"budget_duration": "1mo", "max_budget": 50, "reset_at": "2027-01-15T00:00:00Z"}],
+        },
+    ).default_budgets[0]
+    for org_id in ("org", "other"):
+        assigned: Final = http.post(
+            "/management/v1/customer_organizations/upsert",
+            json={
+                "customer_org_id": org_id,
+                "alias": org_id,
+                "budget_id": group.budget_id,
+            },
+        )
+        assert assigned.status_code == 200, assigned.text
+        assert assigned.json()["budget_is_shared"] is True
+    member: Final = http.post(
+        "/management/v1/customer_members", json={"customer_member_id": "m", "parent_team_ids": ["team"]}
+    )
+    assert member.status_code == 201, member.text
+    keys: Final = (
+        customer_member_cache_key("m"),
+        customer_org_alias_cache_key("org"),
+        customer_org_alias_cache_key("other"),
+    )
+    for key in keys:
+        cache.set_cache(key, "stale")
+    saved: Final = organization_groups(
+        http,
+        {
+            "budget_id": group.budget_id,
+            "name": "Updated",
+            "max_budget": 50,
+            "budget_limits": [{"budget_duration": "1mo", "max_budget": 10}],
+        },
+    )
+    assert saved.default_budgets[0].budget_limits[0].reset_at == group.budget_limits[0].reset_at
+    assert all(cache.get_cache(key) is None for key in keys)
+    rejected: Final = http.patch(
+        "/management/v1/customer_organization_budget_groups",
+        json={
+            "expected_revision": saved.budget_groups_revision,
+            "default_budget_template": None,
+            "default_budgets": [],
+        },
+    )
+    assert rejected.status_code == 409, rejected.text
+    path: Final = "/management/v1/customer_organizations/" + ("org" if method == "PATCH" else "upsert")
+    identity: Final = {} if method == "PATCH" else {"customer_org_id": "org"}
+    kept: Final = http.request(method, path, json={**identity, "alias": "renamed"})
+    assert kept.status_code == 200 and kept.json()["budget_id"] == group.budget_id, kept.text
+    custom: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
+    assert custom.status_code == 200 and custom.json()["budget_id"] != group.budget_id, custom.text
+    assert custom.json()["budget"]["budget_limits"] is None
+    assert custom.json()["budget_is_shared"] is False
+    replay: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
+    assert replay.json() == custom.json()
+    for invalid in ({"budget_id": custom.json()["budget_id"]}, {"budget_id": group.budget_id, "budget": {}}):
+        refused: Final = http.request(method, path, json={**identity, **invalid})
+        assert refused.status_code == 422, refused.text
+    selected: Final = http.request(method, path, json={**identity, "budget_id": group.budget_id})
+    assert selected.status_code == 200 and selected.json()["budget_id"] == group.budget_id, selected.text
+    assert custom.json()["budget_id"] not in database.litellm_budgettable.rows
+    cleared: Final = http.request(method, path, json={**identity, "budget_id": None})
+    assert cleared.status_code == 200 and cleared.json()["budget_id"] is None, cleared.text
+    assert cleared.json()["budget_is_shared"] is False
+    other: Final = http.get("/management/v1/customer_organizations/other").json()
+    assert other["budget_id"] == group.budget_id and other["budget"]["max_budget"] == 50
+    assert other["budget_is_shared"] is True
+    for org_id in ("org", "other"):
+        deleted: Final = http.delete(f"/management/v1/customer_organizations/{org_id}", params={"cascade": True})
+        assert deleted.status_code == 204, deleted.text
+    assert group.budget_id in database.litellm_budgettable.rows
+    assert organization_groups(http).default_budgets == ()
+    assert group.budget_id not in database.litellm_budgettable.rows

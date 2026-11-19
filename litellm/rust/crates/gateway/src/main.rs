@@ -57,17 +57,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
     let config = litellm_gateway::load_config(settings.litellm_config).await?;
-    let inference = litellm_gateway::build_inference(&config)?;
-    let _redis =
-        litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
+    let state = litellm_gateway::AppState::build(&config).await?;
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
 
-    axum::serve(listener, litellm_gateway::router(inference, &config))
+    let served = axum::serve(listener, litellm_gateway::router(state.clone(), &config))
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    Ok(())
+        .await;
+    state.close().await;
+    Ok(served?)
 }
 
 async fn shutdown_signal() {
