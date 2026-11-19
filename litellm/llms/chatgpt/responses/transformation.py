@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from openai.types.responses.response_input_param import ResponseInputItemParam
+from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -45,6 +46,13 @@ if TYPE_CHECKING:
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
 CODEX_RESPONSES_LITE_HEADER: Final = "x-openai-internal-codex-responses-lite"
 _FALSY_HEADER_VALUES: Final = frozenset({"", "0", "false", "no"})
+_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _responses_lite_reasoning(reasoning: object) -> dict[str, object]:
+    # The Codex backend 400s a Responses-Lite request unless reasoning.context is "all_turns",
+    # and Codex 0.144.x can omit the reasoning object entirely.
+    return {**(_OBJECT_DICT.validate_python(reasoning) if isinstance(reasoning, dict) else {}), "context": "all_turns"}
 
 
 def is_codex_responses_lite_request(headers: Mapping[str, object] | None) -> bool:
@@ -161,16 +169,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
         if service_tier is not None:
             filtered["service_tier"] = service_tier
-        if not is_codex_responses_lite_request(headers):
-            return filtered
-        # The Codex backend 400s a Responses-Lite request unless parallel_tool_calls is false and
-        # reasoning.context is "all_turns", and Codex 0.144.x can omit the reasoning object entirely.
-        reasoning: Final = filtered.get("reasoning")
-        return {
-            **filtered,
-            "parallel_tool_calls": False,
-            "reasoning": {**(reasoning if isinstance(reasoning, dict) else {}), "context": "all_turns"},
-        }
+        if is_codex_responses_lite_request(_OBJECT_DICT.validate_python(headers or {})):
+            filtered["parallel_tool_calls"] = False
+            filtered["reasoning"] = _responses_lite_reasoning(_OBJECT_DICT.validate_python(request).get("reasoning"))
+        return filtered
 
     def transform_response_api_response(
         self,
