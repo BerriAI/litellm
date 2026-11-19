@@ -1,0 +1,84 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tm.user_id,\n       tm.team_id,\n       tm.budget_id,\n       tm.spend,\n       tm.total_spend,\n       to_jsonb(b) AS \"litellm_budget_table?: Json<Budget>\"\nFROM \"LiteLLM_TeamMembership\" AS tm\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = tm.budget_id\nWHERE tm.user_id = $1 AND tm.team_id = $2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamMembership\"",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamMembership\"",
+            "name": "team_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamMembership\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamMembership\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "total_spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamMembership\"",
+            "name": "total_spend"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "litellm_budget_table?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "8f987a044341b682eca96c7396bff96a081153421adacb87c52ee688729fe703"
+}

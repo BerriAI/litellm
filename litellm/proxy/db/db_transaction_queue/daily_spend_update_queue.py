@@ -154,6 +154,22 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("autorouter_savings_spend", 0) or 0
                     ) + daily_transaction.get("autorouter_savings_spend", 0)
 
+                    daily_transaction["guardrail_spend"] = (
+                        payload.get("guardrail_spend", 0) or 0
+                    ) + daily_transaction.get("guardrail_spend", 0)
+
+                    daily_transaction["customer_margin_spend"] = (
+                        payload.get("customer_margin_spend", 0) or 0
+                    ) + daily_transaction.get("customer_margin_spend", 0)
+                    if "cache_cost" in payload:
+                        daily_transaction["cache_cost"] = (
+                            daily_transaction.get("cache_cost", 0.0) + payload["cache_cost"]
+                        )
+                    if "priced_cache_tokens" in payload:
+                        daily_transaction["priced_cache_tokens"] = (
+                            daily_transaction.get("priced_cache_tokens", 0) + payload["priced_cache_tokens"]
+                        )
+
                     daily_transaction["total_response_time_ms"] = (
                         payload.get("total_response_time_ms", 0) or 0
                     ) + daily_transaction.get("total_response_time_ms", 0)

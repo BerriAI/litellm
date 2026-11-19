@@ -19,9 +19,11 @@ from typing import (
     cast,  # noqa: TID251  # untyped litellm globals: the live config view and the callback lists
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import overload
 
 import litellm
+from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.router_config import RouterConfig, RouterDynamicConfig, live_dynamic_config
 
 if TYPE_CHECKING:
@@ -33,6 +35,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.redis.stores.connection import RedisStores
     from litellm.redis.stores.router_usage import RouterUsage
+    from litellm.router_utils.dynamic_queue_redis import ScriptHost
+    from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, DynamicQueueSettings
     from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
     from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
     from litellm.types.rerank import RerankResponse
@@ -52,6 +56,8 @@ CallbackList: TypeAlias = Literal[
 ]
 
 Endpoint: TypeAlias = Callable[..., object]
+
+_LITELLM_GLOBAL: Final = TypeAdapter(object)
 
 
 class PythonHost:
@@ -108,7 +114,7 @@ class PythonHost:
             raise AttributeError(f"litellm has no endpoint {op!r}")
         if not callable(endpoint):
             raise TypeError(f"litellm.{op} is not an endpoint")
-        return endpoint
+        return without_global_fallbacks_around(endpoint)
 
     def sleep(self, seconds: float) -> Awaitable[None]:
         return asyncio.sleep(seconds)
@@ -126,7 +132,7 @@ class PythonHost:
         return litellm.logging_callback_manager
 
     def callback_list(self, name: CallbackList) -> list[object]:  # mutable-ok: the process callback list itself
-        value: Final[object] = getattr(litellm, name)  # pyright: ignore[reportAny]  # an untyped litellm global
+        value: Final = _LITELLM_GLOBAL.validate_python(getattr(litellm, name))
         return cast(list[object], value)  # cast-ok: the process callback list is an untyped litellm global
 
     def set_callback_list(self, name: CallbackList, value: list[object]) -> None:  # mutable-ok: assigned as given
@@ -154,6 +160,14 @@ class PythonHost:
         from litellm.redis.stores.router_usage import RouterUsageStore
 
         return RouterUsageStore(redis.router_usage())
+
+    def dynamic_queue(
+        self, settings: "DynamicQueueSettings", redis: "Callable[[], ScriptHost | None]"
+    ) -> "DynamicQueueRouter":
+        """The congestion queue a router's attempts wait in, coordinated on the router's Redis."""
+        from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, on_redis
+
+        return DynamicQueueRouter(settings, on_redis(redis))
 
 
 def redis_cache_for(config: RouterConfig) -> "RedisCache | None":

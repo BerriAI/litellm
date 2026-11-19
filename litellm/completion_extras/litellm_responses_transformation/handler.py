@@ -13,6 +13,8 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
+from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
@@ -182,6 +184,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
@@ -203,9 +208,7 @@ class ResponsesToCompletionBridgeHandler:
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = responses(
-            **request_data,
-        )
+        result: Final = responses(**request_data, **PROMPT_MANAGEMENT_APPLIED)
 
         from litellm.types.utils import ModelResponse
 
@@ -252,7 +255,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -261,7 +264,8 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
-                replays_openai_history=custom_llm_provider == "openai",
+                replays_openai_history=replays_responses_history(custom_llm_provider),
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -284,6 +288,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
@@ -309,7 +316,9 @@ class ResponsesToCompletionBridgeHandler:
             request_data["cache"] = kwargs["cache"]
         result: Final = await aresponses(
             **request_data,
+            **PROMPT_MANAGEMENT_APPLIED,
             aresponses=True,
+            _agentic_loop_api_surface=CHAT_COMPLETION_AGENTIC_SURFACE,
         )
 
         from litellm.types.utils import ModelResponse
@@ -357,7 +366,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, replays_responses_history
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -366,7 +375,8 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
-                replays_openai_history=custom_llm_provider == "openai",
+                replays_openai_history=replays_responses_history(custom_llm_provider),
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

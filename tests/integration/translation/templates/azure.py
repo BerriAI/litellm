@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
+from integration._support.client import list_value
 from pydantic import JsonValue
 
 AZURE_RESPONSES_REQUEST: Final[Mapping[str, JsonValue]] = {
@@ -174,6 +175,18 @@ AZURE_RESPONSES_BRIDGE_REQUEST: Final[Mapping[str, JsonValue]] = {
             "type": "function",
             "description": "Read a range of lines from a project file.",
         },
+    ],
+}
+
+AZURE_RESPONSES_BRIDGE_REQUEST_FROM_CHAT_COMPLETIONS: Final[Mapping[str, JsonValue]] = {
+    **{key: value for key, value in AZURE_RESPONSES_BRIDGE_REQUEST.items() if key != "instructions"},
+    "input": [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": AZURE_RESPONSES_BRIDGE_REQUEST["instructions"]}],
+        },
+        *list_value(AZURE_RESPONSES_BRIDGE_REQUEST["input"]),
     ],
 }
 
