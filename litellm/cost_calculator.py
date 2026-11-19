@@ -70,6 +70,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     ToolUse,
     TranscriptionDocument,
     TranslationUse,
+    UsagePart,
     VectorStoreSearchDocument,
     adjusted_cost,
     batch_usage,
@@ -82,6 +83,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     part_costs,
     price,
     price_call,
+    price_parts,
     price_reported,
     price_session,
     price_tools,
@@ -271,6 +273,7 @@ _RUST_PRICED_CALL_TYPES: Final = frozenset(
         CallTypes.aanthropic_messages.value,
         CallTypes.responses.value,
         CallTypes.aresponses.value,
+        CallTypes.aresponses_websocket.value,
     }
 )
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
@@ -1635,16 +1638,14 @@ def rust_priced_cost(
     if not rows:
         return None
     request_model: Final = None if litellm_logging_obj is None else litellm_logging_obj.model
-    extras: Final = tuple(
-        _candidate_extras(row, completion_response, usage, standard_built_in_tools_params, request_model)
-        for row in rows
+    candidates, candidate_rows = _candidate_facts(
+        _extras_of(rows, completion_response, usage, standard_built_in_tools_params, request_model), 0
     )
-    offsets: Final = tuple(accumulate((len(extra.rows) for extra in extras), initial=0))
     receipt: Final = price_call(
         call,
         priced_usage(usage, web_search=None),
-        candidates=tuple(extra.facts(offset) for extra, offset in zip(extras, offsets, strict=False)),
-        rows=tuple(chain.from_iterable(extra.rows for extra in extras)),
+        candidates=candidates,
+        rows=candidate_rows,
         service_tier=service_tier,
         data_residency=data_residency,
         vertex_location=vertex_location,
@@ -1667,6 +1668,143 @@ def rust_priced_cost(
         return None
     store_receipt_breakdown(litellm_logging_obj, receipt, service_tier, data_residency, vertex_location)
     return receipt.total
+
+
+def _candidate_facts(
+    extras: Sequence[_CandidateExtras], rows_from: int
+) -> tuple[tuple[CandidateFacts, ...], tuple[Mapping[str, object], ...]]:
+    """What Python found for each candidate of a token call, and the rows they name, which start at ``rows_from``
+    among the rows passed beside the document."""
+    offsets: Final = accumulate((len(extra.rows) for extra in extras), initial=rows_from)
+    return (
+        tuple(extra.facts(offset) for extra, offset in zip(extras, offsets, strict=False)),
+        tuple(chain.from_iterable(extra.rows for extra in extras)),
+    )
+
+
+def _extras_of(
+    rows: Sequence[CostRow],
+    completion_response: object,
+    usage: Usage,
+    standard_built_in_tools_params: StandardBuiltInToolsParams | None,
+    request_model: str | None,
+) -> tuple[_CandidateExtras, ...]:
+    return tuple(
+        _candidate_extras(row, completion_response, usage, standard_built_in_tools_params, request_model)
+        for row in rows
+    )
+
+
+def _billable_service_tier(
+    service_tier: str | None, optional_params: Mapping[str, object] | None, response: object, usage: Usage | None
+) -> str | None:
+    """The tier a call is billed on: the caller's, else the one it requested resolved against the one it was served."""
+    explicit_tier: Final = _normalize_service_tier(service_tier)
+    if explicit_tier is not None:
+        return explicit_tier
+    return _resolve_billable_service_tier(
+        requested=optional_params.get("service_tier") if optional_params is not None else None,
+        served=_served_service_tier(response, usage),
+    )
+
+
+def _priced_usage_part(
+    part: LiteLLMRealtimeStreamLoggingObject,
+    custom_pricing: bool | None,
+    service_tier: str | None,
+    optional_params: Mapping[str, object] | None,
+) -> tuple[Usage, str | None] | None:
+    usage: Final = get_usage_object(completion_response=part)
+    priced: Final = _without_provider_stated_cost(usage) if custom_pricing else usage
+    if priced is None:
+        return None
+    return priced, _billable_service_tier(service_tier, optional_params, part, priced)
+
+
+@dataclass(frozen=True, slots=True)
+class _WsCall:
+    """What ``completion_cost`` was told about a Responses WebSocket session it prices by service tier."""
+
+    model: str | None
+    custom_llm_provider: str | None
+    pricing_provider: str | None
+    region_name: object
+    base_model: str | None
+    custom_pricing: bool | None
+    router_model_id: str | None
+    optional_params: Mapping[str, object] | None
+    service_tier: str | None
+    data_residency: str | None
+    vertex_location: str | None
+    standard_built_in_tools_params: StandardBuiltInToolsParams | None
+    litellm_logging_obj: LitellmLoggingObject | None
+    total_time: float | None
+
+
+def _rust_priced_ws_parts(parts: tuple[LiteLLMRealtimeStreamLoggingObject, ...], ws: _WsCall) -> float | None:
+    """A Responses WebSocket session served on several tiers, each tier's share priced in one Rust call as main priced
+    it, on its own walk of the candidates, the costs summed and only the last tier's breakdown stored. ``None`` where
+    Python prices the parts: a provider-billed cost, or a part whose candidates only Python prices."""
+    priced_parts: Final = tuple(
+        _priced_usage_part(part, ws.custom_pricing, ws.service_tier, ws.optional_params) for part in parts
+    )
+    usages: Final = tuple(priced for priced in priced_parts if priced is not None)
+    if len(usages) != len(parts):
+        return None
+    call: Final = _call_facts(
+        parts[0],
+        ws.model,
+        ws.pricing_provider or ws.custom_llm_provider,
+        ws.base_model,
+        ws.custom_pricing,
+        ws.router_model_id,
+        ws.region_name,
+        _invoked_model_id_for_cost(ws.optional_params, ws.litellm_logging_obj),
+        ws.pricing_provider,
+    )
+    caller_set_prices: Final = ws.custom_pricing is True or ws.base_model is not None
+    if not caller_set_prices and any(billed_usage_cost(part, call["loop_provider"]) is not None for part in parts):
+        return None
+    rows, _ = cost_rows(call)
+    if not rows:
+        return None
+    request_model: Final = None if ws.litellm_logging_obj is None else ws.litellm_logging_obj.model
+    part_extras: Final = tuple(
+        _extras_of(rows, part, usage, ws.standard_built_in_tools_params, request_model)
+        for part, (usage, _) in zip(parts, usages, strict=True)
+    )
+    starts: Final = accumulate((sum(len(extra.rows) for extra in extras) for extras in part_extras), initial=0)
+    found: Final = tuple(_candidate_facts(extras, start) for extras, start in zip(part_extras, starts, strict=False))
+    receipts: Final = price_parts(
+        call,
+        parts=tuple(
+            UsagePart(
+                usage=priced_usage(usage, web_search=None),
+                service_tier=tier,
+                raw=raw_counts(usage),
+                candidates=part_candidates,
+            )
+            for (usage, tier), (part_candidates, _) in zip(usages, found, strict=True)
+        ),
+        rows=tuple(chain.from_iterable(part_rows for _, part_rows in found)),
+        data_residency=ws.data_residency,
+        vertex_location=ws.vertex_location,
+        requested_model=request_model,
+        adjust=AdjustFacts(
+            provider=None, model=ws.model if ws.custom_pricing is True else None, region=call["loop_region"]
+        ),
+        branch=BranchFacts(
+            elapsed=Elapsed(
+                response_ms=_response_time_ms_for_cost(parts[0], ws.litellm_logging_obj, ws.total_time),
+                audio_seconds=0.0,
+            ),
+        ),
+        breakdown="absent" if ws.litellm_logging_obj is None else "row",
+    )
+    if receipts is None:
+        return None
+    store_receipt_breakdown(ws.litellm_logging_obj, receipts[-1], usages[-1][1], ws.data_residency, ws.vertex_location)
+    return sum(receipt.total for receipt in receipts)
 
 
 def store_receipt_breakdown(
@@ -1824,49 +1962,106 @@ def completion_cost(
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
+    parts: Final = (
+        _split_responses_ws_logging_object_by_service_tier(completion_response)
+        if (infer_call_type(call_type, completion_response) or "completion") == CallTypes.aresponses_websocket.value
+        and isinstance(completion_response, LiteLLMRealtimeStreamLoggingObject)
+        else None
+    )
+    priced: Final = partial(
+        _completion_cost,
+        model=model,
+        prompt=prompt,
+        messages=messages,
+        completion=completion,
+        total_time=total_time,
+        call_type=call_type,
+        custom_llm_provider=custom_llm_provider,
+        region_name=region_name,
+        size=size,
+        quality=quality,
+        n=n,
+        custom_cost_per_token=custom_cost_per_token,
+        custom_cost_per_second=custom_cost_per_second,
+        requested_model_info_override=requested_model_info_override,
+        optional_params=optional_params,
+        custom_pricing=custom_pricing,
+        base_model=base_model,
+        standard_built_in_tools_params=standard_built_in_tools_params,
+        litellm_model_name=litellm_model_name,
+        router_model_id=router_model_id,
+        litellm_logging_obj=litellm_logging_obj,
+        pricing_provider=pricing_provider,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+    )
+    if parts is None:
+        return priced(completion_response=completion_response)
+    rust_priced: Final = (
+        _rust_priced_ws_parts(
+            parts,
+            _WsCall(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                pricing_provider=pricing_provider,
+                region_name=region_name,
+                base_model=base_model,
+                custom_pricing=custom_pricing,
+                router_model_id=router_model_id,
+                optional_params=optional_params,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                vertex_location=vertex_location,
+                standard_built_in_tools_params=standard_built_in_tools_params,
+                litellm_logging_obj=litellm_logging_obj,
+                total_time=total_time,
+            ),
+        )
+        if custom_cost_per_token is None and custom_cost_per_second is None and requested_model_info_override is None
+        else None
+    )
+    if rust_priced is not None:
+        return rust_priced
+    return sum(priced(completion_response=part) for part in parts)
+
+
+def _completion_cost(
+    *,
+    completion_response: object | None,
+    model: str | None,
+    prompt: str,
+    messages: Sequence[object],
+    completion: str,
+    total_time: float | None,
+    call_type: CallTypesLiteral | None,
+    custom_llm_provider: str | None,
+    region_name: object,
+    size: str | None,
+    quality: str | None,
+    n: int | None,
+    custom_cost_per_token: CostPerToken | None,
+    custom_cost_per_second: float | None,
+    requested_model_info_override: ModelInfo | None,
+    optional_params: dict[str, object] | None,
+    custom_pricing: bool | None,
+    base_model: str | None,
+    standard_built_in_tools_params: StandardBuiltInToolsParams | None,
+    litellm_model_name: str | None,
+    router_model_id: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    pricing_provider: str | None,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> float:
+    """``completion_cost`` of one response."""
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
         if isinstance(completion_response, DecisionsResponse) and completion_response.usage is None:
             raise ValueError("Cannot calculate Decisions cost: provider did not report usage")
         if pricing_provider is not None:
             custom_llm_provider = pricing_provider  # rebind-ok: model_info.pricing_provider overrides the routing provider for cost-map lookups
-
-        if call_type == CallTypes.aresponses_websocket.value and isinstance(
-            completion_response, LiteLLMRealtimeStreamLoggingObject
-        ):
-            ws_tier_parts: Final = _split_responses_ws_logging_object_by_service_tier(completion_response)
-            if ws_tier_parts is not None:
-                return sum(
-                    completion_cost(
-                        completion_response=part,
-                        model=model,
-                        prompt=prompt,
-                        messages=messages,
-                        completion=completion,
-                        total_time=total_time,
-                        call_type=call_type,
-                        custom_llm_provider=custom_llm_provider,
-                        region_name=region_name,
-                        size=size,
-                        quality=quality,
-                        n=n,
-                        custom_cost_per_token=custom_cost_per_token,
-                        requested_model_info_override=requested_model_info_override,
-                        custom_cost_per_second=custom_cost_per_second,
-                        optional_params=optional_params,
-                        custom_pricing=custom_pricing,
-                        base_model=base_model,
-                        pricing_provider=pricing_provider,
-                        standard_built_in_tools_params=standard_built_in_tools_params,
-                        litellm_model_name=litellm_model_name,
-                        router_model_id=router_model_id,
-                        litellm_logging_obj=litellm_logging_obj,
-                        service_tier=service_tier,
-                        data_residency=data_residency,
-                        vertex_location=vertex_location,
-                    )
-                    for part in ws_tier_parts
-                )
 
         # Handle Inputs to completion_cost
         prompt_tokens = 0
@@ -1882,14 +2077,9 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
-        explicit_tier: Final = _normalize_service_tier(service_tier)
-        if explicit_tier is not None:
-            service_tier = explicit_tier
-        else:
-            service_tier = _resolve_billable_service_tier(  # rebind-ok: resolved from request then response
-                requested=optional_params.get("service_tier") if optional_params is not None else None,
-                served=_served_service_tier(completion_response, cost_per_token_usage_object),
-            )
+        service_tier = _billable_service_tier(  # rebind-ok: resolved from request then response
+            service_tier, optional_params, completion_response, cost_per_token_usage_object
+        )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         caller_set_prices: Final = (
