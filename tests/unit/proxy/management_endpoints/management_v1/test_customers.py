@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
@@ -37,6 +37,7 @@ def client(
     database: Database | None = None,
     premium_user: bool = True,
     actor: str = "admin",
+    now: datetime = NOW,
 ) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
@@ -47,7 +48,7 @@ def client(
 
     auth: Final = UserAPIKeyAuth(user_id=actor, user_role=role)
     hierarchy: Final = CustomerHierarchy(
-        cast("Prisma", database if database is not None else Database()), premium_user=premium_user, clock=lambda: NOW
+        cast("Prisma", database if database is not None else Database()), premium_user=premium_user, clock=lambda: now
     )  # cast-ok: in-memory Prisma edge
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     app.dependency_overrides[get_customer_hierarchy] = lambda: hierarchy
@@ -205,7 +206,7 @@ def test_team_model_write_contention_is_retryable_and_rolls_back(error: DataErro
     assert not database.litellm_budgettable.rows
 
 
-def family(http: TestClient) -> dict[str, object]:
+def family(http: TestClient, policy: Mapping[str, object] | None = None) -> dict[str, object]:
     org: Final = http.post(
         "/management/v1/customer_organizations",
         json={
@@ -217,6 +218,7 @@ def family(http: TestClient) -> dict[str, object]:
                     "max_budget": 100,
                     "rpm_limit": 10,
                     "allowed_models": ["model-a"],
+                    **(policy or {}),
                 },
                 {"name": "small", "max_budget": 20, "rpm_limit": 8},
             ],
@@ -236,7 +238,8 @@ def family(http: TestClient) -> dict[str, object]:
     return org.json()
 
 
-def test_member_budget_id_must_name_one_of_its_organizations_templates() -> None:
+@pytest.mark.parametrize("field", ("budget_override", "budget"))
+def test_member_budget_id_must_name_one_of_its_organizations_templates(field: str) -> None:
     """An unowned `/budget/new` row and another member's override are both outside the organization (F4)."""
     database: Final = Database()
     asyncio.run(
@@ -259,7 +262,7 @@ def test_member_budget_id_must_name_one_of_its_organizations_templates() -> None
         json={
             "customer_member_id": "override-member",
             "parent_team_ids": ["team"],
-            "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 100}]},
+            field: {"budget_limits": [{"budget_duration": "1mo", "max_budget": 100}]},
         },
     )
     assert created.status_code == 201, created.text
@@ -268,7 +271,7 @@ def test_member_budget_id_must_name_one_of_its_organizations_templates() -> None
         json={
             "customer_member_id": "other-member",
             "parent_team_ids": ["team"],
-            "budget_id": created.json()["budget_override_id"],
+            "budget_id": created.json()[f"{field}_id"],
         },
     )
     assert shared_override.status_code == 422, shared_override.text
@@ -296,7 +299,11 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
             "customer_member_id": "window-member",
             "parent_team_ids": ["team"],
             "budget_id": budget_id,
-            "budget_override": {"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]},
+            "budget_override": {
+                "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}],
+                "model_rpm_limit": {"model": 5},
+                "cap_policy": "pause_allow_increase",
+            },
         },
     )
     assert created.status_code == 201, created.text
@@ -322,6 +329,12 @@ def test_member_window_override_round_trip_and_clear(clear_limits: object) -> No
         "1mo": 100,
         "12mo": 1000,
     }
+    converted: Final = http.patch(
+        "/management/v1/customer_members/window-member", json={"budget": {"max_budget": 200}, "budget_override": None}
+    )
+    assert converted.status_code == 200, converted.text
+    assert converted.json()["budget"] == {**cleared.json()["effective_budget"], "max_budget": 200}
+    assert converted.json()["budget_override"] is None
 
 
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
@@ -792,9 +805,25 @@ def test_invalid_budget_values_fail_at_the_http_boundary(budget: dict[str, objec
     assert response.status_code == 422, response.text
 
 
-def test_partial_member_override_updates_preserve_other_fields_and_never_change_the_template() -> None:
-    http: Final = client()
-    organization: Final = family(http)
+@pytest.mark.parametrize("field", ("budget_override", "budget"))
+def test_partial_member_override_updates_preserve_other_fields_and_never_change_the_template(field: str) -> None:
+    database: Final = Database()
+    http: Final = client(database=database)
+    organization: Final = family(
+        http,
+        {
+            "budget_duration": "1mo",
+            "model_tpm_limit": {"model": 1000},
+            "model_rpm_limit": {"model": 10},
+            "budget_limits": [{"budget_duration": "12mo", "max_budget": 6000}],
+        },
+    )
+    asyncio.run(
+        database.litellm_budgettable.update(
+            where={"budget_id": organization["default_budget_template_id"]},
+            data={"budget_reset_at": NOW + timedelta(days=10)},
+        )
+    )
     created: Final = http.post(
         "/management/v1/customer_members",
         json={
@@ -806,25 +835,37 @@ def test_partial_member_override_updates_preserve_other_fields_and_never_change_
     patched: Final = http.patch(
         "/management/v1/customer_members/member",
         json={
-            "budget_override": {"max_budget": 5, "soft_budget": 4, "tpm_limit": 2, "allowed_models": ["model-b"]},
+            field: {"max_budget": 5, "soft_budget": 4, "tpm_limit": 2, "allowed_models": ["model-b"]},
             "budget_override_expires_at": "2027-01-01T00:00:00Z",
         },
     )
     assert patched.status_code == 200, patched.text
-    assert patched.json()["budget_override_id"] != organization["default_budget_template_id"]
+    assert patched.json()[f"{field}_id"] != organization["default_budget_template_id"]
     assert patched.json()["effective_budget"]["max_budget"] == 5
+    assert patched.json()["budget"]["model_tpm_limit"] == {"model": 1000}
+    assert patched.json()["budget"]["budget_limits"] == created.json()["budget"]["budget_limits"]
+    assert patched.json()["budget_reset_at"] == created.json()["budget_reset_at"]
     inherited: Final = http.patch(
         "/management/v1/customer_members/member",
         json={
-            "budget_override": {"max_budget": None, "allowed_models": []},
+            field: {
+                "max_budget": None,
+                "allowed_models": [],
+                "model_tpm_limit": None,
+                "model_rpm_limit": None,
+                "rpm_limit": 0,
+            },
         },
     )
     assert inherited.status_code == 200, inherited.text
-    assert inherited.json()["budget_override_id"] == patched.json()["budget_override_id"]
-    assert inherited.json()["effective_budget"]["max_budget"] == 100
+    assert inherited.json()[f"{field}_id"] == patched.json()[f"{field}_id"]
+    assert inherited.json()["effective_budget"]["max_budget"] == (100 if field == "budget_override" else None)
     assert inherited.json()["effective_budget"]["soft_budget"] == 4
     assert inherited.json()["effective_budget"]["tpm_limit"] == 2
-    assert inherited.json()["effective_budget"]["allowed_models"] == ["model-a"]
+    assert inherited.json()["effective_budget"]["allowed_models"] == (["model-a"] if field == "budget_override" else [])
+    assert inherited.json()[field]["model_tpm_limit"] is None
+    assert inherited.json()[field]["model_rpm_limit"] is None
+    assert inherited.json()[field]["rpm_limit"] == 0
     unchanged: Final = http.get("/management/v1/customer_organizations/org")
     assert unchanged.status_code == 200, unchanged.text
     assert unchanged.json() == {**organization, "member_count": 1}
@@ -1479,15 +1520,21 @@ def test_duplicate_alias_is_rejected_without_changing_the_customer_org(method: s
     assert http.get("/management/v1/customer_organizations").json()["meta"]["total_count"] == 2
 
 
-def test_customer_member_upsert_inherits_default_and_preserves_budget_ids_on_update() -> None:
+@pytest.mark.parametrize("custom", (False, True))
+def test_customer_member_upsert_inherits_default_and_preserves_budget_ids_on_update(custom: bool) -> None:
     http: Final = client()
     family(http)
-    payload: Final = {"customer_member_id": "m", "customer_org_id": "org", "alias": "customer member"}
+    payload: Final = {
+        "customer_member_id": "m",
+        "customer_org_id": "org",
+        "alias": "customer member",
+        **({"budget": {"max_budget": 100}} if custom else {}),
+    }
     first: Final = http.post("/management/v1/customer_members/upsert", json=payload)
     assert first.status_code == 200, first.text
     assert first.json()["created"] is True
     assert first.json()["parent_team_ids"] == ["org:default"]
-    assert first.json()["budget_id"] == family_default_budget_id(http)
+    assert (first.json()["budget_id"] != family_default_budget_id(http)) == custom
     repeated: Final = http.post("/management/v1/customer_members/upsert", json=payload)
     assert repeated.status_code == 200, repeated.text
     assert repeated.json() == {**first.json(), "created": False}
@@ -1507,6 +1554,12 @@ def test_customer_member_upsert_inherits_default_and_preserves_budget_ids_on_upd
     assert cleared.json()["budget_override_id"] is None
     assert cleared.json()["effective_budget"]["max_budget"] == 100
     assert http.get("/management/v1/customer_members").json()["meta"]["total_count"] == 1
+    changed: Final = http.post(
+        "/management/v1/customer_members/upsert", json={**payload, "budget": {"max_budget": 200}}
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["budget"] == {**cleared.json()["budget"], "max_budget": 200}
+    assert (changed.json()["budget_id"] == cleared.json()["budget_id"]) == custom
 
 
 def test_customer_member_upsert_accepts_customer_org_alias_and_explicit_customer_team() -> None:
@@ -2298,7 +2351,8 @@ def organization_groups(http: TestClient, *groups: Mapping[str, object]) -> Budg
 
 
 @pytest.mark.parametrize("method", ("PATCH", "POST"))
-def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> None:
+@pytest.mark.parametrize("patch", ({"max_budget": 50}, {"rpm_limit": None}, {}))
+def test_organization_catalog_ownership_and_cache_invalidation(method: str, patch: dict[str, object]) -> None:
     database: Final = Database()
     cache: Final = UserApiKeyCache()
     http: Final = client(database=database, cache=cache)
@@ -2357,11 +2411,12 @@ def test_organization_catalog_ownership_and_cache_invalidation(method: str) -> N
     identity: Final = {} if method == "PATCH" else {"customer_org_id": "org"}
     kept: Final = http.request(method, path, json={**identity, "alias": "renamed"})
     assert kept.status_code == 200 and kept.json()["budget_id"] == group.budget_id, kept.text
-    custom: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
+    custom: Final = http.request(method, path, json={**identity, "budget": patch})
     assert custom.status_code == 200 and custom.json()["budget_id"] != group.budget_id, custom.text
-    assert custom.json()["budget"]["budget_limits"] is None
+    assert custom.json()["budget"] == {**kept.json()["budget"], **patch}
+    assert custom.json()["budget_reset_at"] == kept.json()["budget_reset_at"]
     assert custom.json()["budget_is_shared"] is False
-    replay: Final = http.request(method, path, json={**identity, "budget": {"max_budget": 50}})
+    replay: Final = http.request(method, path, json={**identity, "budget": patch})
     assert replay.json() == custom.json()
     for invalid in ({"budget_id": custom.json()["budget_id"]}, {"budget_id": group.budget_id, "budget": {}}):
         refused: Final = http.request(method, path, json={**identity, **invalid})

@@ -138,7 +138,6 @@ describe("CreateCustomerHierarchyDialog", () => {
         parent_team_ids: ["team-1"],
         alias: "Jamie",
         budget_id: "standard-template",
-        budget_override: null,
       },
     });
   });
