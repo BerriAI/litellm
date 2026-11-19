@@ -1,1 +1,1 @@
-A change to how a Vertex AI Messages login path behaves (`src/vertex_messages/`, including `legacy/`) updates the matching row of [PARITY.md](PARITY.md) in the same commit, and a new or removed path adds or removes its row
+A change to how a Vertex AI Messages login path behaves (`src/vertex_messages/`, including `legacy/`) updates [PARITY.md](PARITY.md) in the same commit. A path that works only through code we added is Legacy, a path that worked in Python and fails here is Unsupported, and a path that works or fails as it did in Python is left out
