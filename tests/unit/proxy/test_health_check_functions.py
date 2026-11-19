@@ -1313,6 +1313,98 @@ async def test_save_then_probe_public_wildcards_keeps_the_cycle_rows_when_probes
     assert [call.kwargs["model_name"] for call in prisma_client.save_health_check_result.await_args_list] == ["exact"]
 
 
+class _FakeProbe:
+    def __init__(self, hanging: frozenset[str] = frozenset()) -> None:
+        self.hanging = hanging
+        self.calls: list[str] = []
+        self.cancelled: list[str] = []
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    async def __call__(self, deployment, details):
+        name = deployment["model_name"]
+        self.calls.append(name)
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        try:
+            if name in self.hanging:
+                await asyncio.Event().wait()
+            for _ in range(3):
+                await asyncio.sleep(0)
+            return [{"model": deployment["litellm_params"]["model"]}], []
+        except asyncio.CancelledError:
+            self.cancelled.append(name)
+            raise
+        finally:
+            self.in_flight -= 1
+
+
+async def _save_then_probe_with(
+    prisma_client: MagicMock,
+    public_names: tuple[str, ...],
+    probe: _FakeProbe,
+    regular_persisted: bool = True,
+    max_concurrency: int | None = None,
+    deadline_seconds: float = 60,
+) -> bool:
+    from litellm.proxy.health_check import WildcardProbeScope, save_then_probe_public_wildcards
+
+    async def regular_save() -> bool:
+        return regular_persisted
+
+    return await save_then_probe_public_wildcards(
+        regular_save,
+        prisma_client,
+        "pod-1",
+        WildcardProbeScope(
+            public_names=public_names,
+            router=_openai_wildcard_router({}),
+            model_groups=None,
+            details=True,
+            max_concurrency=max_concurrency,
+            deadline_seconds=deadline_seconds,
+            probe_one=probe,
+        ),
+    )
+
+
+def _saved_model_names(prisma_client: MagicMock) -> list[str]:
+    return sorted(call.kwargs["model_name"] for call in prisma_client.save_health_check_result.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_save_then_probe_public_wildcards_skips_probes_when_the_cycle_rows_were_not_persisted():
+    prisma_client: Final = _recording_prisma()
+    probe: Final = _FakeProbe()
+
+    persisted: Final = await _save_then_probe_with(prisma_client, ("openai/gpt-5.5",), probe, regular_persisted=False)
+
+    assert (persisted, probe.calls, _saved_model_names(prisma_client)) == (False, [], [])
+
+
+@pytest.mark.asyncio
+async def test_save_then_probe_public_wildcards_saves_finished_probes_and_cancels_the_rest_at_the_deadline():
+    prisma_client: Final = _recording_prisma()
+    probe: Final = _FakeProbe(hanging=frozenset({"openai/hangs"}))
+
+    await _save_then_probe_with(prisma_client, ("openai/hangs", "openai/answers"), probe, deadline_seconds=1)
+
+    assert probe.cancelled == ["openai/hangs"]
+    assert _saved_model_names(prisma_client) == ["openai/answers"]
+
+
+@pytest.mark.asyncio
+async def test_save_then_probe_public_wildcards_bounds_concurrent_probes():
+    prisma_client: Final = _recording_prisma()
+    probe: Final = _FakeProbe()
+    names: Final = tuple(f"openai/model-{i}" for i in range(5))
+
+    await _save_then_probe_with(prisma_client, names, probe, max_concurrency=2)
+
+    assert probe.peak_in_flight == 2
+    assert _saved_model_names(prisma_client) == sorted(names)
+
+
 def test_public_wildcard_probe_deployments_skips_a_wildcard_with_background_checks_disabled():
     from litellm.proxy.health_check import public_wildcard_probe_deployments
 

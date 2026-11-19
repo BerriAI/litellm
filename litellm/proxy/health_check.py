@@ -8,10 +8,11 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -460,6 +461,15 @@ def public_wildcard_probe_deployments(
     )
 
 
+_Endpoints: TypeAlias = Sequence[Mapping[str, object]]
+ProbeOne: TypeAlias = Callable[[Mapping[str, object], bool | None], Awaitable[tuple[_Endpoints, _Endpoints]]]
+
+
+async def _probe_one(deployment: Mapping[str, object], details: bool | None) -> tuple[_Endpoints, _Endpoints]:
+    healthy, unhealthy, _ = await _perform_health_check([deployment], details)
+    return healthy, unhealthy
+
+
 @dataclass(frozen=True, slots=True)
 class WildcardProbeScope:
     public_names: tuple[str, ...]
@@ -468,6 +478,34 @@ class WildcardProbeScope:
     details: bool | None
     max_concurrency: int | None
     deadline_seconds: float
+    probe_one: ProbeOne = _probe_one
+
+
+async def _bounded_probe(
+    scope: WildcardProbeScope, deployment: Mapping[str, object], limit: AbstractAsyncContextManager[object]
+) -> tuple[_Endpoints, _Endpoints]:
+    async with limit:
+        return await scope.probe_one(deployment, scope.details)
+
+
+def _finished(task: "asyncio.Task[tuple[_Endpoints, _Endpoints]]") -> bool:
+    return task.done() and not task.cancelled() and task.exception() is None
+
+
+async def _probes_finished_by_deadline(
+    scope: WildcardProbeScope, probes: Sequence[Mapping[str, object]]
+) -> tuple[tuple[Mapping[str, object], tuple[_Endpoints, _Endpoints]], ...]:
+    limit: Final = (
+        asyncio.Semaphore(scope.max_concurrency)
+        if scope.max_concurrency is not None and scope.max_concurrency > 0
+        else nullcontext()
+    )
+    tasks: Final = tuple(asyncio.create_task(_bounded_probe(scope, probe, limit)) for probe in probes)
+    _, pending = await asyncio.wait(tasks, timeout=scope.deadline_seconds)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    return tuple((probe, task.result()) for probe, task in zip(probes, tasks) if _finished(task))
 
 
 async def _save_wildcard_probes(prisma_client: "PrismaClient", checked_by: str, scope: WildcardProbeScope) -> None:
@@ -478,14 +516,26 @@ async def _save_wildcard_probes(prisma_client: "PrismaClient", checked_by: str, 
         if not probes:
             return
         probe_start: Final = time.time()
-        healthy, unhealthy, _ = await asyncio.wait_for(
-            _perform_health_check(list(probes), scope.details, scope.max_concurrency), timeout=scope.deadline_seconds
-        )
+        finished: Final = await _probes_finished_by_deadline(scope, probes)
     except Exception as e:
         logger.warning("background_health_check_wildcard_probe_failed error=%r", e)
         return
+    if len(finished) < len(probes):
+        logger.warning(
+            "background_health_check_wildcard_probes_unfinished finished=%d probed=%d deadline_seconds=%s",
+            len(finished),
+            len(probes),
+            scope.deadline_seconds,
+        )
+    if not finished:
+        return
     await save_background_health_checks_to_db(
-        prisma_client, list(probes), healthy, unhealthy, probe_start, checked_by=checked_by
+        prisma_client,
+        [probe for probe, _ in finished],
+        list(chain.from_iterable(healthy for _, (healthy, _) in finished)),
+        list(chain.from_iterable(unhealthy for _, (_, unhealthy) in finished)),
+        probe_start,
+        checked_by=checked_by,
     )
 
 
@@ -495,9 +545,9 @@ async def save_then_probe_public_wildcards(
     checked_by: str,
     scope: WildcardProbeScope | None,
 ) -> bool:
-    """Save the cycle's rows, then probe and save public wildcard models; only the cycle's save decides the result."""
+    """Save the cycle's rows, then probe and save public wildcard models only if those rows were persisted."""
     persisted: Final = await save_regular_rows()
-    if scope is not None:
+    if persisted and scope is not None:
         await _save_wildcard_probes(prisma_client, checked_by, scope)
     return persisted
 
