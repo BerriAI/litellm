@@ -13,6 +13,11 @@ from collections.abc import Callable, Generator, Mapping
 from typing import Final
 
 import pytest
+import redis
+import redis.asyncio
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
+from redis.asyncio import BlockingConnectionPool
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -23,6 +28,7 @@ from litellm.router_api import ChangeSet, router_init_args
 from litellm.router_core import RouterCore
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
+from litellm.scheduler import FlowItem
 from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
@@ -618,6 +624,41 @@ def test_applying_a_redis_cache_attaches_it_to_the_routing_state_and_the_pins(ma
     core.apply(ChangeSet(redis_cache=redis_cache))
     assert core.health().store.redis_cache is redis_cache
     assert core.registry().plugins("prompt_caching_pins").redis_cache is redis_cache
+
+
+@pytest.fixture
+def shared_redis(monkeypatch: pytest.MonkeyPatch) -> FakeServer:
+    server: Final = FakeServer()
+
+    class Pool(BlockingConnectionPool):
+        def __init__(self, **kwargs: object) -> None:  # kwargs-ok: forwarded to the redis pool
+            super().__init__(connection_class=FakeConnection, server=server, **kwargs)
+
+    monkeypatch.setattr(redis, "Redis", FakeRedis)
+    monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
+    return server
+
+
+async def test_two_workers_on_one_redis_share_the_priority_queue(make_core: MakeCore, shared_redis: FakeServer) -> None:
+    first: Final = _one(make_core, redis_host="scheduler-shared", redis_port=6399)
+    second: Final = _one(make_core, redis_host="scheduler-shared", redis_port=6399)
+    await first.scheduler.add_request(FlowItem(priority=0, request_id="urgent", model_name="g"))  # pyright: ignore[reportAttributeAccessIssue]
+    waiter: Final = FlowItem(priority=5, request_id="waiter", model_name="g")
+    await second.scheduler.add_request(waiter)  # pyright: ignore[reportAttributeAccessIssue]
+
+    assert not await second.scheduler.poll(waiter, [])  # pyright: ignore[reportAttributeAccessIssue]
+    await first.scheduler.remove_request("urgent", "g")  # pyright: ignore[reportAttributeAccessIssue]
+    assert await second.scheduler.poll(waiter, [])  # pyright: ignore[reportAttributeAccessIssue]
+
+
+async def test_without_redis_each_worker_keeps_its_own_queue(make_core: MakeCore) -> None:
+    first: Final = _one(make_core)
+    second: Final = _one(make_core)
+    await first.scheduler.add_request(FlowItem(priority=0, request_id="urgent", model_name="g"))  # pyright: ignore[reportAttributeAccessIssue]
+    waiter: Final = FlowItem(priority=5, request_id="waiter", model_name="g")
+    await second.scheduler.add_request(waiter)  # pyright: ignore[reportAttributeAccessIssue]
+
+    assert await second.scheduler.poll(waiter, [])  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_cache_responses_installs_a_local_response_cache_on_the_host(make_core: MakeCore, host: ScriptedHost) -> None:

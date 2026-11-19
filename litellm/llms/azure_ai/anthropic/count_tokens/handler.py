@@ -8,19 +8,21 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 from litellm.llms.azure.common_utils import EntraRejectionError
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
@@ -42,7 +44,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         system: object = None,
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
-    ) -> dict[str, object]:
+    ) -> object:
         """
         Handle a CountTokens request using httpx with Azure authentication.
 
@@ -84,7 +86,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
-            if context_management is not None:
+            thinking: Final = request_body.get("thinking")
+            if context_management is not None or AnthropicModelInfo().thinking_betas(thinking):
                 await aload_beta_headers_config()
             # Get required headers with Azure authentication
             headers: Final = self.get_required_headers(
@@ -92,6 +95,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 litellm_params=litellm_params,
                 messages=messages,
                 context_management=context_management,
+                thinking=thinking,
             )
             if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(
@@ -126,7 +130,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                     message=error_text,
                 )
 
-            azure_response: Final = response.json()
+            azure_response: Final = _DECODED_JSON.validate_python(response.json())
 
             verbose_logger.debug("Azure AI Anthropic response: %s", azure_response)
 
@@ -145,6 +149,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
+        except litellm.Timeout as e:
+            raise AnthropicError(status_code=e.status_code, message=str(e)) from e
         except Exception as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise AnthropicError(

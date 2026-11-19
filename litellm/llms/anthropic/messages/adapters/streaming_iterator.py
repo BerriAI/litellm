@@ -3,7 +3,6 @@
 import copy
 import io
 import itertools
-import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
@@ -15,6 +14,7 @@ from typing import (
     Final,
     Literal,
     Protocol,
+    TypeAlias,
     cast,
     get_args,
     runtime_checkable,
@@ -27,7 +27,12 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
+from litellm.litellm_core_utils.core_helpers import (
+    FinishEvidence,
+    as_str_mapping,
+    attribute_items,
+    finish_evidence_of,
+)
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
@@ -37,6 +42,7 @@ from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
     ContentBlockDelta,
+    ContentThinkingSignatureBlockDelta,
     ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
@@ -63,6 +69,7 @@ _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 _THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
 _PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
+_AnthropicStreamEvent: TypeAlias = dict[str, object] | MessageBlockDelta | ContentBlockDelta
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -132,12 +139,19 @@ def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
             assert_never(delta_type)
 
 
-def _first_thinking_block_index(chunk: "ModelResponseStream") -> int | None:
+def _first_thinking_block(chunk: "ModelResponseStream") -> Mapping[str, object] | None:
     delta: Final = _optional_attr(chunk.choices[0], "delta") if chunk.choices else None
     blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
-    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
-    index: Final = first_block.get("index") if first_block is not None else None
+    return as_str_mapping(blocks[0]) if blocks else None
+
+
+def _thinking_block_index(block: Mapping[str, object] | None) -> int | None:
+    index: Final = block.get("index") if block is not None else None
     return index if isinstance(index, int) else None
+
+
+def _closes_thinking_block(block: Mapping[str, object] | None) -> bool:
+    return block is not None and _thinking_block_index(block) is not None and bool(block.get("signature"))
 
 
 def _optional_str_attr(obj: object, name: str) -> str | None:
@@ -275,6 +289,10 @@ class _CombinedChunkSplitter:
         return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
             "list[ModelResponseStream] | None", getattr(self._stream, "chunks", None)
         )
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return finish_evidence_of(self._stream)
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":
@@ -632,6 +650,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_content_block_finish: bool = False
     current_content_block_type: Literal["text", "tool_use", "thinking", "redacted_thinking"] = "text"
     current_thinking_block_index: int | None = None
+    current_thinking_block_closed: bool = False
     sent_last_message: bool = False
     holding_chunk: ContentBlockDelta | None = None
     holding_stop_reason_chunk: MessageBlockDelta | None = None
@@ -696,12 +715,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             type="text",
             text="",
         )
+        self._unsigned_thinking_block_index: int | None = None
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
         return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
             "list[ModelResponseStream] | None", getattr(self.completion_stream, "chunks", None)
         )
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return self._combined_chunk_splitter.finish_evidence
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":
@@ -894,7 +918,36 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         except Exception:  # noqa: BLE001  # prompt estimation must not interrupt the stream
             return 0
 
-    def __next__(self):
+    def __next__(self) -> _AnthropicStreamEvent:
+        return self._signed_thinking_event(self._next_event())
+
+    async def __anext__(self) -> _AnthropicStreamEvent:
+        return self._signed_thinking_event(await self._anext_event())
+
+    def _signed_thinking_event(self, event: _AnthropicStreamEvent) -> _AnthropicStreamEvent:
+        match event:
+            case {"type": "content_block_start", "index": int() as index, "content_block": {"type": "thinking"}}:
+                self._unsigned_thinking_block_index = index
+                return event
+            case {"type": "content_block_delta", "index": int() as index, "delta": {"type": "signature_delta"}} if (
+                index == self._unsigned_thinking_block_index
+            ):
+                self._unsigned_thinking_block_index = None
+                return event
+            case {"type": "content_block_stop", "index": int() as index} if (
+                index == self._unsigned_thinking_block_index
+            ):
+                self._unsigned_thinking_block_index = None
+                self.chunk_queue.appendleft(event)
+                return ContentBlockDelta(
+                    type="content_block_delta",
+                    index=index,
+                    delta=ContentThinkingSignatureBlockDelta(type="signature_delta", signature=""),
+                )
+            case _:
+                return event
+
+    def _next_event(self) -> _AnthropicStreamEvent:
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -1129,7 +1182,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             verbose_logger.error("Anthropic Adapter - %s\n%s", e, traceback.format_exc())
             raise StopIteration
 
-    async def __anext__(self):
+    async def _anext_event(self) -> _AnthropicStreamEvent:
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:
@@ -1367,13 +1420,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         This wrapper ensures dict chunks are SSE formatted with both event and data lines.
         """
         for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+            yield anthropic_sse_frame(chunk)
 
     async def aclose(self) -> None:
         await self._combined_chunk_splitter.aclose()
@@ -1388,9 +1435,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
         try:
             async for chunk in self:
-                if not isinstance(chunk, dict):
-                    yield chunk
-                elif safeguard_results is None:
+                if safeguard_results is None:
                     yield anthropic_sse_frame(chunk)
                 else:
                     yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
@@ -1575,9 +1620,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
-        thinking_block_index: Final = _first_thinking_block_index(chunk)
+        thinking_block: Final = _first_thinking_block(chunk)
+        thinking_block_index: Final = _thinking_block_index(thinking_block)
         previous_thinking_block_index: Final = self.current_thinking_block_index
-        if thinking_block_index is not None or block_type != self.current_content_block_type:
+        follows_closed_thinking_block: Final = self.current_thinking_block_closed and block_type == "thinking"
+        self.current_thinking_block_closed = _closes_thinking_block(thinking_block)
+        if (
+            thinking_block_index is not None
+            or block_type != self.current_content_block_type
+            or follows_closed_thinking_block
+        ):
             self.current_thinking_block_index = thinking_block_index
 
         if block_type != self.current_content_block_type:
@@ -1585,7 +1637,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             self.current_content_block_start = content_block_start
             return True
 
-        if (
+        if follows_closed_thinking_block or (
             thinking_block_index is not None
             and previous_thinking_block_index is not None
             and thinking_block_index != previous_thinking_block_index
@@ -1629,6 +1681,10 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
         return self._anthropic_wrapper.chunks
+
+    @property
+    def finish_evidence(self) -> FinishEvidence:
+        return self._anthropic_wrapper.finish_evidence
 
     @property
     def messages(self) -> "list[AllMessageValues] | None":

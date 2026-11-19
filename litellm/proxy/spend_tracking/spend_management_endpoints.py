@@ -2,7 +2,7 @@
 import collections
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.classifier_logging import classifier_audit_field
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
+from litellm.proxy.auth.auth_checks import get_key_object
 from litellm.proxy.auth.authorization import (
     AllRows,
     OwnedRows,
@@ -53,6 +54,7 @@ from litellm.proxy.auth.authorization_dependencies import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
 from litellm.proxy.spend_tracking.session_page import (
     AGENT_CALL_TYPE_SQL,
     MCP_CALL_TYPES_SQL,
@@ -69,11 +71,16 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
 # those names undefined. Import the helpers locally where they are used.
+from litellm.proxy.spend_tracking.spend_log_api_key_scope import (
+    spend_log_api_keys_for_teams,
+    spend_log_api_keys_for_user,
+)
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team,
     get_spend_by_team_and_customer,
 )
-from litellm.proxy.utils import handle_exception_on_proxy, query_raw_within_statement_timeout
+from litellm.proxy.utils import handle_exception_on_proxy, hash_token_if_needed, query_raw_within_statement_timeout
+from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -128,11 +135,6 @@ _RowT = TypeVar("_RowT")
 
 class _SupportsModelDump(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
-
-
-class _SpendLogOwnerRow(TypedDict):
-    user: ReadOnly[str | None]
-    team_id: ReadOnly[str | None]
 
 
 class _ActivityRow(TypedDict):
@@ -260,6 +262,22 @@ async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object)
     return await prisma_client.db.query_raw(sql_query, *args)
 
 
+async def _scope_api_keys(
+    prisma_client: PrismaClient, *, where_conditions: Mapping[str, object], start: datetime | None, end: datetime | None
+) -> tuple[str, ...] | None:
+    """The api_keys behind a ``"user"`` / ``team_id`` filter, so the unindexed column is only checked on rows the
+    ``(api_key, "startTime")`` index already picked."""
+    if start is None or end is None or isinstance(where_conditions.get("api_key"), str):
+        return None
+    user_id: Final = where_conditions.get("user")
+    if isinstance(user_id, str):
+        return await spend_log_api_keys_for_user(prisma_client, user_id, start.date(), end.date())
+    team_id: Final = where_conditions.get("team_id")
+    if isinstance(team_id, str):
+        return await spend_log_api_keys_for_teams(prisma_client, (team_id,), start.date(), end.date())
+    return None
+
+
 async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT] | None:
     """``_query_raw`` for the call sites that guard the result against ``None``."""
     return await _query_raw(prisma_client, sql_query, *args)
@@ -268,6 +286,60 @@ async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args:
 async def _query_spend_logs(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
     return cast(  # cast-ok: callers declare the row shape their SELECT list produces, as with _query_raw
         "Sequence[_RowT]", await query_raw_within_statement_timeout(prisma_client, sql_query, *args)
+    )
+
+
+_SpendLogIdColumn: TypeAlias = Literal["request_id", "litellm_call_id"]
+
+
+@dataclass(frozen=True, slots=True)
+class _SpendLogWindow:
+    start: datetime | None = None
+    end: datetime | None = None
+
+
+_UNBOUNDED_SPEND_LOG_WINDOW: Final = _SpendLogWindow()
+
+
+def _spend_log_id_filter(
+    id_column: _SpendLogIdColumn, lookup_id: str, window: _SpendLogWindow
+) -> tuple[str, tuple[object, ...]]:
+    match id_column:
+        case "request_id":
+            return "request_id = $1", (lookup_id,)
+        case "litellm_call_id":
+            bounds: Final = tuple(
+                (operator, bound.isoformat())
+                for operator, bound in ((">=", window.start), ("<=", window.end))
+                if bound is not None
+            )
+            bound_sql: Final = "".join(
+                f""" AND "startTime" {operator} (${index}::timestamptz AT TIME ZONE 'UTC')"""
+                for index, (operator, _) in enumerate(bounds, start=2)
+            )
+            return f"litellm_call_id = $1{bound_sql}", (lookup_id, *(bound for _, bound in bounds))
+
+
+def _spend_log_lookup_timeout_hint(id_column: _SpendLogIdColumn) -> str:
+    match id_column:
+        case "request_id":
+            return "Try again"
+        case "litellm_call_id":
+            return (
+                "Pass a narrower start_date and end_date, or ask an admin to check that the "
+                "LiteLLM_SpendLogs_litellm_call_id_idx index exists and is valid"
+            )
+
+
+async def _query_spend_logs_by_id(
+    prisma_client: PrismaClient, id_column: _SpendLogIdColumn, sql_query: str, *args: object
+) -> Sequence[Mapping[str, object]]:
+    return await query_raw_within_statement_timeout(
+        prisma_client,
+        sql_query,
+        *args,
+        what=f"Spend log lookup by {id_column}",
+        hint=_spend_log_lookup_timeout_hint(id_column),
     )
 
 
@@ -397,9 +469,11 @@ def _request_id_or_call_id_clause(request_id: str) -> tuple[_RequestIdEquals, _L
     return (request_id_clause, call_id_clause)
 
 
-async def _find_spend_log_owners(prisma_client: PrismaClient, request_id: str) -> Sequence[_SpendLogOwnerRow]:
+async def _find_spend_log_owners(
+    prisma_client: PrismaClient, id_column: _SpendLogIdColumn, lookup_id: str, window: _SpendLogWindow
+) -> frozenset[tuple[str | None, str | None]]:
     """Read the distinct ``(user, team_id)`` owner pairs across every spend log row
-    identified by ``request_id`` or ``litellm_call_id``.
+    whose ``id_column`` is ``lookup_id``.
 
     ``litellm_call_id`` is populated from the client-settable ``x-litellm-call-id``
     request header, so it is not guaranteed unique to one tenant: any number of rows
@@ -407,13 +481,14 @@ async def _find_spend_log_owners(prisma_client: PrismaClient, request_id: str) -
     carrying the caller's id could otherwise push the caller's own owner pair past a
     row-sample cap and lock them out of their own lookup.
     """
-    sql_query: Final = """
-        SELECT DISTINCT "user", team_id
-        FROM "LiteLLM_SpendLogs"
-        WHERE request_id = $1 OR litellm_call_id = $1
-    """
-    owners: Final[Sequence[_SpendLogOwnerRow] | None] = await _query_raw_or_none(prisma_client, sql_query, request_id)
-    return owners if owners is not None else ()
+    id_filter, id_params = _spend_log_id_filter(id_column, lookup_id, window)
+    rows: Final = await _query_spend_logs_by_id(
+        prisma_client,
+        id_column,
+        f'SELECT DISTINCT "user", team_id FROM "LiteLLM_SpendLogs" WHERE {id_filter}',
+        *id_params,
+    )
+    return frozenset(_fetched_row_owner(row) for row in rows)
 
 
 async def _count_spend_logs(prisma_client: PrismaClient, where: Mapping[str, object]) -> int:
@@ -2577,7 +2652,7 @@ async def ui_view_spend_logs(
         description="Filter logs by model ID (litellm model deployment id)",
     ),
     model_group: str | None = fastapi.Query(default=None, description="Filter logs by model group"),
-    key_alias: str | None = fastapi.Query(default=None, description="Filter logs by key alias"),
+    key_alias: str | None = fastapi.Query(default=None, description="Filter logs by exact key alias match"),
     end_user: str | None = fastapi.Query(default=None, description="Filter logs by end user"),
     error_code: str | None = fastapi.Query(default=None, description="Filter logs by error code (e.g., '404', '500')"),
     error_message: str | None = fastapi.Query(
@@ -2756,14 +2831,6 @@ async def ui_view_spend_logs(
 
         # Build metadata filters
         metadata_filters: Final = []
-        if key_alias is not None:
-            metadata_filters.append(
-                {
-                    "path": ["user_api_key_alias"],
-                    "string_contains": key_alias,
-                }
-            )
-
         if error_code is not None:
             metadata_filters.append(
                 {
@@ -2812,6 +2879,25 @@ async def ui_view_spend_logs(
         read_scope: Final = (
             await _spend_log_read_scope(user_api_key_dict, log_team_lookup) if user_scope_applies else AllRows()
         )
+        if _reads_spend_logs_as_key(user_api_key_dict, route=get_request_route(request)):
+            own_key_result: Final = _own_spend_log_api_key(user_api_key_dict, api_key=api_key, user_id=user_id)
+            match own_key_result:
+                case str() as own_api_key:
+                    where_conditions["api_key"] = own_api_key
+                case _SpendLogFilterDenied() as denial:
+                    raise _spend_log_filter_forbidden(denial)
+                case _:
+                    assert_never(own_key_result)
+        elif user_scope_applies and isinstance(read_scope, OwnedRows):
+            filter_denial: Final = await _internal_user_spend_log_filter_denial(
+                prisma_client,
+                user_api_key_dict,
+                api_key=api_key,
+                user_id=user_id,
+                readable_team_ids=read_scope.team_ids,
+            )
+            if filter_denial is not None:
+                raise _spend_log_filter_forbidden(filter_denial)
         if not is_admin_view:
             if team_id is not None:
                 can_view_team: Final = await _can_team_member_view_log(
@@ -2896,6 +2982,18 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{like_escaped_session_id}%")
             p += 1
 
+        scope_api_keys: Final = (
+            await _scope_api_keys(
+                prisma_client, where_conditions=where_conditions, start=start_date_obj, end=end_date_obj
+            )
+            if not search_owns_window
+            else None
+        )
+        if scope_api_keys is not None:
+            sql_conditions.append(f"api_key = ANY(${p}::text[])")
+            sql_params.append(list(scope_api_keys))
+            p += 1  # rebind-ok: advances the file's shared $N placeholder counter
+
         # Status filter
         if status_filter is not None and not (group_by_session is True and not is_search_lookup):
             if status_filter == "success":
@@ -2931,8 +3029,12 @@ async def ui_view_spend_logs(
 
         # Metadata JSON filters (PostgreSQL JSONB operators)
         if key_alias is not None:
-            sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
-            sql_params.append(f"%{key_alias}%")
+            sql_conditions.append(
+                f'api_key IN (SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = ${p} '
+                f'UNION SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE key_alias = ${p} '
+                f"UNION SELECT ${p}::text)"
+            )
+            sql_params.append(key_alias)
             p += 1
         if error_code is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
@@ -3290,6 +3392,18 @@ async def _resolve_request_response_payload(
     )
 
 
+def _parse_spend_log_ui_date(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"Invalid date {value!r}, expected YYYY-MM-DD HH:MM:SS in UTC"},
+        ) from error
+
+
 @router.get(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],
@@ -3317,6 +3431,7 @@ async def ui_view_request_response_for_request_id(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    window: Final = _SpendLogWindow(start=_parse_spend_log_ui_date(start_date), end=_parse_spend_log_ui_date(end_date))
     caller_is_admin: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
     if not caller_is_admin:
         if prisma_client is None:
@@ -3333,16 +3448,10 @@ async def ui_view_request_response_for_request_id(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
             request_id=request_id,
+            window=window,
         )
 
     custom_loggers: Final = litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
-    start_date_obj: datetime | None = None
-    end_date_obj: datetime | None = None
-    if start_date is not None:
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    if end_date is not None:
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-
     spend_log_row: Final = (
         None
         if prisma_client is None
@@ -3352,6 +3461,7 @@ async def ui_view_request_response_for_request_id(
             request_id=request_id,
             caller_is_admin=caller_is_admin,
             log_team_lookup=log_team_lookup,
+            window=window,
         )
     )
     stored_request_id: Final = _stored_request_id(spend_log_row, request_id)
@@ -3359,8 +3469,8 @@ async def ui_view_request_response_for_request_id(
     for custom_logger in custom_loggers:
         payload = await custom_logger.get_request_response_payload(
             request_id=stored_request_id,
-            start_time_utc=start_date_obj,
-            end_time_utc=end_date_obj,
+            start_time_utc=window.start,
+            end_time_utc=window.end,
         )
         if payload is not None:
             if not caller_is_admin and prisma_client is not None:
@@ -3465,18 +3575,18 @@ async def view_spend_logs(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if (
-        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
-        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-    ):
-        user_id = user_api_key_dict.user_id
-
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
+        owner_filters: Final = await _legacy_spend_log_owner_filters(
+            prisma_client, user_api_key_dict, api_key=api_key, user_id=user_id
+        )
+        if isinstance(owner_filters, _SpendLogFilterDenied):
+            raise _spend_log_filter_forbidden(owner_filters)
+        api_key, user_id = owner_filters  # rebind-ok: the handler's filters read these names
         if (
             start_date is not None
             and isinstance(start_date, str)
@@ -3595,6 +3705,50 @@ async def view_spend_logs(
         )
 
 
+class _EntityIdRow(TypedDict):
+    id: ReadOnly[str]
+
+
+_COMMITTED_DROP_PAGE_SIZE: Final = 1000
+_CommittedDropEntity: TypeAlias = Literal["key", "team"]
+_COMMITTED_DROP_PAGE_QUERIES: Final[Mapping[_CommittedDropEntity, str]] = MappingProxyType(
+    {
+        "key": 'SELECT token AS id FROM "LiteLLM_VerificationToken" WHERE token > $1 ORDER BY token LIMIT $2',
+        "team": 'SELECT team_id AS id FROM "LiteLLM_TeamTable" WHERE team_id > $1 ORDER BY team_id LIMIT $2',
+    }
+)
+_COMMITTED_DROP_COUNTERS: Final[Mapping[_CommittedDropEntity, Callable[[str], str]]] = MappingProxyType(
+    {"key": key_counter, "team": team_counter}
+)
+
+
+async def _drop_committed_spend_page(
+    prisma_client: PrismaClient, entity: _CommittedDropEntity, after_id: str
+) -> str | None:
+    from litellm.proxy.proxy_server import spend_counter_store
+
+    rows: Final[Sequence[_EntityIdRow]] = await _query_raw(
+        prisma_client, _COMMITTED_DROP_PAGE_QUERIES[entity], after_id, _COMMITTED_DROP_PAGE_SIZE
+    )
+    counter_of: Final = _COMMITTED_DROP_COUNTERS[entity]
+    await drop_committed_spend(spend_counter_store, tuple(counter_of(row["id"]) for row in rows))
+    return rows[-1]["id"] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
+
+
+async def _drop_committed_spend_pages(prisma_client: PrismaClient, entity: _CommittedDropEntity) -> None:
+    after_id: str | None = ""  # rebind-ok: the keyset cursor moves one page at a time
+    while after_id is not None:
+        after_id = await _drop_committed_spend_page(prisma_client, entity, after_id)
+
+
+async def _drop_all_key_and_team_committed_spend(prisma_client: PrismaClient) -> None:
+    try:
+        await _drop_committed_spend_pages(prisma_client, "key")
+        await _drop_committed_spend_pages(prisma_client, "team")
+    except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin lasts until charges stop for its TTL
+        verbose_proxy_logger.warning("committed spend drop after a global reset failed: %s", e)
+
+
 @router.post(
     "/global/spend/reset",
     tags=["Budget & Spend Tracking"],
@@ -3626,6 +3780,8 @@ async def global_spend_reset():
         _ = await transaction.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
         _ = await transaction.query_raw(_LOCK_ALL_KEYS_SQL)
         _ = await transaction.litellm_verificationtoken.update_many(data={"spend": 0.0}, where={})
+    if committed_spend_tracked():
+        await _drop_all_key_and_team_committed_spend(prisma_client)
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",
@@ -4804,6 +4960,105 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     )
 
 
+def _reads_spend_logs_as_key(user_api_key_dict: UserAPIKeyAuth, *, route: str) -> bool:
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.auth.user_api_key_auth import is_no_auth_dev_mode
+    from litellm.proxy.proxy_server import general_settings_view, master_key
+
+    return not RouteChecks.key_allowed_routes_grant(route=route, valid_token=user_api_key_dict) or not (
+        is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        or user_api_key_dict.user_role == LitellmUserRoles.ORG_ADMIN
+        or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+        or is_no_auth_dev_mode(master_key, general_settings_view())
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _SpendLogFilterDenied:
+    pass
+
+
+def _own_spend_log_api_key(
+    user_api_key_dict: UserAPIKeyAuth, *, api_key: str | None, user_id: str | None
+) -> str | _SpendLogFilterDenied:
+    """The caller's own hashed key, the only spend-log owner a key without an admin or internal-user role may read."""
+    own_api_key: Final = user_api_key_dict.token or user_api_key_dict.api_key
+    requested_api_key: Final = hash_token_if_needed(api_key) if api_key is not None else None
+    if own_api_key is None:
+        return _SpendLogFilterDenied()
+    own_hash: Final = hash_token_if_needed(own_api_key)
+    if requested_api_key is not None and requested_api_key != own_hash:
+        return _SpendLogFilterDenied()
+    if user_id is not None and user_id != user_api_key_dict.user_id:
+        return _SpendLogFilterDenied()
+    return own_hash
+
+
+async def _legacy_spend_log_owner_filters(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    api_key: str | None,
+    user_id: str | None,
+) -> tuple[str | None, str | None] | _SpendLogFilterDenied:
+    if _reads_spend_logs_as_key(user_api_key_dict, route="/spend/logs"):
+        own_key_result: Final = _own_spend_log_api_key(user_api_key_dict, api_key=api_key, user_id=user_id)
+        match own_key_result:
+            case str() as own_api_key:
+                return own_api_key, user_id
+            case _SpendLogFilterDenied() as denial:
+                return denial
+            case _:
+                assert_never(own_key_result)
+    if not _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+        return api_key, user_id
+    filter_denial: Final = await _internal_user_spend_log_filter_denial(
+        prisma_client, user_api_key_dict, api_key=api_key, user_id=user_id, readable_team_ids=()
+    )
+    if filter_denial is not None:
+        return filter_denial
+    return api_key, user_api_key_dict.user_id
+
+
+def _spend_log_filter_forbidden(denial: _SpendLogFilterDenied) -> HTTPException:
+    match denial:
+        case _SpendLogFilterDenied():
+            return HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view spend logs for a key or user other than your own",
+            )
+        case _:
+            assert_never(denial)
+
+
+async def _internal_user_spend_log_filter_denial(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    api_key: str | None,
+    user_id: str | None,
+    readable_team_ids: tuple[str, ...],
+) -> _SpendLogFilterDenied | None:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if user_id is not None and user_id != user_api_key_dict.user_id and not readable_team_ids:
+        return _SpendLogFilterDenied()
+    if api_key is None:
+        return None
+    try:
+        key_owner: Final = await get_key_object(
+            hashed_token=hash_token_if_needed(api_key),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    except ProxyException:
+        return None
+    owns_key: Final = key_owner.user_id is not None and key_owner.user_id == user_api_key_dict.user_id
+    if not owns_key and key_owner.team_id not in readable_team_ids:
+        return _SpendLogFilterDenied()
+    return None
+
+
 async def _user_can_view_spend_log_owner(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -4829,6 +5084,7 @@ async def _assert_user_can_view_request_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     request_id: str,
+    window: _SpendLogWindow = _UNBOUNDED_SPEND_LOG_WINDOW,
 ) -> None:
     """
     Verify the requesting non-admin user is allowed to view at least one spend-log
@@ -4841,11 +5097,24 @@ async def _assert_user_can_view_request_id(
     so a missing row can't be used to read a payload out of cold storage via the
     detail endpoint.
     """
-    owners: Final = await _find_spend_log_owners(prisma_client, request_id)
-    for owner in owners:
-        if await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner["user"], owner["team_id"]):
-            return
-    raise _spend_log_forbidden(request_id)
+    if not (
+        await _user_can_view_spend_log_by_id(prisma_client, user_api_key_dict, "request_id", request_id, window)
+        or await _user_can_view_spend_log_by_id(prisma_client, user_api_key_dict, "litellm_call_id", request_id, window)
+    ):
+        raise _spend_log_forbidden(request_id)
+
+
+async def _user_can_view_spend_log_by_id(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    id_column: _SpendLogIdColumn,
+    lookup_id: str,
+    window: _SpendLogWindow,
+) -> bool:
+    for user, team_id in await _find_spend_log_owners(prisma_client, id_column, lookup_id, window):
+        if await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, user, team_id):
+            return True
+    return False
 
 
 async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup) -> OwnedRows:
@@ -4879,24 +5148,45 @@ def _read_scope_where(scope: ReadScope) -> Mapping[str, object]:
     return grants[0] if len(grants) == 1 else {"OR": list(grants)}
 
 
-def _spend_log_payload_query(request_id: str, scope: ReadScope) -> tuple[str, tuple[object, ...]]:
+def _spend_log_payload_query(
+    id_column: _SpendLogIdColumn, lookup_id: str, scope: ReadScope, window: _SpendLogWindow
+) -> tuple[str, tuple[object, ...]]:
     """
-    Fetch the one row an id lookup resolves to, preferring the exact ``request_id``
-    match over rows that merely carry the id as their client-set ``litellm_call_id``.
-    A non-admin viewer only ever gets rows they own or rows of a team they may view.
+    Fetch one row whose ``id_column`` is ``lookup_id``. A non-admin viewer only ever
+    gets rows they own or rows of a team they may view.
     """
-    scope_clause, scope_params = read_scope_sql(scope, 2)
+    id_filter, id_params = _spend_log_id_filter(id_column, lookup_id, window)
+    scope_clause, scope_params = read_scope_sql(scope, len(id_params) + 1)
     scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
     return (
         f"""
             SELECT request_id, messages, response, proxy_server_request, metadata, "user", team_id
             FROM "LiteLLM_SpendLogs"
-            WHERE (request_id = $1 OR litellm_call_id = $1){scope_sql}
-            ORDER BY (request_id = $1) DESC
+            WHERE {id_filter}{scope_sql}
             LIMIT 1
         """,
-        (request_id, *scope_params),
+        (*id_params, *scope_params),
     )
+
+
+async def _query_spend_log_payload(
+    prisma_client: PrismaClient,
+    id_column: _SpendLogIdColumn,
+    lookup_id: str,
+    scope: ReadScope,
+    window: _SpendLogWindow,
+) -> Sequence[Mapping[str, object]]:
+    sql_query, sql_params = _spend_log_payload_query(id_column, lookup_id, scope, window)
+    return await _query_spend_logs_by_id(prisma_client, id_column, sql_query, *sql_params)
+
+
+async def _fetch_spend_log_payload_rows(
+    prisma_client: PrismaClient, lookup_id: str, scope: ReadScope, window: _SpendLogWindow
+) -> Sequence[Mapping[str, object]]:
+    by_request_id: Final = await _query_spend_log_payload(prisma_client, "request_id", lookup_id, scope, window)
+    if by_request_id:
+        return by_request_id
+    return await _query_spend_log_payload(prisma_client, "litellm_call_id", lookup_id, scope, window)
 
 
 async def _resolve_spend_log_payload_row(
@@ -4905,6 +5195,7 @@ async def _resolve_spend_log_payload_row(
     request_id: str,
     caller_is_admin: bool,
     log_team_lookup: LogTeamLookup,
+    window: _SpendLogWindow,
 ) -> Mapping[str, object] | None:
     """
     Resolve an id lookup to the caller's own spend-log row before any payload
@@ -4914,8 +5205,7 @@ async def _resolve_spend_log_payload_row(
     ``request_id`` is the key that names the caller's own request.
     """
     scope: Final = AllRows() if caller_is_admin else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
-    sql_query, sql_params = _spend_log_payload_query(request_id, scope)
-    rows: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query, *sql_params)
+    rows: Final = await _fetch_spend_log_payload_rows(prisma_client, request_id, scope, window)
     if not rows:
         return None
     if not caller_is_admin:

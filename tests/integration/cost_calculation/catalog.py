@@ -52,6 +52,14 @@ _PROVIDER_MODULES: Final = (
     xai,
 )
 CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(case for module in _PROVIDER_MODULES for case in module.CASES)
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[frozenset[str]] = frozenset(
+    case.name
+    for case in (
+        *openai.BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+        *anthropic.BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+        *batch_realtime.BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+    )
+)
 PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
     pair for module in _PROVIDER_MODULES for pair in module.PARITY
 )

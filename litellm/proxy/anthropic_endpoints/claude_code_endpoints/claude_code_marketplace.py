@@ -29,7 +29,7 @@ from typing import Annotated, Final, Protocol, TypedDict, get_args
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
-from pydantic import Json, TypeAdapter
+from pydantic import Json, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -60,11 +60,13 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import (
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
+from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.claude_code_endpoints import (
     InstallationPreference,
     ListPluginsResponse,
+    PluginAuthor,
     PluginListItem,
     PluginResponse,
     PluginSpec,
@@ -106,6 +108,15 @@ MANIFEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 _SELF_INSTALLING_PREFERENCES: Final[frozenset[InstallationPreference]] = frozenset({"auto_install", "required"})
+
+
+def read_plugin_author(value: object) -> PluginAuthor | None:
+    if value is None:
+        return None
+    try:
+        return PluginAuthor.model_validate({"name": value} if isinstance(value, str) else value)
+    except ValidationError:
+        return None
 
 
 def get_installation_preference(manifest: Mapping[str, object]) -> InstallationPreference | None:
@@ -215,13 +226,13 @@ async def upload_plugin(
         "sha256": digest,
     }
     spec: Final = RegisterPluginRequest.model_validate({**metadata.model_dump(), "source": source})
-    _validate_installation_preference(spec)
+    validate_plugin_installation_preference(spec)
     published: Final = await uploads.publish(
         PluginPublication(
             name=spec.name,
             version=spec.version,
             description=spec.description,
-            manifest=_build_plugin_manifest(spec.name, spec),
+            manifest=build_plugin_manifest(spec.name, spec),
             content=archive,
             created_by=user_api_key_dict.user_id,
         )
@@ -444,7 +455,7 @@ _VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-
 _VALID_SHA256_RE: Final = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
-def _validate_plugin_source(source: Mapping[str, str]) -> None:
+def validate_plugin_source(source: Mapping[str, str]) -> None:
     """Validate plugin source format, raising HTTPException on invalid input."""
     source_type: Final = source.get("source")
     if source_type == "github":
@@ -500,7 +511,7 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
         )
 
 
-def _validate_installation_preference(spec: PluginSpec) -> None:
+def validate_plugin_installation_preference(spec: PluginSpec) -> None:
     if spec.installation_preference is None:
         return
     if spec.source.get("source") != "archive":
@@ -521,7 +532,7 @@ def _validate_installation_preference(spec: PluginSpec) -> None:
         )
 
 
-def _build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:
+def build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:
     """Build the stored manifest dict shared by plugin create and update."""
     dumped: Final[Mapping[str, object]] = MappingProxyType(spec.model_dump(exclude_none=True))
     return {"name": name, **{key: value for key, value in dumped.items() if value and key != "name"}}
@@ -616,10 +627,10 @@ async def register_plugin(
                 detail={"error": "Plugin name must be kebab-case (lowercase letters, numbers, hyphens)"},
             )
 
-        _validate_plugin_source(request.source)
-        _validate_installation_preference(request)
+        validate_plugin_source(request.source)
+        validate_plugin_installation_preference(request)
 
-        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(request.name, request)
+        manifest: Final[Mapping[str, object]] = build_plugin_manifest(request.name, request)
 
         plugin: Final = await uploads.publish(
             PluginPublication(
@@ -666,6 +677,7 @@ async def register_plugin(
     response_model=ListPluginsResponse,
 )
 async def list_plugins(
+    uploads: PluginUploadRepositoryDep,
     enabled_only: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> ListPluginsResponse:
@@ -678,6 +690,17 @@ async def list_plugins(
     Returns:
         List of plugins with their metadata.
     """
+    catalog: Final = await list_visible_plugins(enabled_only, user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    counts: Final = await uploads.download_counts(tuple(plugin.id for plugin in catalog.plugins))
+    return ListPluginsResponse(
+        plugins=[plugin.model_copy(update={"download_count": counts.get(plugin.id, 0)}) for plugin in catalog.plugins],
+        count=catalog.count,
+    )
+
+
+async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKeyAuth) -> ListPluginsResponse:
     try:
         prisma_client: Final = await get_prisma_client()
 
@@ -693,15 +716,20 @@ async def list_plugins(
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
 
+            review = read_plugin_review(MANIFEST_FIELDS.validate_python(manifest))
             plugin_list.append(
                 PluginListItem(
                     id=p.id,
+                    created_by=p.created_by,
+                    approved_by=review.approved_by if review else None,
+                    published_by=read_plugin_publisher(MANIFEST_FIELDS.validate_python(manifest)),
+                    security_scan_passed=review.security_scan_passed if review else False,
                     name=p.name,
                     version=p.version,
                     description=p.description,
                     source=manifest.get("source", {}),
                     has_agent_skill_metadata=has_agent_skill_metadata(MANIFEST_FIELDS.validate_python(manifest)),
-                    author=manifest.get("author"),
+                    author=read_plugin_author(manifest.get("author")),
                     homepage=manifest.get("homepage"),
                     keywords=manifest.get("keywords"),
                     category=manifest.get("category"),
@@ -869,11 +897,11 @@ async def update_plugin(
 
         current_manifest: Final = MANIFEST_FIELDS.validate_json(existing.manifest_json or "{}")
         if request.source != current_manifest.get("source"):
-            _validate_plugin_source(request.source)
-        _validate_installation_preference(request)
+            validate_plugin_source(request.source)
+        validate_plugin_installation_preference(request)
 
         manifest: Final[Mapping[str, object]] = {
-            **_build_plugin_manifest(plugin_name, request),
+            **build_plugin_manifest(plugin_name, request),
             **(
                 {"agent_skill": current_manifest["agent_skill"]}
                 if "agent_skill" in current_manifest and request.source == current_manifest.get("source")
