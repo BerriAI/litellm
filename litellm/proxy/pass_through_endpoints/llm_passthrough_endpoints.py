@@ -169,6 +169,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     truncated_close_reason,
     websocket_passthrough_request,
 )
+from litellm.proxy.pass_through_endpoints.vector_store_fallbacks import set_passthrough_fallback_plan
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model, normalize_route_for_root_path
 from litellm.proxy.vector_store_endpoints.endpoints import build_request_data_from_managed_vector_store
@@ -1101,6 +1102,14 @@ async def milvus_proxy_route(
         vector_store=vector_store,
         user_api_key_dict=user_api_key_dict,
     )
+    await set_passthrough_fallback_plan(
+        request,
+        vector_store,
+        user_api_key_dict,
+        operation="milvus",
+        endpoint=endpoint,
+        primary_resource_id=vector_store_index,
+    )
     litellm_params = vector_store.get("litellm_params") or {}
     auth_credentials: Final = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
@@ -1156,7 +1165,7 @@ def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStor
 
 async def _opensearch_store_params(
     index_object: LiteLLM_ManagedVectorStoreIndex, user_api_key_dict: UserAPIKeyAuth
-) -> Mapping[str, object]:
+) -> tuple[Mapping[str, object], LiteLLM_ManagedVectorStore]:
     registry: Final = litellm.vector_store_registry
     store_name: Final = index_object.litellm_params.vector_store_name
     named_stores: Final = tuple(
@@ -1187,7 +1196,7 @@ async def _opensearch_store_params(
             "which is not an OpenSearch vector store.",
         )
     await assert_user_can_access_vector_store(vector_store=vector_store, user_api_key_dict=user_api_key_dict)
-    return params
+    return params, vector_store
 
 
 @router.api_route(
@@ -1238,7 +1247,15 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
         user_api_key_dict, path.index_name, operation.permission if operation is not None else None
     )
     index_object: Final = _registered_vector_store_index(path.index_name)
-    store_params: Final = await _opensearch_store_params(index_object, user_api_key_dict)
+    store_params, vector_store = await _opensearch_store_params(index_object, user_api_key_dict)
+    await set_passthrough_fallback_plan(
+        request,
+        vector_store,
+        user_api_key_dict,
+        operation="opensearch",
+        endpoint=endpoint,
+        primary_resource_id=index_object.litellm_params.vector_store_index,
+    )
     prepared: Final = await prepare_index_request(
         config=OpenSearchVectorStoreConfig(aws=OpenSearchIndexAWS()),
         method=request.method,
@@ -2862,6 +2879,14 @@ async def azure_proxy_route(
                     vector_store=vector_store,
                     user_api_key_dict=user_api_key_dict,
                 )
+                await set_passthrough_fallback_plan(
+                    request,
+                    vector_store,
+                    user_api_key_dict,
+                    operation="azure_ai",
+                    endpoint=endpoint,
+                    primary_resource_id=part,
+                )
                 litellm_params = vector_store.get("litellm_params") or {}
                 auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
@@ -3600,6 +3625,16 @@ async def vertex_discovery_proxy_route(
                 "Vector store ID %s found in endpoint but no credentials found in registry",
                 vector_store_id,
             )
+
+    if vector_store_credentials is not None and vector_store_id_match is not None:
+        await set_passthrough_fallback_plan(
+            request,
+            vector_store_credentials,
+            user_api_key_dict,
+            operation="vertex_ai",
+            endpoint=endpoint,
+            primary_resource_id=vector_store_id_match.group(1),
+        )
 
     discovery_handler: Final = get_vertex_pass_through_handler(call_type="discovery")
     return await _base_vertex_proxy_route(
