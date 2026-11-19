@@ -1,13 +1,3 @@
-"""Opt-in pre_call scan of the description strings in a request's tool definitions.
-
-Every API surface (Chat Completions, Responses, Anthropic Messages) carries its tool
-definitions in the request's top-level ``tools`` list, plus Chat Completions' legacy
-``functions`` list and the Responses ``additional_tools`` and ``tool_search_output``
-input items, so walking each definition for string leaves keyed ``description`` covers
-tool and parameter descriptions without per-surface parsing. Each tool is one
-``apply_guardrail`` call, mirroring the MCP ``tools/list`` scan.
-"""
-
 import asyncio
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -110,11 +100,6 @@ async def scanned_request_tools(
     request_data: dict[str, object],  # mutable-ok: guardrails annotate the hook's request dict in place
     logging_obj: "LiteLLMLoggingObj | None",
 ) -> Mapping[str, object]:
-    """Each request field carrying tool definitions whose descriptions were masked, rebuilt with the masked text.
-
-    A guardrail blocks by raising, which surfaces as the usual pre_call HTTP 400; a tool that
-    cannot be scanned is rejected the same way.
-    """
     if guardrail.scan_tool_descriptions_as_text is not True:
         return MappingProxyType({})
     limiter: Final = asyncio.Semaphore(_MAX_CONCURRENT_TOOL_SCANS)
