@@ -440,16 +440,38 @@ def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: 
     return model_groups is None or public_name in model_groups or row.get("model_name") in model_groups
 
 
+@dataclass(frozen=True, slots=True)
+class _WildcardProbe:
+    public_name: str
+    wildcard_id: str | None
+    deployment: Mapping[str, object]
+
+    @property
+    def group_key(self) -> str:
+        """Names share one probe only when the same wildcard deployment serves them the same model."""
+        return f"{self.wildcard_id}|{_deployment_model(self.deployment)}"
+
+
 def _wildcard_probes_for(
     public_name: str, router: "Router", model_groups: AbstractSet[str] | None
-) -> tuple[Mapping[str, object], ...]:
+) -> tuple[_WildcardProbe, ...]:
     served_name: Final = router.registry().resolve(public_name, kind="alias") or public_name
     rows: Final = router.registry().deployments(served_name, source="wildcard")
     if _resolved_deployment_ids(router, served_name) != frozenset(i for row in rows if (i := _deployment_id(row))):
         return ()
     eligible: Final = (row for row in rows if not _skips_health_checks(row))
     return tuple(
-        _wildcard_probe(public_name, row) for row in eligible if _in_model_groups(public_name, row, model_groups)
+        _WildcardProbe(public_name, _deployment_id(row), _wildcard_probe(public_name, row))
+        for row in eligible
+        if _in_model_groups(public_name, row, model_groups)
+    )
+
+
+def _public_wildcard_probes(
+    public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
+) -> tuple[_WildcardProbe, ...]:
+    return tuple(
+        chain.from_iterable(_wildcard_probes_for(name, router, model_groups) for name in dict.fromkeys(public_names))
     )
 
 
@@ -457,9 +479,7 @@ def public_wildcard_probe_deployments(
     public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
 ) -> tuple[Mapping[str, object], ...]:
     """One id-less probe per wildcard for each public name that only a wildcard serves."""
-    return tuple(
-        chain.from_iterable(_wildcard_probes_for(name, router, model_groups) for name in dict.fromkeys(public_names))
-    )
+    return tuple(probe.deployment for probe in _public_wildcard_probes(public_names, router, model_groups))
 
 
 _Endpoints: TypeAlias = Sequence[Mapping[str, object]]
@@ -566,23 +586,31 @@ def _probe_copy(probe: Mapping[str, object]) -> Mapping[str, object]:
     return {**probe, "litellm_params": dict(params) if isinstance(params, Mapping) else {}}
 
 
-def _one_probe_per_served_model(
-    probes: Sequence[Mapping[str, object]],
-) -> tuple[tuple[str | None, Mapping[str, object]], ...]:
-    """Published names that resolve to the same upstream model share one probe, run on a copy left free to change."""
-    first_by_model: Final = {_deployment_model(probe): probe for probe in reversed(probes)}
-    models: Final = dict.fromkeys(_deployment_model(probe) for probe in probes)
-    return tuple((model, _probe_copy(first_by_model[model])) for model in models)
+def _one_probe_per_group(probes: Sequence[_WildcardProbe]) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    """One probe per wildcard deployment and served model, run on a copy left free to change."""
+    first_by_key: Final = {probe.group_key: probe for probe in reversed(probes)}
+    keys: Final = dict.fromkeys(probe.group_key for probe in probes)
+    return tuple((key, _probe_copy(first_by_key[key].deployment)) for key in keys)
 
 
-def _served_model_of(
-    probe: Mapping[str, object], by_model: Sequence[tuple[str | None, Mapping[str, object]]]
-) -> str | None:
-    return next(model for model, copy in by_model if copy is probe)
+def _group_key_of(probe: Mapping[str, object], groups: Sequence[tuple[str, Mapping[str, object]]]) -> str:
+    return next(key for key, copy in groups if copy is probe)
 
 
-def _as_served_model(endpoints: _Endpoints, served_model: str | None) -> _Endpoints:
-    return tuple({**endpoint, "model": served_model} for endpoint in endpoints)
+def _keyed_by_group(endpoints: _Endpoints, group_key: str) -> _Endpoints:
+    return tuple({**endpoint, "model": group_key} for endpoint in endpoints)
+
+
+def _row_per_name_and_group(probes: Sequence[_WildcardProbe]) -> tuple[Mapping[str, object], ...]:
+    """What the save maps endpoints onto: each published name under every group serving it, keyed by group.
+
+    The save combines a name's rows by its usual rule, and a group key never matches another group's endpoints.
+    """
+    memberships: Final = dict.fromkeys((probe.public_name, probe.group_key) for probe in probes)
+    return tuple(
+        {"model_name": name, "litellm_params": {"model": group_key}, "model_info": {}}
+        for name, group_key in memberships
+    )
 
 
 async def _save_wildcard_probes(
@@ -591,23 +619,23 @@ async def _save_wildcard_probes(
     from litellm.proxy.health_endpoints._health_endpoints import save_background_health_checks_to_db
 
     try:
-        probes: Final = public_wildcard_probe_deployments(scope.public_names, scope.router, scope.model_groups)
+        probes: Final = _public_wildcard_probes(scope.public_names, scope.router, scope.model_groups)
         if not probes:
             return
-        by_model: Final = _one_probe_per_served_model(probes)
+        groups: Final = _one_probe_per_group(probes)
         probe_start: Final = time.time()
-        outcomes: Final = await _probe_outcomes_by_deadline(scope, tuple(c for _, c in by_model), timeout_seconds)
+        outcomes: Final = await _probe_outcomes_by_deadline(scope, tuple(c for _, c in groups), timeout_seconds)
     except Exception as e:
         logger.warning("background_health_check_wildcard_probe_failed error=%r", e)
         return
     if not outcomes:
         return
-    served: Final = tuple((_served_model_of(probe, by_model), outcome) for probe, outcome in outcomes)
+    keyed: Final = tuple((_group_key_of(probe, groups), outcome) for probe, outcome in outcomes)
     await save_background_health_checks_to_db(
         prisma_client,
-        list(probes),
-        list(chain.from_iterable(_as_served_model(healthy, model) for model, (healthy, _) in served)),
-        list(chain.from_iterable(_as_served_model(unhealthy, model) for model, (_, unhealthy) in served)),
+        list(_row_per_name_and_group(probes)),
+        list(chain.from_iterable(_keyed_by_group(healthy, key) for key, (healthy, _) in keyed)),
+        list(chain.from_iterable(_keyed_by_group(unhealthy, key) for key, (_, unhealthy) in keyed)),
         probe_start,
         checked_by=checked_by,
     )

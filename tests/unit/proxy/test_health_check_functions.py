@@ -1350,9 +1350,15 @@ def _saved_statuses(prisma_client: MagicMock) -> list[tuple[str, str, str | None
 
 
 class _FakeProbe:
-    def __init__(self, hanging: frozenset[str] = frozenset(), failing_models: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        hanging: frozenset[str] = frozenset(),
+        failing_models: frozenset[str] = frozenset(),
+        failing_regions: frozenset[str] = frozenset(),
+    ) -> None:
         self.hanging = hanging
         self.failing_models = failing_models
+        self.failing_regions = failing_regions
         self.calls: list[str] = []
         self.cancelled: list[str] = []
         self.in_flight = 0
@@ -1370,7 +1376,7 @@ class _FakeProbe:
                 await asyncio.Event().wait()
             for _ in range(3):
                 await asyncio.sleep(0)
-            if params["model"] in self.failing_models:
+            if params["model"] in self.failing_models or params.get("aws_region_name") in self.failing_regions:
                 return (), ({"model": params["model"], "error": "upstream rejected the probe"},)
             return ({"model": params["model"]},), ()
         except asyncio.CancelledError:
@@ -1522,6 +1528,42 @@ async def test_save_then_probe_public_wildcards_probes_an_alias_and_its_target_o
 
     assert len(probe.calls) == 1
     assert _saved_statuses(prisma_client) == [("openai/fast", *expected), ("openai/gpt-5.5", *expected)]
+
+
+def _two_region_bedrock_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*", "aws_region_name": region},
+                "model_info": {"id": f"wildcard-{region}"},
+            }
+            for region in ("us-east-1", "us-west-2")
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failing_regions,expected",
+    [
+        (frozenset({"us-east-1"}), ("healthy", 1, 1)),
+        (frozenset({"us-east-1", "us-west-2"}), ("unhealthy", 0, 2)),
+    ],
+)
+async def test_save_then_probe_public_wildcards_probes_every_wildcard_serving_a_name_and_combines_them(
+    failing_regions: frozenset[str], expected: tuple[str, int, int]
+):
+    prisma_client: Final = _recording_prisma()
+    probe: Final = _FakeProbe(failing_regions=failing_regions)
+
+    await _save_then_probe_with(prisma_client, (_WILDCARD_SERVED,), probe, router=_two_region_bedrock_router())
+
+    assert probe.calls == [_WILDCARD_SERVED, _WILDCARD_SERVED]
+    assert [
+        (call.kwargs["model_name"], call.kwargs["status"], call.kwargs["healthy_count"], call.kwargs["unhealthy_count"])
+        for call in prisma_client.save_health_check_result.await_args_list
+    ] == [(_WILDCARD_SERVED, *expected)]
 
 
 class _SteppedClock:
