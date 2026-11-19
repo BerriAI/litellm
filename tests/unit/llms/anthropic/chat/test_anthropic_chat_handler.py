@@ -93,6 +93,54 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
+def test_anthropic_completion_adds_extra_body_fields_top_level_without_overriding_the_request():
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_extra_body",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            extra_body={
+                "fallbacks": [{"model": "claude-opus-5-5"}],
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "max_tokens": 4096,
+            },
+        )
+    finally:
+        client.close()
+
+    request_body = json.loads(captured_requests[0].content)
+    assert request_body == {
+        "model": "claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 16,
+        "fallbacks": [{"model": "claude-opus-5-5"}],
+    }, request_body
+
+
 def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
