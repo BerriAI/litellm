@@ -25,9 +25,13 @@ export function CatalogFilters({
   return (
     <aside data-slot="catalog-filters">
       <Collapsible open={!narrow || expanded} onOpenChange={setExpanded}>
-        <div className={styles.filterHeading}>
-          <h2 className={styles.filterTitle}>{t("publicModelHub.catalog.filters")}</h2>
-          <CollapsibleTrigger render={<button type="button" className={styles.filterTrigger} />}>
+        <div className={`${styles.filterHeading} flex items-center justify-between gap-2 pb-5`}>
+          <h2 className={`${styles.filterTitle} text-sm leading-[1.6] font-semibold`}>
+            {t("publicModelHub.catalog.filters")}
+          </h2>
+          <CollapsibleTrigger
+            render={<button type="button" className={`${styles.filterTrigger} text-sm leading-[1.6] font-semibold`} />}
+          >
             {t("publicModelHub.catalog.filters")}
             {count > 0 && <span className="tabular-nums">({count})</span>}
             <ChevronDown />
@@ -38,7 +42,9 @@ export function CatalogFilters({
             </Button>
           )}
         </div>
-        <CollapsibleContent className={styles.filterContent}>{children}</CollapsibleContent>
+        <CollapsibleContent className={`${styles.filterContent} flex flex-col gap-[22px]`}>
+          {children}
+        </CollapsibleContent>
       </Collapsible>
     </aside>
   );

@@ -1,6 +1,5 @@
 "use client";
 
-import localFont from "next/font/local";
 import { useTranslation } from "react-i18next";
 
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -16,12 +15,7 @@ import { type HubData, useHubData } from "./useHubData";
 import { type HubTab, useHubUrlState } from "./useHubUrlState";
 import { useRequirePublicHubAuth } from "./useRequirePublicHubAuth";
 import styles from "./catalog.module.css";
-
-const displayFont = localFont({
-  src: "./fonts/barlow-condensed-latin-600.ttf",
-  weight: "600",
-  variable: "--font-catalog-display",
-});
+import { catalogTypography } from "./fonts";
 
 const hubStatus = (hub: HubData): HubStatus => {
   if (hub.models.error && hub.skills.isError) return "unavailable";
@@ -40,7 +34,7 @@ function PublicAiHubContent() {
     <Tabs
       value={tab}
       onValueChange={(next) => setTab(next as HubTab)}
-      className={`${styles.catalog} ${displayFont.variable}`}
+      className={`${styles.catalog} ${catalogTypography}`}
     >
       <CatalogNavbar
         title={hub.info.data?.docs_title || t("publicModelHub.header.title")}
@@ -50,7 +44,7 @@ function PublicAiHubContent() {
           hub.models.onSearchChange(value);
         }}
       />
-      <main className={styles.main}>
+      <main className={`${styles.main} mx-auto w-full max-w-(--page-width) px-(--page-gutter) pb-12`}>
         <HubHeader info={hub.info.data} status={status} tab={tab} />
         {status === "unavailable" ? (
           <HubNotEnabled />

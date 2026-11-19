@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Plugin } from "@/components/claude_code_plugins/types";
 import type { apiClient } from "@/components/networking";
+import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 
 import { chooseSelectOption, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
@@ -37,7 +38,11 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
-vi.mock("next/font/local", () => ({ default: () => ({ variable: "catalog-display-font" }) }));
+vi.mock("next/font/google", () => ({
+  DM_Sans: () => ({ variable: "catalog-sans-font" }),
+  IBM_Plex_Mono: () => ({ variable: "catalog-mono-font" }),
+  Barlow_Condensed: () => ({ variable: "catalog-display-font" }),
+}));
 
 vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn() }));
 
@@ -198,6 +203,7 @@ describe("PublicAiHub", () => {
   ])("hydrates the theme action consistently with saved $savedTheme mode", ({ savedTheme, label }) => {
     const navbar = (
       <ThemeProvider>
+        <ThemeToggle />
         <Tabs.Root defaultValue="models">
           <CatalogNavbar title="Model Hub" search="" onSearchChange={vi.fn()} />
         </Tabs.Root>
@@ -211,11 +217,14 @@ describe("PublicAiHub", () => {
 
     render(navbar, { container, hydrate: true });
 
-    const toggle = within(container).getByRole("button", { name: label });
-    expect(toggle).toHaveAttribute("title", label);
+    const toggles = within(container).getAllByRole("button", { name: label });
+    expect(toggles).toHaveLength(2);
     expect(consoleError).not.toHaveBeenCalled();
-    fireEvent.click(toggle);
-    expect(theme.setTheme).toHaveBeenCalledWith(savedTheme === "dark" ? "light" : "dark");
+    for (const toggle of toggles) {
+      expect(toggle).toHaveAttribute("title", label);
+      fireEvent.click(toggle);
+      expect(theme.setTheme).toHaveBeenCalledWith(savedTheme === "dark" ? "light" : "dark");
+    }
     consoleError.mockRestore();
   });
 

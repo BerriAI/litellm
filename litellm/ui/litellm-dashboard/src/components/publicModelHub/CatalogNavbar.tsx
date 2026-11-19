@@ -3,13 +3,13 @@
 import { Tabs } from "@base-ui/react/tabs";
 import Image from "next/image";
 import Link from "next/link";
-import { useTheme } from "next-themes";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { DOCS_URL } from "@/components/Navbar/DocsLink/DocsLink";
+import { useThemeToggle } from "@/components/ThemeToggle/ThemeToggle";
 import { useTheme as useBranding } from "@/contexts/ThemeContext";
 import { uiHref } from "@/utils/uiHref";
 import {
@@ -20,10 +20,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 import styles from "./catalog.module.css";
+import { catalogTypography } from "./fonts";
 import blueLogo from "./images/litellm-primary-blue.svg";
-import whiteLogo from "./images/litellm-primary-white.svg";
-
-const emptySubscribe = () => () => {};
 
 export function CatalogNavbar({
   title,
@@ -35,18 +33,11 @@ export function CatalogNavbar({
   onSearchChange: (value: string) => void;
 }) {
   const { t } = useTranslation();
-  const { resolvedTheme, setTheme } = useTheme();
+  const { label: themeLabel, toggleTheme } = useThemeToggle();
   const { logoUrl, logoUrlDark } = useBranding();
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
   const inputRef = useRef<HTMLInputElement>(null);
-  const mounted = useSyncExternalStore(
-    emptySubscribe,
-    () => true,
-    () => false,
-  );
-  const isDark = mounted && resolvedTheme === "dark";
-  const themeLabel = t(isDark ? "themeToggle.switchToLight" : "themeToggle.switchToDark");
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -60,25 +51,27 @@ export function CatalogNavbar({
   }, []);
 
   return (
-    <header className={styles.navbar}>
-      <div className={styles.navbarInner}>
-        <Link href={uiHref("")} className={styles.brand}>
+    <header className="relative z-floating border-b border-border bg-background">
+      <div
+        className={`${styles.navbarInner} mx-auto flex min-h-[84px] max-w-(--page-width) items-center gap-[34px] px-(--page-gutter)`}
+      >
+        <Link href={uiHref("")} className={`${styles.brand} flex shrink-0 items-center gap-4 no-underline`}>
           <Image
             src={logoUrl || blueLogo}
             alt={t("shell.navbar.logoAlt")}
             width={132}
             height={32}
             unoptimized
-            className="dark:hidden"
+            className="h-8 w-[132px] object-contain dark:hidden"
           />
           <Image
-            src={logoUrlDark || logoUrl || whiteLogo}
+            src={logoUrlDark || logoUrl || blueLogo}
             alt=""
             aria-hidden
             width={132}
             height={32}
             unoptimized
-            className="hidden dark:block"
+            className={`hidden h-8 w-[132px] object-contain dark:block ${!logoUrlDark && !logoUrl ? styles.whiteLogo : ""}`}
           />
           <span>/ {title}</span>
         </Link>
@@ -111,7 +104,7 @@ export function CatalogNavbar({
           />
           <kbd aria-hidden="true">⌘ K</kbd>
         </form>
-        <div className={styles.navActions}>
+        <div className={`${styles.navActions} flex shrink-0 items-center gap-4`}>
           <a
             href={DOCS_URL}
             target="_blank"
@@ -126,7 +119,7 @@ export function CatalogNavbar({
             className={styles.navIconButton}
             aria-label={themeLabel}
             title={themeLabel}
-            onClick={() => setTheme(isDark ? "light" : "dark")}
+            onClick={toggleTheme}
           >
             <svg
               width="19"
@@ -166,7 +159,7 @@ export function CatalogNavbar({
             >
               <span aria-hidden="true">···</span>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" sideOffset={11} className={`${styles.typography} ${styles.navMenu}`}>
+            <DropdownMenuContent align="end" sideOffset={11} className={`${catalogTypography} ${styles.navMenu}`}>
               <DropdownMenuItem render={<a href={DOCS_URL} target="_blank" rel="noopener noreferrer" />}>
                 {t("shell.docsLink.label")}
               </DropdownMenuItem>

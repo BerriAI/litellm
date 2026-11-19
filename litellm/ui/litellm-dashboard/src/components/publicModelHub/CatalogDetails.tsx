@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import styles from "./catalog.module.css";
+import { catalogTypography } from "./fonts";
 
 export function CatalogDetails({
   name,
@@ -22,7 +22,7 @@ export function CatalogDetails({
   return (
     <Dialog open={name !== null} onOpenChange={(next) => !next && onClose()}>
       <DialogContent
-        className={`${styles.typography} max-h-[90dvh] grid-cols-[minmax(0,1fr)] gap-0 overflow-y-auto p-0 pt-8 sm:max-w-3xl`}
+        className={`${catalogTypography} max-h-[90dvh] grid-cols-[minmax(0,1fr)] gap-0 overflow-y-auto p-0 pt-8 sm:max-w-3xl`}
         aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">{t("publicModelHub.masterDetail.details")}</DialogTitle>

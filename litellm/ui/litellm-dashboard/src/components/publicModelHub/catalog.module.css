@@ -1,51 +1,29 @@
-@font-face {
-  font-family: "DM Sans";
-  src: url("./fonts/dm-sans-latin-variable.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "IBM Plex Mono";
-  src: url("./fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
 .catalog,
 .typography {
   --page-width: 1600px;
   --page-gutter: 44px;
-  --catalog-blue: #2445e7;
-  --catalog-rule: #dce1e8;
+  --primary: #2445e7;
+  --border: #dce1e8;
   --catalog-rule-strong: #b8c1cf;
-  --catalog-ink: #1a2130;
+  --foreground: #1a2130;
   --catalog-secondary: #414c60;
-  --catalog-muted: #647084;
-  --catalog-background: #f7f8fa;
-  --catalog-surface: #fff;
+  --muted-foreground: #647084;
+  --background: #f7f8fa;
+  --card: #fff;
   --catalog-hover: #edf0f5;
-  --background: var(--catalog-background);
-  --foreground: var(--catalog-ink);
-  --card: var(--catalog-surface);
-  --card-foreground: var(--catalog-ink);
-  --popover: var(--catalog-surface);
-  --popover-foreground: var(--catalog-ink);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
   --muted: #f0f2f5;
-  --muted-foreground: var(--catalog-muted);
   --accent: #e9edf3;
-  --accent-foreground: var(--catalog-ink);
-  --primary: var(--catalog-blue);
+  --accent-foreground: var(--foreground);
   --primary-foreground: #fff;
-  --border: var(--catalog-rule);
-  --input: var(--catalog-rule);
-  --ring: var(--catalog-ink);
-  font-family: "DM Sans", sans-serif;
-  --font-sans: "DM Sans", sans-serif;
-  --font-mono: "IBM Plex Mono", monospace;
-  color: var(--catalog-ink);
+  --input: var(--border);
+  --ring: var(--foreground);
+  --font-sans: var(--font-catalog-sans), sans-serif;
+  --font-mono: var(--font-catalog-mono), monospace;
+  font-family: var(--font-sans);
+  color: var(--foreground);
   font-weight: 400;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
@@ -54,62 +32,33 @@
 .catalog {
   min-height: 100dvh;
   gap: 0;
-  background: var(--catalog-background);
+  background: var(--background);
 }
 
 :global(.dark) .catalog,
 :global(.dark) .typography {
-  --catalog-blue: #91a2ff;
-  --catalog-rule: #33373e;
+  --primary: #91a2ff;
+  --border: #33373e;
   --catalog-rule-strong: #535a66;
-  --catalog-ink: #f1f3f6;
+  --foreground: #f1f3f6;
   --catalog-secondary: #c8cbd2;
-  --catalog-muted: #a2a6af;
-  --catalog-background: #111215;
-  --catalog-surface: #191b20;
+  --muted-foreground: #a2a6af;
+  --background: #111215;
+  --card: #191b20;
   --catalog-hover: #23262c;
-  --muted: #191b20;
+  --muted: var(--card);
   --accent: #24272d;
-  --primary-foreground: #111215;
+  --primary-foreground: var(--background);
 }
 
-.navbar {
-  position: relative;
-  z-index: 30;
-  background: var(--catalog-background);
-  border-bottom: 1px solid var(--catalog-rule);
-}
-
-.navbarInner {
-  min-height: 84px;
-  max-width: var(--page-width);
-  margin-inline: auto;
-  padding: 0 var(--page-gutter);
-  display: flex;
-  align-items: center;
-  gap: 34px;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 16px;
-  text-decoration: none;
-}
-
-.brand img {
-  width: 132px;
-  height: 32px;
-  object-fit: contain;
+.whiteLogo {
+  filter: brightness(0) invert(1);
 }
 
 .brand span {
-  font:
-    400 10px/1.2 "IBM Plex Mono",
-    monospace;
+  font: 400 10px/1.2 var(--font-mono);
   letter-spacing: 1.4px;
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
   white-space: nowrap;
   text-transform: uppercase;
 }
@@ -125,7 +74,7 @@
   display: flex;
   align-items: center;
   border-bottom: 2px solid transparent;
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.6;
@@ -135,13 +84,8 @@
 
 .navigation [role="tab"][data-active],
 .navigation [role="tab"]:hover {
-  color: var(--catalog-blue);
-  border-bottom-color: var(--catalog-blue);
-}
-
-.navigation [role="tab"]:focus-visible {
-  outline: 2px solid var(--catalog-ink);
-  outline-offset: 4px;
+  color: var(--primary);
+  border-bottom-color: var(--primary);
 }
 
 .navSearch {
@@ -153,13 +97,13 @@
   height: 36px;
   margin-left: auto;
   padding: 0 11px;
-  border: 1px solid var(--catalog-rule);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
 }
 
 .navSearch:focus-within {
-  border-color: var(--catalog-ink);
+  border-color: var(--foreground);
 }
 
 .navSearch input {
@@ -170,14 +114,9 @@
   border-radius: 0;
   outline: 0;
   background: transparent;
-  color: var(--catalog-ink);
+  color: var(--foreground);
   font: inherit;
   font-size: 12px;
-}
-
-.navSearch input::placeholder {
-  color: var(--catalog-muted);
-  opacity: 1;
 }
 
 .navSearch svg,
@@ -186,28 +125,19 @@
 }
 
 .navSearch kbd {
-  font:
-    9px "IBM Plex Mono",
-    monospace;
+  font: 9px var(--font-mono);
   opacity: 0.8;
 }
 
-.navActions {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 16px;
-}
-
 .navDocs {
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
   font-size: 12px;
   white-space: nowrap;
   text-decoration: none;
 }
 
 .navDocs:hover {
-  color: var(--catalog-ink);
+  color: var(--foreground);
 }
 
 .navIconButton {
@@ -216,10 +146,10 @@
   width: 34px;
   height: 34px;
   padding: 0;
-  border: 1px solid var(--catalog-rule);
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
-  color: var(--catalog-ink);
+  color: var(--foreground);
   cursor: pointer;
 }
 
@@ -231,22 +161,23 @@
 }
 
 .navIconButton:hover {
-  border-color: var(--catalog-ink);
+  border-color: var(--foreground);
   background: var(--accent);
 }
 
 .navIconButton:focus-visible,
+.navigation [role="tab"]:focus-visible,
 .filterTrigger:focus-visible {
-  outline: 2px solid var(--catalog-ink);
+  outline: 2px solid var(--foreground);
   outline-offset: 4px;
 }
 
 .navMenu {
   min-width: 210px;
   padding: 8px;
-  border: 1px solid var(--catalog-rule);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--catalog-surface);
+  background: var(--card);
   box-shadow: 0 12px 30px rgb(0 0 0 / 16%);
 }
 
@@ -256,13 +187,6 @@
   font-size: 13px;
   font-weight: 400;
   line-height: 1.6;
-}
-
-.main {
-  width: 100%;
-  max-width: var(--page-width);
-  margin-inline: auto;
-  padding: 0 var(--page-gutter) 48px;
 }
 
 .header {
@@ -288,13 +212,6 @@
   text-transform: uppercase;
 }
 
-.description {
-  margin: 0;
-  max-width: 520px;
-  font-size: 17px;
-  letter-spacing: -0.3px;
-}
-
 .quickStart {
   margin-top: 22px;
   font-size: 13px;
@@ -303,32 +220,20 @@
 .quickStart summary {
   width: fit-content;
   padding-block: 8px;
-  color: var(--catalog-blue);
+  color: var(--primary);
   font-weight: 500;
   cursor: pointer;
 }
 
 .quickStart summary:focus-visible {
-  outline: 2px solid var(--catalog-blue);
+  outline: 2px solid var(--primary);
   outline-offset: 4px;
-}
-
-.connection {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: start;
-  gap: 16px;
-  padding-block: 12px;
 }
 
 .blueprint {
   width: 100%;
   height: 208px;
-  color: var(--catalog-blue);
-}
-
-.blueprintSurface {
-  fill: var(--catalog-background);
+  color: var(--primary);
 }
 
 .catalog [data-slot="catalog-layout"] {
@@ -341,37 +246,16 @@
 
 .catalog [data-slot="catalog-filters"] {
   padding-right: 26px;
-  border-right: 1px solid var(--catalog-rule);
-}
-
-.filterHeading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 20px;
-}
-
-.filterTitle,
-.filterTrigger {
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.6;
+  border-right: 1px solid var(--border);
 }
 
 .filterTrigger {
   display: none;
 }
 
-.filterContent {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-}
-
 .catalog [data-slot="catalog-filter-section"] {
   padding-bottom: 22px;
-  border-bottom: 1px solid var(--catalog-rule);
+  border-bottom: 1px solid var(--border);
 }
 
 .catalog [data-slot="catalog-filter-section"]:last-child {
@@ -399,7 +283,7 @@
 .catalog [data-slot="catalog-filter-section"] [role="checkbox"] {
   width: 14px;
   height: 14px;
-  border-color: var(--catalog-muted);
+  border-color: var(--muted-foreground);
   border-radius: 2px;
   box-shadow: none;
 }
@@ -413,7 +297,7 @@
   position: absolute;
   top: 19px;
   z-index: 1;
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
   pointer-events: none;
   transform: translateY(-50%);
 }
@@ -430,24 +314,26 @@
   min-height: 38px;
   padding: 8px 25px 8px 29px;
   gap: 5px;
-  background: var(--catalog-surface);
-  border: 1px solid var(--catalog-rule);
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 7px;
-  color: var(--catalog-ink);
-  font-size: 12px;
-  line-height: 1.6;
+  color: var(--foreground);
   box-shadow: none;
 }
 
-.providerSelect input::placeholder {
-  color: var(--catalog-ink);
-  opacity: 1;
-}
-
-.providerSelect input {
+.providerSelect,
+.modeFilters button,
+.resultsMeta button,
+.catalog [data-slot="catalog-count"],
+.catalog [data-slot="table-pagination"] :is(p, span, button) {
   font-size: 12px;
   font-weight: 400;
   line-height: 1.6;
+}
+
+.providerSelect input::placeholder {
+  color: var(--foreground);
+  opacity: 1;
 }
 
 .catalog [data-slot="catalog-results"] {
@@ -462,7 +348,7 @@
 .catalog [data-slot="catalog-toolbar"] [data-slot="input-group"] {
   min-height: 44px;
   background: transparent;
-  border-color: var(--catalog-rule);
+  border-color: var(--border);
   border-radius: 6px;
   box-shadow: none;
 }
@@ -485,17 +371,16 @@
 
 .catalog [data-slot="catalog-toolbar"] kbd {
   padding: 2px 6px;
-  border: 1px solid var(--catalog-rule);
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--muted);
-  color: var(--catalog-muted);
-  font:
-    11px/1.4 "IBM Plex Mono",
-    monospace;
+  color: var(--muted-foreground);
+  font: 11px/1.4 var(--font-mono);
 }
 
+.navSearch input::placeholder,
 .catalog [data-slot="catalog-toolbar"] input::placeholder {
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
   opacity: 1;
 }
 
@@ -505,14 +390,14 @@
   align-items: center;
   gap: 7px;
   padding: 6px 0 18px;
-  border-bottom: 1px solid var(--catalog-rule);
+  border-bottom: 1px solid var(--border);
   font-size: 16px;
   line-height: 1.6;
 }
 
 .modeFilters > span {
   margin-right: 9px;
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
   font-size: 11px;
 }
 
@@ -527,10 +412,7 @@
   border: 1px solid transparent;
   border-radius: 0;
   background: transparent;
-  color: var(--catalog-muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
+  color: var(--muted-foreground);
   gap: normal;
 }
 
@@ -540,27 +422,12 @@
   color: inherit;
 }
 
-.resultsMeta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-block: 16px;
-}
-
 .resultsMeta button {
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
   box-shadow: none;
 }
 
 .catalog [data-slot="catalog-count"] {
-  color: var(--catalog-muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
+  color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
 }
 
@@ -571,7 +438,7 @@
 }
 
 .catalog [data-slot="catalog-table"] [data-testid="data-table-frame"] {
-  border-color: var(--catalog-rule);
+  border-color: var(--border);
 }
 
 .catalog [data-slot="catalog-table"] table {
@@ -583,7 +450,7 @@
 .catalog [data-slot="catalog-table"] th {
   height: auto;
   padding: 14px 16px;
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
   font-size: 11px;
   font-weight: 500;
   line-height: 1.6;
@@ -601,7 +468,7 @@
 .catalog [data-slot="catalog-table"] td {
   height: 66px;
   padding: 12px 16px;
-  color: var(--catalog-ink);
+  color: var(--foreground);
   font-size: 13px;
   font-weight: 400;
   line-height: 1.6;
@@ -623,15 +490,15 @@
 
 .catalog [data-slot="catalog-table"] tbody tr:hover {
   background: var(--catalog-hover);
-  box-shadow: inset 3px 0 0 var(--catalog-blue);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 .catalog [data-slot="catalog-table"] tr {
-  border-color: var(--catalog-rule);
+  border-color: var(--border);
 }
 
 .catalog [data-slot="catalog-table"] a:hover {
-  color: var(--catalog-blue);
+  color: var(--primary);
 }
 
 .modelLink {
@@ -654,7 +521,7 @@
   font-size: 11px;
   line-height: 1.3;
   font-weight: 400;
-  color: var(--catalog-muted);
+  color: var(--muted-foreground);
 }
 
 .catalog [data-slot="table-pagination"] {
@@ -670,10 +537,7 @@
 }
 
 .catalog [data-slot="table-pagination"] :is(p, span, button) {
-  color: var(--catalog-muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
+  color: var(--muted-foreground);
 }
 
 @media (max-width: 1180px) {
@@ -714,7 +578,7 @@
   }
   .catalog [data-slot="catalog-filters"] {
     padding-right: 0;
-    border: 1px solid var(--catalog-rule);
+    border: 1px solid var(--border);
   }
   .filterHeading {
     padding: 12px 16px;
@@ -743,19 +607,6 @@
 }
 
 @media (min-width: 641px) and (max-width: 900px) {
-  .navbarInner {
-    gap: 16px;
-  }
-  .brand img {
-    width: 116px;
-    height: 28px;
-  }
-  .navigation {
-    gap: 16px;
-  }
-  .navigation [role="tab"] {
-    font-size: 12px;
-  }
   .navSearch kbd {
     display: none;
   }

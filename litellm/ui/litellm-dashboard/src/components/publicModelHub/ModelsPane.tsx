@@ -26,6 +26,7 @@ import { type HubData, useOpenedModel } from "./useHubData";
 import { useOpenHref } from "./useHubUrlState";
 import { ModelInspector } from "./ModelInspector";
 import styles from "./catalog.module.css";
+import { catalogTypography } from "./fonts";
 
 const SORTS = [
   { value: "model_group", label: "Name", desc: false },
@@ -59,7 +60,7 @@ function SortControl({ models }: { models: Models }) {
           <span className="hidden text-muted-foreground sm:inline">{t("publicModelHub.sortControl.sort")}</span>
           <SelectValue />
         </SelectTrigger>
-        <SelectContent align="end" className={`${styles.typography} w-auto min-w-(--anchor-width)`}>
+        <SelectContent align="end" className={`${catalogTypography} w-auto min-w-(--anchor-width)`}>
           {options.map((sort) => (
             <SelectItem key={sort.value} value={sort.value}>
               {sort.label}
@@ -163,7 +164,7 @@ function ModelFilters({ hub }: { hub: HubData }) {
             onValueChange={models.onProvidersChange}
             placeholder={t("publicModelHub.catalog.allProviders")}
             className={styles.providerSelect}
-            contentClassName={styles.typography}
+            contentClassName={catalogTypography}
           />
           <svg
             className={styles.providerControlChevron}
@@ -343,7 +344,7 @@ export function ModelsPane({
           />
         </div>
         <ModeFilters hub={hub} />
-        <div className={styles.resultsMeta}>
+        <div className={`${styles.resultsMeta} flex flex-wrap items-center justify-between gap-3 py-4`}>
           <div data-slot="catalog-count" aria-live="polite">
             {models.isFetching || models.isLoading
               ? t("publicModelHub.catalog.loadingModels", { defaultValue: "Loading models…" })

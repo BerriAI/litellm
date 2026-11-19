@@ -93,7 +93,7 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
         <h1 className={styles.title}>
           {t(tab === "skills" ? "publicModelHub.catalog.skillsHub" : "publicModelHub.catalog.modelHub")}
         </h1>
-        <p className={styles.description}>
+        <p className={`${styles.description} m-0 max-w-[520px] text-[17px] tracking-[-0.3px]`}>
           {info?.custom_docs_description ||
             t(
               tab === "skills"
@@ -104,7 +104,7 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
         {status !== "unavailable" && (
           <details className={styles.quickStart}>
             <summary>{t("publicModelHub.catalog.quickStart")}</summary>
-            <div className={styles.connection}>
+            <div className="flex flex-wrap items-start gap-4 py-3">
               <BaseUrlField />
               <LinksMenu info={info} />
             </div>
@@ -119,7 +119,7 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
         </defs>
         <rect x="20" y="14" width="320" height="192" fill={`url(#${gridId})`} />
         <g stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="66" y="35" width="228" height="150" rx="8" className={styles.blueprintSurface} />
+          <rect x="66" y="35" width="228" height="150" rx="8" className="fill-background" />
           <path opacity=".3" d="M66 70h228M66 108h228M66 146h228M208 70v115" />
           <path d="M88 52h72M88 89h92M88 127h66M88 165h80M230 89h40M230 127h40M230 165h40" />
           <circle cx="268" cy="52" r="3" fill="currentColor" stroke="none" />
