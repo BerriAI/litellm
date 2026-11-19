@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 import unittest
 import weakref
 from datetime import datetime, timedelta, timezone
@@ -8442,3 +8443,114 @@ def test_successful_span_reports_provider_usage_without_failure_usage_flags(
     assert response_obj["usage"]["prompt_tokens"] in input_tokens
     assert not any(USAGE_PROVIDER_STATUS_ATTRIBUTE in attrs for attrs in span_attributes)
     assert not any(ESTIMATED_INPUT_TOKENS_ATTRIBUTE in attrs for attrs in span_attributes)
+
+
+def test_record_exception_on_span_records_the_scrubbed_error_text_with_the_same_event_shape() -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    secret: Final = "my ssn is 123-45-6789"
+    exception: Final = ValueError(f"bad input: {secret}")
+
+    with provider.get_tracer(__name__).start_as_current_span("failure") as span:
+        OpenTelemetry()._record_exception_on_span(
+            span=span,
+            kwargs={
+                "exception": exception,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
+                "standard_logging_object": {
+                    "error_information": {
+                        "error_class": "ValueError",
+                        "error_message": "bad input: redacted-by-litellm",
+                        "traceback": "frames",
+                    },
+                },
+            },
+        )
+
+    (event,) = exporter.get_finished_spans()[0].events
+    assert secret not in str(dict(event.attributes))
+    assert event.attributes["exception.message"] == "bad input: redacted-by-litellm"
+    assert event.attributes["exception.stacktrace"] == "frames"
+    assert event.attributes["exception.type"] == "ValueError"
+    assert event.attributes["exception.escaped"] == "False"
+
+
+def test_record_exception_on_span_records_the_raised_exception_when_redaction_is_off_and_the_error_holds_the_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with pytest.raises(ValueError, match="note") as raised:
+        _raise_provider_error("note redacted-by-litellm here")
+
+    with provider.get_tracer(__name__).start_as_current_span("failure") as span:
+        OpenTelemetry()._record_exception_on_span(
+            span=span,
+            kwargs={
+                "exception": raised.value,
+                "standard_logging_object": {
+                    "error_information": {
+                        "error_class": "ValueError",
+                        "error_message": "note redacted-by-litellm here",
+                        "traceback": "frames",
+                    },
+                },
+            },
+        )
+
+    (event,) = exporter.get_finished_spans()[0].events
+    assert event.attributes["exception.message"] == "note redacted-by-litellm here"
+    assert event.attributes["exception.stacktrace"] == "".join(traceback.format_exception(raised.value))
+
+
+def _raise_provider_error(message: str) -> None:
+    raise ValueError(message)
+
+
+def test_record_exception_on_span_records_the_exceptions_own_frames_when_no_traceback_was_logged() -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    secret: Final = "my ssn is 123-45-6789"
+    with pytest.raises(ValueError, match="bad input") as raised:
+        _raise_provider_error(f"bad input: {secret}")
+
+    with provider.get_tracer(__name__).start_as_current_span("failure") as span:
+        OpenTelemetry()._record_exception_on_span(
+            span=span,
+            kwargs={
+                "exception": raised.value,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
+                "standard_logging_object": {
+                    "error_information": {"error_message": "bad input: redacted-by-litellm", "traceback": ""}
+                },
+            },
+        )
+
+    (event,) = exporter.get_finished_spans()[0].events
+    stacktrace: Final = str(event.attributes["exception.stacktrace"])
+    assert secret not in str(dict(event.attributes))
+    assert stacktrace.startswith("Traceback (most recent call last):\n")
+    assert "in _raise_provider_error" in stacktrace
+    assert stacktrace.endswith("ValueError: bad input: redacted-by-litellm\n")
