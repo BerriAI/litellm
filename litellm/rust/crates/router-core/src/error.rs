@@ -326,6 +326,10 @@ pub enum FailureKind {
     /// cools the deployment down.
     #[strum(serialize = "CallerCredentialRateLimitError")]
     CallerCredentialRateLimit,
+    /// The dynamic queue refused the attempt before the provider call (full, its wait ran out, or
+    /// its coordination is unavailable): it ends the request with no retry, fallback or cooldown.
+    #[strum(serialize = "QueueRejected")]
+    QueueRejected,
     #[strum(serialize = "APIError")]
     Other,
 }
@@ -368,7 +372,7 @@ pub struct AttemptError {
     /// so the core records nothing.
     pub recorded: bool,
     /// The exception names its provider (`llm_provider` is set), which marks a provider's own
-    /// 400 for `fallback_on_unsupported_params`.
+    /// bad request for `fallback_on_unsupported_params`.
     pub names_provider: bool,
     /// An agentic follow-up call failed after the first call was served
     /// (`is_agentic_followup_failure`): never retried, since a retry reruns every paid round. The
@@ -424,11 +428,17 @@ impl AttemptError {
         self.class_names().contains(&name)
     }
 
-    /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, and a
+    /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, a
     /// request alone over every deployment's tpm limit (`RequestOverDeploymentTpmError`) stays
-    /// over it. Its fallbacks still run.
+    /// over it, and a queue rejection ends the request. Its fallbacks still run, except a queue
+    /// rejection's.
     pub fn ends_retries(&self) -> bool {
-        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError")
+        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError") || self.queue_rejected()
+    }
+
+    /// The dynamic queue refused the attempt: the request ends with this error and runs no fallback.
+    pub fn queue_rejected(&self) -> bool {
+        self.kind == FailureKind::QueueRejected
     }
 
     #[must_use]

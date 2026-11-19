@@ -15,6 +15,7 @@ export interface SpendMetrics {
   prompt_caching_savings_spend?: number;
   gateway_injected_caching_savings_spend?: number;
   autorouter_savings_spend?: number;
+  customer_margin_spend?: number;
   total_response_time_ms?: number;
   timed_requests?: number;
 }

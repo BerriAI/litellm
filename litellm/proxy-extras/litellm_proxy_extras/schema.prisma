@@ -11,6 +11,13 @@ generator client {
 
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
+  apps LiteLLM_AppTable[] @relation("AppBudget")
+  app_default_tiers LiteLLM_AppTable[] @relation("AppDefaultTier")
+  app_default_members LiteLLM_AppTable[] @relation("AppDefaultMember")
+  app_org_tiers LiteLLM_AppCustomerOrgTable[] @relation("AppOrgTier")
+  app_org_overrides LiteLLM_AppCustomerOrgTable[] @relation("AppOrgOverride")
+  app_org_members LiteLLM_AppCustomerOrgTable[] @relation("AppOrgMember")
+  app_member_overrides LiteLLM_AppCustomerMemberTable[] @relation("AppMemberOverride")
   customer_organization_defaults LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultBudget")
   customer_organizations LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationBudget")
   customer_teams LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudget")
@@ -50,7 +57,60 @@ model LiteLLM_BudgetTable {
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
 }
 
+model LiteLLM_AppTable {
+  app_id String @id @default(uuid())
+  resource_type String?
+  resource_id String?
+  alias String @unique
+  spend Float @default(0.0)
+  spend_reset_window String?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppBudget", fields: [budget_id], references: [budget_id])
+  default_tier_budget_id String?
+  default_tier_budget LiteLLM_BudgetTable? @relation("AppDefaultTier", fields: [default_tier_budget_id], references: [budget_id])
+  default_customer_member_budget_id String?
+  default_customer_member_budget LiteLLM_BudgetTable? @relation("AppDefaultMember", fields: [default_customer_member_budget_id], references: [budget_id])
+  auto_create_customers Boolean @default(true)
+  customer_margin Float?
+  customer_organizations LiteLLM_AppCustomerOrgTable[]
+  customer_members LiteLLM_AppCustomerMemberTable[]
+  @@unique([resource_type, resource_id])
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+}
+
+model LiteLLM_AppCustomerOrgTable {
+  app_id String
+  customer_org_id String
+  spend Float @default(0.0)
+  spend_reset_window String?
+  tier_budget_id String?
+  budget_override_id String?
+  customer_member_budget_id String?
+  app LiteLLM_AppTable @relation(fields: [app_id], references: [app_id], onDelete: Cascade)
+  customer_org LiteLLM_CustomerOrganizationTable @relation(fields: [customer_org_id], references: [customer_org_id], onDelete: Cascade)
+  tier_budget LiteLLM_BudgetTable? @relation("AppOrgTier", fields: [tier_budget_id], references: [budget_id])
+  budget_override LiteLLM_BudgetTable? @relation("AppOrgOverride", fields: [budget_override_id], references: [budget_id])
+  customer_member_budget LiteLLM_BudgetTable? @relation("AppOrgMember", fields: [customer_member_budget_id], references: [budget_id])
+  @@id([app_id, customer_org_id])
+}
+
+model LiteLLM_AppCustomerMemberTable {
+  app_id String
+  customer_member_id String
+  spend Float @default(0.0)
+  spend_reset_window String?
+  budget_override_id String?
+  app LiteLLM_AppTable @relation(fields: [app_id], references: [app_id], onDelete: Cascade)
+  customer_member LiteLLM_CustomerMemberTable @relation(fields: [customer_member_id], references: [customer_member_id], onDelete: Cascade)
+  budget_override LiteLLM_BudgetTable? @relation("AppMemberOverride", fields: [budget_override_id], references: [budget_id])
+  @@id([app_id, customer_member_id])
+}
+
 model LiteLLM_CustomerOrganizationTable {
+  apps LiteLLM_AppCustomerOrgTable[]
   spend Float @default(0.0)
   budget_template_ids String[] @default([])
   budget_id String?
@@ -91,6 +151,7 @@ model LiteLLM_CustomerTeamTable {
 }
 
 model LiteLLM_CustomerMemberTable {
+  apps LiteLLM_AppCustomerMemberTable[]
   spend Float @default(0.0)
   spend_reset_window String?
   customer_member_id String @id @default(uuid())
@@ -595,6 +656,7 @@ model LiteLLM_SSOIdentityAssertion {
 
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
+    key_id String? @unique @default(uuid())
     token      String   @id
     key_name   String?
     key_alias   String?
@@ -697,6 +759,7 @@ model LiteLLM_DeprecatedVerificationToken {
 
 // Audit table for deleted keys - preserves spend and key information for historical tracking
 model LiteLLM_DeletedVerificationToken {
+    key_id String?
     id                      String   @id @default(uuid())
     token                   String   // Original token (hashed)
     key_name                String?
@@ -978,6 +1041,7 @@ model LiteLLM_DailyUserSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1016,6 +1080,7 @@ model LiteLLM_DailyGlobalSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1050,6 +1115,7 @@ model LiteLLM_DailyOrganizationSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1070,6 +1136,7 @@ model LiteLLM_DailyOrganizationSpend {
 
 // Track daily end user (customer) spend metrics per model and key
 model LiteLLM_DailyCustomerMemberSpend {
+  app_id String @default("")
   id                  String   @id
   date                String
   customer_org_id     String
@@ -1092,6 +1159,7 @@ model LiteLLM_DailyCustomerMemberSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend Float @default(0.0)
   guardrail_spend Float @default(0.0)
+  customer_margin_spend Float @default(0.0)
   api_requests        BigInt   @default(0)
   successful_requests BigInt   @default(0)
   failed_requests     BigInt   @default(0)
@@ -1128,6 +1196,7 @@ model LiteLLM_DailyEndUserSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1166,6 +1235,7 @@ model LiteLLM_DailyAgentSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1204,6 +1274,7 @@ model LiteLLM_DailyTeamSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1245,6 +1316,7 @@ model LiteLLM_DailyTagSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1349,6 +1421,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   api_key String?
   request_tags Json? @default("[]")
   end_user_id String?
+  creator_billing_context Json?
   updated_at DateTime @updatedAt
   updated_by String?
 
@@ -2081,6 +2154,7 @@ model LiteLLM_ShadowEvalJob {
   models            String[] @default([]) // model groups the sampled traffic is narrowed to; empty samples every model
   direction         String   @default("forward") // forward | reverse
   baseline_model    String?  // reverse only: the fixed model the router is judged against
+  skip_same_model   Boolean  @default(false) // reverse only: skip samples the baseline's own group served
   judge_model       String
   shadow_percentage Float
   max_turns         Int      // sample-count ceiling: the whole budget on pre-max_budget jobs, the error-loop valve otherwise
@@ -2090,6 +2164,8 @@ model LiteLLM_ShadowEvalJob {
   ends_at           DateTime
   stopped_at        DateTime?
   stopped_by        String?  // operator who stopped it early; null when it ended on its own
+  rubric            String?  // criteria both responses are graded against; null on preference-only jobs
+  rubric_version    Int?     // grading contract the rubric job runs under; set exactly when rubric is
 
   @@index([group_id])
   @@index([target_type, target_id])
@@ -2113,6 +2189,8 @@ model LiteLLM_ShadowEvalAttempt {
   real_classifier_cost   Float @default(0)
   shadow_classifier_cost Float @default(0)
   real_cache_hit Boolean @default(false)
+  real_grade   Int?     // rubric jobs: 1-5 grade of the response the caller received; null = ungraded
+  shadow_grade Int?     // rubric jobs: 1-5 grade of the shadow response; null = ungraded
   error        String?
   created_at   DateTime @default(now())
 
@@ -2121,10 +2199,11 @@ model LiteLLM_ShadowEvalAttempt {
 
 // Per-leg sampling funnel counters the attempt rows cannot derive: requests an
 // admitting job saw but did not judge. attempted = the leg's attempt rows; the
-// leg's eligible traffic = not_sampled + unjudgeable + shed + withheld + attempted.
+// leg's eligible traffic = not_sampled + same_model + unjudgeable + shed + withheld + attempted.
 model LiteLLM_ShadowEvalFunnel {
   job_id      String @id
   not_sampled Int    @default(0)
+  same_model  Int    @default(0)
   unjudgeable Int    @default(0)
   shed        Int    @default(0)
   withheld    Int    @default(0)

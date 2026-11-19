@@ -30,6 +30,7 @@ from tests.unit.proxy.db.fake_prisma_engine import (
     statement_timeout_error,
     statement_timeout_reads,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
@@ -5136,7 +5137,7 @@ async def test_ui_view_spend_logs_with_error_message(client):
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
-    """Test merging error_code and key_alias filters with AND logic"""
+    """Test error-code filtering when a key-alias filter is supplied"""
     mock_spend_logs = [
         {
             "id": "log1",
@@ -5158,7 +5159,7 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
             "spend": 0.10,
             "startTime": datetime.datetime.now(timezone.utc).isoformat(),
             "model": "gpt-4",
-            "metadata": '{"user_api_key_alias": "test-key-2", "error_information": {"error_code": "500"}}',
+            "metadata": '{"user_api_key_alias": "test-key-2", "error_information": {"error_code": "404"}}',
         },
         {
             "id": "log3",
@@ -5174,17 +5175,11 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
     ]
 
     def filter_by_error_code_and_key_alias(where):
-        if "AND" in where:
-            key_alias = error_code = None
-            for cond in where["AND"]:
-                if "metadata" in cond:
-                    mf = cond["metadata"]
-                    if mf.get("path") == ["user_api_key_alias"]:
-                        key_alias = mf.get("string_contains")
-                    elif mf.get("path") == ["error_information", "error_code"]:
-                        error_code = str(mf.get("equals", "")).strip('"')
-            if key_alias == "test-key-1" and error_code == "500":
-                return [mock_spend_logs[2]]
+        metadata_filter = where.get("metadata", {})
+        if metadata_filter.get("path") == ["error_information", "error_code"] and str(
+            metadata_filter.get("equals", "")
+        ).strip('"') == "500":
+            return [mock_spend_logs[2]]
         return mock_spend_logs
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -7290,16 +7285,18 @@ def test_org_spend_report_proxy_admin_override(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def test_org_spend_report_org_admin_auto_scopes_to_own_org(client, monkeypatch):
+def test_org_spend_report_org_admin_auto_scopes_to_own_org(client, monkeypatch, rust_auth_stores: RustAuthStores):
     user_id = "org-admin-auto-scope"
+    user_row = _org_member_user_row(
+        user_id=user_id,
+        organization_id="org-acme",
+        membership_role=LitellmUserRoles.ORG_ADMIN.value,
+    )
+    rust_auth_stores.user.rows = {user_id: user_row.model_dump()}
     mock_prisma = _spend_report_mock_prisma(
         query_raw_returns=[{"api_key": "k1"}],
         team_rows=[{"team_id": "team-a"}],
-        user_row=_org_member_user_row(
-            user_id=user_id,
-            organization_id="org-acme",
-            membership_role=LitellmUserRoles.ORG_ADMIN.value,
-        ),
+        user_row=user_row,
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
@@ -7324,14 +7321,16 @@ def test_org_spend_report_org_admin_auto_scopes_to_own_org(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def test_org_spend_report_non_org_admin_403(client, monkeypatch):
+def test_org_spend_report_non_org_admin_403(client, monkeypatch, rust_auth_stores: RustAuthStores):
     user_id = "org-plain-member"
+    user_row = _org_member_user_row(
+        user_id=user_id,
+        organization_id="org-acme",
+        membership_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    rust_auth_stores.user.rows = {user_id: user_row.model_dump()}
     mock_prisma = _spend_report_mock_prisma(
-        user_row=_org_member_user_row(
-            user_id=user_id,
-            organization_id="org-acme",
-            membership_role=LitellmUserRoles.INTERNAL_USER.value,
-        ),
+        user_row=user_row,
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)

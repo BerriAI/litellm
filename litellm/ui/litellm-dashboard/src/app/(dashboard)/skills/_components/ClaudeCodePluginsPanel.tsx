@@ -24,6 +24,7 @@ import { toast } from "@/lib/toast";
 import { isPendingSkill, type SkillHubSkill, type SkillMutationResponse } from "@/components/claude_code_plugins/types";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import SkillSubmissions from "./SkillSubmissions";
+import { useUserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 interface ClaudeCodePluginsPanelProps {
   accessToken: string | null;
@@ -48,6 +49,8 @@ function skillPermissions(accessToken: string | null, userRole: string, isViewOn
 }
 
 interface CatalogSkillDetailProps {
+  userRole: string;
+  isViewOnly: boolean;
   skill: SkillHubSkill;
   accessToken: string | null;
   queryScope: QueryKey;
@@ -58,6 +61,8 @@ interface CatalogSkillDetailProps {
 }
 
 function CatalogSkillDetail({
+  userRole,
+  isViewOnly,
   skill,
   accessToken,
   queryScope,
@@ -74,6 +79,12 @@ function CatalogSkillDetail({
     queryFn: () => getSkillHubSkill(accessToken!, skill.name),
     enabled: Boolean(accessToken),
   });
+  const displayedSkill = detail.data ?? skill;
+  const users = useUserIdentityLookup([displayedSkill.created_by, displayedSkill.approved_by], {
+    accessToken,
+    userRole,
+    isViewOnly,
+  });
   return (
     <>
       {detail.isError && (
@@ -85,7 +96,8 @@ function CatalogSkillDetail({
         </div>
       )}
       <SkillDetail
-        skill={skillHubDetail(detail.data ?? skill)}
+        skill={skillHubDetail(displayedSkill)}
+        users={users}
         onBack={onBack}
         accessToken={accessToken}
         isAdmin={isAdmin}
@@ -132,6 +144,10 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
     enabled: Boolean(accessToken),
   });
   const pluginsList = plugins.data?.skills ?? [];
+  const users = useUserIdentityLookup(
+    pluginsList.flatMap((skill) => [skill.created_by, skill.approved_by]),
+    { accessToken, userRole, isViewOnly: readOnly },
+  );
   const selectedSkill = pluginsList.find((plugin) => plugin.id === selectedSkillId);
   const refreshSkills = async () => {
     await Promise.all([
@@ -172,6 +188,8 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       {selectedSkill ? (
         <CatalogSkillDetail
+          userRole={userRole}
+          isViewOnly={readOnly}
           skill={selectedSkill}
           isAdmin={isAdmin}
           accessToken={accessToken}
@@ -212,6 +230,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
                 </div>
               )}
               <PluginTable
+                users={users}
                 pluginsList={pluginsList}
                 isLoading={plugins.isLoading}
                 filtered={filters.active}
@@ -242,6 +261,8 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
             <TabsContent value="submissions">
               {accessToken && (
                 <SkillSubmissions
+                  userRole={userRole}
+                  isViewOnly={readOnly}
                   accessToken={accessToken}
                   queryScope={queryScope}
                   canReview={isAdmin}

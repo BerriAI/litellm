@@ -265,6 +265,29 @@ def test_request_transform_keeps_the_billing_header_block() -> None:
     assert request["system"] == [billing_block, {"type": "text", "text": "be brief"}]
 
 
+
+def test_request_transform_drops_thinking_claude_cannot_verify() -> None:
+    request: Final = DatabricksAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model=CLAUDE_MODEL,
+        messages=[
+            {"role": "user", "content": "first"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "open model plan", "signature": ""},
+                    {"type": "text", "text": "reply"},
+                ],
+            },
+            {"role": "user", "content": "second"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["messages"][1]["content"] == [{"type": "text", "text": "reply"}]
+
+
 def _reply(request: httpx.Request, body: dict[str, object]) -> httpx.Response:
     return httpx.Response(
         status_code=200,

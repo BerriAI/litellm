@@ -89,6 +89,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     validated_customer_key_metadata,
 )
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
+from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -104,6 +105,7 @@ from litellm.proxy.management_helpers.utils import (
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
 from litellm.redis.stores.spend_counters import (
     user_counter,
+    user_window_counter,
 )
 from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -166,6 +168,9 @@ _ADMIN_KEY_ROW_ADAPTER: Final = TypeAdapter(
     dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
 _ADMIN_USER_ROW_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_ADMIN_BUDGET_LIMITS_ADAPTER: Final[TypeAdapter[Sequence[BudgetLimitEntry] | str | None]] = TypeAdapter(
+    Sequence[BudgetLimitEntry] | str | None
+)
 
 
 def _user_table(
@@ -965,6 +970,19 @@ def _redact_scim_enterprise_metadata(
     return {k: v for k, v in metadata.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
 
 
+async def _user_budget_limits_usage(
+    user_id: str | None, budget_limits: Sequence[object] | str | None
+) -> Mapping[str, Mapping[str, object]] | None:
+    if user_id is None:
+        return None
+    return await build_budget_limits_usage(
+        budget_limits=budget_limits,
+        counter_key=lambda duration: user_window_counter(user_id, duration),
+        entity_type="User",
+        entity_id=user_id,
+    )
+
+
 def _build_user_info_response(
     user_id: str | None,
     user_info: Any | None,
@@ -972,6 +990,7 @@ def _build_user_info_response(
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
     model_max_budget_usage: dict[str, dict[str, object]] | None = None,
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None,
 ) -> UserInfoResponse:
     """Create UserInfoResponse while filtering sensitive fields."""
     if user_info is None and keys is not None:
@@ -987,6 +1006,8 @@ def _build_user_info_response(
         _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
         if model_max_budget_usage is not None:
             _user_info["model_max_budget_usage"] = model_max_budget_usage
+        if budget_limits_usage is not None:
+            _user_info["budget_limits_usage"] = budget_limits_usage
 
     return UserInfoResponse(
         user_id=user_id,
@@ -1092,6 +1113,7 @@ async def user_info(
                 model_max_budget=getattr(user_info, "model_max_budget", None),
                 cache=model_max_budget_limiter.dual_cache,
             ),
+            budget_limits_usage=await _user_budget_limits_usage(user_id, getattr(user_info, "budget_limits", None)),
         )
 
         return (
@@ -1291,6 +1313,9 @@ async def user_info_v2(
                 model_max_budget=user_data.get("model_max_budget"),
                 cache=model_max_budget_limiter.dual_cache,
             ),
+            budget_limits_usage=await _user_budget_limits_usage(
+                user_data.get("user_id", user_id), user_data.get("budget_limits")
+            ),
         )
     except Exception as e:
         if isinstance(e, HTTPException) and e.status_code < 500:
@@ -1314,7 +1339,12 @@ async def _get_admin_user_row(
     if row is None:
         return None
     fields: Final = _ADMIN_USER_ROW_ADAPTER.validate_python(row.model_dump() if isinstance(row, BaseModel) else row)
-    return {name: value for name, value in fields.items() if name != "password"}
+    budget_limits: Final = _ADMIN_BUDGET_LIMITS_ADAPTER.validate_python(fields.get("budget_limits"))
+    usage: Final = await _user_budget_limits_usage(admin_user_id, budget_limits)
+    return {
+        **{name: value for name, value in fields.items() if name != "password"},
+        **({"budget_limits_usage": usage} if usage is not None else {}),
+    }
 
 
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):

@@ -1,4 +1,5 @@
 mod auth;
+mod environment;
 mod error;
 mod mcp;
 mod model;
@@ -10,7 +11,12 @@ mod value;
 
 use serde::Deserialize;
 
-pub use auth::{JwtAuthSettings, JwtRoutingOverride, OneOrMany, RoutingPath};
+pub use auth::{
+    ClaimPath, JwtAuthSettings, JwtIssuerConfig, JwtLitellmRoleMap, JwtRoutingOverride,
+    LitellmRole, OneOrMany, RbacRole, RoleMapping, RolePermissions, RoutingPath, ScopeMapping,
+    UnregisteredJwtClientBehavior,
+};
+pub use environment::Environment;
 pub use error::Error;
 pub use litellm_router_types::{LitellmParams, Spelled};
 pub use mcp::{McpAuth, McpServer, McpTransport};
@@ -20,7 +26,7 @@ pub use redis::{CacheSettings, RedisSettings};
 pub use routes::RouteList;
 pub use settings::{
     ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
-    TracingStoreSettings,
+    TracingStoreSettings, UserHeaderMapping,
 };
 pub use value::{AdditionalFields, Object, Value};
 
