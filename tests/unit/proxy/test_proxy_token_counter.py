@@ -46,6 +46,8 @@ import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.responses_adapters.transformation import LiteLLMAnthropicToResponsesAPIAdapter
 from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -88,7 +90,7 @@ from litellm.proxy.proxy_server import (
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -3400,7 +3402,9 @@ def _shipped_kimi_k3_framing() -> int:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("as_blocks", [False, True])
-@pytest.mark.parametrize("model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"])
+@pytest.mark.parametrize(
+    "model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"]
+)
 async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_header(
     monkeypatch: pytest.MonkeyPatch, as_blocks: bool, model: str
 ) -> None:
@@ -3419,6 +3423,94 @@ async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_
     )
 
     assert counted.total_tokens == baseline.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat_fallback", [False, True])
+@pytest.mark.parametrize("with_edits", [False, True])
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_provider_count_removes_only_the_first_adjacent_billing_block(
+    monkeypatch: pytest.MonkeyPatch, chat_fallback: bool, with_edits: bool, as_blocks: bool
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", chat_fallback)
+    router: Final = _single_deployment_router(
+        {"model": "openai/gpt-6.2-sol", "api_key": "test-key", "store": False}, {}
+    )
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    bodies: Final[list[dict[str, object]]] = []  # mutable-ok: records the HTTP peer's input
+
+    def peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 47}, request=request)
+
+    with patch.object(
+        openai_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        assert (
+            await _input_tokens(
+                router,
+                {
+                    "model": "counted",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "system": [
+                        {"type": "text", "text": billing_a},
+                        {"type": "text", "text": billing_b},
+                        {"type": "text", "text": "Be concise."},
+                    ]
+                    if as_blocks
+                    else billing_a + "\n" + billing_b + "\nBe concise.",
+                    **({"context_management": _CLEAR_TOOL_USES} if with_edits else {}),
+                },
+            )
+            == 47
+        )
+
+    assert bodies[0]["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+            if as_blocks
+            else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
+    ]
+
+
+@pytest.mark.parametrize("as_blocks", [False, True])
+def test_generation_keeps_the_second_adjacent_billing_block(as_blocks: bool) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "openai/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [
+            {"type": "text", "text": billing_a},
+            {"type": "text", "text": billing_b},
+            {"type": "text", "text": "Be concise."},
+        ]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    responses: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_request(request)
+    assert chat["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": billing_b}, {"type": "text", "text": "Be concise."}]
+        if as_blocks
+        else billing_b + "\nBe concise.",
+    }
+    assert responses["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+        if as_blocks
+        else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+    }
 
 
 @pytest.mark.asyncio

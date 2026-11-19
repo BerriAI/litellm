@@ -16357,18 +16357,13 @@ async def _gateway_request_view(
 ) -> InferenceRequestView | InferenceRequestViewError | None:
     match route:
         case Target.CHAT_COMPLETIONS:
-            view: Final = await _bridged_request_view(
+            return await _bridged_request_view(
                 messages, system, tools, messages_format, edits, deployment, fallback_model
-            )
-            return (
-                replace(view, system=system_without_claude_code_billing_header(view.system))
-                if isinstance(view, InferenceRequestView) and messages_format == "anthropic"
-                else view
             )
         case Target.RESPONSES if edits is not None:
             return await _responses_request_view(messages, system, tools, edits, deployment, fallback_model)
         case Target.RESPONSES:
-            return InferenceRequestView(messages=messages, system=system_without_claude_code_billing_header(system))
+            return InferenceRequestView(messages=messages, system=system)
         case _:
             return None
 
@@ -16855,7 +16850,12 @@ async def _count_request_tokens(
     local_messages: Final = (
         request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
     )
-    local_system: Final = system if counted_view is None else counted_view.system
+    post_edit_system: Final = system if counted_view is None else counted_view.system
+    local_system: Final = (
+        system_without_claude_code_billing_header(post_edit_system)
+        if messages_format == "anthropic" and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)
+        else post_edit_system
+    )
 
     # Default LiteLLM token counting
     custom_tokenizer: CustomHuggingfaceTokenizer | None = None
