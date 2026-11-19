@@ -1,10 +1,13 @@
 from typing import Final
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_key_object, get_team_object
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_key_object, get_team_object
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.management_helpers.apps import AppStore
+from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.types.proxy.management_endpoints.apps import AppFailure, AppResourceType
 
 
@@ -18,7 +21,24 @@ class _ResourceIdentity(BaseModel):
 _ALIASES: Final = TypeAdapter(dict[str, str])
 
 
-async def app_resource_auth(
+async def app_resource_models(
+    store: AppStore, resource_type: AppResourceType, resource_id: str
+) -> tuple[str, ...] | AppFailure:
+    from litellm.proxy.proxy_server import accessible_model_names
+
+    try:
+        auth: Final = await _app_resource_auth(store, resource_type, resource_id)
+        return auth if isinstance(auth, AppFailure) else await accessible_model_names(auth)
+    except (HTTPException, ProxyException, NativeDatabaseFailure, DBLookupDeadlineExceeded) as error:
+        missing: Final = isinstance(error, TeamNotFoundError) or (
+            isinstance(error, ProxyException) and error.type == ProxyErrorTypes.token_not_found_in_db
+        )
+        if missing:
+            return AppFailure(404, "App resource or its parent not found.")
+        return AppFailure(503, "Unable to load app models. Try again.")
+
+
+async def _app_resource_auth(
     store: AppStore, resource_type: AppResourceType, resource_id: str
 ) -> UserAPIKeyAuth | AppFailure:
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache

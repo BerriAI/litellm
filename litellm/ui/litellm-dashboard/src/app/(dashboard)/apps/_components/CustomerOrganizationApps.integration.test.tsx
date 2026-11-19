@@ -127,7 +127,6 @@ describe("customer app budgets", () => {
       return serve(input, init);
     });
     const user = await openBudget();
-    await user.click(screen.getByText("Advanced limits"));
     const search = screen.getByRole("combobox", { name: "Search app models" });
     await user.click(search);
     expect(await screen.findByRole("option", { name: "app-model" })).toBeInTheDocument();

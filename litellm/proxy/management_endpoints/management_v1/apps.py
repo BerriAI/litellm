@@ -12,7 +12,7 @@ from litellm.proxy.management_endpoints.management_v1.customers import (
     require_customer_admin,
 )
 from litellm.proxy.management_helpers.app_access import ALL_APPS, AppAccess, granted_app_ids
-from litellm.proxy.management_helpers.app_models import app_resource_auth
+from litellm.proxy.management_helpers.app_models import app_resource_models
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.types.proxy.management_endpoints.apps import (
     App,
@@ -106,9 +106,7 @@ async def list_app_resources(
     description="List models accessible to an app's underlying team, project, or virtual key. Proxy admins only.",
 )
 async def list_app_resource_models(resource_type: AppResourceType, resource_id: str, store: Store) -> tuple[str, ...]:
-    from litellm.proxy.proxy_server import accessible_model_names
-
-    return await accessible_model_names(resolve(await app_resource_auth(store, resource_type, resource_id)))
+    return resolve(await app_resource_models(store, resource_type, resource_id))
 
 
 @router.post(

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.list_api.common import ManagementProblem, problem_response
 from litellm.proxy.management_endpoints.management_v1.apps import get_app_store, router
 from litellm.proxy.management_helpers.apps import AppStore
@@ -276,32 +277,16 @@ def test_only_proxy_admins_can_discover_or_manage_app_budgets(
     assert http.put("/management/v1/apps/definition", json={"resource_type": "team"}).status_code == 403
 
 
-@pytest.mark.parametrize(
-    ("resource", "team_models", "key_models", "project_models", "expected"),
-    (
-        ("team/chat", ["alpha"], [], [], ["alpha"]),
-        ("team/chat", [], [], [], ["alpha", "beta", "other"]),
-        ("team/chat", ["no-default-models"], [], [], []),
-        ("virtual_key/key-id", ["alpha", "beta"], ["alpha"], [], ["alpha"]),
-        ("virtual_key/key-id", ["alpha"], ["beta"], [], []),
-        ("virtual_key/key-id", ["alpha", "beta"], ["all-team-models"], ["beta"], ["beta"]),
-        ("virtual_key/key-id", ["a*"], ["*"], [], ["alpha"]),
-        ("project/project", ["alpha", "beta"], [], ["beta", "other"], ["beta"]),
-    ),
-)
-def test_app_model_options_follow_resource_permissions(
+def model_client(
     monkeypatch: pytest.MonkeyPatch,
-    resource: str,
     team_models: list[str],
     key_models: list[str],
     project_models: list[str],
-    expected: list[str],
-) -> None:
+) -> tuple[TestClient, UserApiKeyCache]:
     from litellm import Router
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import project_cache_key
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import PrismaClient
 
     http, store = client()
@@ -332,10 +317,60 @@ def test_app_model_options_follow_resource_permissions(
             database_url="postgresql://unused:unused@localhost/unused", proxy_logging_obj=proxy_server.proxy_logging_obj
         ),
     )
+    return http, cache
+
+
+@pytest.mark.parametrize(
+    ("resource", "team_models", "key_models", "project_models", "expected"),
+    (
+        ("team/chat", ["alpha"], [], [], ["alpha"]),
+        ("team/chat", [], [], [], ["alpha", "beta", "other"]),
+        ("team/chat", ["no-default-models"], [], [], []),
+        ("virtual_key/key-id", ["alpha", "beta"], ["alpha"], [], ["alpha"]),
+        ("virtual_key/key-id", ["alpha"], ["beta"], [], []),
+        ("virtual_key/key-id", ["alpha", "beta"], ["all-team-models"], ["beta"], ["beta"]),
+        ("virtual_key/key-id", ["a*"], ["*"], [], ["alpha"]),
+        ("project/project", ["alpha", "beta"], [], ["beta", "other"], ["beta"]),
+    ),
+)
+def test_app_model_options_follow_resource_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    resource: str,
+    team_models: list[str],
+    key_models: list[str],
+    project_models: list[str],
+    expected: list[str],
+) -> None:
+    http, _ = model_client(monkeypatch, team_models, key_models, project_models)
     response: Final = http.get(f"/management/v1/apps/resources/{resource}/models")
     assert response.status_code == 200, response.text
     assert sorted(response.json()) == expected
     assert http.get("/management/v1/apps/resources/team/missing/models").status_code == 404
+
+
+@pytest.mark.parametrize("resource", ("team/chat", "project/project", "virtual_key/key-id"))
+@pytest.mark.parametrize("unavailable", (False, True))
+def test_app_model_lookup_errors_describe_the_resource_not_the_admin_session(
+    monkeypatch: pytest.MonkeyPatch, resource: str, unavailable: bool
+) -> None:
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+    from tests.unit.proxy.rust_auth_stores import FakeKeyStore, FakeTeamStore, RustAuthStores, install_rust_auth_stores
+
+    http, cache = model_client(monkeypatch, [], [], [])
+    cache.flush_cache()
+    error: Final = DBLookupDeadlineExceeded("app resource", 1)
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            key=FakeKeyStore(rows={"token-a": error} if unavailable else {}),
+            team=FakeTeamStore(rows={"chat": error} if unavailable else {}),
+        ),
+    )
+    response: Final = http.get(f"/management/v1/apps/resources/{resource}/models")
+    assert response.status_code == (503 if unavailable else 404), response.text
+    assert response.json() == {
+        "detail": "Unable to load app models. Try again." if unavailable else "App resource or its parent not found."
+    }
 
 
 @pytest.mark.parametrize("resource_type", ("key", "application", "unknown"))

@@ -83,23 +83,18 @@ export default function CustomerBudgetCompactFields({
           </div>
         </div>
       )}
-      <details className="text-sm">
-        <summary className="cursor-pointer text-muted-foreground">{t("apps.advancedLimits")}</summary>
-        <div className="mt-4 space-y-4">
-          <CustomerBudgetWindows
-            id={id}
-            windows={fields.budgetWindows}
-            onChange={(budgetWindows) => onChange({ ...fields, budgetWindows })}
-          />
-          <CustomerBudgetAdvancedFields
-            modelScope={modelScope}
-            idPrefix={id}
-            fields={fields}
-            disabled={disabled}
-            onChange={(key, value) => onChange({ ...fields, [key]: value })}
-          />
-        </div>
-      </details>
+      <CustomerBudgetWindows
+        id={id}
+        windows={fields.budgetWindows}
+        onChange={(budgetWindows) => onChange({ ...fields, budgetWindows })}
+      />
+      <CustomerBudgetAdvancedFields
+        modelScope={modelScope}
+        idPrefix={id}
+        fields={fields}
+        disabled={disabled}
+        onChange={(key, value) => onChange({ ...fields, [key]: value })}
+      />
     </div>
   );
 }
