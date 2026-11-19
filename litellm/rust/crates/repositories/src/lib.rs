@@ -12,9 +12,11 @@ macro_rules_attribute::attribute_alias! {
 }
 
 mod access_group;
+mod agent_identity;
 mod budget;
 mod database;
 mod end_user;
+mod inserted;
 mod jwt_key_mapping;
 mod key;
 mod model_access_group;
@@ -32,10 +34,12 @@ mod user;
 mod utc_timestamp;
 
 pub use access_group::{AccessGroup, AccessGroupRepository};
+pub use agent_identity::AgentIdentityRepository;
 pub use budget::{Budget, BudgetRepository};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
-pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim};
+pub use inserted::Inserted;
+pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim, NewKeyMapping};
 pub use key::{FetchedKey, KeyRepository};
 pub use model_access_group::{ModelAccessGroupBudget, ModelAccessGroupRepository};
 pub use object_permission::{ObjectPermission, ObjectPermissionRepository};
@@ -46,4 +50,4 @@ pub use spend_log::{SpendLogOwner, SpendLogRepository};
 pub use tag::{Tag, TagRepository};
 pub use team::{Team, TeamRepository};
 pub use team_membership::{TeamMembership, TeamMembershipRepository};
-pub use user::{SignIn, User, UserRepository};
+pub use user::{NewUserDefaults, SignIn, User, UserRepository};

@@ -94,3 +94,24 @@ impl Session {
         Statements::new(&mut *self.connection, self.named)
     }
 }
+
+/// Where the steps of one operation take their connection: a session per step from the database, one after the
+/// other so an operation never holds two, or a single transaction in tests.
+pub(crate) trait Connections {
+    async fn with<T>(
+        &mut self,
+        side: Side,
+        step: impl for<'e> AsyncFnOnce(Statements<&'e mut PgConnection>) -> Result<T, litellm_db::Error>,
+    ) -> Result<T, litellm_db::Error>;
+}
+
+impl Connections for &Database {
+    async fn with<T>(
+        &mut self,
+        side: Side,
+        step: impl for<'e> AsyncFnOnce(Statements<&'e mut PgConnection>) -> Result<T, litellm_db::Error>,
+    ) -> Result<T, litellm_db::Error> {
+        let mut session = self.session(side).await?;
+        step(session.executor()).await
+    }
+}
