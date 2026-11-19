@@ -11,7 +11,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -268,7 +267,7 @@ class PythonAuthHost:
         await prefetch_identity_keys(
             identity_cache_keys(token or "", end_user_id=end_user_id, key_is_resolved=token is None),
             user_api_key_cache=self.user_api_key_cache,
-            before_read=partial(arm_routing_cooldowns, self._requested_model()),
+            before_read=self._arm_routing_cooldowns,
         )
 
     async def end_user(self, end_user_id: str | None) -> EndUserRow:
@@ -413,6 +412,9 @@ class PythonAuthHost:
     def _requested_model(self) -> str | None:
         model: Final = None if self.http is None else self.http.request_data.get("model")
         return model if isinstance(model, str) else None
+
+    def _arm_routing_cooldowns(self) -> None:
+        arm_routing_cooldowns(self._requested_model())
 
     async def key_owner(self, user_id: str) -> LiteLLM_UserTable | None:
         """Raises when the owner cannot be read; the core treats that as no owner."""
