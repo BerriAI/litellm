@@ -71,7 +71,11 @@ def readable(access: AppAccess, app_id: str) -> str:
 
 Access: TypeAlias = Annotated[AppAccess, Depends(get_app_access)]
 ADMIN_ONLY: Final = (Depends(require_customer_admin),)
-router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX + "/apps", tags=["apps"])
+router: Final = APIRouter(
+    prefix=MANAGEMENT_V1_PREFIX + "/apps",
+    tags=["apps"],
+    dependencies=(Depends(user_api_key_auth),),
+)
 
 
 @router.get("/definition", response_model=AppDefinition)

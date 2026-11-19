@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Final, cast
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -319,3 +319,24 @@ def test_app_definition_uses_database_or_reports_unavailability(
         if available
         else {"detail": "Database unavailable."}
     )
+
+
+@pytest.mark.parametrize("path", ("/management/v1/apps", "/management/v1/apps/definition", "/management/v1/apps/a"))
+def test_unauthenticated_app_read_does_not_open_the_store(path: str) -> None:
+    opened: Final[list[str]] = []  # mutable-ok: records store opens across the request
+
+    def unauthenticated() -> UserAPIKeyAuth:
+        raise HTTPException(401, "Unauthorized.")
+
+    def opening_store() -> AppStore:
+        opened.append(path)
+        return AppStore(AppDatabase(), NOW)
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = unauthenticated
+    app.dependency_overrides[get_app_store] = opening_store
+
+    response: Final = TestClient(app).get(path)
+
+    assert (response.status_code, opened) == (401, []), response.text
