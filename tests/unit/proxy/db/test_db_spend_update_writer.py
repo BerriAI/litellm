@@ -285,6 +285,7 @@ class _LoggedSuccesses(CustomLogger):
         super().__init__()
         self.events: list[tuple[dict, object]] = []
         self.hook_results: list[object] = []
+        self.logged: Final = asyncio.Event()
 
     async def async_logging_hook(self, kwargs, result, call_type):
         self.hook_results.append(result)
@@ -292,13 +293,14 @@ class _LoggedSuccesses(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.events.append((kwargs, response_obj))
+        self.logged.set()
 
     async def last_event(self) -> tuple[dict, object]:
-        for _ in range(200):
-            if self.events:
-                return self.events[-1]
-            await asyncio.sleep(0.01)
-        raise AssertionError("no success event was logged")
+        try:
+            await asyncio.wait_for(self.logged.wait(), timeout=60)
+        except TimeoutError as error:
+            raise AssertionError("no success event was logged") from error
+        return self.events[-1]
 
 
 def _called_tool_names(response: object) -> list[str]:
