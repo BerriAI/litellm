@@ -802,8 +802,26 @@ _OMITTED: Final = object()
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_value, expected",
-    ((_OMITTED, 0.2), (None, 0.2), ("not-a-number", 0.2), (True, 0.2), ("0.3", 0.3)),
-    ids=("omitted", "explicit-null", "non-numeric", "boolean", "request-value"),
+    (
+        (_OMITTED, 0.2),
+        (None, 0.2),
+        ("not-a-number", 0.2),
+        (True, 0.2),
+        (10**400, 0.2),
+        ("nan", 0.2),
+        ("1e400", 0.2),
+        ("0.3", 0.3),
+    ),
+    ids=(
+        "omitted",
+        "explicit-null",
+        "non-numeric",
+        "boolean",
+        "int-past-float-range",
+        "nan",
+        "infinite",
+        "request-value",
+    ),
 )
 async def test_stream_ttft_timeout_is_resolved_per_attempt_and_kept_out_of_provider_body(
     request_value: object,

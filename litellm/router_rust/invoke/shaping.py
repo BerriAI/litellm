@@ -364,13 +364,14 @@ def _stream_ttft_seconds(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return None
     try:
-        return float(value)
-    except ValueError:
+        seconds: Final = float(value)
+    except (ValueError, OverflowError):
         return None
+    return seconds if math.isfinite(seconds) else None
 
 
 def is_requested_stream_ttft_timeout(value: object) -> bool:
-    """Null, a boolean or a non-numeric string keeps the deployment value. Zero or a negative overrides it."""
+    """Null, a boolean or anything that is not a finite number keeps the deployment value. Zero or a negative overrides it."""
     return _stream_ttft_seconds(value) is not None
 
 
@@ -380,7 +381,7 @@ def stream_ttft_timeout(kwargs: Mapping[str, object], deployment_params: Mapping
         requested if is_requested_stream_ttft_timeout(requested) else deployment_params.get("stream_ttft_timeout")
     )
     seconds: Final = _stream_ttft_seconds(value)
-    return seconds if seconds is not None and math.isfinite(seconds) and seconds > 0 else None
+    return seconds if seconds is not None and seconds > 0 else None
 
 
 def non_stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[str, object]) -> object:
