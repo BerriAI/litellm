@@ -433,3 +433,26 @@ def test_deepgram_speak_meter_prices_the_total_at_the_rate_it_holds(upstream_url
     assert DeepgramSpeakMeter(upstream_url, character_rate=0.25).price(47) == WebSocketSessionUsage(
         model=model, custom_llm_provider="deepgram", response_cost=47 * 0.25
     )
+
+
+def _speak_session_cost(generation: str, character_rate: object) -> float | None:
+    litellm.register_model(
+        {
+            f"deepgram/{generation}": {
+                "litellm_provider": "deepgram",
+                "mode": "audio_speech",
+                "input_cost_per_character": character_rate,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    upstream_url: Final = f"wss://api.deepgram.com/v1/speak?model={generation}-thalia-en"
+    rate: Final = deepgram_speak_character_rate(upstream_url)
+    return None if rate is None else DeepgramSpeakMeter(upstream_url, character_rate=rate).price(100).response_cost
+
+
+def test_deepgram_speak_rate_written_as_a_numeric_string_bills_like_the_number() -> None:
+    as_number: Final = _speak_session_cost("aura-77", 1.5e-5)
+
+    assert _speak_session_cost("aura-78", "1.5e-5") == as_number
+    assert as_number is not None and as_number > 0.0
