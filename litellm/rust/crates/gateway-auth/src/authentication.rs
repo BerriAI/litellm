@@ -16,7 +16,7 @@ use crate::{
     AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
     Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind,
     ResolvedIdentity, VerifiedIdentity,
-    keys::{HeldKey, KeyHash},
+    keys::{HeldKey, KeyHash, KeyLimits},
 };
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -385,6 +385,7 @@ impl VerifiedIdentity {
                 verifier: VIRTUAL_KEY.into(),
                 credential_id: hash.as_str().into(),
                 expires_at: key.expires_at(),
+                limits: key.limits(),
             },
             restrictions: match models.is_empty() {
                 true => Permissions::All,
@@ -402,6 +403,7 @@ fn master_identity() -> VerifiedIdentity {
             verifier: "litellm:master-key".into(),
             credential_id: "master".into(),
             expires_at: None,
+            limits: KeyLimits::default(),
         },
         restrictions: Permissions::All,
     }

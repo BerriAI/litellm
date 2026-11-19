@@ -36,8 +36,8 @@ impl Host for NativeHost {
     type RouterHost<'a, A: RouteAttempt + 'a> = NativeRouterHost<'a, A>;
     type Hooks = callbacks::Call;
 
-    fn hooks(&self, _identity: &AuthenticatedRequest, call_type: CallType) -> callbacks::Call {
-        self.callbacks.begin(call_type)
+    fn hooks(&self, identity: &AuthenticatedRequest, call_type: CallType) -> callbacks::Call {
+        self.callbacks.begin(identity, call_type)
     }
 
     fn router_host<'a, A: RouteAttempt>(

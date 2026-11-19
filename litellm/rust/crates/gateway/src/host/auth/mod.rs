@@ -443,6 +443,7 @@ pub(crate) mod tests {
     use litellm_gateway_auth::{
         Auth, AuthenticatedRequest, AuthenticationMethod, Error as Rejected, Permissions,
         hash_token,
+        keys::{KeyLimits, ModelLimits},
     };
     use litellm_redis_testing::RedisServer;
     use litellm_repositories::RawJson;
@@ -593,12 +594,10 @@ pub(crate) mod tests {
     #[case::project_id(|key: &mut KeyView| key.project_id = Some("project".to_owned()))]
     #[case::org_id(|key: &mut KeyView| key.org_id = Some("org".to_owned()))]
     #[case::permissions(|key: &mut KeyView| key.permissions = json(r#"{"a":true}"#))]
-    #[case::max_parallel_requests(|key: &mut KeyView| key.max_parallel_requests = Some(1))]
     #[case::metadata(|key: &mut KeyView| key.metadata = json(r#"{"guardrails":["pii"]}"#))]
-    #[case::tpm_limit(|key: &mut KeyView| key.tpm_limit = Some(1))]
-    #[case::rpm_limit(|key: &mut KeyView| key.rpm_limit = Some(1))]
-    #[case::a_limit_of_zero(|key: &mut KeyView| key.rpm_limit = Some(0))]
-    #[case::tpd_limit(|key: &mut KeyView| key.tpd_limit = Some(1))]
+    #[case::metadata_beside_a_model_limit(|key: &mut KeyView| key.metadata = json(r#"{"model_rpm_limit":{"claude":2},"tags":["a"]}"#))]
+    #[case::a_model_limit_that_is_no_whole_number(|key: &mut KeyView| key.metadata = json(r#"{"model_tpm_limit":{"claude":"100"}}"#))]
+    #[case::model_limits_that_are_no_map(|key: &mut KeyView| key.metadata = json(r#"{"model_rpm_limit":5}"#))]
     #[case::max_budget(|key: &mut KeyView| key.max_budget = Some(5.0))]
     #[case::soft_budget(|key: &mut KeyView| key.soft_budget = Some(5.0))]
     #[case::budget_duration(|key: &mut KeyView| key.budget_duration = Some("30d".to_owned()))]
@@ -620,6 +619,33 @@ pub(crate) mod tests {
             "{:?}",
             refused.err()
         );
+    }
+
+    #[rstest]
+    #[case::rpm(|key: &mut KeyView| key.rpm_limit = Some(2), KeyLimits { rpm: Some(2), ..KeyLimits::default() })]
+    #[case::tpm(|key: &mut KeyView| key.tpm_limit = Some(100), KeyLimits { tpm: Some(100), ..KeyLimits::default() })]
+    #[case::parallel(
+        |key: &mut KeyView| key.max_parallel_requests = Some(1),
+        KeyLimits { max_parallel_requests: Some(1), ..KeyLimits::default() }
+    )]
+    #[case::a_limit_of_zero(|key: &mut KeyView| key.rpm_limit = Some(0), KeyLimits { rpm: Some(0), ..KeyLimits::default() })]
+    #[case::per_model_in_its_metadata(
+        |key: &mut KeyView| key.metadata = json(r#"{"model_rpm_limit":{"claude":2},"model_tpm_limit":{"claude":100,"gpt":0}}"#),
+        KeyLimits {
+            model_rpm: ModelLimits::new(BTreeMap::from([("claude".to_owned(), 2)])),
+            model_tpm: ModelLimits::new(BTreeMap::from([("claude".to_owned(), 100), ("gpt".to_owned(), 0)])),
+            ..KeyLimits::default()
+        }
+    )]
+    #[case::a_daily_token_limit_that_only_counts_batches(|key: &mut KeyView| key.tpd_limit = Some(1), KeyLimits::default())]
+    #[tokio::test]
+    async fn a_keys_limits_reach_its_caller(
+        #[case] change: fn(&mut KeyView),
+        #[case] limits: KeyLimits,
+    ) {
+        let identity = authenticate(holding(change), VIRTUAL_KEY).await.unwrap();
+
+        assert_eq!(identity.caller().authentication().limits, limits);
     }
 
     #[rstest]

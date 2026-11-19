@@ -4,41 +4,83 @@
 //! order.
 
 mod fields;
+pub mod parallel_request_limiter;
 
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
-use litellm_callbacks::{Abort, ErasedCallback, Hook, ManifestError, RequestState, Verdict};
+use litellm_callbacks::{
+    Abort, Callback, ErasedCallback, Hook, ManifestError, RequestState, Verdict,
+};
+use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_gateway_inference::{CallHooks, CallType, Refusal, ServedCall};
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
 use self::fields::Known;
 
+type FromCaller = Box<dyn Fn(&AuthenticatedRequest) -> RequestState + Send + Sync>;
+
+/// One callback of the stage and how its state for a request is made.
+pub struct Registered {
+    callback: Arc<dyn ErasedCallback>,
+    /// For a callback that keeps something of each request's caller, as Python's hooks are
+    /// handed the caller's `UserAPIKeyAuth`. `None` takes the callback's own `request_state`.
+    from_caller: Option<FromCaller>,
+}
+
+impl Registered {
+    /// `callback`, with its state for each request made from that request's caller.
+    pub fn for_caller<C: Callback>(
+        callback: Arc<C>,
+        state: impl Fn(&AuthenticatedRequest) -> C::State + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            callback,
+            from_caller: Some(Box::new(move |identity| Arc::new(state(identity)))),
+        }
+    }
+}
+
+impl From<Arc<dyn ErasedCallback>> for Registered {
+    fn from(callback: Arc<dyn ErasedCallback>) -> Self {
+        Self {
+            callback,
+            from_caller: None,
+        }
+    }
+}
+
 /// The callbacks every call runs, in the order each hook reaches them: the config's `callbacks`
-/// as written, then the proxy's own hooks, as `litellm.callbacks` holds them. None is built from
-/// a config yet, so each one a config names still sends its requests to Python.
+/// as written, then the proxy's own hooks, as `litellm.callbacks` holds them.
 #[derive(Default)]
 pub struct Callbacks {
-    callbacks: Vec<Arc<dyn ErasedCallback>>,
+    callbacks: Vec<Registered>,
 }
 
 impl Callbacks {
     /// `callbacks` in the order their hooks run. A manifest that subscribes to what its hook
     /// point cannot do is refused here, so no call runs it.
-    pub fn new(callbacks: Vec<Arc<dyn ErasedCallback>>) -> Result<Self, ManifestError> {
-        for callback in &callbacks {
-            callback.manifest().validate()?;
+    pub fn new(callbacks: Vec<Registered>) -> Result<Self, ManifestError> {
+        for registered in &callbacks {
+            registered.callback.manifest().validate()?;
         }
         Ok(Self { callbacks })
     }
 
-    pub(crate) fn begin(self: &Arc<Self>, call_type: CallType) -> Call {
+    pub(crate) fn begin(
+        self: &Arc<Self>,
+        identity: &AuthenticatedRequest,
+        call_type: CallType,
+    ) -> Call {
         Call {
             states: self
                 .callbacks
                 .iter()
-                .map(|callback| callback.request_state())
+                .map(|registered| match &registered.from_caller {
+                    Some(state) => Some(state(identity)),
+                    None => registered.callback.request_state(),
+                })
                 .collect(),
             callbacks: self.clone(),
             known: Mutex::new(Known::of(call_type)),
@@ -61,10 +103,19 @@ const fn decides(hook: Hook) -> bool {
     matches!(hook, Hook::PreCall | Hook::PostCallSuccess)
 }
 
+/// The exception Python raises for `abort`: its `ProxyRateLimitError` for a limiter's refusal,
+/// with the headers in the order the limiter lists them, and the abort's own status and words
+/// for any other.
 fn refusal(abort: Abort) -> Refusal {
+    if let Some(limited) = parallel_request_limiter::rate_limited(&abort) {
+        return limited.into();
+    }
     Refusal {
-        status: StatusCode::from_u16(abort.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        message: abort.message,
+        headers: abort.headers.into_iter().collect(),
+        ..Refusal::new(
+            StatusCode::from_u16(abort.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            abort.message,
+        )
     }
 }
 
@@ -81,7 +132,8 @@ impl Call {
     /// manifest reads as the callbacks before it left them, and the first to abort ends the hook
     /// with its refusal.
     async fn run(&self, hook: Hook) -> Result<(), Refusal> {
-        for (callback, state) in self.callbacks.callbacks.iter().zip(&self.states) {
+        for (registered, state) in self.callbacks.callbacks.iter().zip(&self.states) {
+            let callback = &registered.callback;
             let manifest = callback.manifest();
             let Some(subscription) = manifest.subscription(hook) else {
                 continue;
@@ -91,10 +143,10 @@ impl Call {
             let verdict = match callback.handle(&input, state.as_ref()).await {
                 Ok(verdict) => verdict,
                 Err(error) if decides(hook) => {
-                    return Err(Refusal {
-                        status: StatusCode::INTERNAL_SERVER_ERROR,
-                        message: error.to_string(),
-                    });
+                    return Err(Refusal::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        error.to_string(),
+                    ));
                 }
                 Err(error) => {
                     tracing::error!(callback = %name, ?hook, %error, "the callback failed");
@@ -267,12 +319,15 @@ mod tests {
         ))
     }
 
-    fn call(callbacks: Vec<Arc<Scripted>>) -> Call {
+    async fn call(callbacks: Vec<Arc<Scripted>>) -> Call {
         let callbacks = callbacks
             .into_iter()
-            .map(|callback| callback as Arc<dyn ErasedCallback>)
+            .map(|callback| Registered::from(callback as Arc<dyn ErasedCallback>))
             .collect();
-        Arc::new(Callbacks::new(callbacks).unwrap()).begin(CallType::AnthropicMessages)
+        Arc::new(Callbacks::new(callbacks).unwrap()).begin(
+            &crate::test_support::master().await,
+            CallType::AnthropicMessages,
+        )
     }
 
     fn body() -> Map<String, Value> {
@@ -293,7 +348,8 @@ mod tests {
             scripted("before", &log, &[pre_call(), ended()], silent),
             scripted("limiter", &log, &[pre_call()], publishes),
             scripted("after", &log, &[pre_call(), ended()], silent),
-        ]);
+        ])
+        .await;
         let admitted = call.pre_call(body()).await;
         call.succeeded(served()).await;
 
@@ -328,16 +384,14 @@ mod tests {
         let call = call(vec![
             scripted("first", &log, &[pre_call()], answer),
             scripted("second", &log, &[pre_call()], silent),
-        ]);
+        ])
+        .await;
         let refused = call.pre_call(body()).await;
 
         assert_eq!(
             (refused, log.lock().clone()),
             (
-                Err(Refusal {
-                    status,
-                    message: message.to_owned()
-                }),
+                Err(Refusal::new(status, message)),
                 vec!["first:PreCall:1:-".to_owned()]
             )
         );
@@ -354,7 +408,8 @@ mod tests {
         let call = call(vec![
             scripted("first", &log, &[ended()], answer),
             scripted("second", &log, &[ended()], silent),
-        ]);
+        ])
+        .await;
 
         call.failed().await;
 
@@ -371,14 +426,46 @@ mod tests {
     async fn each_request_has_its_own_state_for_a_callback() {
         let log = Log::default();
         let callbacks = Arc::new(
-            Callbacks::new(vec![scripted("counting", &log, &[ended()], silent) as _]).unwrap(),
+            Callbacks::new(vec![Registered::from(
+                scripted("counting", &log, &[ended()], silent) as Arc<dyn ErasedCallback>,
+            )])
+            .unwrap(),
         );
-        callbacks.begin(CallType::AnthropicMessages).failed().await;
-        callbacks.begin(CallType::AnthropicMessages).failed().await;
+        let caller = crate::test_support::master().await;
+        callbacks
+            .begin(&caller, CallType::AnthropicMessages)
+            .failed()
+            .await;
+        callbacks
+            .begin(&caller, CallType::AnthropicMessages)
+            .failed()
+            .await;
 
         assert_eq!(
             log.lock().clone(),
             vec!["counting:AttemptEnded:1:-", "counting:AttemptEnded:1:-"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_callbacks_state_for_a_request_can_be_made_from_its_caller() {
+        let log = Log::default();
+        let seeded =
+            Registered::for_caller(scripted("seeded", &log, &[ended()], silent), |identity| {
+                AtomicU32::new(identity.caller().principal().subject().len() as u32)
+            });
+        let callbacks = Arc::new(Callbacks::new(vec![seeded]).unwrap());
+        let caller = crate::test_support::master().await;
+        let started_at = caller.caller().principal().subject().len() + 1;
+
+        callbacks
+            .begin(&caller, CallType::AnthropicMessages)
+            .failed()
+            .await;
+
+        assert_eq!(
+            log.lock().clone(),
+            vec![format!("seeded:AttemptEnded:{started_at}:-")]
         );
     }
 
@@ -389,10 +476,13 @@ mod tests {
             awaited: true,
             ..pre_call()
         };
-        let registered =
-            Callbacks::new(vec![
-                scripted("wrong", &log, &[awaited_and_aborting], silent) as _,
-            ]);
+        let registered = Callbacks::new(vec![Registered::from(scripted(
+            "wrong",
+            &log,
+            &[awaited_and_aborting],
+            silent,
+        )
+            as Arc<dyn ErasedCallback>)]);
         assert!(matches!(
             registered.err(),
             Some(ManifestError::Subscription {

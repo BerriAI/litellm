@@ -2,16 +2,17 @@
 //! so a column added to the row does not compile here until it is honored, left to a host step or
 //! named as one no step is asked about.
 
-use std::{sync::Arc, time::SystemTime};
+use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 use chrono::NaiveDateTime;
 use jiff::Timestamp;
-use litellm_gateway_auth::keys::HeldKey;
+use litellm_gateway_auth::keys::{HeldKey, KeyLimits, ModelLimits};
 use litellm_gateway_auth_core::{
     KeyHash,
     authn::key::{KeyRecord, Keyed},
 };
 use litellm_repositories::{KeyView, RawJson};
+use serde::Deserialize;
 
 /// The name of the first of `fields` that holds something.
 macro_rules! carried {
@@ -85,6 +86,7 @@ const UI_TEAM: &str = "litellm-dashboard";
 pub struct Key {
     expires_at: Option<SystemTime>,
     models: Arc<[String]>,
+    limits: KeyLimits,
     /// The first budget column the row holds, which `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
@@ -99,6 +101,31 @@ impl HeldKey for Key {
     fn models(&self) -> Arc<[String]> {
         self.models.clone()
     }
+
+    fn limits(&self) -> KeyLimits {
+        self.limits.clone()
+    }
+}
+
+/// The `metadata` the native app honors: the key's own limit for each model it names one for,
+/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Metadata {
+    #[serde(default)]
+    model_rpm_limit: BTreeMap<String, i64>,
+    #[serde(default)]
+    model_tpm_limit: BTreeMap<String, i64>,
+}
+
+impl Metadata {
+    /// `None` when `metadata` holds anything else, or a limit that is not a whole number.
+    fn read(metadata: &RawJson) -> Option<Self> {
+        if !metadata.is_carried() {
+            return Some(Self::default());
+        }
+        serde_json::from_str(metadata.get()).ok()
+    }
 }
 
 /// What the row holds beside the columns the core's record carries.
@@ -109,10 +136,12 @@ struct Held {
     aliased: bool,
 }
 
-/// The native app honors a key's expiry, its block and its model list. The owner, the team and the
-/// project are the core's to ask the host for, the budgets and the aliases are steps the host
-/// declines, and every other column that holds something is one no step is asked about. The team,
-/// organization and project columns are only filled for a key that names one.
+/// The native app honors a key's expiry, its block, its model list, its `rpm_limit`, `tpm_limit`
+/// and `max_parallel_requests`, and the per-model limits in its metadata. Its `tpd_limit` only
+/// counts a batch, which no native route serves. The owner, the team and the project are the
+/// core's to ask the host for, the budgets and the aliases are steps the host declines, and every
+/// other column that holds something is one no step is asked about. The team, organization and
+/// project columns are only filled for a key that names one.
 fn held(key: &KeyView) -> Held {
     let KeyView {
         token: _,
@@ -157,6 +186,11 @@ fn held(key: &KeyView) -> Held {
         organization_rpm_limit: _,
         organization_metadata: _,
         project_alias: _,
+        max_parallel_requests: _,
+        rpm_limit: _,
+        tpm_limit: _,
+        tpd_limit: _,
+        metadata: _,
         key_type,
         soft_budget_cooldown,
         models,
@@ -169,11 +203,6 @@ fn held(key: &KeyView) -> Held {
         project_id: _,
         org_id,
         permissions,
-        max_parallel_requests,
-        metadata,
-        tpm_limit,
-        rpm_limit,
-        tpd_limit,
         max_budget,
         soft_budget,
         budget_duration,
@@ -204,11 +233,6 @@ fn held(key: &KeyView) -> Held {
                     agent_id,
                     org_id,
                     permissions,
-                    max_parallel_requests,
-                    metadata,
-                    tpm_limit,
-                    rpm_limit,
-                    tpd_limit,
                     allowed_cache_controls,
                     allowed_routes,
                     access_group_ids,
@@ -258,9 +282,12 @@ pub(super) fn read(key: &KeyView, also: Option<&'static str>) -> Result<Keyed<Ke
         budget,
         aliased,
     } = held(key);
-    if let Some(column) = unasked.or(also).filter(|_| !blocked) {
+    let metadata = Metadata::read(&key.metadata);
+    let unread = metadata.is_none().then_some("metadata");
+    if let Some(column) = unasked.or(unread).or(also).filter(|_| !blocked) {
         return Err(column);
     }
+    let metadata = metadata.unwrap_or_default();
     let expires = key
         .expires
         .map(|at| Timestamp::from_microsecond(at.and_utc().timestamp_micros()))
@@ -281,6 +308,13 @@ pub(super) fn read(key: &KeyView, also: Option<&'static str>) -> Result<Keyed<Ke
         row: Key {
             expires_at: key.expires.map(|at| SystemTime::from(at.and_utc())),
             models: Arc::from(key.models.as_slice()),
+            limits: KeyLimits {
+                rpm: key.rpm_limit,
+                tpm: key.tpm_limit,
+                max_parallel_requests: key.max_parallel_requests.map(i64::from),
+                model_rpm: ModelLimits::new(metadata.model_rpm_limit),
+                model_tpm: ModelLimits::new(metadata.model_tpm_limit),
+            },
             budget,
             aliased,
         },

@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::{
     Extension, Json,
-    response::{IntoResponse, Response},
+    response::{AppendHeaders, IntoResponse, Response},
 };
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
@@ -171,7 +171,16 @@ impl Error {
     }
 
     pub fn openai_response(self) -> Response {
-        (self.status(), Json(self.openai_body())).into_response()
+        let body = Json(self.openai_body());
+        match self {
+            Self::Refused(refusal) => (
+                refusal.status,
+                AppendHeaders(crate::rate_limited::header_pairs(refusal.headers)),
+                body,
+            )
+                .into_response(),
+            other => (other.status(), body).into_response(),
+        }
     }
 
     /// The OpenAI envelope as an `event: error` frame, for a stream that fails after its
@@ -186,13 +195,18 @@ impl Error {
         format!("event: error\ndata: {event}\n\n")
     }
 
+    /// A refusal names its own `type` and `code` when the proxy's exception does.
     fn openai_body(&self) -> Value {
         let status = self.status();
+        let (kind, code) = match self {
+            Self::Refused(refusal) => (refusal.kind.clone(), refusal.code.clone()),
+            _ => (None, None),
+        };
         json!({"error": {
             "message": self.message(),
-            "type": error_type(status),
+            "type": kind.map_or_else(|| json!(error_type(status)), Value::from),
             "param": null,
-            "code": status.as_u16(),
+            "code": code.map_or_else(|| json!(status.as_u16()), Value::from),
         }})
     }
 

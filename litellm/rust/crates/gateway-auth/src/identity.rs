@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::SystemTime};
 
-use crate::authorization::Permissions;
+use crate::{authorization::Permissions, keys::KeyLimits};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrincipalKind {
@@ -49,6 +49,7 @@ pub struct Authentication {
     pub verifier: String,
     pub credential_id: String,
     pub expires_at: Option<SystemTime>,
+    pub limits: KeyLimits,
 }
 
 pub struct VerifiedIdentity {

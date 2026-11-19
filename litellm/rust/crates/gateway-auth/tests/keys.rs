@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -7,7 +8,7 @@ use axum::http::request::Parts;
 use litellm_gateway_auth::{
     AccessRequest, Auth, AuthFuture, AuthenticationMethod, Authenticator, Clock, Credential, Error,
     KeyHolder, NoAdditionalPolicy, VerifiedIdentity,
-    keys::{HeldKey, KeyHash},
+    keys::{HeldKey, KeyHash, KeyLimits},
 };
 use litellm_secret_value::SecretValue;
 use rstest::rstest;
@@ -27,6 +28,7 @@ impl Clock for At {
 struct Held {
     expires_at: Option<SystemTime>,
     models: Arc<[String]>,
+    limits: KeyLimits,
 }
 
 impl HeldKey for Held {
@@ -36,6 +38,10 @@ impl HeldKey for Held {
 
     fn models(&self) -> Arc<[String]> {
         self.models.clone()
+    }
+
+    fn limits(&self) -> KeyLimits {
+        self.limits.clone()
     }
 }
 
@@ -71,6 +77,7 @@ fn expiring(at: Option<u64>) -> Held {
     Held {
         expires_at: at.map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
         models: Arc::from([]),
+        limits: KeyLimits::default(),
     }
 }
 
@@ -115,6 +122,28 @@ async fn an_active_virtual_key_reaches_every_route_and_model(#[case] expires_at:
     }
 }
 
+#[tokio::test]
+async fn a_virtual_keys_limits_reach_its_caller() {
+    let limits = KeyLimits {
+        rpm: Some(2),
+        tpm: Some(100),
+        max_parallel_requests: Some(1),
+        model_rpm: Arc::new(BTreeMap::from([("claude".to_owned(), 1)])),
+        model_tpm: Arc::new(BTreeMap::from([("claude".to_owned(), 50)])),
+    };
+    let held = Held {
+        limits: limits.clone(),
+        ..expiring(None)
+    };
+
+    let key = auth(held)
+        .authenticate(&SecretValue::new(VIRTUAL_KEY))
+        .await
+        .unwrap();
+
+    assert_eq!(key.caller().authentication().limits, limits);
+}
+
 #[rstest]
 #[case::boundary(Some(NOW))]
 #[case::past(Some(NOW - 1))]
@@ -146,6 +175,7 @@ async fn a_key_with_a_model_list_may_call_only_what_the_proxy_lets_it(
     let held = Held {
         expires_at: None,
         models: models.iter().map(|model| (*model).to_owned()).collect(),
+        limits: KeyLimits::default(),
     };
     let identity = auth(held)
         .authenticate(&SecretValue::new(VIRTUAL_KEY))

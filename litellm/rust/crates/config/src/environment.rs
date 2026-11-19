@@ -35,6 +35,8 @@ pub struct Environment {
     pub default_max_retries: Option<String>,
     pub default_allowed_fails: Option<String>,
     pub default_cooldown_time_seconds: Option<String>,
+    pub litellm_rate_limit_window_size: Option<i64>,
+    pub litellm_tpm_token_reservation_enabled: Option<Flag>,
 }
 
 impl Environment {
@@ -92,6 +94,8 @@ mod tests {
             ("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", "10"),
             ("MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", "20"),
             ("NON_LLM_CONNECTION_TIMEOUT", "40"),
+            ("LITELLM_RATE_LIMIT_WINDOW_SIZE", "30"),
+            ("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false"),
         ])
         .unwrap();
 
@@ -106,6 +110,8 @@ mod tests {
                 max_request_body_decompression_ratio: Some(10),
                 max_decompressed_request_bodies_in_flight_mb: Some(20.0),
                 non_llm_connection_timeout: Some(40),
+                litellm_rate_limit_window_size: Some(30),
+                litellm_tpm_token_reservation_enabled: Some(Flag(false)),
                 ..Environment::default()
             }
         );

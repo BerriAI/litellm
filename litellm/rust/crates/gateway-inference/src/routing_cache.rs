@@ -59,6 +59,11 @@ impl RoutingCache {
             outcomes: InMemoryRouterCache::default(),
         }
     }
+
+    /// Each counter's value, `None` for one nothing counted.
+    pub(crate) async fn counted(&self, counters: &[Counter]) -> Result<Vec<Option<Number>>, Error> {
+        self.usage.get_many(counters).await
+    }
 }
 
 impl Default for RoutingCache {

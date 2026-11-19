@@ -4,15 +4,18 @@
 //! `litellm-router-core` (pick, retries, fallbacks, cooldowns), runs the core route on each
 //! attempt, and tells the host's callback hooks what happened to the call (`hooks.rs`).
 
+mod asked;
 mod audio_transcription;
 mod caching;
 mod chat_completions;
 mod error;
+mod group_usage;
 mod headers;
 mod hooks;
 pub mod messages;
 mod model_restamp;
 mod ocr;
+mod rate_limited;
 mod request;
 mod responses;
 pub mod routing;
@@ -34,9 +37,11 @@ use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
+pub use asked::call_type;
 pub use error::{BodyError, Ended, Error};
 pub use headers::ExposedHeader;
 pub use hooks::{CallHooks, CallType, Refusal, ServedCall};
+pub use rate_limited::RateLimited;
 pub use request::{JsonObject, MAX_BODY_BYTES, RequestId};
 pub use routing::Host;
 pub use routing_cache::{RouterTiers, RoutingCache};
@@ -162,6 +167,10 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
             request::MAX_BODY_BYTES,
         ))
         .layer(headers::layer())
+        .layer(axum::middleware::from_fn_with_state(
+            gateway.clone(),
+            group_usage::told::<H>,
+        ))
         .with_state(gateway)
 }
 

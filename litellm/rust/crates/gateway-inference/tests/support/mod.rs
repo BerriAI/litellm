@@ -115,7 +115,9 @@ pub fn app_with_callbacks(
         litellm_gateway_auth::Permissions::All,
         None,
         None,
-        NativeHost::new(Arc::new(Callbacks::new(callbacks).unwrap())),
+        NativeHost::new(Arc::new(
+            Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap(),
+        )),
     )
 }
 

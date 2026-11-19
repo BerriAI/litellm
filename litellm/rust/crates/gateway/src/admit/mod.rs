@@ -20,7 +20,7 @@ use litellm_model_catalog::CostMap;
 use litellm_router_core::registry::DeploymentFilter;
 use serde_json::{Map, Value};
 
-use crate::{AppState, Gateway};
+use crate::{AppState, Gateway, callbacks::parallel_request_limiter};
 pub use checks::Reason;
 use checks::{Authenticated, Fields};
 use groups::Groups;
@@ -86,6 +86,20 @@ const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
     (Box::new(Request::from_parts(request, body)), reason)
+}
+
+/// A key that counts tokens reserves what the body asks for before the call, and only Python's
+/// estimator reads a body that carries media, so that call goes to Python.
+fn token_estimate(
+    authenticated: &Authenticated,
+    path: &str,
+    fields: &mut Fields,
+) -> Option<Reason> {
+    let counts_tokens = authenticated
+        .as_ref()
+        .is_ok_and(|identity| identity.caller().authentication().limits.counts_tokens());
+    (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
+        .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }
 
 impl Admit {
@@ -187,7 +201,7 @@ impl Admit {
             return Err(refused(parts, body, reason));
         }
         let (body, whole) = body::read(&parts, body).await;
-        let Some(fields) =
+        let Some(mut fields) =
             whole.and_then(|sent| serde_json::from_slice::<Map<String, Value>>(&sent).ok())
         else {
             return Err(refused(
@@ -200,6 +214,9 @@ impl Admit {
             return Err(refused(parts, body, reason));
         }
         if let Some(reason) = self.model_access(&authenticated, &fields).await {
+            return Err(refused(parts, body, reason));
+        }
+        if let Some(reason) = token_estimate(&authenticated, parts.uri.path(), &mut fields) {
             return Err(refused(parts, body, reason));
         }
         parts.extensions.insert(JsonObject(fields));

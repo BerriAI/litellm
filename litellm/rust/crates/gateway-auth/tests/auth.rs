@@ -62,7 +62,7 @@ fn hash_token_matches_python_sha256_hexdigest() {
 use litellm_gateway_auth::{
     AccessRequest, AuthFuture, AuthenticatedCaller, AuthenticatedRequest, Authentication,
     AuthenticationMethod, Authenticator, Authorizer, Clock, Error, IdentityResolver, Permissions,
-    Principal, PrincipalKind, ResolvedIdentity, VerifiedIdentity, authenticate,
+    Principal, PrincipalKind, ResolvedIdentity, VerifiedIdentity, authenticate, keys::KeyLimits,
 };
 use std::{
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -116,6 +116,7 @@ impl Authenticator for Verifier {
                     verifier: "test-verifier".into(),
                     credential_id: "credential".into(),
                     expires_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(100)),
+                    limits: KeyLimits::default(),
                 },
                 restrictions: self.restrictions.clone(),
             })
