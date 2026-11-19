@@ -4996,6 +4996,75 @@ def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
 
+def _stored_chain(*items: dict[str, object]) -> dict[str, object]:
+    return {"object": "list", "data": list(items), "first_id": "msg_1", "last_id": "msg_2", "has_more": False}
+
+
+_STORED_USER_TURN: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_chain", "sent_instructions"),
+    [
+        (httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN)), None),
+        (
+            httpx.Response(200, json=_stored_chain(_system_input_item("Older prefix"), _STORED_USER_TURN)),
+            "Stable prefix",
+        ),
+        (httpx.Response(200, json=_stored_chain(_STORED_USER_TURN)), "Stable prefix"),
+        (
+            httpx.Response(404, json={"error": {"message": "Response not found", "type": "invalid_request_error"}}),
+            "Stable prefix",
+        ),
+    ],
+)
+async def test_acompletion_follow_up_sends_the_system_prompt_only_when_the_stored_chain_lacks_it(
+    stored_chain: httpx.Response, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=stored_chain
+        )
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        response: Final = await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "again"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            previous_response_id="resp_prior",
+        )
+    assert dict(chain.calls[0].request.url.params) == {"order": "asc", "limit": "20"}
+    assert chain.calls[0].request.headers["authorization"] == "Bearer sk-test"
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6.2-sol",
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}],
+        "previous_response_id": "resp_prior",
+        **({"instructions": sent_instructions} if sent_instructions else {}),
+    }
+    assert response.choices[0].message.content == "ok"
+
+
 @pytest.mark.parametrize(
     ("content_block", "expected_content"),
     [
@@ -5465,7 +5534,7 @@ def _bridged_transform_request(
     )
 
 
-@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}])
 @pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
 def test_chained_turn_keeps_leading_system_strings_in_instructions(continuation: dict[str, str], location: str) -> None:
     copied_continuation: Final = copy.deepcopy(continuation)
@@ -5558,25 +5627,30 @@ def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> No
         {"custom_llm_provider": "openai"},
         {"instructions": "Caller instructions", **continuation},
     )
-    assert request["instructions"] == "Be brief.\nCaller instructions"
-    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
+    assert request["input"] == [
+        *([] if continuation else [_system_input_item("Be brief.")]),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
 
 
 @pytest.mark.parametrize(
     ("params", "optional", "system_in_input"),
     [
-        ({}, {}, False),
-        ({}, {"store": True}, False),
+        ({}, {}, True),
+        ({}, {"store": True}, True),
         ({}, {"store": False}, True),
         ({}, {"extra_body": {"store": False}}, True),
-        ({}, {"store": False, "extra_body": {"store": True}}, False),
+        ({}, {"store": False, "extra_body": {"store": True}}, True),
         ({}, {"store": True, "extra_body": {"store": False}}, True),
         ({"extra_body": {"store": False}}, {"store": True}, True),
-        ({"extra_body": {"store": True}}, {"store": False}, False),
-        ({"store": False}, {}, False),
+        ({"extra_body": {"store": True}}, {"store": False}, True),
+        ({"store": False}, {}, True),
+        ({}, {"previous_response_id": "resp_prior"}, False),
+        ({}, {"store": True, "truncation": "auto"}, False),
     ],
 )
-def test_system_placement_uses_effective_upstream_store(
+def test_system_goes_in_input_unless_the_request_continues_a_chain(
     params: dict[str, object], optional: dict[str, object], system_in_input: bool
 ) -> None:
     request: Final = _bridged_transform_request(
@@ -5585,8 +5659,6 @@ def test_system_placement_uses_effective_upstream_store(
         {"custom_llm_provider": "openai", **params},
         copy.deepcopy(optional),
     )
-    upstream_store: Final = request.get("extra_body", {}).get("store", request.get("store"))
-    assert (upstream_store is False) == system_in_input
     assert request.get("instructions") == (None if system_in_input else "Be brief.")
     assert request["input"] == [
         *([_system_input_item("Be brief.")] if system_in_input else []),
@@ -5633,8 +5705,8 @@ def test_chat_store_drops_preserve_upstream_forwarding(params: dict[str, object]
     body: Final = json.loads(upstream.calls.last.request.content)
     assert body.get("store") is expected_store
     assert ("store" in body) == (expected_store is not None)
-    assert body.get("instructions") == (None if expected_store is False else "Be brief.")
-    assert [item["role"] for item in body["input"]] == (["system", "user"] if expected_store is False else ["user"])
+    assert "instructions" not in body
+    assert [item["role"] for item in body["input"]] == ["system", "user"]
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
