@@ -234,6 +234,12 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             if (inline_data := part.get("inlineData")) and (b64_json := inline_data.get("data"))
         ]
 
+        if not data_list:
+            from litellm.llms.gemini.image_generation.transformation import (
+                raise_if_image_gen_flagged,
+            )
+
+            raise_if_image_gen_flagged(response_json, model, raw_response, llm_provider="vertex_ai")
         usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
         traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
         return ImageResponse(

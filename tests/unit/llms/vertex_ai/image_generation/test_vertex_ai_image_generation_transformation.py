@@ -567,6 +567,30 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert finish_reason in str(exc.value)
         assert exc.value.llm_provider == "vertex_ai"
 
+    def test_transform_image_generation_response_raises_on_blocked_prompt(self):
+        """A prompt blocked before generation has promptFeedback.blockReason and
+        no candidates; it must raise too."""
+        from litellm.exceptions import ContentPolicyViolationError
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}}
+        mock_response.headers = {}
+
+        with pytest.raises(ContentPolicyViolationError) as exc:
+            self.config.transform_image_generation_response(
+                model="gemini-2.5-flash-image",
+                raw_response=mock_response,
+                model_response=ImageResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+        assert "PROHIBITED_CONTENT" in str(exc.value)
+        assert exc.value.provider_specific_fields["block_reason"] == "PROHIBITED_CONTENT"
+
 
 class TestVertexAIImagenImageGenerationConfig:
     def setup_method(self):
