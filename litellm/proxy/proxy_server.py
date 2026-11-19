@@ -2096,11 +2096,12 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
         if telemetry_start is not None:
             telemetry_start.add_done_callback(_log_telemetry_start_failure)
+        startup_callbacks: Final = tuple(litellm.logging_callback_manager.get_all_callbacks())
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
-                    await setup_proxy_callbacks(app, litellm.logging_callback_manager.get_all_callbacks())
+                    await setup_proxy_callbacks(app, startup_callbacks)
                     gc.freeze()
                     verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
                     yield state
@@ -2143,7 +2144,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             await _flush_spend_around_logging_drain_on_shutdown()
 
             await close_proxy_callbacks(
-                litellm.logging_callback_manager.get_all_callbacks(),
+                (*startup_callbacks, *litellm.logging_callback_manager.get_all_callbacks()),
                 timeout=GracefulShutdownManager.remaining(CALLBACK_CLOSE_TIMEOUT_SECONDS),
             )
 

@@ -2,11 +2,13 @@ import asyncio
 from typing import Final
 
 import pytest
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, WebSocket
+from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy import proxy_server
+from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_lifecycle import close_proxy_callbacks, setup_proxy_callbacks
 
 
@@ -39,22 +41,54 @@ class _HangingCallback(CustomLogger):
         await asyncio.Event().wait()
 
 
-def _reject_key() -> None:
-    raise HTTPException(status_code=401, detail="no key")
+class _PlainRouteCallback(CustomLogger):
+    async def async_setup_proxy(self) -> APIRouter:
+        router: Final = APIRouter()
+        router.add_route("/plugin/plain", lambda request: PlainTextResponse("open"))
+        return router
+
+
+class _WebsocketCallback(CustomLogger):
+    async def async_setup_proxy(self) -> APIRouter:
+        router: Final = APIRouter()
+
+        @router.websocket("/plugin/ws")
+        async def ws(websocket: WebSocket) -> None:
+            await websocket.accept()
+
+        return router
 
 
 @pytest.mark.asyncio
-async def test_callback_routes_are_served_only_behind_key_auth():
+async def test_callback_routes_are_served_only_to_a_valid_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(proxy_server, "master_key", "sk-the-master-key")
     app: Final = FastAPI()
     await setup_proxy_callbacks(app, [_RouteCallback()])
     client: Final = TestClient(app)
 
-    app.dependency_overrides[user_api_key_auth] = _reject_key
-    rejected: Final = client.get("/plugin/status")
-    app.dependency_overrides[user_api_key_auth] = lambda: None
-    allowed: Final = client.get("/plugin/status")
+    with pytest.raises(ProxyException) as missing:
+        client.get("/plugin/status")
+    with pytest.raises(ProxyException) as invalid:
+        client.get("/plugin/status", headers={"Authorization": "Bearer sk-not-a-key"})
+    allowed: Final = client.get("/plugin/status", headers={"Authorization": "Bearer sk-the-master-key"})
 
-    assert (rejected.status_code, allowed.status_code, allowed.json()) == (401, 200, {"ok": True})
+    assert (str(missing.value.code), str(invalid.value.code), allowed.status_code, allowed.json()) == (
+        "401",
+        "401",
+        200,
+        {"ok": True},
+    ), (missing.value.message, invalid.value.message, allowed.text)
+
+
+@pytest.mark.parametrize("callback_type", [_PlainRouteCallback, _WebsocketCallback])
+@pytest.mark.asyncio
+async def test_routes_that_cannot_carry_key_auth_abort_startup_and_are_not_served(callback_type: type[CustomLogger]):
+    app: Final = FastAPI()
+
+    with pytest.raises(ValueError, match="cannot carry LiteLLM key auth"):
+        await setup_proxy_callbacks(app, [callback_type()])
+
+    assert {route.path for route in app.routes if route.path.startswith("/plugin")} == set()
 
 
 @pytest.mark.asyncio

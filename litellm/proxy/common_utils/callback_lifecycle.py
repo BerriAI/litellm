@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from typing import Final
 
 from fastapi import Depends, FastAPI
+from fastapi.routing import APIRoute
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -21,6 +22,12 @@ async def setup_proxy_callbacks(app: FastAPI, callbacks: Iterable[object]) -> No
     for callback in _custom_loggers(callbacks):
         router = await callback.async_setup_proxy()
         if router is not None:
+            unprotected = tuple(route for route in router.routes if not isinstance(route, APIRoute))
+            if unprotected:
+                raise ValueError(
+                    f"Callback {type(callback).__name__} returned routes that cannot carry LiteLLM key auth: "
+                    f"{unprotected}. Register HTTP routes with add_api_route or the router decorators."
+                )
             app.include_router(router, dependencies=[Depends(user_api_key_auth)])
             app.openapi_schema = None  # rebind-ok: FastAPI caches the schema, so new routes must invalidate it
 

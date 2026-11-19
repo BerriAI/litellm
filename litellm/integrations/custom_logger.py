@@ -115,7 +115,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         Runs once when the proxy starts, before it serves traffic. Raising aborts startup.
 
-        Routes on a returned router are added to the proxy behind LiteLLM key auth.
+        HTTP API routes on a returned router are added to the proxy behind LiteLLM key auth.
+        Websocket routes, mounts and plain Starlette routes are refused.
         """
         return None
 
