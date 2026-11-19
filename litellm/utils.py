@@ -9499,6 +9499,8 @@ class ProviderConfigManager:
             return litellm.AzureAIDecisionsConfig()
         if provider == LlmProviders.VERCEL_AI_GATEWAY:
             return litellm.VercelAIGatewayDecisionsConfig()
+        if provider == LlmProviders.LITELLM_PROXY:
+            return litellm.LiteLLMProxyDecisionsConfig()
         return None
 
     @staticmethod

@@ -145,6 +145,11 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
     },
 }
 
+_OPENAI_PREDICATE_RESPONSE: Final[Mapping[str, object]] = {
+    **_OPENAI_RESPONSE,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+}
+
 
 class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
@@ -379,6 +384,34 @@ async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
     assert litellm.completion_cost(completion_response=response, call_type="acompletion") == pytest.approx(
         expected_chat_cost
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_litellm_proxy", "model"),
+    [(True, "openai/gpt-6-luna"), (False, "litellm_proxy/openai/gpt-6-luna")],
+)
+async def test_litellm_proxy_decisions_go_to_the_proxy_with_its_own_key(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    use_litellm_proxy: bool,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", use_litellm_proxy)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await litellm.adecisions(
+        model=model,
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer proxy-key"
+    assert json.loads(route.calls[0].request.content)["model"] == "openai/gpt-6-luna"
 
 
 @pytest.mark.asyncio
@@ -1446,6 +1479,7 @@ _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
         LlmProviders.AZURE.value,
         LlmProviders.OPENROUTER.value,
         LlmProviders.HOSTED_VLLM.value,
+        LlmProviders.LITELLM_PROXY.value,
     }
 )
 _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
