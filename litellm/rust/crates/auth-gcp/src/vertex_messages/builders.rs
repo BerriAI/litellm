@@ -24,7 +24,7 @@ pub(crate) fn build(
 ) -> Result<Arc<dyn GcpTokenSource>, GoogleLoginFailure> {
     credentials
         .build()
-        .map_err(|error| GoogleLoginFailure::new(exception, error.to_string()))
+        .map_err(|_| GoogleLoginFailure::new(exception, super::failure::UNLOADABLE_CREDENTIALS))
 }
 
 /// google-auth's `service_account.Credentials.from_service_account_info`, which requires a

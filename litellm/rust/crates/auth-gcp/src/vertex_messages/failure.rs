@@ -123,6 +123,17 @@ pub(crate) struct UnsignableKey(#[source] pub(crate) Error);
 /// google-auth's `sts.Client` raises as an `OAuthError` when STS refuses it.
 const STS_EXCHANGE_FAILED: &str = "failed to exchange token";
 
+// The SDK's own error text can quote a credential source's whole reply or file, so a token
+// failure reaches the caller only as one of these fixed messages.
+const TOKEN_ENDPOINT_UNREACHABLE: &str = "Vertex: the Google token endpoint could not be reached.";
+const EXCHANGE_REFUSED: &str =
+    "Vertex: Google's token exchange refused the external account credentials.";
+const KEY_CANNOT_SIGN: &str = "Vertex: the service account private key cannot sign a token.";
+const REFRESH_FAILED: &str = "Vertex: Google refused or could not complete the token refresh.";
+/// A credentials document Google's Rust SDK cannot load, whose own error text may quote it.
+pub(crate) const UNLOADABLE_CREDENTIALS: &str =
+    "Vertex: Google's Rust SDK cannot load these credentials.";
+
 const CA_BUNDLE_HINT: &str = "Google's Rust SDK verifies TLS against SSL_CERT_FILE, SSL_CERT_DIR or the system's certificates, never REQUESTS_CA_BUNDLE or CURL_CA_BUNDLE: set SSL_CERT_FILE to the same CA bundle.";
 
 fn causes<'a>(
@@ -165,14 +176,13 @@ impl GoogleLoginFailure {
         if let Some(failure) = litellm_error::find::<Self>(error) {
             return failure.clone();
         }
-        let report = litellm_error::Report::new(error).to_string();
         let http = litellm_error::find::<reqwest::Error>(error);
         if http.is_some_and(|http| http.status().is_none() && !http.is_decode()) {
             let hint = (rejects_the_certificate(error) && names_a_requests_only_bundle(env))
                 .then_some(CA_BUNDLE_HINT);
             return Self::new(
                 PythonException::Transport,
-                [Some(report.as_str()), hint]
+                [Some(TOKEN_ENDPOINT_UNREACHABLE), hint]
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>()
@@ -189,11 +199,11 @@ impl GoogleLoginFailure {
             exchange_refused,
             litellm_error::find::<UnsignableKey>(error).is_some(),
         ) {
-            (true, _) => PythonException::OAuth,
-            (false, true) => PythonException::Value,
-            (false, false) => PythonException::Refresh,
+            (true, _) => (PythonException::OAuth, EXCHANGE_REFUSED),
+            (false, true) => (PythonException::Value, KEY_CANNOT_SIGN),
+            (false, false) => (PythonException::Refresh, REFRESH_FAILED),
         };
-        Self::new(exception, report)
+        Self::new(exception.0, exception.1)
     }
 }
 

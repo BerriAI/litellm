@@ -1394,4 +1394,14 @@ mod tests {
             failure.message
         );
     }
+
+    #[test]
+    fn a_token_failure_never_quotes_the_sdk_error() {
+        let error = std::io::Error::other(r#"missing field in {"saml": "secret-assertion"}"#);
+
+        let failure = GoogleLoginFailure::token(&error, &FakeEnvironment::default());
+
+        assert_eq!(failure.exception, PythonException::Refresh);
+        assert!(!failure.message.contains("secret-assertion"));
+    }
 }
