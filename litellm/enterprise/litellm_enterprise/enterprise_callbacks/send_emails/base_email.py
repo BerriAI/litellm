@@ -49,6 +49,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.common_utils.budget_alerts import (
+    parse_budget_alert_recipients as _parse_email_list,
+)
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
@@ -63,15 +66,6 @@ def _max_budget_alert_id(user_info: CallInfo) -> str:
     if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
         return f"team_member:{user_info.user_id}:{user_info.team_id}"
     return user_info.token or user_info.user_id or "default_id"
-
-
-def _parse_email_list(raw) -> List[str]:
-    """Parse emails from a list or comma-separated string."""
-    if isinstance(raw, list):
-        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
-    elif isinstance(raw, str):
-        return [e.strip() for e in raw.split(",") if e.strip()]
-    return []
 
 
 class BaseEmailLogger(CustomLogger):

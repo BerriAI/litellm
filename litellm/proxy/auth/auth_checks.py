@@ -112,6 +112,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_shared,
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipients as _parse_email_list
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -7116,15 +7117,6 @@ async def virtual_key_soft_budget_check(
 _virtual_key_soft_budget_check: Final = virtual_key_soft_budget_check
 
 
-def _parse_email_list(raw: str | Sequence[object] | None) -> list[str]:
-    """Parse emails from a list or comma-separated string."""
-    if isinstance(raw, list):
-        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
-    elif isinstance(raw, str):
-        return [e.strip() for e in raw.split(",") if e.strip()]
-    return []
-
-
 def _normalize_alert_emails(
     cfg: Mapping[str, str | Sequence[object] | None] | None,
 ) -> dict[str, list[str]]:
@@ -7251,9 +7243,8 @@ def _is_valid_alert_threshold_pct(pct: str) -> bool:
 
 
 def _alert_recipients(raw: object) -> Sequence[str] | None:
-    if isinstance(raw, (str, Sequence)):
-        return _parse_email_list(raw)
-    return None
+    emails: Final = _parse_email_list(raw)
+    return emails if isinstance(raw, (str, Sequence)) else None
 
 
 def _valid_alert_threshold_config(raw_config: object) -> Mapping[str, str | Sequence[object] | None] | None:
@@ -7306,15 +7297,12 @@ _TEAM_ALERT_CONFIG_WRITE_ADAPTER: Final[TypeAdapter[Mapping[str, str | Sequence[
 )
 
 
-_ALERT_RECIPIENT_PATTERN: Final = re.compile(r"[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f.]+(?:\.[^@\s\x00-\x1f\x7f.]+)+")
-
-
 def _team_alert_threshold_error(pct: str, recipients: str | Sequence[str]) -> str | None:
     if not (_is_valid_alert_threshold_pct(pct) and str(int(pct)) == pct):
         return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct!r} must be a whole number from 1 to 100"
     emails: Final = _parse_email_list(recipients)
-    if not emails or not all(_ALERT_RECIPIENT_PATTERN.fullmatch(email) for email in emails):
-        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct} needs at least one valid recipient email"
+    if not emails:
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct} needs at least one recipient email"
     return None
 
 

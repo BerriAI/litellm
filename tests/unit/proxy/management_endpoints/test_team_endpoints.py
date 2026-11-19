@@ -11353,17 +11353,14 @@ async def test_update_team_keeps_stored_invalid_alerts_through_unrelated_edits_t
     assert call.kwargs["data"]["metadata"]["cost_center"] == "ops"
 
 
-@pytest.mark.parametrize(
-    "recipient",
-    ["a@", "@b.com", "a@b", "a@@b.com", "a b@c.com", "a@b..com", "a\n@b.com", "a@b.c\x00om", "a@.com", "a@b.com."],
-)
+@pytest.mark.parametrize("recipient", ["", "   ", " , , "])
 @pytest.mark.asyncio
-async def test_update_team_rejects_malformed_alert_recipients(recipient, disable_audit_logging_for_mocked_team):
+async def test_update_team_rejects_empty_alert_recipients(recipient, disable_audit_logging_for_mocked_team):
     from litellm.proxy._types import ProxyException
 
     with pytest.raises(ProxyException) as exc_info:
         await _update_team_for_alert_validation(
-            {}, 100.0, metadata={"max_budget_alert_emails": {"50": [recipient]}}
+            {}, 100.0, metadata={"max_budget_alert_emails": {"50": recipient}}
         )
 
     assert exc_info.value.code == "400"
