@@ -18,6 +18,7 @@ _MODEL: Final = "messages-failure-hook"
 _MODULE: Final = "failure_hook_replacement"
 _REPLACEMENT: Final = "rewritten by hook"
 _UPSTREAM_DENIAL: Final = "The security token included in the request is invalid."
+_WITH_RETRY_HEADERS: Final = "with-retry-headers"
 _MODULE_SOURCE: Final = f'''from fastapi import HTTPException
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -27,9 +28,13 @@ class RetryableDenials(CustomLogger):
     async def async_post_call_failure_hook(
         self, request_data, original_exception, user_api_key_dict, traceback_str=None
     ):
-        if getattr(original_exception, "status_code", None) == 403:
-            return HTTPException(status_code=500, detail="{_REPLACEMENT}")
-        return None
+        if getattr(original_exception, "status_code", None) != 403:
+            return None
+        if "{_WITH_RETRY_HEADERS}" in str(request_data.get("messages")):
+            return HTTPException(
+                status_code=503, detail="{_REPLACEMENT}", headers={{"retry-after": "7", "x-should-retry": "true"}}
+            )
+        return HTTPException(status_code=500, detail="{_REPLACEMENT}")
 
 
 replacer = RetryableDenials()
@@ -107,6 +112,22 @@ def test_messages_answers_the_error_the_failure_hook_returns(rig: Rig, stream: b
     assert body["type"] == "error", body
     assert object_value(body["error"])["message"] == _REPLACEMENT, body
     assert _UPSTREAM_DENIAL not in response.text, response.text
+    assert _upstream_calls(rig, marker) == 1
+
+
+def test_messages_forwards_the_headers_on_the_error_the_failure_hook_returns(rig: Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    body: Final = {
+        **_messages_body(marker, stream=False),
+        "messages": [{"role": "user", "content": f"marker-{marker} {_WITH_RETRY_HEADERS}"}],
+    }
+    response: Final = rig.gateway.request("POST", "/v1/messages", body)
+
+    assert response.status_code == 503, response.text
+    assert object_value(JSON_OBJECT.validate_json(response.content)["error"])["message"] == _REPLACEMENT, response.text
+    assert (response.headers.get("retry-after"), response.headers.get("x-should-retry")) == ("7", "true"), dict(
+        response.headers
+    )
     assert _upstream_calls(rig, marker) == 1
 
 

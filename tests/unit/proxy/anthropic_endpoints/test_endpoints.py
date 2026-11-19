@@ -742,7 +742,11 @@ class _RewriteEveryFailure(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> HTTPException:
-        return HTTPException(status_code=500, detail="rewritten by hook")
+        return HTTPException(
+            status_code=500,
+            detail="rewritten by hook",
+            headers={"retry-after": "7", "x-should-retry": "true", "strict-transport-security": "max-age=1"},
+        )
 
 
 @pytest.mark.asyncio
@@ -785,6 +789,8 @@ async def test_messages_answers_the_error_the_failure_hook_returns(denial: Excep
 
     assert response.status_code == 500
     assert json.loads(response.body)["error"]["message"] == "rewritten by hook"
+    assert (response.headers.get("retry-after"), response.headers.get("x-should-retry")) == ("7", "true")
+    assert "strict-transport-security" not in response.headers
 
 
 class TestErrorLogCarriesCallId:

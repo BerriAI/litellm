@@ -15,6 +15,7 @@ import litellm
 from litellm.anthropic_interface.exceptions import (
     AnthropicExceptionMapping,
 )
+from litellm.constants import UNSAFE_PROXY_RESPONSE_HEADERS
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.tool_fields import first_validation_error
@@ -280,7 +281,12 @@ async def anthropic_response(
         )
 
         if isinstance(failure, HTTPException):
-            return _anthropic_error_json_response(proxy_exception_from_http_exception(failure, headers), request)
+            client_headers: Final = {
+                name: value
+                for name, value in {**(failure.headers or {}), **headers}.items()
+                if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS
+            }
+            return _anthropic_error_json_response(proxy_exception_from_http_exception(failure, client_headers), request)
 
         error_msg: Final = f"{answered}"
         return _anthropic_error_json_response(
