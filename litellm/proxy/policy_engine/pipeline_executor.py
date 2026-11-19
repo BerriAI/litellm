@@ -386,6 +386,51 @@ def _release_original_chunks(
     )
 
 
+async def scan_buffered_stream_with_write_back(
+    scanner: CustomGuardrail,
+    *,
+    guardrail_name: str,
+    endpoint_translation: "BaseTranslation",
+    streaming_chunks: list[object],  # mutable-ok: shared buffered-stream chunks the translation rewrites in place
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as data
+    user_api_key_dict: "UserAPIKeyAuth",
+    litellm_logging_obj: "LiteLLMLoggingObj | None",
+    stream_already_sent: bool,
+) -> None:
+    """Scan a buffered stream through the endpoint translation, writing text and tool-call rewrites back into
+    ``streaming_chunks`` on translations that support ended-stream write-back. A rewrite that cannot reach the
+    client is discarded and the original chunks are restored, so the client gets the stream the provider sent."""
+    observer: Final = _StreamRewriteObserver(scanner)
+    rewrite_undeliverable_reason: Final = _rewrite_undeliverable_reason(
+        type(endpoint_translation).delivers_ended_stream_rewrites, stream_already_sent
+    )
+    originals: Final = copy.deepcopy(streaming_chunks)
+    try:
+        if rewrite_undeliverable_reason is None:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=streaming_chunks,
+                guardrail_to_apply=observer,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                deliver_ended_stream_rewrites=True,
+            )
+        else:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=streaming_chunks,
+                guardrail_to_apply=observer,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            )
+    except UndeliverableStreamRewrite as undeliverable:
+        _release_original_chunks(guardrail_name, undeliverable.reason, streaming_chunks, originals)
+        return
+    discard_reason: Final = observer.discard_reason(rewrite_undeliverable_reason)
+    if discard_reason is not None:
+        _release_original_chunks(guardrail_name, discard_reason, streaming_chunks, originals)
+
+
 class PipelineExecutor:
     """Executes guardrail pipelines with ordered, conditional step logic."""
 
@@ -545,38 +590,20 @@ class PipelineExecutor:
             if PipelineExecutor.supports_unified_execution(callback)
             else _LegacyHookStreamAdapter(callback, endpoint_translation, user_api_key_dict)
         )
-        observer: Final = _StreamRewriteObserver(scanner)
-        rewrite_undeliverable_reason: Final = _rewrite_undeliverable_reason(
-            type(endpoint_translation).delivers_ended_stream_rewrites, stream_already_sent
-        )
-        originals: Final = copy.deepcopy(streaming_chunks)
         hook_input.pop("response", None)
         try:
-            if rewrite_undeliverable_reason is None:
-                await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=streaming_chunks,
-                    guardrail_to_apply=observer,
-                    litellm_logging_obj=litellm_logging_obj,
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=hook_input,
-                    deliver_ended_stream_rewrites=True,
-                )
-            else:
-                await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=streaming_chunks,
-                    guardrail_to_apply=observer,
-                    litellm_logging_obj=litellm_logging_obj,
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=hook_input,
-                )
-        except UndeliverableStreamRewrite as undeliverable:
-            _release_original_chunks(step.guardrail, undeliverable.reason, streaming_chunks, originals)
-            return
+            await scan_buffered_stream_with_write_back(
+                scanner,
+                guardrail_name=step.guardrail,
+                endpoint_translation=endpoint_translation,
+                streaming_chunks=streaming_chunks,
+                request_data=hook_input,
+                user_api_key_dict=user_api_key_dict,
+                litellm_logging_obj=litellm_logging_obj,
+                stream_already_sent=stream_already_sent,
+            )
         finally:
             _name_step_that_ran(hook_input, metadata_key, step.guardrail)
-        discard_reason: Final = observer.discard_reason(rewrite_undeliverable_reason)
-        if discard_reason is not None:
-            _release_original_chunks(step.guardrail, discard_reason, streaming_chunks, originals)
 
     @staticmethod
     async def _run_step(
