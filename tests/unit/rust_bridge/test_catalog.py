@@ -202,6 +202,27 @@ def test_only_claude_on_vertex_ai_messages_is_served_by_rust(model: str, target:
     assert catalog.decision(context) is expected
 
 
+@pytest.mark.parametrize(
+    ("provider", "target", "expected"),
+    (
+        ("anthropic", Target.MESSAGES, Decision.RUST_REQUIRED),
+        ("azure_ai", Target.MESSAGES, Decision.RUST_REQUIRED),
+        ("vertex_ai", Target.MESSAGES, Decision.RUST_REQUIRED),
+        ("anthropic", None, Decision.PYTHON),
+        ("azure_ai", None, Decision.PYTHON),
+        ("vertex_ai", None, Decision.PYTHON),
+        ("azure_ai", Target.CHAT_COMPLETIONS, Decision.PYTHON),
+        ("azure_ai", Target.RESPONSES, Decision.PYTHON),
+    ),
+)
+def test_native_messages_providers_require_rust_only_for_a_native_messages_target(
+    provider: str, target: Target | None, expected: Decision
+) -> None:
+    context: Final = RouteContext(Route.MESSAGES, provider=provider, target=target)
+
+    assert catalog.decision(context) is expected
+
+
 def test_vertex_ai_messages_passthrough_stays_on_python() -> None:
     context: Final = RouteContext(Route.MESSAGES, provider="vertex_ai", target=Target.MESSAGES_PASSTHROUGH)
 

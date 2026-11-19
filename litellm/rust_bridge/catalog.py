@@ -206,20 +206,19 @@ RULES: Final[Rules] = (
         targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES, Target.MESSAGES_PASSTHROUGH}),
     ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
-    RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic", "azure_ai"})),
+    # azure_ai and vertex_ai serve native Messages only for Claude (`"claude" in model`), so the target, not the
+    # provider, decides: their other models translate on Python, also when `_rust_only_refusal` has no target.
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.RUST_REQUIRED,
+        providers=frozenset({"anthropic", "azure_ai", "vertex_ai"}),
+        targets=frozenset({Target.MESSAGES}),
+    ),
     RouteRule(
         Route.MESSAGES,
         Rollout.RUST_REQUIRED,
         providers=frozenset({"bedrock"}),
         targets=frozenset({Target.BEDROCK_INVOKE}),
-    ),
-    # Claude on Vertex AI: only a model Python's partner config serves (`"claude" in model`) resolves
-    # to the Messages target; Gemini, Llama, Mistral and other partners keep their Python targets.
-    RouteRule(
-        Route.MESSAGES,
-        Rollout.RUST_REQUIRED,
-        providers=frozenset({"vertex_ai"}),
-        targets=frozenset({Target.MESSAGES}),
     ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
