@@ -6055,6 +6055,57 @@ async def test_view_spend_logs_internal_user_combines_user_with_api_key(client, 
         ps.user_api_key_cache.delete_cache(other_key_hash)
 
 
+@pytest.mark.parametrize("route", ["/spend/logs", "/spend/logs/v2"])
+def test_spend_logs_key_without_key_identity_is_forbidden(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    mock_client: Final = _CapturePrismaClient()
+    monkeypatch.setattr(ps, "prisma_client", mock_client)
+    monkeypatch.setattr(ps, "master_key", "sk-master")
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth()
+    try:
+        response: Final = client.get(
+            route,
+            params={"start_date": "2024-01-01", "end_date": "2024-12-31", "summarize": "false"},
+        )
+        assert response.status_code == 403, response.text
+        assert mock_client.db.captured_where is None
+        assert mock_client.db.captured_params is None
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_view_spend_logs_deleted_key_filter_preserves_user_scope(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+) -> None:
+    mock_client: Final = _CapturePrismaClient()
+    deleted_hash: Final = hash_token_if_needed("sk-deleted-spend-filter")
+    monkeypatch.setattr(ps, "prisma_client", mock_client)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal-user-1"
+    )
+    try:
+        response: Final = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-01",
+                "end_date": "2024-12-31",
+                "summarize": "false",
+                "api_key": deleted_hash,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == []
+        assert mock_client.db.captured_where == {
+            "api_key": deleted_hash,
+            "user": "internal-user-1",
+            "startTime": {"gte": "2024-01-01T00:00:00+00:00", "lte": "2024-12-31T00:00:00+00:00"},
+        }
+        assert rust_auth_stores.key.lookups == [(deleted_hash, False)]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 def test_view_spend_logs_org_admin_keeps_the_user_filter_they_asked_for(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
