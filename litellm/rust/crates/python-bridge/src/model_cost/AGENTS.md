@@ -1,5 +1,6 @@
 # Model cost bridge
 
+- Python reads its settings and passes the values in. `NativeCostMapSource.remote`, `NativeFetchPolicy` and `NativeModelCostMap.bundled` apply the core's rule and defaults to them, and none of them reads the environment
 - `NativeModelCostMap` holds inputs only, the installed `CostMap`, kept `Registrations` and the name index. Python's `litellm.model_cost` is the only copy of the live rows
 - Every call that reads or writes rows takes the dict as an argument. Never store rows or build a second table here
 - `LiveDict` holds a reference to that same dict and reads it under the GIL on every query, so a Python write is seen on the next read
@@ -14,4 +15,4 @@
 - `register` keeps a registration only after its pass finished, so an exception in a host call keeps nothing
 - `rows=None` writes each entry into whichever table is published at that moment and never reports a swap
 - `refresh_blocking` and `fetch_blocking` run on a throwaway runtime with an unpooled client so an importing process can still fork. `refresh` is for workers after the fork
-- `refresh_blocking` and `refresh` fetch and read off the GIL and touch no state. `install_refreshed` is the only step that needs the GIL, since it builds the table
+- `refresh_blocking` and `refresh` fetch and read off the GIL and touch no state. They return a `CostMapRefreshed` or a `CostMapKept`, whose wording comes from the core's `Refreshed::or_kept`, so no failure text is written in Python. `install_refreshed` is the only step that needs the GIL, since it builds the table

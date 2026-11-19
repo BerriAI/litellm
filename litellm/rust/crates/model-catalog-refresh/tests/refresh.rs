@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use litellm_model_catalog::{BUNDLED_REGISTRY, IntegrityLimits, git_blob_id};
-use litellm_model_catalog_refresh::{Failed, Fetched, Refreshed, Source, refresh};
+use litellm_model_catalog_refresh::{
+    Failed, Fetched, Kept, Refreshed, Remote, RetryPolicy, Source, refresh,
+};
 use rstest::rstest;
 
 struct Scripted(Result<Fetched, Failed>);
@@ -13,8 +15,11 @@ impl Source for Scripted {
 }
 
 fn limits() -> IntegrityLimits {
-    IntegrityLimits::new(50, 0.5).unwrap()
+    IntegrityLimits::DEFAULT
 }
+
+const PRESIGNED: &str = "https://user:secret@example.com/cost.json?X-Amz-Signature=abc#part";
+const SHOWN: &str = "https://example.com/cost.json";
 
 fn document(body: &[u8]) -> Scripted {
     Scripted(Ok(Fetched {
@@ -62,4 +67,120 @@ async fn a_document_the_limits_refuse_is_rejected(#[case] body: &[u8], #[case] i
         panic!("the document must be refused");
     };
     assert_eq!(error.is_integrity(), integrity);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_replaced_document_is_handed_to_the_host() {
+    let cost_map = refresh(&document(BUNDLED_REGISTRY), limits())
+        .await
+        .or_kept(PRESIGNED)
+        .unwrap();
+    assert_eq!(
+        cost_map.provenance().revision,
+        git_blob_id(BUNDLED_REGISTRY)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failed_fetch_reports_the_fetch_failure() {
+    let failed = Failed {
+        reason: format!("HTTP 404 from {SHOWN}"),
+        retryable: false,
+        retry_after: None,
+    };
+    let refreshed = refresh(&Scripted(Err(failed)), limits()).await;
+    assert_eq!(
+        refreshed.or_kept(PRESIGNED).unwrap_err(),
+        Kept {
+            detail: format!("HTTP 404 from {SHOWN}"),
+            reason: format!("HTTP 404 from {SHOWN}"),
+            fallback_reason: format!("Remote fetch failed: HTTP 404 from {SHOWN}"),
+        }
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_document_that_lost_its_models_reports_integrity_without_the_url_credentials() {
+    let body = br#"{"only": {"litellm_provider": "openai"}}"#;
+    let kept = refresh(&document(body), limits())
+        .await
+        .or_kept(PRESIGNED)
+        .unwrap_err();
+    assert_eq!(
+        kept.reason,
+        format!("model cost map from {SHOWN} failed integrity validation")
+    );
+    assert_eq!(
+        kept.fallback_reason,
+        "Remote data failed integrity validation"
+    );
+    assert!(
+        kept.detail.contains("has 1 models, below minimum"),
+        "{}",
+        kept.detail
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_document_that_does_not_read_reports_invalid_json_without_the_url_credentials() {
+    let kept = refresh(&document(b"[1, 2]"), limits())
+        .await
+        .or_kept(PRESIGNED)
+        .unwrap_err();
+    assert_eq!(
+        kept.reason,
+        format!("invalid JSON from {SHOWN}: {}", kept.detail)
+    );
+    assert_eq!(
+        kept.fallback_reason,
+        format!(
+            "Remote fetch failed: invalid JSON from {SHOWN}: {}",
+            kept.detail
+        )
+    );
+    assert!(!kept.detail.is_empty());
+}
+
+#[rstest]
+#[case::remote(false, false, Remote::At("https://example.com/cost.json".into()))]
+#[case::local_override(true, false, Remote::Off)]
+#[case::offline(false, true, Remote::Off)]
+#[case::both(true, true, Remote::Off)]
+fn the_local_override_and_offline_mode_each_turn_the_remote_document_off(
+    #[case] local_only: bool,
+    #[case] offline: bool,
+    #[case] remote: Remote,
+) {
+    assert_eq!(
+        Remote::new("https://example.com/cost.json".into(), local_only, offline),
+        remote
+    );
+}
+
+#[rstest]
+fn the_default_policy_is_three_attempts_of_five_seconds_two_to_thirty_apart() {
+    assert_eq!(
+        RetryPolicy::DEFAULT,
+        RetryPolicy {
+            max_attempts: 3,
+            timeout: Duration::from_secs(5),
+            min_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(30),
+        }
+    );
+}
+
+#[rstest]
+fn the_default_limits_are_fifty_models_and_half_the_bundled_count() {
+    assert_eq!(
+        (
+            IntegrityLimits::DEFAULT.min_model_count(),
+            IntegrityLimits::DEFAULT.min_reference_ratio()
+        ),
+        (50, 0.5)
+    );
 }

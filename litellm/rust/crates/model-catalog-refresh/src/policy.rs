@@ -17,6 +17,14 @@ pub const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
 impl RetryPolicy {
+    /// What every host uses unless a caller asks otherwise: 3 attempts of 5 seconds, 2 to 30 seconds apart
+    pub const DEFAULT: Self = Self {
+        max_attempts: 3,
+        timeout: Duration::from_secs(5),
+        min_delay: Duration::from_secs(2),
+        max_delay: Duration::from_secs(30),
+    };
+
     pub(crate) fn backoff(&self) -> ExponentialBackoff {
         ExponentialBuilder::new()
             .with_min_delay(self.min_delay)

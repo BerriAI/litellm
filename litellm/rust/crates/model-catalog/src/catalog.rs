@@ -121,6 +121,20 @@ impl IntegrityLimits {
         min_reference_ratio: 0.0,
     };
 
+    /// What every host uses unless its operator sets otherwise: at least 50 models and half the bundled count
+    pub const DEFAULT: Self = Self {
+        min_model_count: 50,
+        min_reference_ratio: 0.5,
+    };
+
+    pub fn min_model_count(&self) -> usize {
+        self.min_model_count
+    }
+
+    pub fn min_reference_ratio(&self) -> f64 {
+        self.min_reference_ratio
+    }
+
     pub fn new(min_model_count: usize, min_reference_ratio: f64) -> Option<Self> {
         (0.0..=1.0).contains(&min_reference_ratio).then_some(Self {
             min_model_count,

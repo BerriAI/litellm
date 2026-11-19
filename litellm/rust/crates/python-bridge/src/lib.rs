@@ -72,9 +72,9 @@ mod _native {
     use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
     #[pymodule_export]
     use crate::model_cost::{
-        CostMapRefreshed, NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched,
-        NativeInstalled, NativeModelCostMap, NativeModelCostMapState, NativeProvenance,
-        NativeRegistered, NativeRejected, NativeTableSwapped,
+        CostMapKept, CostMapRefreshed, NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy,
+        NativeFetched, NativeInstalled, NativeModelCostMap, NativeModelCostMapState,
+        NativeProvenance, NativeRegistered, NativeRejected, NativeTableSwapped,
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
@@ -254,6 +254,7 @@ mod tests {
                 "NativeFetched",
                 "NativeFetchFailed",
                 "CostMapRefreshed",
+                "CostMapKept",
                 "TokenCounter",
                 "Tokenizer",
                 "RouterCoreHandle",
