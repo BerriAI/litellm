@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
+from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
@@ -483,7 +484,7 @@ def _messages_without_rejected_reasoning(
 async def _aresponses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _ResponsesResult]:
-    responses_kwargs: Final = responses_kwargs_for(messages)
+    responses_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(messages))
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
@@ -494,14 +495,14 @@ async def _aresponses_without_rejected_reasoning(
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
+        replay_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(replayed_messages))
         return replay_kwargs, await litellm.aresponses(**replay_kwargs)
 
 
 def _responses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _SyncResponsesResult]:
-    responses_kwargs: Final = responses_kwargs_for(messages)
+    responses_kwargs: Final = without_stored_instructions(responses_kwargs_for(messages))
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
@@ -512,7 +513,7 @@ def _responses_without_rejected_reasoning(
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
+        replay_kwargs: Final = without_stored_instructions(responses_kwargs_for(replayed_messages))
         return replay_kwargs, litellm.responses(**replay_kwargs)
 
 
