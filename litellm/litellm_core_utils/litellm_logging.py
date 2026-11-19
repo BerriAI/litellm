@@ -5153,7 +5153,13 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
     def _failure_handler_helper_fn(
-        self, exception, traceback_exception, start_time=None, end_time=None, *, estimate_prompt_tokens: bool = True
+        self,
+        exception: Exception,
+        traceback_exception,
+        start_time=None,
+        end_time=None,
+        *,
+        estimate_prompt_tokens: bool = True,
     ):
         if start_time is None:
             start_time = self.start_time
