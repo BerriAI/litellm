@@ -12,6 +12,7 @@ macro_rules_attribute::attribute_alias! {
 
 mod access_group;
 mod budget;
+mod budget_window_spend;
 mod database;
 mod end_user;
 mod jwt_key_mapping;
@@ -31,6 +32,7 @@ mod utc_timestamp;
 
 pub use access_group::{AccessGroup, AccessGroupRepository};
 pub use budget::{Budget, BudgetRepository};
+pub use budget_window_spend::{BudgetWindowSpend, BudgetWindowSpendRepository};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
 pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim};

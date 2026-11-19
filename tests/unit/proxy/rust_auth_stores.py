@@ -23,6 +23,7 @@ from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
     RustAccessGroupRepository,
     RustBudgetRepository,
+    RustBudgetWindowSpendRepository,
     RustEndUserRepository,
     RustJwtKeyMappingRepository,
     RustKeyRepository,
@@ -412,6 +413,28 @@ class FakeTagStore:
         return list(self._rows.reader)[:limit]
 
 
+WindowKey = tuple[str, str, str]
+
+
+@dataclass
+class BudgetWindowSpendRows:
+    """``LiteLLM_BudgetWindowSpend`` rows by ``(entity_type, entity_id, window_duration)``, reader and writer apart."""
+
+    reader: MutableMapping[WindowKey, Row] = field(default_factory=dict)
+    writer: MutableMapping[WindowKey, Row] = field(default_factory=dict)
+
+
+class FakeBudgetWindowSpendStore:
+    def __init__(self, rows: BudgetWindowSpendRows) -> None:
+        self._rows: Final = rows
+
+    async def find(
+        self, entity_type: str, entity_id: str, window_duration: str, *, use_writer: bool = False
+    ) -> str | None:
+        rows: Final = self._rows.writer if use_writer else self._rows.reader
+        return _encoded(rows.get((entity_type, entity_id, window_duration)))
+
+
 @dataclass
 class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
@@ -427,6 +450,7 @@ class RustAuthStores:
     tag: TagRows = field(default_factory=TagRows)
     access_group: RustStoreRows = field(default_factory=RustStoreRows)
     object_permission: RustStoreRows = field(default_factory=RustStoreRows)
+    budget_window_spend: BudgetWindowSpendRows = field(default_factory=BudgetWindowSpendRows)
 
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
@@ -443,6 +467,7 @@ class RustAuthStores:
             RustTagRepository: FakeTagStore(self.tag),
             RustAccessGroupRepository: FakeAccessGroupStore(self.access_group),
             RustObjectPermissionRepository: FakeObjectPermissionStore(self.object_permission),
+            RustBudgetWindowSpendRepository: FakeBudgetWindowSpendStore(self.budget_window_spend),
         }
 
 
