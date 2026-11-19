@@ -133,7 +133,7 @@ async def test_only_forwarded_subscription_oauth_skips_budget_hold(
         )
         monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
         monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
-    result = await reserve_budget_for_request(
+    result: Final = await reserve_budget_for_request(
         request_body={
             "model": "claude",
             "messages": ANTHROPIC_MESSAGES,
@@ -215,7 +215,7 @@ async def test_subscription_hold_uses_consumed_credential_and_prepared_model(
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "operator-bearer")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     credential: Final = "sk-ant-oat-test" if source == "bare" else "Bearer sk-ant-oat-test"
-    result = await reserve_budget_for_request(
+    result: Final = await reserve_budget_for_request(
         request_body={"model": "claude", "messages": ANTHROPIC_MESSAGES, "max_tokens": 1},
         route=route,
         llm_router=router,
