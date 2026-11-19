@@ -1288,6 +1288,19 @@ def test_defs_unpacked_resolves_each_ref_to_the_block_it_points_at_when_both_def
     }
 
 
+def test_defs_unpacked_inlines_a_defs_entry_that_refs_the_definitions_entry_of_the_same_name() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/T"}},
+        "$defs": {"T": {"type": "object", "properties": {"n": {"$ref": "#/definitions/T"}}}},
+        "definitions": {"T": {"type": "integer"}},
+    }
+    assert defs_unpacked(schema) == {
+        "type": "object",
+        "properties": {"a": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+    }
+
+
 @pytest.mark.parametrize("block", ["$defs", "definitions"])
 def test_defs_unpacked_resolves_a_ref_target_that_is_itself_a_ref_into_its_own_defs(block: str) -> None:
     outer: Final = {"$ref": f"#/{block}/Inner", block: {"Inner": {"type": "string"}}}

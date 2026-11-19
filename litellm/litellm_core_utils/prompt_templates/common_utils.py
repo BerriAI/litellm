@@ -1057,22 +1057,22 @@ def unpack_defs(
             # --- Case 1: this node *is* a reference ---
             if "$ref" in node:
                 ref_name = node["$ref"].split("/")[-1]
-
-                # Check for circular reference in the resolution chain
-                if ref_name in ref_chain:
-                    # Circular reference detected - leave as-is to prevent infinite recursion
-                    continue
-
-                target_schema = next(
+                resolved_ref = next(
                     (
-                        scope[node["$ref"]] if node["$ref"] in scope else scope[ref_name]
+                        (node["$ref"], scope[node["$ref"]]) if node["$ref"] in scope else (ref_name, scope[ref_name])
                         for scope in active_defs
                         if ref_name in scope
                     ),
                     None,
                 )
                 # Unknown reference – leave untouched
-                if target_schema is None:
+                if resolved_ref is None:
+                    continue
+                ref_key, target_schema = resolved_ref
+
+                # Check for circular reference in the resolution chain
+                if ref_key in ref_chain:
+                    # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
                 replacement = (
@@ -1120,7 +1120,7 @@ def unpack_defs(
 
                 # Add to ref chain to track circular references
                 new_ref_chain = ref_chain.copy()
-                new_ref_chain.add(ref_name)
+                new_ref_chain.add(ref_key)
 
                 # Add resolved node to queue for further processing
                 queue.append((resolved, parent, key, child_defs, new_ref_chain))
