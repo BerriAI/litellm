@@ -88,6 +88,7 @@ impl Router {
                                         .and_then(|value| value.as_bool())
                                 },
                             ),
+                            ..MessagesShaping::default()
                         },
                         configurable_clientside_auth_params: string_list(
                             &litellm_params.extra,

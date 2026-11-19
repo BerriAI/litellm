@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
-import { customerChildSpendCall, customerHierarchyUsageCall, customerUsageEntity } from "./customerUsageApi";
+import {
+  customerAppSpendCall,
+  customerChildSpendCall,
+  customerHierarchyUsageCall,
+  customerUsageEntity,
+} from "./customerUsageApi";
 
 const audit = {
   created_at: "2026-11-01T00:00:00Z",
@@ -183,6 +188,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customerHierarchyUsageCall", () => {
+  it.each([
+    { member: null, resource: "customer_organizations", id: "org-1", spend: 4, tokens: 600 },
+    { member: "member-a", resource: "customer_members", id: "member-a", spend: 3, tokens: 100 },
+  ])(
+    "loads app usage for $resource without mixing scopes or duplicating matching periods",
+    async ({ member, resource, id, spend, tokens }) => {
+      const result = await customerAppSpendCall({ ...request, scope: { ...request.scope, member }, appId: "app-one" });
+      expect(result).toMatchObject({ monthlySpend: spend, yearlySpend: spend, tokenDetails: { tokens } });
+      const calls = dailyUrls();
+      expect(calls.every((url) => url.pathname === `/management/v1/${resource}/daily/activity`)).toBe(true);
+      expect(
+        calls.every(
+          (url) => url.searchParams.get("app_id") === "app-one" && url.searchParams.get(filterFor(resource)) === id,
+        ),
+      ).toBe(true);
+      expect(
+        calls.filter((url) => url.searchParams.get("page") === "1").map((url) => url.searchParams.get("start_date")),
+      ).toEqual([request.startDate, request.yearStartDate]);
+    },
+  );
+
   it("should pass the app filter to every usage query without changing global budget policy", async () => {
     const scopedRequest = { ...request, appId: "app-search", startDate: "2026-11-10", endDate: "2026-11-12" };
     const result = await customerHierarchyUsageCall(scopedRequest);

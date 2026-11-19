@@ -17,6 +17,7 @@ from litellm.proxy.list_api.common import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetGroupScope,
     BudgetSort,
     CustomerHierarchy,
     CustomerPortalLimits,
@@ -91,7 +92,11 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Budget template names must be unique within the organization.",
         ),
         ErrorCode.TEMPLATE_IN_USE: (409, "Template in use", "A default or referenced template cannot be deleted."),
-        ErrorCode.BUDGET_REQUIRED: (422, "Budget required", "A member requires a template or a budget override."),
+        ErrorCode.BUDGET_REQUIRED: (
+            422,
+            "Budget required",
+            "A member requires a preset, a custom budget, or a budget override.",
+        ),
         ErrorCode.INCREASE_NOT_ALLOWED: (
             422,
             "Increase not allowed",
@@ -233,7 +238,9 @@ async def get_customer_organization_budget_groups(
     "/customer_organization_budget_groups",
     response_model=BudgetGroups,
     description="Save the complete organization budget group list with its expected_revision. "
-    "default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.",
+    "default_budget_template names the group assigned to new organizations that omit budget and budget_id, "
+    "or null for no organization-level limit. Existing organizations are unchanged by default selection. "
+    "Stale revisions or referenced deletions return 409. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def configure_customer_organization_budget_groups(
@@ -254,6 +261,42 @@ async def configure_customer_organization_budget_groups(
 
 
 @router.get(
+    "/app_customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable app × customer organization budget groups, independently of organization groups. "
+    "Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_app_customer_organization_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(
+        await hierarchy.transaction(
+            lambda store: store.get_budget_groups(None, scope=BudgetGroupScope.APP_ORGANIZATION)
+        )
+    )
+
+
+@router.patch(
+    "/app_customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete app × customer organization budget group list with its expected_revision. "
+    "default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_app_customer_organization_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(
+        await hierarchy.transaction(
+            lambda store: store.configure_templates(None, data, actor, scope=BudgetGroupScope.APP_ORGANIZATION)
+        )
+    )
+
+
+@router.get(
     "/customer_portal/limits",
     response_model=CustomerPortalLimits,
     summary="Get Customer Management Limits",
@@ -270,7 +313,8 @@ async def get_customer_portal_limits(
     "/customer_organizations",
     status_code=201,
     response_model=Organization,
-    description="Create a customer organization with resolved budgets. Proxy admins only.",
+    description="Create a customer organization with resolved budgets. Omit budget and budget_id to use the configured "
+    "organization budget group default. Explicit null opts out of the default. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def create_customer_organization(
@@ -482,7 +526,7 @@ async def create_customer_member(
         "Create or update a customer member by customer_member_id within a customer org identified by "
         "customer_org_id or customer_org_alias. If both are supplied they must match. "
         "A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. "
-        "Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. "
+        "Alias, budget_id, budget, budget_override and budget_override_expires_at follow the customer member models. "
         "Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. "
         "Moving between customer orgs or selecting another customer org's customer team returns 409. "
         "Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. "

@@ -27,8 +27,8 @@ COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
     ("configured", "requested", "preserve"),
     [
         ({"store": False}, {}, False),
-        ({"store": False}, {"store": None}, True),
-        ({"extra_body": {"store": False}}, {"extra_body": None}, True),
+        ({"store": False}, {"store": None}, False),
+        ({"extra_body": {"store": False}}, {"extra_body": None}, False),
         ({"store": False, "previous_response_id": "resp_old"}, {"previous_response_id": None}, False),
         ({"store": False, "conversation": "conv_old"}, {"conversation": None}, False),
         ({"store": False, "truncation": "auto"}, {"truncation": None}, False),
@@ -87,7 +87,7 @@ async def test_count_explicit_null_overrides_match_routed_generation(
             messages_format="anthropic",
         )
     assert result is not None and result.total_tokens == 10
-    assert generated.get("store") is (None if preserve else False)
+    assert generated.get("store") is (None if {"store", "extra_body"} & requested.keys() else False)
     assert generated.get("instructions") == ("Be brief." if preserve else None)
     assert json.loads(route.calls.last.request.content) == {
         "model": "gpt-6.2-sol",
@@ -298,6 +298,7 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
     assert sent == {
         "model": "gpt-4o",
         "input": [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]},
             {
                 "type": "message",
                 "role": "user",
@@ -310,7 +311,6 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
             {"type": "function_call", "call_id": "toolu_01", "name": "lookup", "arguments": "{}"},
             {"type": "function_call_output", "call_id": "toolu_01", "output": "found"},
         ],
-        "instructions": "Be brief.",
     }
 
 

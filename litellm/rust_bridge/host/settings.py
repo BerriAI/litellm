@@ -34,6 +34,7 @@ class ProviderDefaults:
     azure_key: object
     drop_params: object
     bedrock_request_metadata_fields: object
+    vertex_request_label_fields: object
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +151,7 @@ def provider_defaults() -> ProviderDefaults:
         azure_key=litellm.azure_key,
         drop_params=litellm.drop_params,
         bedrock_request_metadata_fields=litellm.bedrock_request_metadata_fields,
+        vertex_request_label_fields=litellm.vertex_request_label_fields,
     )
 
 

@@ -4754,7 +4754,7 @@ def register_model(
 
 
 def _should_drop_param(k, additional_drop_params) -> bool:
-    if additional_drop_params is not None and isinstance(additional_drop_params, list) and k in additional_drop_params:
+    if isinstance(additional_drop_params, (list, tuple)) and k in additional_drop_params:
         return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
 
     return False
@@ -10639,6 +10639,7 @@ class ProviderConfigManager:
             LlmProviders.EU_JEV,
             LlmProviders.PARALLEL_AI,
             LlmProviders.VERCEL_AI_GATEWAY,
+            LlmProviders.LITELLM_PROXY,
         ):
             configs: Final = {
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
@@ -10648,6 +10649,7 @@ class ProviderConfigManager:
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
                 LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
                 LlmProviders.VERCEL_AI_GATEWAY: litellm.VercelAIGatewayDecisionsConfig,
+                LlmProviders.LITELLM_PROXY: litellm.LiteLLMProxyDecisionsConfig,
             }
             return configs[provider]()
         return None
