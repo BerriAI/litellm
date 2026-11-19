@@ -127,13 +127,14 @@ class SpendCounterReseed:
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
         spend:project:{project_id}        -> LiteLLM_ProjectTable.spend
 
-    End-user and tag spend counters intentionally do not reseed here. Their
-    auth paths already load the corresponding objects via get_end_user_object()
+    End-user and tag spend counters intentionally do not reseed here on a read.
+    Their auth paths already load the corresponding objects via get_end_user_object()
     and get_tag_objects_batch(); callers pass those values as fallback_spend.
-    end_user_from_db is the one end-user read, used only as the budget floor when
+    end_user_from_db reads the end-user row in two places. It is the budget floor when
     a counter sits below that cached spend: a worker that did not run the budget
     reset still caches the pre-reset end-user object, and LiteLLM_EndUserTable
-    is the row the reset zeroed.
+    is the row the reset zeroed. It is also the seed of a cold end-user counter on
+    the write path, where coalesced takes cached_end_user_spend.
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
@@ -293,6 +294,14 @@ class SpendCounterReseed:
         return float(row.spend or 0.0)
 
     @staticmethod
+    async def _end_user_seed(
+        prisma_client: Optional["PrismaClient"], counter_key: str, cached_spend: float
+    ) -> float | None:
+        """The cached spend holds this worker's charges the row has not been written with yet."""
+        row_spend: Final = await SpendCounterReseed.end_user_from_db(prisma_client, counter_key)
+        return None if row_spend is None else max(row_spend, cached_spend)
+
+    @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:
         for prefix in ("spend:key:", "spend:team:"):
             if not counter_key.startswith(prefix):
@@ -319,6 +328,7 @@ class SpendCounterReseed:
         spend_counter_store: SpendCounterStore,
         counter_key: str,
         require_cache_warm: bool = False,
+        cached_end_user_spend: float | None = None,
     ) -> float | None:
         """
         Reseed a cold spend counter from the DB and warm the cache,
@@ -327,6 +337,9 @@ class SpendCounterReseed:
 
         Returns the spend value (including 0.0 from a fresh budget reset)
         when the DB read succeeds, or None when the DB is unavailable.
+
+        The write path passes ``cached_end_user_spend`` for an end-user counter,
+        which then seeds from LiteLLM_EndUserTable, never below that cached spend.
         """
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
@@ -334,7 +347,11 @@ class SpendCounterReseed:
             if cached is not None:
                 return cached
 
-            db_spend: Final = await SpendCounterReseed.from_db(prisma_client, counter_key)
+            db_spend: Final = (
+                await SpendCounterReseed.from_db(prisma_client, counter_key)
+                if cached_end_user_spend is None
+                else await SpendCounterReseed._end_user_seed(prisma_client, counter_key, cached_end_user_spend)
+            )
             if db_spend is None:
                 return None
             # Warm even when 0 so subsequent reads hit cache, not DB.

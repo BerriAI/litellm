@@ -4607,6 +4607,11 @@ async def ensure_spend_counter_initialized(
             spend_counter_store=spend_counter_store,
             counter_key=counter_key,
             require_cache_warm=True,
+            cached_end_user_spend=(
+                await _get_source_cache_base_spend(source_cache_key=source_cache_key)
+                if counter_key.startswith(END_USER_COUNTER_PREFIX)
+                else None
+            ),
         )
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).

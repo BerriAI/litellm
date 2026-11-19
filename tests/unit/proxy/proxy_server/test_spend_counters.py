@@ -1274,6 +1274,80 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
     assert spend.redis == {"spend:user:u": 7.0}
 
 
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_overlapping_cold_end_user_seeds_hold_the_spend_once(monkeypatch):
+    """Requests that all find the end-user counter cold seed it once, so it holds the
+    cached spend (the row lags it by one unwritten charge) and not a multiple of it."""
+    spend: Final = _spend_counters(monkeypatch)
+
+    async def _cached_end_user(*_: object, **__: object) -> dict[str, float]:
+        await asyncio.sleep(0)
+        return {"spend": 6.0}
+
+    monkeypatch.setattr(ps, "user_api_key_cache", _make_user_api_key_cache(get_side_effect=_cached_end_user))
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=5.5))
+
+    await asyncio.gather(
+        *(
+            ps._ensure_spend_counter_initialized(
+                counter_key="spend:end_user:customer-42",
+                source_cache_key="end_user_id:customer-42",
+            )
+            for _ in range(5)
+        )
+    )
+
+    assert spend.redis == {"spend:end_user:customer-42": 6.0}
+    assert [command for command in spend.commands if command.startswith("INCRBYFLOAT")] == []
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_end_user_seeds_the_row_when_it_is_ahead(monkeypatch):
+    spend: Final = _spend_counters(monkeypatch)
+    monkeypatch.setattr(ps, "user_api_key_cache", _make_user_api_key_cache(get_value={"spend": 6.0}))
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=7.5))
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:end_user:customer-42",
+        source_cache_key="end_user_id:customer-42",
+    )
+
+    assert spend.redis == {"spend:end_user:customer-42": 7.5}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_end_user_without_a_row_adds_the_cached_spend(monkeypatch):
+    spend: Final = _spend_counters(monkeypatch)
+    monkeypatch.setattr(ps, "user_api_key_cache", _make_user_api_key_cache(get_value={"spend": 6.0}))
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=None))
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:end_user:customer-42",
+        source_cache_key="end_user_id:customer-42",
+    )
+
+    assert spend.commands[-1] == "INCRBYFLOAT spend:end_user:customer-42 6.0"
+    assert spend.redis == {"spend:end_user:customer-42": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_cold_end_user_counter_keeps_the_cached_spend_over_a_lagging_row(monkeypatch):
+    """After Redis loses the counter, admission still reads the cached spend, which holds
+    charges the row has not been written with yet, and writes nothing."""
+    spend: Final = _spend_counters(monkeypatch)
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=9.5))
+
+    result: Final = await ps.get_current_spend(
+        counter_key="spend:end_user:customer-42",
+        fallback_spend=10.2,
+        max_budget=10.0,
+        fallback_authoritative=True,
+    )
+
+    assert result == 10.2
+    assert spend.redis == {}
+
+
 # ---------------------------------------------------------------------------
 # _get_source_cache_base_spend
 # ---------------------------------------------------------------------------
