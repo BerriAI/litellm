@@ -14,6 +14,16 @@ REQUESTS: Final = "/management/v1/customer_budget_increase_requests"
 EXPIRES: Final = "2026-02-01T00:00:00Z"
 
 
+def _approve_increase(http: TestClient, member_id: str, expires_at: str = EXPIRES) -> None:
+    requested: Final = http.post(
+        REQUESTS,
+        json={"customer_member_id": member_id, "requested_max_budget": 1000, "expires_at": expires_at},
+    )
+    assert requested.status_code == 201, requested.text
+    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
+    assert approved.status_code == 200, approved.text
+
+
 @pytest.mark.parametrize("field", ("budget", "budget_override"))
 def test_temporary_increase_restores_the_members_custom_budget_after_expiry(field: str) -> None:
     database: Final = Database()
@@ -34,13 +44,7 @@ def test_temporary_increase_restores_the_members_custom_budget_after_expiry(fiel
     )
     assert custom.status_code == 200, custom.text
     original: Final = custom.json()["effective_budget"]
-    requested: Final = http.post(
-        REQUESTS,
-        json={"customer_member_id": member_id, "requested_max_budget": 1000, "expires_at": EXPIRES},
-    )
-    assert requested.status_code == 201, requested.text
-    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
-    assert approved.status_code == 200, approved.text
+    _approve_increase(http, member_id)
     active: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
     assert active["effective_budget"] == {**original, "max_budget": 1000}
     assert active["budget_id"] != active["budget_override_id"]
@@ -68,13 +72,7 @@ def test_editing_base_limits_preserves_the_active_grant_and_its_expiry() -> None
         },
     )
     assert custom.status_code == 200, custom.text
-    requested: Final = http.post(
-        REQUESTS,
-        json={"customer_member_id": member_id, "requested_max_budget": 1000, "expires_at": EXPIRES},
-    )
-    assert requested.status_code == 201, requested.text
-    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
-    assert approved.status_code == 200, approved.text
+    _approve_increase(http, member_id)
     active: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
     edited: Final = http.patch(f"/management/v1/customer_members/{member_id}", json={"budget": {"rpm_limit": 23}})
     assert edited.status_code == 200, edited.text
@@ -105,17 +103,7 @@ def test_preserving_legacy_custom_budget_keeps_existing_increases_temporary(maxi
             data={"temp_budget_increase": 50, "temp_budget_expiry": NOW + timedelta(days=3)},
         )
     )
-    requested: Final = http.post(
-        REQUESTS,
-        json={
-            "customer_member_id": member_id,
-            "requested_max_budget": 1000,
-            "expires_at": (NOW + timedelta(days=1)).isoformat(),
-        },
-    )
-    assert requested.status_code == 201, requested.text
-    approved: Final = http.put(f"{REQUESTS}/{requested.json()['request_id']}/approve")
-    assert approved.status_code == 200, approved.text
+    _approve_increase(http, member_id, (NOW + timedelta(days=1)).isoformat())
     promoted: Final = http.get(f"/management/v1/customer_members/{member_id}").json()
     assert promoted["budget"] == original
     assert promoted["budget_id"] == custom.json()["budget_override_id"]

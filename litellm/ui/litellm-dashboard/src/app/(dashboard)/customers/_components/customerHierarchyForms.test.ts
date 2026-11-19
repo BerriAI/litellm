@@ -182,13 +182,16 @@ describe("customer hierarchy settings payloads", () => {
     });
   });
 
-  it("should save a preset change together with removing the temporary budget", () => {
+  it.each([
+    { action: "disabling the temporary budget", changes: { budgetEnabled: false } },
+    { action: "clearing expiry", changes: { overrideExpiry: "" } },
+  ])("should save a preset change together with $action", ({ changes }) => {
     const entity: CustomerHierarchyEntity = { kind: "member", record: member };
     expect(
       buildCustomerHierarchyPatch(entity, {
         ...customerHierarchyFields(entity),
         templateId: "template-2",
-        budgetEnabled: false,
+        ...changes,
       }),
     ).toEqual({
       ok: true,
@@ -401,25 +404,18 @@ describe("customer hierarchy settings payloads", () => {
     });
   });
 
-  it("should reject selecting a different preset and entering zero permanent custom limits together", () => {
-    const entity: CustomerHierarchyEntity = {
-      kind: "member",
-      record: { ...member, budget_override: null, budget_override_expires_at: null },
-    };
-    const fields = {
-      ...customerHierarchyFields(entity),
-      templateId: "template-2",
-      budgetEnabled: true,
-      maxBudget: "0",
-      rpm: "0",
-    };
-    expect(buildCustomerHierarchyPatch(entity, fields)).toEqual({
-      ok: false,
-      error: "conflictingBudgetSources",
-    });
-  });
-
-  it("should preserve zero permanent custom limits when the preset selection is unchanged", () => {
+  it.each([
+    {
+      selection: "changed",
+      changes: { templateId: "template-2" },
+      expected: { ok: false, error: "conflictingBudgetSources" },
+    },
+    {
+      selection: "unchanged",
+      changes: {},
+      expected: { ok: true, patch: { kind: "member", body: { budget: { max_budget: 0, rpm_limit: 0 } } } },
+    },
+  ])("should validate zero permanent limits with $selection preset selection", ({ changes, expected }) => {
     const entity: CustomerHierarchyEntity = {
       kind: "member",
       record: { ...member, budget_override: null, budget_override_expires_at: null },
@@ -429,11 +425,9 @@ describe("customer hierarchy settings payloads", () => {
       budgetEnabled: true,
       maxBudget: "0",
       rpm: "0",
+      ...changes,
     };
-    expect(buildCustomerHierarchyPatch(entity, fields)).toEqual({
-      ok: true,
-      patch: { kind: "member", body: { budget: { max_budget: 0, rpm_limit: 0 } } },
-    });
+    expect(buildCustomerHierarchyPatch(entity, fields)).toEqual(expected);
   });
 
   it("should make only the entered temporary limits permanent when clearing expiry", () => {
@@ -453,23 +447,6 @@ describe("customer hierarchy settings payloads", () => {
           budget_override: null,
           budget_override_expires_at: null,
         },
-      },
-    });
-  });
-
-  it("should remove the temporary grant when selecting a preset and clearing expiry", () => {
-    const entity: CustomerHierarchyEntity = { kind: "member", record: member };
-    expect(
-      buildCustomerHierarchyPatch(entity, {
-        ...customerHierarchyFields(entity),
-        templateId: "template-2",
-        overrideExpiry: "",
-      }),
-    ).toEqual({
-      ok: true,
-      patch: {
-        kind: "member",
-        body: { budget_id: "template-2", budget_override: null, budget_override_expires_at: null },
       },
     });
   });

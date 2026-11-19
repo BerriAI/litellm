@@ -73,6 +73,16 @@ const lastRequest = (): Request => {
   return request;
 };
 
+const renderMemberSettings = (record: Member = member) =>
+  render(
+    <CustomerHierarchySettings
+      entity={{ kind: "member", record }}
+      organization={organization}
+      onSaved={onSaved}
+      onDeleted={onDeleted}
+    />,
+  );
+
 describe("CustomerHierarchySettings", () => {
   beforeEach(() => {
     registerBaseUrlGetter(() => "http://localhost");
@@ -301,14 +311,7 @@ describe("CustomerHierarchySettings", () => {
   it("should show friendly template names while sending the selected template identifier", async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue(json(member));
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: member }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings();
     const template = screen.getByRole("combobox", { name: "Budget template" });
     expect(template).toHaveTextContent("Standard (default)");
     expect(template).not.toHaveTextContent("template-1");
@@ -323,14 +326,7 @@ describe("CustomerHierarchySettings", () => {
   it("should clear the template without changing the existing override", async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue(json({ ...member, budget_id: null }));
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: member }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings();
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget template" }), "No template");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
@@ -338,14 +334,7 @@ describe("CustomerHierarchySettings", () => {
   });
 
   it("should identify an unavailable stored template instead of displaying No template", () => {
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: { ...member, budget_id: "retired-template" } }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings({ ...member, budget_id: "retired-template" });
     expect(screen.getByRole("combobox", { name: "Budget template" })).toHaveTextContent(
       "Unavailable template (retired-template)",
     );
@@ -354,14 +343,7 @@ describe("CustomerHierarchySettings", () => {
   it("should clear the member override and its expiry without changing the template", async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue(json(member));
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: member }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings();
     await user.click(screen.getByRole("checkbox", { name: "Override the template budget" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
@@ -371,14 +353,7 @@ describe("CustomerHierarchySettings", () => {
 
   it("should make the entered limits permanent when the administrator clears Override expires", async () => {
     fetchMock.mockResolvedValue(json(member));
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: member }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings();
     expect(screen.getByText("Uses your local time. Leave blank for no expiry.")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Override expires"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
@@ -401,14 +376,7 @@ describe("CustomerHierarchySettings", () => {
       budget_override_expires_at: null,
     };
     fetchMock.mockResolvedValue(json({ ...privateMember, budget_id: "template-2" }));
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: privateMember }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings(privateMember);
     const template = screen.getByRole("combobox", { name: "Budget template" });
     expect(template).toHaveTextContent("No template");
     await user.click(screen.getByRole("checkbox", { name: "Override the template budget" }));
@@ -424,18 +392,25 @@ describe("CustomerHierarchySettings", () => {
   });
 
   it("should explain that blank member limits inherit from the selected template", () => {
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: member }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings();
     expect(
       screen.getByText("Blank limits inherit from the budget template. Without a template, blank means no limit."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Leave a limit blank for no limit. Zero is a valid limit.")).not.toBeInTheDocument();
+  });
+
+  it("should reject combining a new preset with zero permanent custom limits", async () => {
+    const user = userEvent.setup();
+    const inherited = { ...member, budget_override: null, budget_override_expires_at: null };
+    renderMemberSettings(inherited);
+    await user.click(screen.getByRole("checkbox", { name: "Override the template budget" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget template" }), "Pro");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Save the selected preset first, then set custom limits.");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
   });
 
   it("should omit untouched preset restrictions when saving the first custom member budget", async () => {
@@ -446,14 +421,7 @@ describe("CustomerHierarchySettings", () => {
       effective_budget: { max_budget: 100, rpm_limit: 10, allowed_models: ["openai/gpt-4.1"] },
     };
     fetchMock.mockResolvedValue(json(inheritedMember));
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: inheritedMember }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings(inheritedMember);
     await user.click(screen.getByRole("checkbox", { name: "Override the template budget" }));
     expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(null);
     expect(screen.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(null);
@@ -618,14 +586,7 @@ describe("CustomerHierarchySettings", () => {
         settle = resolve;
       }),
     );
-    render(
-      <CustomerHierarchySettings
-        entity={{ kind: "member", record: member }}
-        organization={organization}
-        onSaved={onSaved}
-        onDeleted={onDeleted}
-      />,
-    );
+    renderMemberSettings();
     await user.click(screen.getByRole("button", { name: "Delete customer member" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete customer member" });
     await user.type(within(dialog).getByPlaceholderText("member-1"), "member-1");
