@@ -106,7 +106,12 @@ impl RecordingCache {
 
     /// Every deployment id any cooldown read asked for.
     fn cooldown_ids_read(&self) -> BTreeSet<String> {
-        self.cooldown_reads.lock().iter().flatten().cloned().collect()
+        self.cooldown_reads
+            .lock()
+            .iter()
+            .flatten()
+            .cloned()
+            .collect()
     }
 }
 
@@ -954,7 +959,10 @@ async fn a_group_cooling_down_falls_back_reading_only_each_hops_candidates() {
         .await
         .unwrap();
     assert_eq!(
-        (response.deployment_id.as_str(), host.cache.cooldown_ids_read()),
+        (
+            response.deployment_id.as_str(),
+            host.cache.cooldown_ids_read()
+        ),
         ("b1", ids(&["a1", "a2", "b1"]))
     );
 }
@@ -967,7 +975,10 @@ async fn weighted_failover_reads_only_the_failed_groups_cooldowns() {
         vec![failure(FailureKind::RateLimit, 429)],
     ));
     let router = stopped_router(
-        beside_an_unrelated_group(primary_and_backup(), json!({"enable_weighted_failover": true})),
+        beside_an_unrelated_group(
+            primary_and_backup(),
+            json!({"enable_weighted_failover": true}),
+        ),
         json!({"num_retries": 0}),
         host.clone(),
     );
@@ -977,7 +988,10 @@ async fn weighted_failover_reads_only_the_failed_groups_cooldowns() {
         .unwrap();
     assert_eq!(host.selected().len(), 2);
     assert_eq!(
-        (response.model_group.as_str(), host.cache.cooldown_ids_read()),
+        (
+            response.model_group.as_str(),
+            host.cache.cooldown_ids_read()
+        ),
         ("primary", ids(&["a1", "a2"]))
     );
 }

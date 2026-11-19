@@ -490,23 +490,26 @@ async def _auth_object_prefetch(host: PythonAuthHost) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefetch", [_identity_prefetch, _auth_object_prefetch], ids=["identity", "auth_objects"])
+@pytest.mark.parametrize("configured_router", [True, False], ids=["with_router", "without_router"])
 @pytest.mark.parametrize(
     ("request_data", "reads"),
     [
         pytest.param({"model": "claude"}, [frozenset({"dep-a"})], id="requested_model"),
         pytest.param({}, [frozenset({"dep-a", "dep-other"})], id="no_model"),
+        pytest.param({"model": []}, [frozenset({"dep-a", "dep-other"})], id="non_string_model"),
     ],
 )
 async def test_the_auth_prefetch_reads_the_cooldowns_of_the_deployments_the_requested_model_may_route_to(
     prefetch: Callable[[PythonAuthHost], Awaitable[None]],
+    configured_router: bool,
     request_data: dict[str, object],  # mutable-ok: the host takes the request body it rewrites
     reads: list[frozenset[str]],
 ) -> None:
     router, handle = _router_recording_cooldown_reads()
     cache, _ = shared_cache()
-    host: Final = replace(_host(request_data=request_data, cache=cache), llm_router=router)
+    host: Final = replace(_host(request_data=request_data, cache=cache), llm_router=router if configured_router else None)
 
     with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await prefetch(host)
 
-    assert [frozenset(ids) for ids in handle.declared] == reads
+    assert [frozenset(ids) for ids in handle.declared] == (reads if configured_router else [])
