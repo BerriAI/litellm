@@ -48,6 +48,8 @@ if TYPE_CHECKING:
     from prisma import Json, Prisma
     from prisma.models import LiteLLM_BudgetWindowSpend
 
+BaseModel = LiteLLMBaseModel
+
 
 BudgetSort: TypeAlias = Literal["budget_asc", "budget_desc"]
 
