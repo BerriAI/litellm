@@ -76,6 +76,7 @@ from .interceptors import get_messages_interceptors
 from .utils import (
     AnthropicMessagesRequestUtils,
     continues_message_thread,
+    diagnostics_refusal,
     message_thread_not_found_body,
     message_thread_unsupported_body,
     mock_response,
@@ -883,16 +884,9 @@ def anthropic_messages_handler(
         and not anthropic_messages_provider_config.supports_diagnostics()
         and "diagnostics" not in additional_drop_paths(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs of the handler is untyped
     ):
-        if not drops_unsupported_params(litellm_params.drop_params):
-            raise litellm.UnsupportedParamsError(
-                message=(
-                    f"diagnostics is not supported for provider {custom_llm_provider}. "
-                    "Send the request without diagnostics, or set drop_params to drop it"
-                ),
-                llm_provider=custom_llm_provider,
-                model=model,
-            )
-        verbose_logger.warning("Dropping diagnostics for provider %s: it rejects the field", custom_llm_provider)
+        refusal: Final = diagnostics_refusal(custom_llm_provider, model, litellm_params.drop_params)
+        if refusal is not None:
+            raise refusal
         kwargs.pop("diagnostics")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.

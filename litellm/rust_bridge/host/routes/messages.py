@@ -85,6 +85,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor, get_messages_interceptors
 from litellm.llms.anthropic.messages.native.utils import (
     continues_message_thread,
+    diagnostics_refusal,
     message_thread_not_found_body,
     message_thread_unsupported_body,
     normalize_native_messages,
@@ -191,11 +192,28 @@ def _anthropic_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
 
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     params: Final = _anthropic_metadata(
-        known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request), _dropped_thread(request)), request)
+        known_params(
+            _BODY_FIELDS.difference(
+                handler.additional_drop_paths(request),
+                _dropped_thread(request),
+                () if _diagnostics_provider(request) is None else ("diagnostics",),
+            ),
+            request,
+        )
     )
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
+
+
+def _messages_config(request: Mapping[str, object]) -> tuple[str, BaseAnthropicMessagesConfig | None]:
+    """The provider and Messages config of a call, as Python's handler resolves them."""
+    model, provider, _, _ = _requested_provider(
+        str(request["model"]), optional_str(request.get("custom_llm_provider")), _handler_params(request)
+    )
+    return str(provider), native_messages_config(
+        model, provider, request.get("model_info"), optional_str(request.get("api_base"))
+    )
 
 
 def _thread_provider(request: Mapping[str, object]) -> str | None:
@@ -203,15 +221,32 @@ def _thread_provider(request: Mapping[str, object]) -> str | None:
     resolves it, or None when the call carries no thread or its config serves threads."""
     if request.get("thread") is None:
         return None
-    model, provider, _, _ = _requested_provider(
-        str(request["model"]), optional_str(request.get("custom_llm_provider")), _handler_params(request)
-    )
-    config: Final = native_messages_config(
-        model, provider, request.get("model_info"), optional_str(request.get("api_base"))
-    )
+    provider, config = _messages_config(request)
     if config is not None and config.supports_message_threads():
         return None
-    return str(provider)
+    return provider
+
+
+def _diagnostics_provider(request: Mapping[str, object]) -> str | None:
+    """The provider of a call carrying diagnostics its native Messages config rejects, or None."""
+    if request.get("diagnostics") is None or "diagnostics" in handler.additional_drop_paths(request):
+        return None
+    provider, config = _messages_config(request)
+    if config is None or config.supports_diagnostics():
+        return None
+    return provider
+
+
+def _refuse_unsupported_diagnostics(request: Mapping[str, object], asynchronous: bool) -> None:
+    """Python's handler refuses diagnostics its provider rejects, or drops them under drop_params."""
+    provider: Final = _diagnostics_provider(request)
+    if provider is None:
+        return
+    refusal: Final = diagnostics_refusal(provider, str(request["model"]), request.get("drop_params"))
+    if refusal is None:
+        return
+    _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    raise refusal
 
 
 def _dropped_thread(request: Mapping[str, object]) -> tuple[str, ...]:
@@ -1425,6 +1460,7 @@ def settings(
     call_settings: Final = _with_call_settings(configured, request, kwargs.get("litellm_logging_obj"))
     if call_settings.mock_response is None and not call_settings.mcp_gateway:
         _refuse_unsupported_thread(request, asynchronous)
+        _refuse_unsupported_diagnostics(request, asynchronous)
     return asdict(call_settings)
 
 
