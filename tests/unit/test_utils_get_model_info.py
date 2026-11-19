@@ -223,6 +223,16 @@ def test_regional_bedrock_alias_requires_canonical_converse_metadata(
     _enforce_bedrock_converse_models(model_cost, ())
 
 
+GOVCLOUD_LATER_CAPABILITIES: Final = frozenset({"supports_bedrock_native_structured_output"})
+
+
+def _govcloud_gets_capability_later(model_key: str, capability: str) -> bool:
+    in_govcloud: Final = model_key.startswith("us-gov.") or any(
+        segment.startswith("us-gov-") for segment in model_key.split("/")
+    )
+    return in_govcloud and capability in GOVCLOUD_LATER_CAPABILITIES
+
+
 def test_get_model_info_bedrock_models():
     """
     Check for drift in base model info for bedrock models and regional model info for bedrock models.
@@ -255,6 +265,8 @@ def test_get_model_info_bedrock_models():
             base_model_info = litellm.model_cost[base_model_key]
             for base_model_key, base_model_value in base_model_info.items():
                 if "invoke/" in k:
+                    continue
+                if _govcloud_gets_capability_later(k, base_model_key):
                     continue
                 if base_model_key.startswith("supports_"):
                     assert (
@@ -314,7 +326,7 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             continue
         checked += 1
         for cap, base_value in litellm.model_cost[base_model_key].items():
-            if not cap.startswith("supports_"):
+            if not cap.startswith("supports_") or _govcloud_gets_capability_later(k, cap):
                 continue
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
             assert (

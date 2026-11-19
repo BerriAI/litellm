@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 )
 from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebSearchOptions
 from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 def test_web_search_cost_low():
@@ -378,7 +379,7 @@ def test_gemini_2x_web_search_still_billed_per_prompt(local_model_cost_map):
 
 
 def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
-    local_model_cost_map,
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ):
     """
     Regression for the provider-prefix fallback in _handle_web_search_cost. When the initial
@@ -390,7 +391,15 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
     """
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    model = "openrouter/google/gemini-3.1-flash-lite"
+    model = "openrouter/example-lab/model-without-web-search-pricing"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openrouter", "mode": "chat", "input_cost_per_token": 1e-07, "output_cost_per_token": 4e-07},
+    )
+    _invalidate_model_cost_lowercase_map()
+    request.addfinalizer(_invalidate_model_cost_lowercase_map)
+    litellm.get_model_info.cache_clear()
     model_info = litellm.get_model_info(model)
     assert model_info["litellm_provider"] == "openrouter"
     assert not model_info.get("search_context_cost_per_query")
