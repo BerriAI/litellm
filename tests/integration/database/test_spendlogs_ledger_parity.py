@@ -31,6 +31,7 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.repositories.accounting_delivery_repository import AccountingDeliveryRepository
+from litellm.repositories.database import Database
 from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.utils import ModelResponse, Usage
@@ -375,6 +376,9 @@ async def _assert_legacy_database_parity(
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
     await client.db.connect()
+    database = await Database.open(
+        client, parity_database, None, writer_connections=2, reader_connections=0
+    )
     results = []
     try:
         for path in ("legacy", "ledger"):
@@ -602,7 +606,7 @@ async def _assert_legacy_database_parity(
         if reset_kind == "team_member":
             assert results[-1]["LiteLLM_TeamMembership"][0]["spend"] == cost
     finally:
-        await client.db.disconnect()
+        await database.aclose()
 
 
 @pytest.mark.parametrize(
