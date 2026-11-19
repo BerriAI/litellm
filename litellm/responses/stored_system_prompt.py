@@ -51,7 +51,7 @@ def _upstream_response_id(response_id: str, provider: object) -> str | None:
     return upstream_id if nested.get("custom_llm_provider") is None else None
 
 
-_CREDENTIAL_KEYS: Final = (
+_FORWARDED_KEYS: Final = (
     "api_key",
     "api_base",
     "api_version",
@@ -68,7 +68,7 @@ _CREDENTIAL_KEYS: Final = (
 
 def _lookup_kwargs(request: Mapping[str, object]) -> Mapping[str, object]:
     return {
-        **{key: request[key] for key in _CREDENTIAL_KEYS if request.get(key) is not None},
+        **{key: request[key] for key in _FORWARDED_KEYS if request.get(key) is not None},
         "no-log": True,  # the listed stored messages must not reach logging callbacks
     }
 
@@ -126,7 +126,7 @@ def without_stored_instructions(request: Mapping[str, object]) -> Mapping[str, o
             include=None,
             limit=20,
             order="asc",
-            extra_headers=None,
+            extra_headers=dict(as_str_mapping(request.get("extra_headers")) or {}) or None,
             custom_llm_provider=_text(request.get("custom_llm_provider")),
             timeout=_timeout(request.get("timeout")),
             **_lookup_kwargs(request),
@@ -151,7 +151,7 @@ async def awithout_stored_instructions(request: Mapping[str, object]) -> Mapping
             include=None,
             limit=20,
             order="asc",
-            extra_headers=None,
+            extra_headers=dict(as_str_mapping(request.get("extra_headers")) or {}) or None,
             custom_llm_provider=_text(request.get("custom_llm_provider")),
             timeout=_timeout(request.get("timeout")),
             **_lookup_kwargs(request),
