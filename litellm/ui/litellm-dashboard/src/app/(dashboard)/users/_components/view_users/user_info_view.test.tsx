@@ -135,6 +135,16 @@ describe("UserInfoView", () => {
     expect(aliases.length).toBeGreaterThan(0);
   });
 
+  it.each([
+    ["internal_user_viewer", "Internal User Viewer"],
+    ["proxy_admin_viewer", "Proxy Admin Viewer"],
+  ])("labels the read-only Details role %s", async (user_role, label) => {
+    mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, user_role });
+    render(<UserInfoView {...defaultProps} initialTab={1} />);
+
+    expect(await screen.findByText(label)).toBeVisible();
+  });
+
   it("seeds the user rate limits when opening the edit form", async () => {
     mockUserGetInfoV2.mockResolvedValue({
       ...MOCK_USER_DATA,

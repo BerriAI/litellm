@@ -213,7 +213,9 @@ interface SettingsViewProps {
 
 const SettingsView = ({ values, roleOptions }: SettingsViewProps) => {
   const { t } = useTranslation();
-  const roleLabel = roleOptions.find((option) => option.value === values.user_role)?.label ?? values.user_role;
+  const roleLabel =
+    roleOptions.find((option) => option.value === values.user_role)?.label ??
+    availableRoleDisplayLabel(values.user_role);
   const durationValue = values.budget_duration === "" ? NO_RESET : values.budget_duration;
   const durationOption = BUDGET_DURATION_OPTIONS.find((option) => option.value === durationValue);
   const durationLabel = durationOption === undefined ? values.budget_duration : t(durationOption.labelKey);

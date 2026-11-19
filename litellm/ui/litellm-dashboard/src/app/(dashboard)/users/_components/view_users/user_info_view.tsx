@@ -681,7 +681,7 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.globalProxyRole")}</p>
-                  <p>{userData.user_role || t("users.userInfo.details.notSet")}</p>
+                  <p>{availableRoleDisplayLabel(roleId || "") || t("users.userInfo.details.notSet")}</p>
                 </div>
 
                 <div>
