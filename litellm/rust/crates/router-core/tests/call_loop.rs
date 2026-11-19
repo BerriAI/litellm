@@ -4,12 +4,12 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HostFacts, InMemoryRouterCache, Op, PreRoute, PreRouted, Router,
-    RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest,
-    RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served, SuccessReport,
-    UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
-    host::UncountedRetries, select, select::PassThrough,
+    Attempt, AttemptError, AttemptFailure, Blocked, CallbackFiltered, Deployment, Error,
+    FailureKind, FailureReport, Health, HostFacts, InMemoryRouterCache, Op, OutcomeCallbacks,
+    PreRoute, PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent,
+    RouterHost, RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage,
+    Served, SuccessReport, UsageWindow, call::StreamOrigin, fallback::Fallbacks,
+    health::current_minute, host::UncountedRetries, select, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -40,6 +40,8 @@ struct ScriptedHost {
     pinned: Option<&'static str>,
     /// A pick of this name is answered this way, as a pre-routing hook reroutes it.
     pre_routes: Option<(&'static str, PreRouted)>,
+    /// How the next successes are blocked, in turn, whatever group they serve.
+    blocked: Mutex<VecDeque<Blocked>>,
 }
 
 impl ScriptedHost {
@@ -115,6 +117,7 @@ impl RouterHost for ScriptedHost {
         match next {
             Some(failure) => Err(Self::raised(attempt, failure)),
             None => Ok(Served {
+                blocked: self.blocked.lock().pop_front(),
                 deferred: self.deferred,
                 tracks_usage: self.tracks_usage,
                 ..Served::new(attempt.deployment.id.clone(), 10)
@@ -658,6 +661,77 @@ async fn a_bad_request_falls_back_without_retrying(config: RouterConfig) {
             retried
         ),
         ("b1", 1, false)
+    );
+}
+
+fn unusable_host(responses: usize) -> ScriptedHost {
+    ScriptedHost {
+        blocked: Mutex::new(vec![Blocked::Unusable; responses].into()),
+        ..ScriptedHost::default()
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_unusable_response_is_retried_then_falls_back(config: RouterConfig) {
+    let host = Arc::new(unusable_host(2));
+    let router = router(
+        config,
+        json!({"num_retries": 1, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            response.deployment_id.as_str(),
+            response.attempted_fallbacks,
+            host.retries()
+        ),
+        ("b1", 1, 1)
+    );
+}
+
+#[rstest]
+#[case::own_logging(false)]
+#[case::shared_logging(true)]
+#[tokio::test]
+async fn an_unusable_response_raises_a_500_and_counts_as_served(
+    config: RouterConfig,
+    #[case] shared_logging: bool,
+) {
+    let host = Arc::new(unusable_host(1));
+    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let request = RouterRequest {
+        outcome_callbacks: OutcomeCallbacks {
+            shared_logging,
+            ..OutcomeCallbacks::default()
+        },
+        ..request()
+    };
+    let error = router
+        .call(Op::from("acompletion"), request)
+        .await
+        .unwrap_err();
+    let served = host.selected()[0].clone();
+    let outcomes = host.cache.outcomes(&served).await.unwrap();
+    let cooled = router
+        .health()
+        .active_cooldowns(&["a1".to_owned(), "a2".to_owned()])
+        .await
+        .unwrap();
+    let failed = error.attempt().unwrap();
+    assert_eq!(
+        (
+            failed.status,
+            failed.is_a("APIError"),
+            outcomes.successes,
+            outcomes.fails,
+            cooled.len()
+        ),
+        (Some(500), true, 1, 0, 0)
     );
 }
 

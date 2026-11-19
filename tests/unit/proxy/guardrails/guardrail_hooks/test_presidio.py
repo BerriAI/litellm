@@ -3459,6 +3459,93 @@ async def test_apply_to_output_streaming_propagates_upstream_error_when_nothing_
             pass
 
 
+async def _chat_stream_cut_after(texts: Sequence[str], error: Exception) -> AsyncIterator[ModelResponseStream]:
+    for text in texts:
+        yield _chat_delta_chunk(text)
+    raise error
+
+
+async def _collect_until_raised(
+    guardrail: OPTIONAL_PresidioPIIMasking, stream: AsyncIterator[object]
+) -> tuple[list[object], Exception | None]:
+    collected: Final[list[object]] = []
+    try:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=stream, request_data={}
+        ):
+            collected.append(chunk)
+    except RuntimeError as error:
+        return collected, error
+    return collected, None
+
+
+@asynccontextmanager
+async def _unreachable_presidio() -> AsyncIterator[object]:
+    raise aiohttp.ClientConnectionError("presidio is down")
+    yield
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_chat_stream_cut_by_an_upstream_error_releases_the_masked_buffer_then_raises():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, apply_to_output=True, mock_redacted_text={"text": "my card is <CREDIT_CARD>"}
+    )
+
+    upstream_error: Final = RuntimeError("upstream stream cut")
+
+    collected, raised = await _collect_until_raised(
+        guardrail, _chat_stream_cut_after(("my card is 4111", " 1111 1111 1111"), upstream_error)
+    )
+
+    assert raised is upstream_error
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in collected) == "my card is <CREDIT_CARD>"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_chat_stream_cut_by_an_upstream_error_releases_nothing_when_masking_fails():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://presidio.test/",
+        presidio_anonymizer_api_base="http://presidio.test/",
+        apply_to_output=True,
+    )
+
+    upstream_error: Final = RuntimeError("upstream stream cut")
+
+    with patch.object(guardrail, "_get_session_iterator", _unreachable_presidio):
+        collected, raised = await _collect_until_raised(
+            guardrail, _chat_stream_cut_after(("my card is 4111",), upstream_error)
+        )
+
+    assert (collected, raised) == ([], upstream_error)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_anthropic_stream_cut_by_an_upstream_error_drops_the_buffer_and_raises():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, apply_to_output=True, mock_redacted_text={"text": "<CREDIT_CARD>"}
+    )
+    upstream_error: Final = RuntimeError("upstream stream cut")
+
+    async def cut_stream() -> AsyncIterator[bytes]:
+        yield _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        )
+        yield _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        )
+        yield _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111"}},
+        )
+        raise upstream_error
+
+    collected, raised = await _collect_until_raised(guardrail, cut_stream())
+
+    assert (collected, raised) == ([], upstream_error)
+
+
 @pytest.mark.asyncio
 async def test_output_parse_pii_streaming_responses_events_passthrough(
     mock_user_api_key,

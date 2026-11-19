@@ -1498,7 +1498,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def _mask_buffered_model_response_stream(
         self, all_chunks: Sequence[ModelResponseStream], request_data: dict
-    ) -> tuple[object, ...]:
+    ) -> tuple[object, ...] | None:
         from litellm.llms.base_llm.base_model_iterator import (
             convert_model_response_to_streaming,
         )
@@ -1507,9 +1507,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         assembled: Final = stream_chunk_builder(chunks=list(all_chunks), messages=request_data.get("messages"))
         if not isinstance(assembled, ModelResponse):
-            return tuple(all_chunks)
+            return None
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         return (convert_model_response_to_streaming(assembled),)
+
+    async def _masked_before_upstream_error(
+        self, all_chunks: Sequence[ModelResponseStream], request_data: dict
+    ) -> tuple[object, ...]:
+        """What a stream cut by an upstream error may still release: the buffer masked, or nothing."""
+        try:
+            return await self._mask_buffered_model_response_stream(all_chunks, request_data) or ()
+        except Exception as masking_error:  # noqa: BLE001  # the upstream error is the one the caller gets
+            verbose_proxy_logger.error("Error masking streaming PII output: %s", masking_error)
+            return ()
 
     async def _stream_apply_output_masking(
         self,
@@ -1519,8 +1529,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """Apply Presidio masking to streaming output (apply_to_output=True path)."""
         all_chunks: list[ModelResponseStream] = []
         passthrough_due_to_unknown_stream_shape = False
+        stream: Final = _coalesce_first_sse_frame(response.__aiter__())
         try:
-            stream: Final = _coalesce_first_sse_frame(response.__aiter__())
             async for chunk in stream:
                 if isinstance(chunk, ModelResponseStream):
                     if passthrough_due_to_unknown_stream_shape:
@@ -1550,30 +1560,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     all_chunks = []
                     passthrough_due_to_unknown_stream_shape = True
                     yield chunk
-            if passthrough_due_to_unknown_stream_shape:
-                verbose_proxy_logger.warning(
-                    "Presidio apply_to_output: streaming response was not a parsed chat completion stream "
-                    "(raw non-Anthropic SSE passthrough or /v1/responses events). "
-                    "Output PII masking was skipped for this response."
-                )
-                return
-            if not all_chunks:
-                verbose_proxy_logger.warning(
-                    "Presidio apply_to_output: streaming response contained no "
-                    "ModelResponseStream chunks (an empty upstream stream). "
-                    "Output PII masking was skipped for this response."
-                )
-                return
-
-            for masked_chunk in await self._mask_buffered_model_response_stream(all_chunks, request_data):
-                yield masked_chunk
-
-        except Exception as e:
-            if not all_chunks or isinstance(e, BlockedPiiEntityError):
+        except Exception as upstream_error:
+            if not all_chunks or isinstance(upstream_error, BlockedPiiEntityError):
                 raise
-            verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
-            for chunk in all_chunks:
-                yield chunk
+            for masked_chunk in await self._masked_before_upstream_error(all_chunks, request_data):
+                yield masked_chunk
+            raise
+        if passthrough_due_to_unknown_stream_shape:
+            verbose_proxy_logger.warning(
+                "Presidio apply_to_output: streaming response was not a parsed chat completion stream "
+                "(raw non-Anthropic SSE passthrough or /v1/responses events). "
+                "Output PII masking was skipped for this response."
+            )
+            return
+        if not all_chunks:
+            verbose_proxy_logger.warning(
+                "Presidio apply_to_output: streaming response contained no "
+                "ModelResponseStream chunks (an empty upstream stream). "
+                "Output PII masking was skipped for this response."
+            )
+            return
+        masked: Final = await self._mask_buffered_model_response_stream(all_chunks, request_data)
+        for masked_chunk in all_chunks if masked is None else masked:
+            yield masked_chunk
 
     def _is_anthropic_first_frame(self, chunk: bytes) -> bool:
         if is_anthropic_sse_stream((chunk,)):

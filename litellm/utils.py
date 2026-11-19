@@ -138,6 +138,7 @@ from litellm.litellm_core_utils.on_end_byte_stream import (
     StreamFailed,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.litellm_core_utils.served_failure import is_served_failure, served_failure_error, served_failure_of
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.litellm_core_utils.tool_fields import (
     MalformedField,
@@ -1693,6 +1694,12 @@ def dispatch_success_logging(
         )
 
 
+def _raise_served_failure(result: object, model: str | None) -> None:
+    error: Final = served_failure_error(result, model or "")
+    if error is not None:
+        raise error
+
+
 def _unread_speech_upstream(result: object, call_type: str, stream_requested: bool) -> httpx.Response | None:
     if (
         not stream_requested
@@ -2539,11 +2546,12 @@ def client(original_function):
             checked_result: Final = checked_fallback_attempt(kwargs, call_type, result)
 
             # [OPTIONAL] ADD TO CACHE
-            _llm_caching_handler.sync_set_cache(
-                result=checked_result,
-                args=args,
-                kwargs=kwargs,
-            )
+            if served_failure_of(checked_result) is None:
+                _llm_caching_handler.sync_set_cache(
+                    result=checked_result,
+                    args=args,
+                    kwargs=kwargs,
+                )
 
             _update_response_metadata: Final[_ResponseMetadataUpdater] = litellm_utils.update_response_metadata
             _update_response_metadata(
@@ -2585,7 +2593,8 @@ def client(original_function):
                     start_time,
                     end_time,
                 )
-            # RETURN RESULT
+            if not is_internal_call.get():
+                _raise_served_failure(checked_result, model)
             return checked_result
         except Exception as e:
             _close_unread_speech_sync(result, call_type, "stream" in kwargs and kwargs["stream"] is True)
@@ -2866,12 +2875,13 @@ def client(original_function):
                 )
 
             ## Add response to cache
-            await _llm_caching_handler.async_set_cache(
-                result=result,
-                original_function=original_function,
-                kwargs=call_kwargs,
-                args=args,
-            )
+            if served_failure_of(result) is None:
+                await _llm_caching_handler.async_set_cache(
+                    result=result,
+                    original_function=original_function,
+                    kwargs=call_kwargs,
+                    args=args,
+                )
 
             # REBUILD EMBEDDING CACHING
             if (
@@ -2926,6 +2936,8 @@ def client(original_function):
                     is_completion_with_fallbacks=is_completion_with_fallbacks,
                     is_litellm_internal_call=_is_litellm_internal_call,
                 )
+            if not _is_litellm_internal_call:
+                _raise_served_failure(result, model)
 
             return _replayed_when_run_unstreamed(result, transcription_runs_unstreamed)
         except Exception as e:
@@ -2934,7 +2946,7 @@ def client(original_function):
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
-            if logging_obj and not _is_litellm_internal_call and not is_resent_failure(e):
+            if logging_obj and not _is_litellm_internal_call and not is_resent_failure(e) and not is_served_failure(e):
                 unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
                 try:
                     logging_obj.failure_handler(

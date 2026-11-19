@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.served_failure import ServedResponseFailedError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini.long_decode import (
     collect_hops_async,
@@ -141,6 +142,45 @@ async def test_unary_long_decode_resends_the_original_request_with_the_token_and
     assert response.usage.completion_tokens == 50
     assert response.usage.prompt_tokens_details.cached_tokens == 9
     assert response.usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+async def _complete_either_way(is_async: bool, kwargs: Mapping[str, object], transport: httpx.MockTransport) -> object:
+    if is_async:
+        return await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=transport))
+    return litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=transport)))
+
+
+@pytest.mark.parametrize(
+    ("hop_count", "prompt_tokens", "completion_tokens"),
+    [(1, 10, 20), (2, 20, 50)],
+    ids=["one_request", "continued"],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_failed_tool_call_serves_every_hops_usage_on_the_error(
+    is_async: bool, hop_count: int, prompt_tokens: int, completion_tokens: int
+):
+    failed: Final = _ending_with(HOP_2, "MALFORMED_FUNCTION_CALL")
+    bodies: Final = (HOP_1, failed)[-hop_count:]
+    sent: Final[list[dict[str, object]]] = []
+    transport: Final = httpx.MockTransport(_replay(tuple(httpx.Response(200, json=body) for body in bodies), sent))
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 100_000,
+        "api_key": "fake-gemini-key",
+    }
+
+    with pytest.raises(ServedResponseFailedError) as raised:
+        await _complete_either_way(is_async, kwargs, transport)
+
+    usage: Final = raised.value.served_response.usage
+    assert len(sent) == hop_count
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        prompt_tokens,
+        completion_tokens,
+        prompt_tokens + completion_tokens,
+    )
 
 
 @pytest.mark.parametrize("is_async", [True, False])

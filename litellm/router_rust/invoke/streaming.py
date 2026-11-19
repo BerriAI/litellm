@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.core_helpers import FinishEvidence, as_str_mapping, finish_evidence_of, without
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.on_end_byte_stream import StreamClosedEarly, StreamCompleted, StreamEnd, StreamFailed
+from litellm.litellm_core_utils.served_failure import is_served_failure, served_failure_in
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -330,7 +331,10 @@ async def _areported(
                 observe(item)
             yield item
     except Exception as error:
-        if started or fails_before_first_item:
+        served_failure: Final = served_failure_in(error)
+        if served_failure is not None:
+            attempt.report_success(total_tokens(served_failure.served_response), served_failure.served_response)
+        elif started or fails_before_first_item:
             attempt.report_failure(error)
         else:
             attempt.outcome_reported = True  # rebind-ok: a stream that never opened counts nothing
@@ -343,7 +347,10 @@ def _reported(attempt: StreamAttempt, items: Iterable[_ItemT]) -> Generator[_Ite
     try:
         yield from items
     except Exception as error:
-        attempt.report_failure_sync(error)
+        if is_served_failure(error):
+            attempt.report_success_sync()
+        else:
+            attempt.report_failure_sync(error)
         raise
     attempt.report_success_sync()
 
@@ -719,6 +726,10 @@ def _names_deployment_that_cannot_continue(core: "RustCore", target: object) -> 
     return deployment is not None and not deployment_can_continue(deployment.model_dump(exclude_none=True))
 
 
+def _never_continues(e: MidStreamFallbackError) -> bool:
+    return isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError) or is_served_failure(e)
+
+
 def _mid_stream_continuation_eligible(
     attempt: StreamAttempt, e: MidStreamFallbackError, cut_deployment_id: object
 ) -> bool:
@@ -738,7 +749,7 @@ def _mid_stream_continuation_eligible(
         return False
     if not e.generated_content or e.emitted_disqualifying_content:
         return False
-    if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
+    if _never_continues(e):
         return False
     if isinstance(cut_deployment_id, str) and not core.registry().has_deployment(cut_deployment_id):
         return False
@@ -1914,12 +1925,18 @@ def _raise_released_stream_error(attempt: StreamAttempt, e: MidStreamFallbackErr
     _raise_original_mid_stream_error(e)
 
 
+def _starts_over_on_fallback(e: MidStreamFallbackError) -> bool:
+    return _mid_stream_error_before_output(e) or is_served_failure(e)
+
+
 def _responses_continuation_request(
-    attempt: StreamAttempt, e: MidStreamFallbackError, source_iterator: BaseResponsesAPIStreamingIterator
+    attempt: StreamAttempt,
+    e: MidStreamFallbackError,
+    source_iterator: BaseResponsesAPIStreamingIterator,
 ) -> Mapping[str, object] | None:
-    """The request a fallback continues from once a Responses stream broke after text, or None before
-    output. Raises the primary's error when the output is constrained, a tool call began, a content
-    filter cut it, or the output ceiling is spent."""
+    """The request a fallback continues from once a Responses stream broke after text, or None when the
+    fallback starts over. Raises the primary's error when the output is constrained, a tool call began, a
+    content filter cut it, or the output ceiling is spent."""
     from litellm.litellm_core_utils.token_counter import (
         token_counter,  # pyright: ignore[reportUnknownVariableType]  # untyped tokenizer argument
     )
@@ -1933,9 +1950,9 @@ def _responses_continuation_request(
 
     if source_iterator.started_tool_call:
         _raise_original_mid_stream_error(e)
-    if _mid_stream_error_before_output(e):
+    if _starts_over_on_fallback(e):
         return None
-    if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
+    if _never_continues(e):
         _raise_original_mid_stream_error(e)
     cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
     if constrains_responses_continuation(_params_sent_to_deployment(attempt, cut_deployment_id)):
@@ -2074,7 +2091,7 @@ async def _responses_fallback_attempt(
     reach the client only when no fallback lands."""
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ResponsesContinuationSeam
 
-    if output_started and _mid_stream_error_before_output(e):
+    if output_started and _starts_over_on_fallback(e):
         _raise_original_mid_stream_error(e)
     continued: Final = _responses_continuation_request(attempt, e, source_iterator)
     seam: Final = ResponsesContinuationSeam(e.generated_content if continued is not None else "")

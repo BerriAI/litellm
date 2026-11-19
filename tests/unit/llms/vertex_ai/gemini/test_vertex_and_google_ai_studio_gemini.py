@@ -1,9 +1,9 @@
-import asyncio, base64, importlib, os, uuid
+import asyncio, base64, datetime, importlib, os, uuid
 import json
 import logging
 import re
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, pairwise
@@ -20,6 +20,7 @@ import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
 from litellm._logging import verbose_logger
 from litellm.cost_calculator import batch_cost_calculator
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, parse_prompt_tokens_details
@@ -28,8 +29,10 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.llms.vertex_ai.gemini.long_decode import AsyncStreamResume, SyncStreamResume
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
+    ModelResponseIterator,
     VertexGeminiConfig,
     _log_gemini_sampling_params_deprecated,
     normalize_gemini_speech_config,
@@ -39,7 +42,14 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, StreamingChoices, Usage
 from litellm.utils import CustomStreamWrapper
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.litellm_core_utils.served_failure import (
+    ServedFailure,
+    ServedResponseFailedError,
+    is_served_failure,
+    served_failure_of,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
@@ -8756,10 +8766,8 @@ _GOOGLE_NOTE_OUTCOMES: Final = (
     pytest.param(_flagged_outcome("SAFETY", "Candidate was blocked for safety."), id="flagged_with_note"),
     pytest.param(_blocked_outcome("PROHIBITED_CONTENT", "Prompt was blocked."), id="blocked_with_note"),
     pytest.param(
-        _finished_after_text_outcome(
-            "MALFORMED_FUNCTION_CALL", "stop", "Malformed function call: print(default_api.lookup(city='Paris'"
-        ),
-        id="malformed_function_call_with_note",
+        _finished_after_text_outcome("MALFORMED_RESPONSE", "stop", "The model returned an unusable response."),
+        id="malformed_response_with_note",
     ),
 )
 _GOOGLE_REASON_OUTCOMES: Final = (
@@ -8767,7 +8775,7 @@ _GOOGLE_REASON_OUTCOMES: Final = (
     pytest.param(_flagged_outcome("RECITATION"), id="flagged_without_note"),
     pytest.param(_blocked_outcome("SAFETY"), id="blocked_without_note"),
     pytest.param(_finished_after_text_outcome("STOP", "stop"), id="stop"),
-    pytest.param(_finished_after_text_outcome("MALFORMED_FUNCTION_CALL", "stop"), id="malformed_function_call"),
+    pytest.param(_finished_after_text_outcome("MALFORMED_RESPONSE", "stop"), id="malformed_response"),
 )
 
 
@@ -12362,3 +12370,841 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+_SYNC_AND_ASYNC: Final = pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+_FAILED_TOOL_CALL_REASONS: Final = ("MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL")
+_FAILED_TOOL_CALL_NOTE: Final = "print(default_api.lookup(city='Paris'"
+_TOOL_CALL_FRAME: Final = {
+    "candidates": [
+        {
+            "content": {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {"city": "Paris"}}}]},
+            "index": 0,
+        }
+    ]
+}
+_STOP_FRAME: Final = _google_finished({"finishReason": "STOP"})
+_CONTINUATION_FRAME: Final = _google_finished({"finishReason": "CONTINUATION", "continuationToken": "next-hop"})
+
+
+def _google_last_frame(reason: str) -> Mapping[str, object]:
+    return _google_finished(
+        {
+            "content": {"role": "model", "parts": [{"text": "silver light."}]},
+            "finishReason": reason,
+            "finishMessage": _FAILED_TOOL_CALL_NOTE,
+        }
+    )
+
+
+_FAILED_TOOL_CALL_FRAME: Final = _google_last_frame("MALFORMED_FUNCTION_CALL")
+_FAILED_TOOL_CALL_FRAMES: Final = (_google_text_frame("Waves fold "), _FAILED_TOOL_CALL_FRAME)
+
+
+@dataclass(frozen=True, slots=True)
+class _GeminiStreamEnd:
+    chunks: tuple[ModelResponseStream, ...]
+    error: Exception | None
+    failure: ServedFailure | None = None
+
+
+def _items_until_error(stream: Iterable[object], error_type: type[Exception]) -> Iterator[object]:
+    try:
+        yield from stream
+    except error_type as error:
+        yield error
+
+
+async def _async_items_until_error(stream: AsyncIterable[object], error_type: type[Exception]) -> AsyncIterator[object]:
+    try:
+        async for item in stream:
+            yield item
+    except error_type as error:
+        yield error
+
+
+def _stream_end_of(items: Sequence[object], error_type: type[Exception]) -> _GeminiStreamEnd:
+    errors: Final = tuple(item for item in items if isinstance(item, error_type))
+    return _GeminiStreamEnd(
+        chunks=tuple(item for item in items if isinstance(item, ModelResponseStream)),
+        error=errors[0] if errors else None,
+    )
+
+
+def _sync_stream_end(stream: Iterable[object], error_type: type[Exception]) -> _GeminiStreamEnd:
+    return _stream_end_of(tuple(_items_until_error(stream, error_type)), error_type)
+
+
+async def _async_stream_end(stream: AsyncIterable[object], error_type: type[Exception]) -> _GeminiStreamEnd:
+    return _stream_end_of([item async for item in _async_items_until_error(stream, error_type)], error_type)
+
+
+async def _async_lines(lines: Sequence[str]) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+
+
+def _hop_response(frames: Sequence[Mapping[str, object]]) -> httpx.Response:
+    return httpx.Response(200, content="".join(f"data: {json.dumps(frame)}\n\n" for frame in frames).encode())
+
+
+def _gemini_logging_obj(is_stream: bool = True, optional_params: Mapping[str, object] | None = None) -> Logging:
+    logging_obj: Final = Logging(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Describe the sea."}],
+        stream=is_stream,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="gemini-stream",
+        function_id="gemini-stream",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params=dict(optional_params or {}), model="gemini/gemini-3.8-flash"
+    )
+    return logging_obj
+
+
+async def _drain_gemini_stream(
+    frames: Sequence[Mapping[str, object]],
+    is_async: bool,
+    generation_config: Mapping[str, int] | None = None,
+    hop_frames: Sequence[Mapping[str, object]] = (),
+    optional_params: Mapping[str, object] | None = None,
+) -> _GeminiStreamEnd:
+    lines: Final = tuple(f"data: {json.dumps(frame)}" for frame in frames)
+    request_body: Final = RequestBody(contents=[], generationConfig=dict(generation_config or {}))
+
+    async def open_hop_async(_: RequestBody) -> httpx.Response:
+        return _hop_response(hop_frames)
+
+    iterator: Final = ModelResponseIterator(
+        streaming_response=_async_lines(lines) if is_async else iter(lines),
+        sync_stream=not is_async,
+        logging_obj=_gemini_logging_obj(optional_params=optional_params),
+        resume=(
+            AsyncStreamResume(request_body=request_body, open_hop=open_hop_async)
+            if is_async
+            else SyncStreamResume(request_body=request_body, open_hop=lambda _: _hop_response(hop_frames))
+        ),
+    )
+    end: Final = (
+        await _async_stream_end(iterator, VertexAIError) if is_async else _sync_stream_end(iterator, VertexAIError)
+    )
+    return _GeminiStreamEnd(chunks=end.chunks, error=end.error, failure=served_failure_of(iterator))
+
+
+def _streamed_text(chunks: Sequence[ModelResponseStream]) -> str:
+    return "".join(choice.delta.content or "" for choice in _stream_choices(chunks))
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("reason", _FAILED_TOOL_CALL_REASONS)
+async def test_stream_ending_in_failed_tool_call_is_marked_served_after_delivering_text_and_usage(
+    reason: str, is_async: bool
+) -> None:
+    end: Final = await _drain_gemini_stream((_google_text_frame("Waves fold "), _google_last_frame(reason)), is_async)
+
+    assert end.error is None
+    assert end.failure is not None
+    assert end.failure.reason == reason
+    assert reason in end.failure.message
+    assert _FAILED_TOOL_CALL_NOTE not in end.failure.message
+    assert _streamed_text(end.chunks) == "Waves fold silver light."
+    last_usage: Final = end.chunks[-1].usage
+    assert (last_usage.prompt_tokens, last_usage.completion_tokens, last_usage.total_tokens) == (11, 5, 16)
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("reason", _FAILED_TOOL_CALL_REASONS)
+async def test_tool_call_followed_by_failed_reason_still_finishes_as_tool_calls(reason: str, is_async: bool) -> None:
+    end: Final = await _drain_gemini_stream((_TOOL_CALL_FRAME, _google_finished({"finishReason": reason})), is_async)
+
+    assert end.failure is None
+    assert end.chunks[-1].choices[0].finish_reason == "tool_calls"
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("reason", ["MALFORMED_RESPONSE", "TOO_MANY_TOOL_CALLS", "MISSING_THOUGHT_SIGNATURE", "STOP"])
+async def test_other_finish_reasons_end_the_stream_normally(reason: str, is_async: bool) -> None:
+    end: Final = await _drain_gemini_stream((_google_text_frame("Waves fold "), _google_last_frame(reason)), is_async)
+
+    assert end.failure is None
+    assert end.chunks[-1].choices[0].finish_reason == "stop"
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("count_key", ["candidate_count", "candidateCount"])
+async def test_request_for_several_candidates_keeps_the_normal_finish(count_key: str, is_async: bool) -> None:
+    end: Final = await _drain_gemini_stream(_FAILED_TOOL_CALL_FRAMES, is_async, {count_key: 2})
+
+    assert end.failure is None
+    assert end.chunks[-1].choices[0].finish_reason == "stop"
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    "later_frame",
+    [pytest.param(_TOOL_CALL_FRAME, id="tool_call"), pytest.param(_STOP_FRAME, id="normal_finish")],
+)
+async def test_later_frame_clears_a_remembered_tool_call_failure(
+    later_frame: Mapping[str, object], is_async: bool
+) -> None:
+    end: Final = await _drain_gemini_stream((*_FAILED_TOOL_CALL_FRAMES, later_frame), is_async)
+
+    assert end.failure is None
+
+
+@_SYNC_AND_ASYNC
+async def test_later_candidate_without_a_finish_reason_keeps_the_remembered_failure(is_async: bool) -> None:
+    end: Final = await _drain_gemini_stream((*_FAILED_TOOL_CALL_FRAMES, _google_text_frame(" Again.")), is_async)
+
+    assert end.failure is not None
+    assert _streamed_text(end.chunks) == "Waves fold silver light. Again."
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    ("frames", "hop_frames", "text", "finish_reason"),
+    [
+        pytest.param(
+            (_FAILED_TOOL_CALL_FRAME, _CONTINUATION_FRAME),
+            (_google_text_frame(" After the hop."), _STOP_FRAME),
+            "silver light. After the hop.",
+            "stop",
+            id="failure_then_hop",
+        ),
+        pytest.param(
+            (_CONTINUATION_FRAME, _FAILED_TOOL_CALL_FRAME),
+            (),
+            "silver light.",
+            "length",
+            id="hop_then_failure_then_no_reply",
+        ),
+    ],
+)
+async def test_continuation_hop_drops_a_remembered_tool_call_failure(
+    frames: tuple[Mapping[str, object], ...],
+    hop_frames: tuple[Mapping[str, object], ...],
+    text: str,
+    finish_reason: str,
+    is_async: bool,
+) -> None:
+    end: Final = await _drain_gemini_stream(frames, is_async, {"max_output_tokens": 1000}, hop_frames)
+
+    assert end.failure is None
+    assert _streamed_text(end.chunks) == text
+    assert end.chunks[-1].choices[0].finish_reason == finish_reason
+
+
+@_SYNC_AND_ASYNC
+async def test_chunk_that_ends_a_continued_hop_reports_no_finish(is_async: bool) -> None:
+    end: Final = await _drain_gemini_stream(
+        (_CONTINUATION_FRAME,), is_async, {"max_output_tokens": 1000}, (_STOP_FRAME,)
+    )
+
+    assert end.chunks[0].choices[0].finish_reason is None
+    assert getattr(end.chunks[0].choices[0], "provider_specific_fields", None) is None
+    assert end.chunks[-1].choices[0].finish_reason == "stop"
+
+
+@_SYNC_AND_ASYNC
+async def test_tool_call_failure_in_a_continuation_hop_is_still_marked(is_async: bool) -> None:
+    end: Final = await _drain_gemini_stream(
+        (_google_text_frame("Waves fold "), _CONTINUATION_FRAME),
+        is_async,
+        {"max_output_tokens": 1000},
+        (_FAILED_TOOL_CALL_FRAME,),
+    )
+
+    assert end.failure is not None
+    assert _streamed_text(end.chunks) == "Waves fold silver light."
+
+
+@_SYNC_AND_ASYNC
+async def test_legacy_function_call_followed_by_failed_reason_is_not_marked(is_async: bool) -> None:
+    end: Final = await _drain_gemini_stream(
+        (_TOOL_CALL_FRAME, _google_finished({"finishReason": "MALFORMED_FUNCTION_CALL"})),
+        is_async,
+        optional_params={"functions": [{"name": "lookup"}]},
+    )
+
+    assert end.failure is None
+    assert end.chunks[0].choices[0].delta.function_call is not None
+
+
+class _OutcomeRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = threading.Event()
+        self.total_tokens: int | None = None
+        self.cost: float | None = None
+        self.successes: int = 0
+        self.failures: int = 0
+
+    def _record(self, kwargs: Mapping[str, object]) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        self.successes += 1
+        self.total_tokens = payload["total_tokens"]
+        self.cost = payload["response_cost"]
+        self.logged.set()
+
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures += 1
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures += 1
+
+
+def _request_logging_obj(recorder: _OutcomeRecorder, is_async: bool, is_stream: bool = True) -> Logging:
+    return Logging(
+        model="primary",
+        messages=[{"role": "user", "content": "Describe the sea."}],
+        stream=is_stream,
+        call_type="acompletion" if is_async else "completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="served-failure",
+        function_id="served-failure",
+        dynamic_success_callbacks=[recorder],
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+
+
+def _proxy_logging_obj(recorder: _OutcomeRecorder, is_stream: bool = True) -> Logging:
+    logging_obj: Final = _request_logging_obj(recorder, True, is_stream)
+    logging_obj.defer_async_logging = not is_stream
+    logging_obj.parks_served_failure = is_stream
+    return logging_obj
+
+
+def _streamed_document(frames: Sequence[Mapping[str, object]]) -> Callable[[httpx.Request], httpx.Response]:
+    content: Final = "".join(f"data: {json.dumps(frame)}\r\n\r\n" for frame in frames).encode()
+    return lambda _: httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
+
+
+async def _gemini_stream_end(
+    frames: Sequence[Mapping[str, object]], is_async: bool, logging_obj: Logging | None = None
+) -> _GeminiStreamEnd:
+    transport: Final = httpx.MockTransport(_streamed_document(frames))
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "Describe the sea."}],
+        "stream": True,
+        "api_key": "fake-gemini-key",
+        **({} if logging_obj is None else {"litellm_logging_obj": logging_obj}),
+    }
+    if is_async:
+        return await _async_stream_end(
+            await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport)),
+            MidStreamFallbackError,
+        )
+    return _sync_stream_end(
+        litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))),
+        MidStreamFallbackError,
+    )
+
+
+@_SYNC_AND_ASYNC
+async def test_caller_gets_text_then_a_served_failure_and_no_finish_when_the_tool_call_fails(is_async: bool) -> None:
+    outcome: Final = _finished_after_text_outcome("MALFORMED_FUNCTION_CALL", "stop", _FAILED_TOOL_CALL_NOTE)
+    transport: Final = httpx.MockTransport(_google_reason_handler(outcome))
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "Describe the sea."}],
+        "stream": True,
+        "api_key": "fake-gemini-key",
+    }
+
+    end: Final = (
+        await _async_stream_end(
+            await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport)),
+            MidStreamFallbackError,
+        )
+        if is_async
+        else _sync_stream_end(
+            litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport))),
+            MidStreamFallbackError,
+        )
+    )
+
+    assert isinstance(end.error, MidStreamFallbackError)
+    assert end.error.status_code == 500
+    assert "MALFORMED_FUNCTION_CALL" in str(end.error)
+    assert _FAILED_TOOL_CALL_NOTE not in str(end.error)
+    served: Final = end.error.original_exception
+    assert isinstance(served, ServedResponseFailedError)
+    assert served.reason == "MALFORMED_FUNCTION_CALL"
+    assert served.served_response.choices[0].message.content == outcome.text
+    assert _streamed_text(end.chunks) == outcome.text
+    assert _finish_choices(end.chunks) == ()
+
+
+@_SYNC_AND_ASYNC
+async def test_stream_ending_on_a_failed_tool_call_is_logged_once_as_a_success(is_async: bool) -> None:
+    recorder: Final = _OutcomeRecorder()
+
+    end: Final = await _gemini_stream_end(_FAILED_TOOL_CALL_FRAMES, is_async, _request_logging_obj(recorder, is_async))
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+    await asyncio.sleep(0.1)
+
+    assert isinstance(end.error, MidStreamFallbackError)
+    assert (recorder.successes, recorder.failures, recorder.total_tokens) == (
+        1,
+        0,
+        _GOOGLE_REASON_USAGE["totalTokenCount"],
+    )
+    assert recorder.cost is not None and recorder.cost > 0
+
+
+async def _complete_google_document(
+    document: Mapping[str, object],
+    is_async: bool,
+    request: Mapping[str, object] | None = None,
+    transport: httpx.MockTransport | None = None,
+) -> ModelResponse:
+    sent: Final = transport or httpx.MockTransport(lambda _: httpx.Response(200, json=dict(document)))
+    call: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "Describe the sea."}],
+        "api_key": "fake-gemini-key",
+        **(request or {}),
+    }
+    if is_async:
+        return await litellm.acompletion(**call, client=AsyncHTTPHandler(transport=sent))
+    return litellm.completion(**call, client=HTTPHandler(client=httpx.Client(transport=sent)))
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("reason", _FAILED_TOOL_CALL_REASONS)
+async def test_non_streamed_failed_tool_call_raises_a_500_carrying_the_served_response(
+    reason: str, is_async: bool
+) -> None:
+    with pytest.raises(ServedResponseFailedError) as raised:
+        await _complete_google_document(_google_last_frame(reason), is_async)
+
+    assert raised.value.status_code == 500
+    assert reason in str(raised.value)
+    assert _FAILED_TOOL_CALL_NOTE not in str(raised.value)
+    assert "silver light." not in str(raised.value)
+    served: Final = raised.value.served_response
+    assert served.choices[0].message.content == "silver light."
+    assert served.usage.total_tokens == _GOOGLE_REASON_USAGE["totalTokenCount"]
+
+
+@_SYNC_AND_ASYNC
+async def test_non_streamed_failed_tool_call_is_logged_once_as_a_success(is_async: bool) -> None:
+    recorder: Final = _OutcomeRecorder()
+
+    with pytest.raises(ServedResponseFailedError):
+        await _complete_google_document(
+            _FAILED_TOOL_CALL_FRAME, is_async, {"litellm_logging_obj": _request_logging_obj(recorder, is_async, False)}
+        )
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+    await asyncio.sleep(0.1)
+
+    assert (recorder.successes, recorder.failures, recorder.total_tokens) == (
+        1,
+        0,
+        _GOOGLE_REASON_USAGE["totalTokenCount"],
+    )
+
+
+@_SYNC_AND_ASYNC
+async def test_sdk_num_retries_rescues_a_failed_tool_call(is_async: bool) -> None:
+    documents: Final = iter((_FAILED_TOOL_CALL_FRAME, _HEALTHY_FRAME))
+    transport: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=dict(next(documents))))
+
+    response: Final = await _complete_google_document({}, is_async, {"num_retries": 1}, transport)
+
+    assert response.choices[0].message.content == "Harbor lights."
+
+
+@_SYNC_AND_ASYNC
+async def test_a_failed_tool_call_is_never_cached(is_async: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", litellm.Cache())
+    documents: Final = iter((_FAILED_TOOL_CALL_FRAME, _HEALTHY_FRAME))
+    transport: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=dict(next(documents))))
+
+    with pytest.raises(ServedResponseFailedError):
+        await _complete_google_document({}, is_async, {"caching": True}, transport)
+    for _ in range(20):
+        await asyncio.sleep(0)
+    retried: Final = await _complete_google_document({}, is_async, {"caching": True}, transport)
+
+    assert retried.choices[0].message.content == "Harbor lights."
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("reason", _FAILED_TOOL_CALL_REASONS)
+async def test_non_streamed_tool_call_with_a_failed_reason_is_returned(reason: str, is_async: bool) -> None:
+    candidate: Final = {**_TOOL_CALL_FRAME["candidates"][0], "finishReason": reason}
+
+    response: Final = await _complete_google_document(_google_finished(candidate), is_async)
+
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response.choices[0].message.tool_calls[0].function.name == "lookup"
+
+
+@_SYNC_AND_ASYNC
+async def test_non_streamed_legacy_function_call_with_a_failed_reason_is_returned(is_async: bool) -> None:
+    candidate: Final = {**_TOOL_CALL_FRAME["candidates"][0], "finishReason": "MALFORMED_FUNCTION_CALL"}
+
+    response: Final = await _complete_google_document(
+        _google_finished(candidate),
+        is_async,
+        {"functions": [{"name": "lookup", "parameters": {"type": "object", "properties": {}}}]},
+    )
+
+    assert response.choices[0].finish_reason == "function_call"
+    assert response.choices[0].message.function_call.name == "lookup"
+
+
+@_SYNC_AND_ASYNC
+@pytest.mark.parametrize("reason", ["MALFORMED_RESPONSE", "TOO_MANY_TOOL_CALLS", "MISSING_THOUGHT_SIGNATURE", "STOP"])
+async def test_non_streamed_other_finish_reasons_return_the_answer(reason: str, is_async: bool) -> None:
+    response: Final = await _complete_google_document(_google_last_frame(reason), is_async)
+
+    assert response.choices[0].finish_reason == "stop"
+    assert response.choices[0].message.content == "silver light."
+
+
+@_SYNC_AND_ASYNC
+async def test_non_streamed_request_for_several_candidates_returns_the_answer(is_async: bool) -> None:
+    response: Final = await _complete_google_document(_FAILED_TOOL_CALL_FRAME, is_async, {"n": 2})
+
+    assert response.choices[0].finish_reason == "stop"
+    assert response.choices[0].message.content == "silver light."
+
+
+@pytest.mark.parametrize("reason", _FAILED_TOOL_CALL_REASONS)
+def test_shared_response_transform_used_by_batch_keeps_a_failed_tool_call_as_a_stop(reason: str) -> None:
+    response: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=_google_last_frame(reason),
+        model_response=ModelResponse(),
+        model="gemini-3.8-flash",
+        logging_obj=_gemini_logging_obj(is_stream=False),
+        raw_response=httpx.Response(200),
+    )
+
+    assert response.choices[0].finish_reason == "stop"
+    assert response.choices[0].message.content == "silver light."
+    assert served_failure_of(response) is None
+
+
+_FAILED_ATTEMPT_FRAME: Final = _google_finished({"finishReason": "MALFORMED_FUNCTION_CALL"})
+_HEALTHY_FRAME: Final = _google_finished(
+    {"content": {"role": "model", "parts": [{"text": "Harbor lights."}]}, "finishReason": "STOP"}
+)
+_ATTEMPT_TOKENS: Final = _GOOGLE_REASON_USAGE["totalTokenCount"]
+
+
+def _gemini_deployment(group: str, deployment_id: str, api_base: str) -> Mapping[str, object]:
+    return {
+        "model_name": group,
+        "litellm_params": {"model": "gemini/gemini-3.8-flash", "api_key": "fake-gemini-key", "api_base": api_base},
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _fallback_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            _gemini_deployment("primary", "failing", "https://failing.test"),
+            _gemini_deployment("backup", "healthy", "https://healthy.test"),
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+
+def _retry_router(num_retries: int = 1) -> litellm.Router:
+    return litellm.Router(
+        model_list=[_gemini_deployment("primary", "failing", "https://failing.test")], num_retries=num_retries
+    )
+
+
+def _attempt_transport(
+    failing_frames: Callable[[Mapping[str, object]], Sequence[Mapping[str, object]]],
+    failures_before_success: int | None,
+) -> httpx.MockTransport:
+    opened_attempts: Final[list[object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        if "continuationToken" not in body:
+            opened_attempts.append(request.url.host)
+        recovered: Final = failures_before_success is not None and len(opened_attempts) > failures_before_success
+        frames: Final = (_HEALTHY_FRAME,) if request.url.host == "healthy.test" or recovered else failing_frames(body)
+        if ":generateContent" in request.url.path:
+            return httpx.Response(200, json=dict(frames[-1]))
+        return _hop_response(frames)
+
+    return httpx.MockTransport(respond)
+
+
+def _one_failed_hop(_: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return (_FAILED_ATTEMPT_FRAME,)
+
+
+def _failed_after_a_continuation(body: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return (_FAILED_ATTEMPT_FRAME,) if "continuationToken" in body else (_CONTINUATION_FRAME,)
+
+
+async def _stream_through_router(
+    router: litellm.Router, transport: httpx.MockTransport, logging_obj: Logging, max_tokens: int | None = None
+) -> _GeminiStreamEnd:
+    call: Final = {
+        "model": "primary",
+        "messages": [{"role": "user", "content": "Describe the sea."}],
+        "stream": True,
+        "litellm_logging_obj": logging_obj,
+        **({} if max_tokens is None else {"max_tokens": max_tokens}),
+    }
+    try:
+        return await _async_stream_end(
+            await router.acompletion(**call, client=AsyncHTTPHandler(transport=transport)),
+            litellm.InternalServerError,
+        )
+    except litellm.InternalServerError as error:
+        return _GeminiStreamEnd(chunks=(), error=error)
+
+
+@pytest.mark.parametrize(
+    ("router_factory", "failures_before_success"),
+    [pytest.param(_fallback_router, None, id="fallback"), pytest.param(_retry_router, 1, id="retry")],
+)
+async def test_recovered_stream_bills_the_failed_attempt_once_on_the_success_log(
+    router_factory: Callable[[], litellm.Router], failures_before_success: int | None
+) -> None:
+    recorder: Final = _OutcomeRecorder()
+    logging_obj: Final = _proxy_logging_obj(recorder)
+
+    end: Final = await _stream_through_router(
+        router_factory(), _attempt_transport(_one_failed_hop, failures_before_success), logging_obj
+    )
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+
+    assert end.error is None
+    assert (recorder.successes, recorder.total_tokens) == (1, 2 * _ATTEMPT_TOKENS)
+    billed_attempts: Final = logging_obj.failed_attempts_billed_on_success
+    assert [usage.total_tokens for usage, _ in billed_attempts] == [_ATTEMPT_TOKENS]
+    assert recorder.cost == pytest.approx(2 * billed_attempts[0][1])
+    assert billed_attempts[0][1] > 0
+
+
+@pytest.mark.parametrize(
+    ("router_factory", "failures_before_success"),
+    [pytest.param(_fallback_router, None, id="fallback"), pytest.param(_retry_router, 1, id="retry")],
+)
+async def test_recovered_non_streamed_call_bills_the_failed_attempt_once_on_the_success_log(
+    router_factory: Callable[[], litellm.Router], failures_before_success: int | None
+) -> None:
+    recorder: Final = _OutcomeRecorder()
+    logging_obj: Final = _proxy_logging_obj(recorder, is_stream=False)
+    transport: Final = _attempt_transport(_one_failed_hop, failures_before_success)
+
+    response: Final = await router_factory().acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "Describe the sea."}],
+        litellm_logging_obj=logging_obj,
+        client=AsyncHTTPHandler(transport=transport),
+    )
+    logging_obj.enqueue_deferred_logging()
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+
+    assert response.choices[0].message.content == "Harbor lights."
+    assert recorder.total_tokens == 2 * _ATTEMPT_TOKENS
+    billed_attempts: Final = logging_obj.failed_attempts_billed_on_success
+    assert [usage.total_tokens for usage, _ in billed_attempts] == [_ATTEMPT_TOKENS]
+    assert recorder.cost == pytest.approx(2 * billed_attempts[0][1])
+
+
+def _native_responses_stream(_: httpx.Request) -> httpx.Response:
+    response: Final = {
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-5.6",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Harbor lights.", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {"input_tokens": 11, "output_tokens": 5, "total_tokens": _ATTEMPT_TOKENS},
+    }
+    events: Final = (
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {**response, "status": "in_progress", "output": [], "usage": None},
+        },
+        {"type": "response.completed", "sequence_number": 1, "response": response},
+    )
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode(),
+    )
+
+
+def _gemini_then_native_responses_transport() -> httpx.MockTransport:
+    gemini: Final = _attempt_transport(_one_failed_hop, None)
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "failing.test":
+            return await gemini.handle_async_request(request)
+        return _native_responses_stream(request)
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.parametrize(
+    ("backup_model", "open_stream"),
+    [
+        pytest.param(
+            "openai/gpt-5.6",
+            lambda router, **call: router.aresponses(model="primary", input="hi", **call),
+            id="responses_endpoint",
+        ),
+        pytest.param(
+            "openai/responses/gpt-5.6",
+            lambda router, **call: router.acompletion(
+                model="primary", messages=[{"role": "user", "content": "hi"}], **call
+            ),
+            id="chat_endpoint_through_the_responses_bridge",
+        ),
+    ],
+)
+async def test_stream_recovered_by_a_native_responses_fallback_bills_the_failed_attempt_once(
+    backup_model: str, open_stream: Callable[..., Awaitable[AsyncIterable[object]]]
+) -> None:
+    recorder: Final = _OutcomeRecorder()
+    logging_obj: Final = _proxy_logging_obj(recorder)
+    client: Final = AsyncHTTPHandler(transport=_gemini_then_native_responses_transport())
+    router: Final = litellm.Router(
+        model_list=[
+            _gemini_deployment("primary", "failing", "https://failing.test"),
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": backup_model, "api_key": "fake", "api_base": "https://openai.test/v1"},
+                "model_info": {"id": "native-responses"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    with (
+        patch.object(litellm, "module_level_aclient", client),
+        patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client", return_value=client),
+    ):
+        end: Final = await _async_stream_end(
+            await open_stream(router, stream=True, litellm_logging_obj=logging_obj), litellm.InternalServerError
+        )
+        assert await asyncio.to_thread(recorder.logged.wait, 10)
+
+    assert end.error is None
+    assert recorder.total_tokens == 2 * _ATTEMPT_TOKENS
+    assert [usage.total_tokens for usage, _ in logging_obj.failed_attempts_billed_on_success] == [_ATTEMPT_TOKENS]
+
+
+def _usage_then_server_error(_: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return (
+        {"usageMetadata": _GOOGLE_REASON_USAGE},
+        {"error": {"code": 500, "message": "boom", "status": "INTERNAL"}},
+    )
+
+
+async def test_stream_recovered_from_another_error_does_not_bill_that_attempt_on_success() -> None:
+    recorder: Final = _OutcomeRecorder()
+    logging_obj: Final = _proxy_logging_obj(recorder)
+
+    end: Final = await _stream_through_router(
+        _fallback_router(), _attempt_transport(_usage_then_server_error, None), logging_obj
+    )
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+
+    assert end.error is None
+    assert recorder.total_tokens == _ATTEMPT_TOKENS
+    assert logging_obj.failed_attempts_billed_on_success == ()
+
+
+async def test_recovered_multi_hop_stream_bills_every_hop_of_the_failed_attempt_once() -> None:
+    recorder: Final = _OutcomeRecorder()
+    logging_obj: Final = _proxy_logging_obj(recorder)
+
+    end: Final = await _stream_through_router(
+        _fallback_router(), _attempt_transport(_failed_after_a_continuation, None), logging_obj, max_tokens=1000
+    )
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+
+    assert end.error is None
+    assert recorder.total_tokens == 3 * _ATTEMPT_TOKENS
+
+
+async def test_unrescued_stream_parks_one_success_that_bills_every_attempt_and_logs_no_failure() -> None:
+    recorder: Final = _OutcomeRecorder()
+    logging_obj: Final = _proxy_logging_obj(recorder)
+
+    end: Final = await _stream_through_router(
+        _retry_router(num_retries=1), _attempt_transport(_one_failed_hop, None), logging_obj
+    )
+    assert is_served_failure(end.error)
+    assert recorder.successes == 0
+    logging_obj.enqueue_deferred_logging()
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+    await asyncio.sleep(0.1)
+
+    assert (recorder.successes, recorder.failures, recorder.total_tokens) == (1, 0, 2 * _ATTEMPT_TOKENS)
+
+
+@pytest.mark.parametrize(
+    "open_stream",
+    [
+        pytest.param(lambda router, **call: router.aresponses(model="primary", input="hi", **call), id="responses"),
+        pytest.param(
+            lambda router, **call: router.aanthropic_messages(
+                model="primary", messages=[{"role": "user", "content": "hi"}], max_tokens=50, **call
+            ),
+            id="messages",
+        ),
+    ],
+)
+async def test_recovered_bridged_stream_bills_the_failed_attempt_once(
+    open_stream: Callable[..., Awaitable[AsyncIterable[object]]],
+) -> None:
+    recorder: Final = _OutcomeRecorder()
+    client: Final = AsyncHTTPHandler(transport=_attempt_transport(_one_failed_hop, None))
+
+    with patch.object(litellm, "module_level_aclient", client):
+        stream: Final = await open_stream(
+            _fallback_router(), stream=True, litellm_logging_obj=_proxy_logging_obj(recorder)
+        )
+        end: Final = await _async_stream_end(stream, litellm.InternalServerError)
+    assert await asyncio.to_thread(recorder.logged.wait, 10)
+
+    assert end.error is None
+    assert recorder.total_tokens == 2 * _ATTEMPT_TOKENS

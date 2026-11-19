@@ -430,6 +430,9 @@ pub enum Blocked {
     ContentFilter,
     /// An Anthropic /v1/messages safeguard refusal carrying `stop_details`.
     Refusal,
+    /// A response the provider served and billed but the caller cannot use, such as a Gemini
+    /// tool call that came back malformed. It counts as served and always raises a retryable 500.
+    Unusable,
 }
 
 /// What a plugin or strategy sees: never the router itself.
@@ -934,6 +937,10 @@ mod tests {
     #[case::blocked(
         RouterEvent::Blocked { level: 0, model: "claude".to_owned(), blocked: Blocked::ContentFilter },
         json!({"event": "Blocked", "level": 0, "model": "claude", "blocked": "content_filter"})
+    )]
+    #[case::blocked_unusable(
+        RouterEvent::Blocked { level: 1, model: "gemini".to_owned(), blocked: Blocked::Unusable },
+        json!({"event": "Blocked", "level": 1, "model": "gemini", "blocked": "unusable"})
     )]
     #[case::retry_logged_after_an_attempt(
         RouterEvent::RetryLogged {

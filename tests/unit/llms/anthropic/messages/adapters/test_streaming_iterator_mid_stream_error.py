@@ -109,6 +109,39 @@ async def test_mid_stream_bedrock_error_becomes_anthropic_error_event():
     assert "messageStop" in error_payload["error"]["message"]
 
 
+def _sync_stream_then_raise(chunks: Sequence[object], exc: Exception) -> Iterator[object]:
+    yield from chunks
+    raise exc
+
+
+def test_sync_mid_stream_error_ends_the_sse_stream_with_an_error_event_after_the_text():
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_sync_stream_then_raise(
+            [_make_chunk(Delta(content="Creating a file"))], BedrockError(status_code=500, message="boom")
+        ),
+        model="claude-x",
+    )
+
+    parsed: Final = [_parse_sse(event) for event in wrapper.anthropic_sse_wrapper()]
+
+    texts: Final = [payload["delta"].get("text") for name, payload in parsed if name == "content_block_delta"]
+    assert (texts, parsed[-1][0], parsed[-1][1]["error"]["type"]) == (["Creating a file"], "error", "api_error")
+    assert "message_stop" not in [name for name, _ in parsed]
+
+
+def test_sync_mid_stream_error_reaches_a_caller_iterating_events():
+    upstream_error: Final = BedrockError(status_code=500, message="boom")
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_sync_stream_then_raise([_make_chunk(Delta(content="Creating a file"))], upstream_error),
+        model="claude-x",
+    )
+
+    with pytest.raises(BedrockError) as raised:
+        list(wrapper)
+
+    assert raised.value is upstream_error
+
+
 @pytest.mark.asyncio
 async def test_mid_stream_error_does_not_raise_out_of_wrapper():
     """The async wrapper must fully drain without letting the upstream exception

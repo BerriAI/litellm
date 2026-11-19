@@ -193,6 +193,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
+from litellm.litellm_core_utils.served_failure import is_served_failure
 from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
@@ -1252,6 +1253,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # post_call guardrails have run; the @client decorator then stores the
         # enqueue closure here instead of firing it immediately.
         self.defer_async_logging: bool = False
+        self.parks_served_failure: bool = False
         self.drops_stream_token_ids: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
@@ -3386,7 +3388,7 @@ class Logging(LiteLLMLoggingBaseClass):
         own_usage: Final = getattr(response, "usage", None)
         own_cost: Final = self.model_call_details.get("response_cost")
         if not (isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_usage, Usage)):
-            return own_usage if isinstance(own_usage, Usage) else None
+            return own_usage if isinstance(own_usage, Usage) else get_usage_object(completion_response=response)
         combined_usage: Final = BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[own_usage, partial_usage])
         self.model_call_details["combined_usage_object"] = combined_usage
         if not isinstance(own_cost, (int, float)):
@@ -5596,6 +5598,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ``for_async_request`` marks the sync run of a failure whose async run also logs it, so a
         CustomLogger that gets ``async_log_failure_event`` from that async run skips its sync hook."""
+        if is_served_failure(exception):
+            return None
         try:
             with outside_mirrored_call(), self._parent_otel_span_anchored(), self._failure_logging_context():
                 return self._failure_handler_body(
@@ -5833,6 +5837,8 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
+        if is_served_failure(exception):
+            return None
         try:
             with outside_mirrored_call(), self._parent_otel_span_anchored(), self._failure_logging_context():
                 return await self._async_failure_handler_body(

@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.model_param_helper import embeds_thought_signatu
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.served_failure import ServedFailure, mark_served_failure
 from litellm.litellm_core_utils.tool_fields import (
     declared_function_name,
     qualified_member_name,
@@ -133,6 +134,7 @@ from .long_decode import (
     StreamResume,
     SyncStreamResume,
     answer_bytes,
+    asks_for_one_candidate,
     client_continuation_token,
     collect_hops_async,
     collect_hops_sync,
@@ -168,7 +170,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import ModelResponseStream, StreamingChoices
+    from litellm.types.utils import Delta, Message, ModelResponseStream, StreamingChoices
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -4240,11 +4242,58 @@ def _transform_long_decode_hops(
         logging_obj=logging_obj,
         raw_response=first_response,
     )
-    merged_usage: Final = getattr(merged, "usage", None)
-    if not isinstance(merged_usage, Usage):
-        return merged
-    marked: Final = with_initial_prompt_tokens(merged_usage, initial_prompt_tokens_of(hops))
-    return merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
+    finished: Final = _with_first_hop_prompt_tokens(merged, hops)
+    failed_reason: Final = _response_failed_tool_call_reason(body, request_body, finished)
+    if failed_reason is not None:
+        mark_served_failure(finished, _failed_tool_call(failed_reason))
+    return finished
+
+
+def _with_first_hop_prompt_tokens(response: ModelResponse, hops: LongDecodeHops) -> ModelResponse:
+    usage: Final = getattr(response, "usage", None)
+    if not isinstance(usage, Usage):
+        return response
+    marked: Final = with_initial_prompt_tokens(usage, initial_prompt_tokens_of(hops))
+    return response if marked is usage else response.model_copy(update={"usage": marked})
+
+
+_FAILED_TOOL_CALL_FINISH_REASONS: Final[frozenset[GeminiFinishReason]] = frozenset(
+    {"MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL"}
+)
+
+
+def _requests_one_candidate(request_body: RequestBody) -> bool:
+    return asks_for_one_candidate(request_body.get("generationConfig") or {})
+
+
+def _calls_a_tool(message: "Message | Delta") -> bool:
+    return bool(message.tool_calls or message.function_call)
+
+
+def _failed_tool_call_reason(candidate: Candidates, called_a_tool: bool) -> GeminiFinishReason | None:
+    reason: Final = candidate.get("finishReason")
+    return reason if not called_a_tool and reason in _FAILED_TOOL_CALL_FINISH_REASONS else None
+
+
+def _failed_tool_call(reason: GeminiFinishReason) -> ServedFailure:
+    return ServedFailure(
+        reason=reason, message=f"Gemini ended the response with finish reason {reason} instead of a usable tool call"
+    )
+
+
+def _response_failed_tool_call_reason(
+    body: GenerateContentResponseBody, request_body: RequestBody, response: ModelResponse
+) -> GeminiFinishReason | None:
+    candidates: Final = body.get("candidates")
+    if not candidates or not _requests_one_candidate(request_body):
+        return None
+    called_a_tool: Final = any(_calls_a_tool(choice.message) for choice in response.choices)
+    return _failed_tool_call_reason(candidates[0], called_a_tool)
+
+
+def _stream_fails_on_failed_tool_call(resume: StreamResume | None) -> bool:
+    """Needs the request body ``resume`` carries; a stream opened without one keeps its finish reason."""
+    return resume is not None and _requests_one_candidate(resume.request_body)
 
 
 def _provider_finish_reasons(
@@ -4294,6 +4343,9 @@ class ModelResponseIterator:
         self.has_seen_tool_calls: bool = False
         self._resume = resume
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
+        self._fails_on_failed_tool_call: Final = _stream_fails_on_failed_tool_call(resume)
+        self._failed_tool_call_reason: GeminiFinishReason | None = None
+        self._saw_tool_or_function_call: bool = False
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
         self._first_response_id: str | None = None
@@ -4401,6 +4453,8 @@ class ModelResponseIterator:
                 if choice.finish_reason == "stop":
                     choice.finish_reason = "tool_calls"
 
+        self._track_failed_tool_call_finish(_candidates, model_response)
+
         VertexGeminiConfig.set_stream_metadata_on_response(
             model_response,
             grounding_metadata,
@@ -4415,6 +4469,30 @@ class ModelResponseIterator:
             safety_ratings,
             citation_metadata,
         )
+
+    def _track_failed_tool_call_finish(
+        self, candidates: Sequence[Candidates], model_response: "ModelResponseStream"
+    ) -> None:
+        if not self._fails_on_failed_tool_call:
+            return
+        self._saw_tool_or_function_call = self._saw_tool_or_function_call or any(
+            _calls_a_tool(choice.delta) for choice in model_response.choices
+        )
+        if not self._saw_tool_or_function_call and not _names_its_finish(candidates[0]):
+            return
+        self._failed_tool_call_reason = _failed_tool_call_reason(candidates[0], self._saw_tool_or_function_call)
+
+    def _take_hop_token_and_drop_failed_tool_call(self) -> str | None:
+        token: Final = self._pending_hop_token
+        if token is None:
+            return None
+        self._pending_hop_token = None
+        self._failed_tool_call_reason = None
+        return token
+
+    def _mark_if_stream_ended_on_failed_tool_call(self) -> None:
+        if self._failed_tool_call_reason is not None:
+            mark_served_failure(self, _failed_tool_call(self._failed_tool_call_reason))
 
     def _marked_stream_usage(self, usage: Usage | None) -> Usage | None:
         if usage is None or not self._usage_offset:
@@ -4718,9 +4796,9 @@ class ModelResponseIterator:
                         return result
                 if (unanswered_end := self._end_of_unanswered_hop()) is not None:
                     return unanswered_end
-                if (token := self._pending_hop_token) is None:
+                if (token := self._take_hop_token_and_drop_failed_tool_call()) is None:
+                    self._mark_if_stream_ended_on_failed_tool_call()
                     raise StopIteration
-                self._pending_hop_token = None
                 if (truncated_end := self._open_next_hop_sync(token)) is not None:
                     return truncated_end
                 continue
@@ -4759,9 +4837,9 @@ class ModelResponseIterator:
                         return result
                 if (unanswered_end := self._end_of_unanswered_hop()) is not None:
                     return unanswered_end
-                if (token := self._pending_hop_token) is None:
+                if (token := self._take_hop_token_and_drop_failed_tool_call()) is None:
+                    self._mark_if_stream_ended_on_failed_tool_call()
                     raise StopAsyncIteration
-                self._pending_hop_token = None
                 if (truncated_end := await self._open_next_hop_async(token)) is not None:
                     return truncated_end
                 continue

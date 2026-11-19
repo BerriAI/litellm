@@ -15,6 +15,7 @@ import pytest
 
 import litellm
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.served_failure import ServedFailure, ServedResponseFailedError, is_served_failure
 from litellm.router_core import RouterCore
 from litellm.router_utils.cooldown_handlers import mark_deployment_selection_failure
 from litellm.types.router import AllowedFailsPolicy
@@ -56,6 +57,15 @@ def selection_failure() -> Exception:
     error: Final = rate_limit()
     mark_deployment_selection_failure(error)
     return error
+
+
+def served_failure() -> ServedResponseFailedError:
+    return ServedResponseFailedError(
+        ServedFailure(reason="MALFORMED_FUNCTION_CALL", message="the model's tool call came back malformed"),
+        served_response=None,
+        model="gpt-4o",
+        llm_provider="openai",
+    )
 
 
 def caller_auth_error() -> Exception:
@@ -183,6 +193,93 @@ async def test_the_failure_hook_counts_a_failure_outside_the_deployment_as_nothi
 
     assert core.deployment_callback_on_failure(logged, None, None, None) is False  # pyright: ignore[reportAttributeAccessIssue]  # every core serves it
     assert core.health().failures_this_minute("a") == 0
+
+
+@pytest.mark.parametrize(
+    ("builder", "failures", "cooled"),
+    [(served_failure, 0, frozenset()), (server_error, 1, frozenset({"a", "b"}))],
+    ids=["served-failure", "ordinary-500"],
+)
+@pytest.mark.parametrize("is_sync", [False, True], ids=["async", "sync"])
+@pytest.mark.asyncio
+async def test_only_a_served_failure_raises_without_counting_against_the_deployment(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    builder: ErrorBuilder,
+    failures: int,
+    cooled: frozenset[str],
+    is_sync: bool,
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a", order=1), deployment("g", "b", order=2)], num_retries=0, allowed_fails=0
+    )
+    host.answer("*", fresh(builder))
+
+    raised: Final = attempt_sync(core) if is_sync else await attempt(core)
+
+    assert isinstance(raised, litellm.InternalServerError)
+    assert is_served_failure(raised) is (builder is served_failure)
+    assert core.health().failures_this_minute("a") == failures
+    assert set(cooled_down(core, ["a", "b"])) == cooled
+
+
+@pytest.mark.parametrize(
+    ("builder", "failures", "cooled"),
+    [(served_failure, 0, frozenset()), (server_error, 1, frozenset({"a"}))],
+    ids=["served-failure", "ordinary-500"],
+)
+@pytest.mark.asyncio
+async def test_only_a_served_failure_ends_a_stream_without_counting_against_the_deployment(
+    make_core: MakeCore, host: ScriptedHost, builder: ErrorBuilder, failures: int, cooled: frozenset[str]
+) -> None:
+    host.answer("openai/a", chat_stream("partial", error=builder(), logged=True))
+    core: Final = make_core(
+        model_list=[deployment("g", "a", order=1), deployment("g", "b", order=2)], num_retries=0, allowed_fails=0
+    )
+
+    stream: Final = await core.acompletion(model="g", messages=MESSAGES, stream=True)  # pyright: ignore[reportAttributeAccessIssue]  # every core serves acompletion
+    with pytest.raises(litellm.InternalServerError):
+        await collect_texts(stream)
+    await settle()
+
+    assert core.health().failures_this_minute("a") == failures
+    assert set(cooled_down(core, ["a", "b"])) == cooled
+
+
+@pytest.mark.parametrize(
+    ("builder", "calls"),
+    [(served_failure, ({"openai/a": 1}, {})), (server_error, ({}, {"openai/a": 1}))],
+    ids=["served-failure", "ordinary-500"],
+)
+@pytest.mark.asyncio
+async def test_a_served_failure_counts_as_a_successful_call(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    builder: ErrorBuilder,
+    calls: tuple[dict[str, int], dict[str, int]],  # mutable-ok: expected counter snapshots
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=0)
+    host.answer("*", fresh(builder))
+
+    await attempt(core)
+
+    assert (dict(core.success_calls), dict(core.fail_calls)) == calls  # pyright: ignore[reportAttributeAccessIssue]  # public counters
+
+
+@pytest.mark.parametrize("is_sync", [False, True], ids=["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_served_failure_is_retried_then_falls_back(
+    make_core: MakeCore, host: ScriptedHost, is_sync: bool
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a"), deployment("f", "z")], num_retries=1, fallbacks=[{"g": ["f"]}]
+    )
+    host.answer("openai/a", fresh(served_failure))
+
+    answered: Final = attempt_sync(core) if is_sync else await attempt(core)
+
+    assert not isinstance(answered, Exception)
+    assert host.deployments_called("completion" if is_sync else "acompletion") == ["a", "a", "z"]
 
 
 # --- N13: _should_run_cooldown_logic's per-caller exits ---------------------------------------------

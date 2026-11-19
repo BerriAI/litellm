@@ -19,6 +19,7 @@ import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.served_failure import ServedFailure, ServedResponseFailedError
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.router_core import RouterCore
@@ -61,6 +62,15 @@ def headers(response: object) -> Mapping[str, object]:
 
 def model_id(response: object) -> object:
     return getattr(response, "_hidden_params").get("model_id")
+
+
+def served_failure() -> ServedResponseFailedError:
+    return ServedResponseFailedError(
+        ServedFailure(reason="MALFORMED_FUNCTION_CALL", message="the model's tool call came back malformed"),
+        served_response=None,
+        model="gpt-4o",
+        llm_provider="openai",
+    )
 
 
 # --- the first chunk is read inside the attempt -----------------------------------------------
@@ -460,6 +470,19 @@ async def test_continuation_continues_after_content_on_a_prefill_capable_fallbac
     stream = await open_stream(core)
     assert await collect_texts(stream) == "hello world"
     assert host.deployments_called() == ["a", "b"]
+
+
+async def test_continuation_raises_a_served_failure_instead_of_hiding_it(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    failure: Final = served_failure()
+    host.answer("openai/a", chat_stream("he", "llo", error=failure))
+    host.answer(PREFILL_MODEL, chat_stream(" world"))
+    core: Final = continuation_core(make_core)
+    stream: Final = await open_stream(core)
+    with pytest.raises(litellm.InternalServerError):
+        await collect_texts(stream)
+    assert host.deployments_called() == ["a"]
 
 
 async def test_continuation_sends_the_partial_text_as_an_assistant_prefill(

@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
+from litellm.litellm_core_utils.served_failure import is_served_failure
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
@@ -502,8 +503,9 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
+        served: Final = is_served_failure(original_exception)
         completed_cost: Final = (
-            _str_keyed_fields(request_data.get("standard_logging_object")).get("cost_finalized") is True
+            served or _str_keyed_fields(request_data.get("standard_logging_object")).get("cost_finalized") is True
         )
         tracking_disabled: Final = ProxyUpdateSpend.disable_spend_updates()
         try:
@@ -535,7 +537,8 @@ class _ProxyDBLogger(CustomLogger):
             or request_fields.get(GUARDRAIL_ENDPOINT_FAILURE_KEY) is GUARDRAIL_ENDPOINT_FAILURE
         )
         if (
-            request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN
+            served
+            or request_fields.get(FAILURE_ROW_ALREADY_WRITTEN_KEY) is FAILURE_ROW_ALREADY_WRITTEN
             or ProxyDBLogger._should_track_errors_in_db() is False
             and not completed_cost
             or ProxyDBLogger._skips_pre_routing_rejections()

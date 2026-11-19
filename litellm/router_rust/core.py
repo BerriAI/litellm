@@ -70,6 +70,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
 )
 from litellm.litellm_core_utils.routing_groups import validate_routing_strategy
 from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.served_failure import ServedResponseFailedError, served_failure_in
 from litellm.litellm_core_utils.total_deadline import (
     TotalTimeoutNotApplicable,
     current_total_deadline,
@@ -4521,6 +4522,7 @@ class _Driver:
         self._request: Final = request
         self._cut_deployment: Final = cut_deployment if isinstance(cut_deployment, str) else None
         self._last_response: object = None
+        self._unusable_error: ServedResponseFailedError | None = None
         self._last_error: BaseException | None = None
         # The level the call raises from: a fallback walk re-entered from a failed stream starts at
         # the level that stream served, on the failure ``async_function_with_fallbacks_common_utils``
@@ -4595,6 +4597,8 @@ class _Driver:
             safeguard_refusal_error,
         )
 
+        if event.get("blocked") == "unusable" and self._unusable_error is not None:
+            return self._unusable_error
         model: Final = str(event.get("model"))
         stop_details: Final = get_safeguard_refusal_stop_details(self._last_response)
         if event.get("blocked") == "refusal" and stop_details is not None:
@@ -4947,7 +4951,8 @@ class _Driver:
             if event.get("kind") == "blocked":
                 level = event.get("level")
                 blocked = self._blocked_error(event)
-                self._stamp_blocked(blocked)
+                if event.get("blocked") != "unusable":
+                    self._stamp_blocked(blocked)
                 self._last_error = blocked
                 self._level_errors[level if isinstance(level, int) else 0] = blocked
                 continue
@@ -5211,6 +5216,15 @@ class _Driver:
             "deferred": deferred,
             "tracks_usage": self._tracks_usage(call, response, deferred),
         }
+
+    def _unusable(
+        self, call: "AttemptCall", error: ServedResponseFailedError, host_op: str, stream: "StreamAttempt | None"
+    ) -> Mapping[str, object]:
+        """A response the provider served and billed but the caller cannot use: a success the call
+        loop raises as a retryable 500, so health counts it served while retries and fallbacks apply."""
+        self._unusable_error = error
+        self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        return {**self._succeeded(call, error.served_response, host_op, stream), "blocked": "unusable"}
 
     def _tracks_usage(self, call: "AttemptCall", response: object, deferred: bool) -> bool:
         """Whether the attempt counts against its deployment's usage (``_deployment_tracks_usage``). A
@@ -5509,12 +5523,16 @@ class _Driver:
         except TotalTimeoutNotApplicable:
             raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
+            served_failure: Final = served_failure_in(error)
             if call is not None:
                 try:
-                    await released(self._release(call, attempt, refund_io_tokens=True))
+                    await released(self._release(call, attempt, refund_io_tokens=served_failure is None))
                 except asyncio.CancelledError:
                     _ = await self._queue_terminal(admission, error)
                     raise
+            if call is not None and served_failure is not None:
+                await self._report_served(admission)
+                return self._unusable(call, served_failure, call.host_op, reading_stream)
             return await self._attempt_failure(
                 step, deployment, call, error, admission, reading_stream, logs_failure=logs_failure, in_call=in_call
             )
@@ -5569,6 +5587,9 @@ class _Driver:
         except _NotSynchronous:
             raise
         except Exception as error:  # noqa: BLE001  # see attempt
+            served_failure: Final = served_failure_in(error)
+            if call is not None and served_failure is not None:
+                return self._unusable(call, served_failure, "", None)
             failed: Final = self._failed(step, deployment, call, error)
             return {**failed, "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call)}
         return self._succeeded(call, response, "", stream)

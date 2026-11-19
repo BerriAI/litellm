@@ -2703,7 +2703,7 @@ _SuccessReportSteps = _CacheStep | _CountedStep | _SuccessCountedStep | _FailedS
 class _AttemptSucceeded(TypedDict):
     ok: Literal[True]
     total_tokens: NotRequired[int]
-    blocked: NotRequired[Literal["content_filter", "refusal"] | None]
+    blocked: NotRequired[Literal["content_filter", "refusal", "unusable"] | None]
     # A stream whose success or failure the host reports when it ends (`report_success`,
     # `report_failure`): the attempt counts its request and `total_tokens` only.
     deferred: NotRequired[bool]
