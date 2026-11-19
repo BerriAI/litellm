@@ -310,6 +310,27 @@
     "description": "Langsmith Logging Integration"
   },
   {
+    "id": "mixpanel",
+    "displayName": "Mixpanel",
+    "logo": "mixpanel.svg",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "mixpanel_project_token": {
+        "type": "password",
+        "ui_name": "Mixpanel Project Token",
+        "description": "Mixpanel project token for this team or key. Traces export to this project over OTLP.",
+        "required": false
+      },
+      "mixpanel_region": {
+        "type": "text",
+        "ui_name": "Mixpanel Region (us, eu, or in)",
+        "description": "Data residency region for this project (us, eu, or in). Defaults to us.",
+        "required": false
+      }
+    },
+    "description": "Mixpanel Agent Intelligence OpenTelemetry Integration. Setup: https://docs.mixpanel.com/docs/agent-intelligence"
+  },
+  {
     "id": "newrelic",
     "displayName": "New Relic",
     "logo": "newrelic.png",
