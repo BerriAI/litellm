@@ -44,8 +44,10 @@ def test_a_uvicorn_worker_reimports_the_launcher_without_loading_litellm():
             sys.executable,
             "-I",
             "-c",
-            'import runpy, sys; runpy.run_module("gateway.launch", run_name="__mp_main__", alter_sys=True); '
+            'import runpy, sys; sys.path.insert(0, sys.argv[1]); '
+            'runpy.run_module("gateway.launch", run_name="__mp_main__", alter_sys=True); '
             'print("litellm" in sys.modules)',
+            str(Path(__file__).resolve().parents[3] / "litellm" / "runtime"),
         ],
         capture_output=True,
         text=True,
@@ -185,6 +187,15 @@ class TestUvicornArgv:
         flag: Final = _uvicorn_params(uvicorn_argv(argv, {}))["timeout_graceful_shutdown"]
         graceful: Final = GracefulShutdownManager.get_timeout() if flag is None else float(str(flag))
         assert python_server(argv).graceful_timeout_seconds == graceful
+
+    def test_rust_is_told_the_config_file_the_gateway_image_loads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config: Final = tmp_path / "config.yaml"
+        config.write_text("model_list: []\n")
+        monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+        monkeypatch.setenv("CONFIG_FILE_PATH", str(config))
+        assert python_server(()).config_path == str(config)
 
     @pytest.mark.parametrize(
         ("mode", "served"),

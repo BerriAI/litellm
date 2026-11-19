@@ -15,17 +15,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from fastapi import Request, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.types import Message
 
 import litellm
+import litellm.proxy.proxy_server as proxy_server
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ModelResponseStream, TokenCountResponse
@@ -557,7 +560,9 @@ class TestProxyExceptionAnthropicEnvelope:
                 proxy_server, "count_request_tokens", new=AsyncMock(side_effect=unavailable)
             ),
         ):
-            response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response: Final = await ep.count_tokens(
+                request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+            )
 
         body: Final = json.loads(response.body)
         assert response.status_code == expected_status
@@ -840,7 +845,9 @@ class TestErrorLogCarriesCallId:
             ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
-            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response = await ep.count_tokens(
+                request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+            )
 
         assert response.status_code == 500
         record = self._error_record(caplog)
@@ -883,7 +890,9 @@ class TestCountTokensCompactedHistory:
                 patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
                 patch.object(proxy_server, "llm_router", None),  # test-quality-ok: module global; with no router the count runs on the local tokenizer, the path that raised
             ):
-                return await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+                return await ep.count_tokens(
+                    request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+                )
 
         counted = await count(compacted)
 
@@ -934,7 +943,9 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(mod
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert response.status_code == 400
     assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
@@ -957,7 +968,9 @@ async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools == _MALFORMED_TOOL_ENTRY
@@ -990,7 +1003,9 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert response == {"input_tokens": 7}
     counted: Final = counter.await_args.kwargs["request"]
@@ -1017,7 +1032,9 @@ async def test_count_tokens_keeps_claude_code_malformed_tools_when_operator_sets
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
         patch.object(proxy_server, "proxy_config", new=operator_config),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert response.status_code == 400
     assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
@@ -1055,7 +1072,9 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
         patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=router),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
-        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+        response: Final = await ep.count_tokens(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools is None
@@ -1107,6 +1126,71 @@ def _count_on_claude(
         "/v1/messages/count_tokens",
         json={"model": "count-log-claude", "messages": [{"role": "user", "content": "Hello"}], **extra_body},
         headers=dict(headers),
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "preserve_instructions"),
+    [
+        ({}, True),
+        ({"store": True}, True),
+        ({"store": False}, False),
+        ({"extra_body": {"store": False}}, False),
+        ({"store": False, "extra_body": {"store": True}}, True),
+        ({"store": True, "extra_body": {"store": False}}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, True),
+        ({"store": False, "truncation": "auto"}, True),
+        ({"store": False, "previous_response_id": "resp_prior"}, True),
+        ({"store": False, "conversation": "conv_prior"}, True),
+        ({"store": False, "extra_body": {"truncation": "auto"}}, True),
+        ({"store": False, "extra_body": {"previous_response_id": "resp_prior"}}, True),
+        ({"store": False, "extra_body": {"conversation": "conv_prior"}}, True),
+    ],
+)
+def test_messages_count_tokens_uses_the_system_shape_sent_by_inference(
+    monkeypatch: pytest.MonkeyPatch,
+    params: dict[str, object],
+    preserve_instructions: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {"model_name": "count-sol", "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "sk-test"}}
+            ]
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(messages_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    with respx.mock(assert_all_called=True) as upstream:
+        count: Final = upstream.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 10})
+        )
+        response: Final = TestClient(app).post(
+            "/v1/messages/count_tokens",
+            json={
+                "model": "count-sol",
+                "system": "Stable prefix",
+                "messages": [{"role": "user", "content": "hi"}],
+                **params,
+            },
+        )
+    assert response.status_code == 200, response.text
+    body: Final = json.loads(count.calls[0].request.content)
+    assert not {"truncation", "previous_response_id", "conversation"} & body.keys()
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    assert {key: body[key] for key in ("input", "instructions") if key in body} == (
+        {"instructions": "Stable prefix", "input": [user_input]}
+        if preserve_instructions
+        else {
+            "input": [
+                {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+                user_input,
+            ]
+        }
     )
 
 
@@ -1246,7 +1330,7 @@ def test_count_tokens_rejected_before_counting_logs_the_400_it_answers(
 ) -> None:
     response: Final = _count_on_local_model(monkeypatch, body)
 
-    assert response.status_code == 400, response.text
+    assert (response.status_code, response.headers.get("x-litellm-call-id")) == (400, "count-log-local"), response.text
     assert token_count_log_lines() == (
         {
             "litellm_call_id": "count-log-local",
@@ -1301,6 +1385,59 @@ def test_count_tokens_on_bedrock_answers_400_for_a_message_without_content_witho
     assert response.json()["error"]["type"] == "invalid_request_error"
     assert response.json()["error"]["message"] == "Message 0 must have a 'content' field"
     assert len(respx_mock.calls) == 0
+
+
+def _claude_count_reply(status_code: int) -> Callable[[httpx.Request], httpx.Response]:
+    reply: Final = (
+        {"input_tokens": 77}
+        if status_code == 200
+        else {"type": "error", "error": {"type": "invalid_request_error", "message": "invalid base64 data"}}
+    )
+    return lambda request: httpx.Response(status_code, json=reply, request=request)
+
+
+@pytest.mark.parametrize("client_call_id", [None, "count-echo-claude"])
+@pytest.mark.parametrize("provider_status", [200, 400])
+def test_count_tokens_answers_the_call_id_its_count_line_names(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    provider_status: int,
+    client_call_id: str | None,
+) -> None:
+    response: Final = _count_on_claude(
+        monkeypatch,
+        _claude_count_reply(provider_status),
+        {} if client_call_id is None else {"x-litellm-call-id": client_call_id},
+    )
+
+    (line,) = token_count_log_lines()
+    assert (response.status_code, response.headers.get("x-litellm-call-id")) == (
+        provider_status,
+        line["litellm_call_id"],
+    ), response.text
+    assert client_call_id in (None, line["litellm_call_id"])
+
+
+@pytest.mark.parametrize(
+    ("provider_status", "extra_body"),
+    [(400, MappingProxyType({})), (200, MappingProxyType({"tools": 5}))],
+    ids=["provider_rejection", "malformed_tools_rejection"],
+)
+def test_count_tokens_error_body_names_the_call_id_its_header_carries_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    provider_status: int,
+    extra_body: Mapping[str, object],
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"include_call_id_in_error_body": True})
+
+    response: Final = _count_on_claude(monkeypatch, _claude_count_reply(provider_status), {}, extra_body)
+
+    (line,) = token_count_log_lines()
+    assert response.json()["error"]["litellm_call_id"] == response.headers.get("x-litellm-call-id")
+    assert response.headers.get("x-litellm-call-id") == line["litellm_call_id"]
 
 
 class TestEventLoggingBatchEndpoint:

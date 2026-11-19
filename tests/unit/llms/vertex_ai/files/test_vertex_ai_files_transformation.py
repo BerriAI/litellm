@@ -4,6 +4,7 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 """
 
 import json
+import re
 import urllib.parse
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
@@ -1276,6 +1277,35 @@ class TestVertexEmbeddingsBatchInputTranslation:
             },
         }
 
+    def test_should_nest_embed_content_config_params_inside_the_request(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": "hello world",
+                        "dimensions": 768,
+                        "document_ocr": True,
+                        "audio_track_extraction": True,
+                        "auto_truncate": False,
+                    }
+                )
+            ]
+        )
+
+        assert row == {
+            "key": "request-1",
+            "request": {
+                "content": {"parts": [{"text": "hello world"}]},
+                "output_dimensionality": 768,
+                "embed_content_config": {
+                    "document_ocr": True,
+                    "audio_track_extraction": True,
+                    "auto_truncate": False,
+                },
+            },
+        }
+
     def test_should_omit_config_fields_when_no_params_given(self):
         (row,) = _wrap_entries([_embeddings_entry()])
 
@@ -1667,6 +1697,52 @@ class TestVertexBatchIntegerEnums:
         properties: Final = row["request"]["tools"][0]["function_declarations"][0]["parameters"]["properties"]
         assert "enum" not in properties["level"]
         assert properties["mode"]["enum"] == ["fast", "slow"]
+
+
+_FLAT_TOOL_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+def _chat_entry_with_tool(custom_id: str, name: str, parameters: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Look it up"}],
+            "tools": [{"type": "function", "function": {"name": name, "parameters": parameters}}],
+        },
+    }
+
+
+class TestVertexBatchToolParameters:
+    @pytest.mark.parametrize(
+        "root_schema",
+        [
+            {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+            },
+            {"type": ["object", "null"], "properties": {"a": {"type": "string"}}},
+        ],
+        ids=["anyof-root", "type-list-root"],
+    )
+    def test_rows_never_send_parameters_json_schema_since_vertex_batch_merges_keys_across_rows(
+        self, root_schema: Mapping[str, object]
+    ):
+        rows: Final = _wrap_entries(
+            [
+                _chat_entry_with_tool("root-1", "lookup", root_schema),
+                _chat_entry_with_tool("flat-1", "get_weather", _FLAT_TOOL_SCHEMA),
+            ]
+        )
+
+        declarations: Final = [row["request"]["tools"][0]["function_declarations"][0] for row in rows]
+        assert [
+            (declaration["name"], "parameters" in declaration, "parametersJsonSchema" in declaration)
+            for declaration in declarations
+        ] == [("lookup", True, False), ("get_weather", True, False)]
 
 
 class TestVertexEmbeddingsBatchOutputTranslation:
@@ -2447,7 +2523,374 @@ def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_global_drop_
     assert _generation_config(row) == {"max_output_tokens": 5}
 
 
+@pytest.mark.parametrize(
+    ("deployment_params", "row_params"),
+    [({"drop_params": True}, {}), ({}, {"drop_params": True})],
+    ids=["deployment", "row"],
+)
+def test_batch_row_for_a_flagged_gemini_model_drops_the_knobs_under_deployment_or_row_drop_params(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object], row_params: Mapping[str, object]
+) -> None:
+    _flag_model_as_no_sampling(monkeypatch, "gemini-zeta-9")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    deployment: Final = {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-zeta-9", **deployment_params}
+    entry: Final = dict(_chat_entry("gemini-zeta-9", {**_SAMPLING_KNOBS, **row_params}))
+    (row,) = _uploaded_rows(VertexAIFilesConfig(), deployment, [entry])
+    assert _generation_config(row) == {"max_output_tokens": 5}
+
+
 def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
+
+
+_ANSWER_SCHEMA: Final = MappingProxyType(
+    {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+)
+_JSON_SCHEMA_KNOBS: Final = MappingProxyType(
+    {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": dict(_ANSWER_SCHEMA)}}}
+)
+
+
+def _request_of(row: Mapping[str, object]) -> dict[str, object]:
+    return TypeAdapter(dict[str, object]).validate_python(row["request"])
+
+
+def _config_columns(row: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(_request_of(row)) & {"generationConfig", "generation_config"}
+
+
+@pytest.mark.parametrize(
+    "plain_knobs",
+    [{}, {"temperature": 0.2}, {"response_format": {"type": "json_object"}}, {"response_format": {"type": "text"}}],
+    ids=["max_tokens", "temperature", "json_object", "text"],
+)
+def test_a_plain_row_shares_no_config_column_with_a_json_schema_row(plain_knobs: Mapping[str, object]) -> None:
+    """Vertex loads a batch file as one table, so a shared column gives the plain row a null response_json_schema,
+    which fails it with 'response_mime_type must be set when response_json_schema is set'"""
+    (plain_row, schema_row) = _wrap_entries(
+        [_chat_entry("gemini-2.5-flash", plain_knobs), _chat_entry("gemini-2.5-flash", _JSON_SCHEMA_KNOBS)]
+    )
+    assert _config_columns(plain_row).isdisjoint(_config_columns(schema_row))
+
+
+def test_a_json_schema_row_keeps_its_whole_generation_config() -> None:
+    (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _JSON_SCHEMA_KNOBS)])
+    assert _request_of(row)["generation_config"] == {
+        "max_output_tokens": 5,
+        "response_mime_type": "application/json",
+        "response_json_schema": dict(_ANSWER_SCHEMA),
+    }
+
+
+def test_a_responses_row_with_a_json_schema_uses_the_same_column_as_a_chat_row() -> None:
+    (responses_row, chat_row) = _wrap_entries(
+        [
+            _responses_entry(
+                {
+                    "model": "gemini-2.5-flash",
+                    "input": "hi",
+                    "text": {"format": {"type": "json_schema", "name": "answer", "schema": dict(_ANSWER_SCHEMA)}},
+                }
+            ),
+            _chat_entry("gemini-2.5-flash", _JSON_SCHEMA_KNOBS),
+        ]
+    )
+    assert _config_columns(responses_row) == _config_columns(chat_row) == {"generation_config"}
+
+
+def test_a_json_schema_row_keeps_every_other_key_of_the_plain_row() -> None:
+    knobs: Final = {
+        "messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+        "tool_choice": "auto",
+    }
+    (plain_row, schema_row) = _wrap_entries(
+        [_chat_entry("gemini-2.5-flash", knobs), _chat_entry("gemini-2.5-flash", {**knobs, **_JSON_SCHEMA_KNOBS})]
+    )
+    plain_request: Final = _request_of(plain_row)
+    schema_request: Final = _request_of(schema_row)
+    assert {"labels", "system_instruction", "tools", "toolConfig"} <= plain_request.keys()
+    assert {k: v for k, v in schema_request.items() if k != "generation_config"} == {
+        k: v for k, v in plain_request.items() if k != "generationConfig"
+    }
+
+
+def _keys_anywhere(node: object) -> frozenset[str]:
+    if isinstance(node, Mapping):
+        return frozenset(str(key) for key in node).union(*(_keys_anywhere(value) for value in node.values()))
+    if isinstance(node, list):
+        return frozenset().union(*(_keys_anywhere(item) for item in node))
+    return frozenset()
+
+
+def test_a_json_schema_row_with_defs_holds_no_key_bigquery_refuses() -> None:
+    """Vertex loads a batch file into BigQuery, whose column names cannot hold `$`, so one `$defs` key failed the
+    whole batch with 'Invalid field name "$defs"'"""
+    city: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    schema_with_defs: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": "#/$defs/City"}, "largest": {"$ref": "#/$defs/City"}},
+        "required": ["capital", "largest"],
+        "$defs": {"City": city},
+    }
+    (row,) = _wrap_entries(
+        [
+            _chat_entry(
+                "gemini-2.5-flash",
+                {"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": schema_with_defs}}},
+            )
+        ]
+    )
+    assert not any("$" in key for key in _keys_anywhere(row))
+    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ] == {"type": "object", "properties": {"capital": city, "largest": city}, "required": ["capital", "largest"]}
+
+
+_GEMINI_DEPLOYMENT: Final = MappingProxyType({"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-2.5-flash"})
+_ANNOTATED_ANSWER_SCHEMA: Final = MappingProxyType(
+    {
+        **_ANSWER_SCHEMA,
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "answer",
+        "properties": {"answer": {"type": "string", "$comment": "a city name"}},
+    }
+)
+
+
+def _schema_entry(schema: Mapping[str, object], **body: object) -> Mapping[str, object]:
+    return dict(
+        _chat_entry(
+            "gemini-2.5-flash",
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": dict(schema)}}, **body},
+        )
+    )
+
+
+def _uploaded_json_schema(
+    config: VertexAIFilesConfig, deployment: Mapping[str, object], schema: Mapping[str, object], **body: object
+) -> object:
+    (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(
+        _uploaded_rows(config, deployment, [_schema_entry(schema, **body)])
+    )
+    return TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ]
+
+
+def test_a_json_schema_annotation_bigquery_refuses_answers_400_without_drop_params(config, monkeypatch) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(VertexAIError, match=r"line 1 .*\$id.*\$schema.*drop_params") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_schema_entry(_ANNOTATED_ANSWER_SCHEMA)])
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("deployment", "body"),
+    [({**_GEMINI_DEPLOYMENT, "drop_params": True}, {}), (_GEMINI_DEPLOYMENT, {"drop_params": True})],
+    ids=["deployment", "request"],
+)
+def test_drop_params_drops_json_schema_annotations_bigquery_refuses(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: Mapping[str, object],
+    body: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _uploaded_json_schema(config, deployment, _ANNOTATED_ANSWER_SCHEMA, **body) == dict(_ANSWER_SCHEMA)
+
+
+def test_a_responses_row_drop_params_drops_json_schema_annotations_bigquery_refuses(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = _responses_entry(
+        {
+            "model": "gemini-2.5-flash",
+            "input": "hi",
+            "drop_params": True,
+            "text": {"format": {"type": "json_schema", "name": "answer", "schema": dict(_ANNOTATED_ANSWER_SCHEMA)}},
+        }
+    )
+
+    (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(_uploaded_rows(config, _GEMINI_DEPLOYMENT, [entry]))
+
+    assert TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
+        "response_json_schema"
+    ] == dict(_ANSWER_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    ("schema", "key"),
+    [
+        (
+            {
+                "$ref": "#/$defs/Node",
+                "$defs": {
+                    "Node": {"type": "object", "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}}}
+                },
+            },
+            r"\$ref",
+        ),
+        ({"type": "object", "properties": {"$id": {"type": "string"}}}, r"\$id"),
+        (
+            {"type": "object", "properties": {"a": {"$ref": "#/$defs/Town"}}, "$defs": {"City": {"type": "string"}}},
+            r"\$ref.*no \$defs block defines",
+        ),
+    ],
+    ids=["recursive_ref", "property_name", "missing_ref"],
+)
+def test_a_json_schema_key_bigquery_refuses_answers_400_even_with_drop_params(
+    config, schema: Mapping[str, object], key: str
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    with pytest.raises(VertexAIError, match=rf"line 1 .*{key}") as exc_info:
+        _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "ref",
+    ["#/$defs/Outer/properties/inner", "https://example.com/schemas/City"],
+    ids=["json_pointer", "external"],
+)
+def test_a_json_schema_ref_that_is_not_a_defs_name_answers_400_even_with_drop_params(config, ref: str) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    schema: Final = {
+        "type": "object",
+        "properties": {"capital": {"$ref": ref}},
+        "$defs": {
+            "Outer": {"type": "object", "properties": {"inner": {"type": "string"}}},
+            "inner": {"type": "integer"},
+            "City": {"type": "string"},
+        },
+    }
+    with pytest.raises(VertexAIError, match=rf"line 1 .*{re.escape(ref)}") as exc_info:
+        _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
+    assert exc_info.value.status_code == 400
+
+
+_CONSTRAINED_CAPITAL_SCHEMA: Final = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {
+            "capital": {"$ref": "#/$defs/City", "description": "The capital", "minLength": 2, "$comment": "a city"}
+        },
+        "$defs": {"City": {"type": "string"}},
+    }
+)
+
+
+def test_a_json_schema_constraint_next_to_a_ref_answers_400_without_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(VertexAIError, match=r"line 1 .*\$comment.*minLength.*next to a \$ref.*drop_params") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_schema_entry(_CONSTRAINED_CAPITAL_SCHEMA)])
+    assert exc_info.value.status_code == 400
+
+
+def test_drop_params_drops_json_schema_keys_next_to_a_ref_that_its_target_does_not_keep(
+    config: VertexAIFilesConfig,
+) -> None:
+    assert _uploaded_json_schema(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, _CONSTRAINED_CAPITAL_SCHEMA) == {
+        "type": "object",
+        "properties": {"capital": {"type": "string", "description": "The capital"}},
+    }
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        {"const": {"$id": "answer"}},
+        {"enum": [{"$id": "answer"}]},
+        {"default": {"name": {"$comment": "a city"}}},
+        {"default": {"$ref": "#/$defs/City"}},
+    ],
+    ids=["const", "enum", "nested_default", "ref_in_default"],
+)
+def test_a_dollar_key_inside_a_json_schema_literal_answers_400_even_with_drop_params(
+    config, literal: Mapping[str, object]
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    schema: Final = {
+        "type": "object",
+        "properties": {"answer": {"type": "object", **literal}},
+        "$defs": {"City": {"type": "object", "properties": {"name": {"type": "string"}}}},
+    }
+    with pytest.raises(VertexAIError, match=r"line 1 .*\$.*inside a const") as exc_info:
+        _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, [_schema_entry(schema)])
+    assert exc_info.value.status_code == 400
+
+
+def test_drop_params_drops_annotations_inside_properties_named_like_json_schema_keywords(
+    config: VertexAIFilesConfig,
+) -> None:
+    properties: Final = {name: {"type": "string"} for name in ("const", "default", "enum", "example", "examples")}
+    annotated: Final = {name: {**schema, "$comment": "a field"} for name, schema in properties.items()}
+
+    assert _uploaded_json_schema(
+        config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, {"type": "object", "properties": annotated}
+    ) == {"type": "object", "properties": properties}
+
+
+def test_json_schema_defs_named_like_json_schema_keywords_are_inlined(config: VertexAIFilesConfig) -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/default"}},
+        "$defs": {
+            "default": {"type": "object", "properties": {"b": {"$ref": "#/$defs/enum"}}},
+            "enum": {"type": "string"},
+        },
+    }
+
+    assert _uploaded_json_schema(config, _GEMINI_DEPLOYMENT, schema) == {
+        "type": "object",
+        "properties": {"a": {"type": "object", "properties": {"b": {"type": "string"}}}},
+    }
+
+
+def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations(config: VertexAIFilesConfig) -> None:
+    answer: Final = {
+        "type": "object",
+        "const": {"name": "Paris"},
+        "enum": [{"name": "Paris"}],
+        "default": {"name": "Paris"},
+    }
+    schema: Final = {"type": "object", "properties": {"answer": {**answer, "$comment": "a city"}}}
+
+    assert _uploaded_json_schema(config, {**_GEMINI_DEPLOYMENT, "drop_params": True}, schema) == {
+        "type": "object",
+        "properties": {"answer": answer},
+    }
+
+
+@pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])
+def test_batch_row_keeps_flagged_logprobs_only_when_the_row_allows_them(
+    allowed: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-zeta-9", {"supports_logprobs": False})
+    knobs: Final = {"logprobs": True, "top_logprobs": 3, "drop_params": True}
+
+    (allowed_row, dropped_row) = _wrap_entries(
+        [
+            _chat_entry("gemini-zeta-9", {**knobs, "allowed_openai_params": list(allowed)}),
+            _chat_entry("gemini-zeta-9", knobs),
+        ]
+    )
+
+    assert _generation_config(allowed_row) == {"max_output_tokens": 5, "responseLogprobs": True, "logprobs": 3}
+    assert _generation_config(dropped_row) == {"max_output_tokens": 5}

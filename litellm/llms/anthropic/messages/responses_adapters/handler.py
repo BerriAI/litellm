@@ -4,10 +4,11 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -41,7 +42,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CountContextManagement
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import (
@@ -158,6 +159,33 @@ async def count_view_messages(
     return messages if result is None else result.messages
 
 
+async def count_messages_as_sent(
+    *,
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    system: object,
+    messages_format: TokenCountMessagesFormat,
+    context_management: CountContextManagement | None,
+) -> Sequence[Mapping[str, object]] | AnthropicContextManagementError:
+    match messages_format:
+        case "openai":
+            return messages
+        case "anthropic":
+            try:
+                return await count_view_messages(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    system=system,
+                    context_management=context_management,
+                )
+            except AnthropicContextManagementError as error:
+                return error
+        case _:
+            assert_never(messages_format)
+
+
 def _with_applied_edits(
     response: AnthropicMessagesResponse, polyfill_result: PolyfillResult | None
 ) -> AnthropicMessagesResponse:
@@ -171,6 +199,19 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
     logging_obj: Final = litellm_logging_obj_from_kwargs(responses_kwargs)
     if logging_obj is not None:
         logging_obj.record_bridged_responses_api_response(result)
+
+
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
+    dropped: Final = drop_policy(request_params).additional_drop_params
+    placement_fields: Final = ("store", "previous_response_id", "conversation", "truncation")
+    top_level: Final = {key: request_params.get(key) for key in placement_fields if key not in dropped}
+    sent: Final = {key: extra_body.get(key, top_level.get(key)) for key in placement_fields}
+    return (
+        sent["store"] is not False
+        or bool(sent["previous_response_id"] or sent["conversation"])
+        or sent["truncation"] == "auto"
+    )
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -367,7 +408,22 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
+
+    caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
+    system_instructions: Final = responses_kwargs.get("instructions")
+    if isinstance(system_instructions, str) and isinstance(caller_instructions, str):
+        combined_instructions: Final = (
+            f"{system_instructions}\n{caller_instructions}" if caller_instructions else system_instructions
+        )
+        responses_kwargs["instructions"] = combined_instructions
+        if "instructions" in caller_extra_body:
+            responses_kwargs["extra_body"] = {
+                **_without_background(caller_extra_body),
+                "instructions": combined_instructions,
+            }
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
@@ -407,7 +463,7 @@ def _build_responses_kwargs(
                 # Responses API result back to a ModelResponse for the row.
                 setattr(value, "call_type", CallTypes.anthropic_messages.value)
             responses_kwargs[key] = value
-        elif key == "extra_body" and (extra_body := as_str_mapping(value)) is not None:
+        elif key == "extra_body" and key not in responses_kwargs and (extra_body := as_str_mapping(value)) is not None:
             responses_kwargs[key] = _without_background(extra_body)
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
@@ -596,7 +652,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         **kwargs: object,
     ) -> (
         AnthropicMessagesResponse
-        | AsyncIterator[bytes]
+        | Iterator[bytes]
         | Coroutine[None, None, AnthropicMessagesResponse | AsyncIterator[bytes]]
     ):
         if _is_async:
@@ -669,7 +725,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 applied_edits=polyfill_result.applied_edits_for_response() if polyfill_result else None,
             )
-            return wrapper.async_anthropic_sse_wrapper()
+            return wrapper.anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")

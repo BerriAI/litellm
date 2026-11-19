@@ -386,6 +386,10 @@ def _guardrails_listed_in(metadata: object) -> list[str | dict[str, DynamicGuard
     return metadata.get("guardrails") or []
 
 
+class GuardrailSetupError(Exception):
+    pass
+
+
 class CustomGuardrail(CustomLogger):
     mcp_block_behavior: Literal["tool_result", "raise"] | None = None
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
@@ -1345,6 +1349,12 @@ class CustomGuardrail(CustomLogger):
         """
         return True
 
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return False
+
+    def scans_each_text_separately(self) -> bool:
+        return True
+
     def structured_messages_cover_full_request(self) -> bool:
         """Whether returned ``structured_messages`` span the whole request.
 
@@ -1985,7 +1995,13 @@ def log_guardrail_information(func):
     async def async_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
@@ -2025,7 +2041,13 @@ def log_guardrail_information(func):
     def sync_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
