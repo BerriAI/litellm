@@ -3,8 +3,10 @@
 //! (`google_cloud_auth` 1.16) impersonates credentials it is handed only through the public
 //! `iamcredentials.googleapis.com`, so an account naming a Private Service Connect host or another
 //! universe would be sent elsewhere. For such a URL this module makes `impersonated_credentials`'
-//! `generateAccessToken` call itself, with the source credentials' token as the bearer. Delete it
-//! once the SDK honours a custom impersonation URL for credentials it is handed.
+//! `generateAccessToken` call itself, with the source credentials' token as the bearer. Unlike
+//! google-auth, it refuses a plain `http` URL unless it names this machine, so the bearer never
+//! crosses a network in the clear. Delete it once the SDK honours a custom impersonation URL for
+//! credentials it is handed.
 
 use std::sync::Arc;
 
@@ -27,11 +29,27 @@ const SDK_IMPERSONATION_HOST: &str = "iamcredentials.googleapis.com";
 const DEFAULT_LIFETIME_SECONDS: u64 = 3600;
 const REFUSED: &str = "Vertex: the service account impersonation endpoint refused the request.";
 const NO_TOKEN: &str = "Vertex: the service account impersonation endpoint answered no token.";
+const PLAIN_HTTP: &str =
+    "Vertex: the service account impersonation URL must use https unless it names this machine.";
 
 /// Whether Google's Rust SDK would call `url` itself: an HTTPS URL on its default host.
 pub(super) fn sdk_calls(url: &str) -> bool {
     url::Url::parse(url)
         .is_ok_and(|url| url.scheme() == "https" && url.host_str() == Some(SDK_IMPERSONATION_HOST))
+}
+
+/// Whether `url` is plain `http` to a host other than this machine's loopback, which would send
+/// the source credentials' token over the network unencrypted.
+fn plain_http_off_this_machine(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        url.scheme() == "http"
+            && !match url.host() {
+                Some(url::Host::Domain(domain)) => domain == "localhost",
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                None => false,
+            }
+    })
 }
 
 /// `_make_iam_token_request`'s body.
@@ -78,8 +96,15 @@ impl CustomImpersonation {
     }
 
     /// `impersonated_credentials.Credentials._update_token`: one `generateAccessToken` call, a
-    /// `RefreshError` when it is refused or answers no token.
+    /// `RefreshError` when it is refused or answers no token, or when the URL is plain `http` to
+    /// another machine.
     async fn generate(&self) -> Result<Granted, GoogleLoginFailure> {
+        if plain_http_off_this_machine(&self.url) {
+            return Err(GoogleLoginFailure::new(
+                PythonException::Refresh,
+                PLAIN_HTTP,
+            ));
+        }
         let bearer = self
             .source
             .token()
@@ -151,5 +176,46 @@ mod tests {
     #[case::not_a_url("iamcredentials.googleapis.com", false)]
     fn only_the_sdk_s_own_host_is_left_to_the_sdk(#[case] url: &str, #[case] expected: bool) {
         assert_eq!(sdk_calls(url), expected);
+    }
+
+    #[rstest]
+    #[case::https(
+        "https://iamcredentials-psc.p.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        false
+    )]
+    #[case::loopback_ipv4(
+        "http://127.0.0.1:8080/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        false
+    )]
+    #[case::loopback_ipv4_range(
+        "http://127.0.0.2/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        false
+    )]
+    #[case::loopback_ipv6(
+        "http://[::1]:8080/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        false
+    )]
+    #[case::localhost(
+        "http://LOCALHOST:8080/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        false
+    )]
+    #[case::google_host(
+        "http://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        true
+    )]
+    #[case::private_address(
+        "http://10.0.0.5/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        true
+    )]
+    #[case::localhost_lookalike(
+        "http://localhost.example.com/v1/projects/-/serviceAccounts/sa:generateAccessToken",
+        true
+    )]
+    #[case::not_a_url("iamcredentials.googleapis.com", false)]
+    fn plain_http_is_refused_unless_it_stays_on_this_machine(
+        #[case] url: &str,
+        #[case] refused: bool,
+    ) {
+        assert_eq!(plain_http_off_this_machine(url), refused);
     }
 }

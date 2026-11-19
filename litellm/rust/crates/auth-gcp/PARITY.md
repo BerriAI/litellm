@@ -22,6 +22,7 @@ The "How common" column is an estimate, since there is no telemetry on how deplo
 | 12 | Unsupported | Metadata server reached only through `GCE_METADATA_ROOT` | Rare | The SDK reads `GCE_METADATA_HOST` only | 500 `DefaultCredentialsError` |
 | 13 | Unsupported | Metadata server in mTLS-only mode | Very rare | The SDK has no metadata mTLS | 500, likely `TransportError` |
 | 14 | Unsupported | `gdch_service_account` in an ADC file | Essentially never for Claude | Refused at login | 500 `DefaultCredentialsError` (E8) |
+| 15 | Unsupported | External account whose `service_account_impersonation_url` is plain `http` to a host other than this machine's loopback | Very rare | Refused before the source token is sent, so it never crosses the network unencrypted. google-auth sent it | 500 `RefreshError` (E9) |
 
 ## Error texts
 
@@ -40,3 +41,5 @@ E6. "Vertex: the Google token endpoint could not be reached." When `REQUESTS_CA_
 E7. "Vertex: Google refused or could not complete the token refresh."
 
 E8. "The file (path) holds gdch_service_account credentials, which the Rust Vertex AI login does not support."
+
+E9. "Vertex: the service account impersonation URL must use https unless it names this machine."
