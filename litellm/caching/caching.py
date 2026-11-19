@@ -309,6 +309,7 @@ class Cache:
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
         _backend: BaseCache | None = None,
+        excluded_call_types: list[CachingSupportedCallTypes] | None = None,
         **kwargs,
     ):
         """
@@ -355,6 +356,7 @@ class Cache:
 
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
+            excluded_call_types (list, optional): Call types to drop from supported_call_types. Defaults to None.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
@@ -477,7 +479,9 @@ class Cache:
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = (
-            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+            supported_call_types
+            if supported_call_types is None or not excluded_call_types
+            else [call_type for call_type in supported_call_types if call_type not in excluded_call_types]
         )
         self.type = type
         self.namespace = namespace
