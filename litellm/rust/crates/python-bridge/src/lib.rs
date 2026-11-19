@@ -54,11 +54,11 @@ mod _native {
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
-        RustAccessGroupRepository, RustAgentIdentityRepository, RustBudgetRepository,
-        RustEndUserRepository, RustJwtKeyMappingRepository, RustKeyRepository,
-        RustModelAccessGroupRepository, RustObjectPermissionRepository, RustOrganizationRepository,
-        RustProjectRepository, RustSpendLogRepository, RustTagRepository,
-        RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
+        RustAccessGroupRepository, RustAgentIdentityRepository, RustAuditLogRepository,
+        RustBudgetRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
+        RustKeyRepository, RustModelAccessGroupRepository, RustObjectPermissionRepository,
+        RustOrganizationRepository, RustProjectRepository, RustSpendLogRepository,
+        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -244,6 +244,7 @@ mod tests {
                 "RustTeamRepository",
                 "RustAccessGroupRepository",
                 "RustAgentIdentityRepository",
+                "RustAuditLogRepository",
                 "RustObjectPermissionRepository",
                 "RustProjectRepository",
                 "RustTagRepository",

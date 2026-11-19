@@ -13,6 +13,7 @@ macro_rules_attribute::attribute_alias! {
 
 mod access_group;
 mod agent_identity;
+mod audit_log;
 mod budget;
 mod database;
 mod end_user;
@@ -35,6 +36,7 @@ mod utc_timestamp;
 
 pub use access_group::{AccessGroup, AccessGroupRepository};
 pub use agent_identity::AgentIdentityRepository;
+pub use audit_log::{AuditLogRepository, NewAuditLog};
 pub use budget::{Budget, BudgetRepository};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
