@@ -269,9 +269,7 @@ RESPONSES_SYSTEM_PLACEMENT_PARAMS: Final = (
 
 def preserve_system_instructions(forwarded_kwargs: Mapping[str, object]) -> bool:
     caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
-    dropped_params: Final = as_object_list(forwarded_kwargs.get("additional_drop_params")) or ()
-    top_level_store: Final = None if "store" in dropped_params else forwarded_kwargs.get("store")
-    return caller_extra_body.get("store", top_level_store) is not False or any(
+    return any(
         params.get("previous_response_id") or params.get("conversation") or params.get("truncation") == "auto"
         for params in (forwarded_kwargs, caller_extra_body)
     )

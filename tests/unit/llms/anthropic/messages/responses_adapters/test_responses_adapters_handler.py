@@ -34,16 +34,16 @@ MESSAGES = [{"role": "user", "content": "hello"}]
 @pytest.mark.parametrize(
     ("forwarded", "wire_store", "cacheable"),
     [
-        ({}, {}, False),
-        ({"store": True}, {"store": True}, False),
+        ({}, {}, True),
+        ({"store": True}, {"store": True}, True),
         ({"store": False}, {"store": False}, True),
-        ({"extra_body": {"store": True}}, {"store": True}, False),
+        ({"extra_body": {"store": True}}, {"store": True}, True),
         ({"extra_body": {"store": False}}, {"store": False}, True),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, True),
-        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
-        ({"store": False, "extra_body": {"store": None}}, {"store": None}, False),
-        ({"store": None}, {}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": False, "extra_body": {"store": None}}, {"store": None}, True),
+        ({"store": None}, {}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
         ({"store": False, "additional_drop_params": ["extra_body.store"]}, {"store": False}, True),
         ({"store": False, "additional_drop_params": ["extra_body"]}, {"store": False}, True),
         ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, True),
@@ -51,7 +51,7 @@ MESSAGES = [{"role": "user", "content": "hello"}]
         ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, True),
     ],
 )
-def test_only_forwarded_store_false_puts_messages_system_in_input(
+def test_messages_system_goes_in_input_unless_the_request_continues_a_chain(
     forwarded: dict[str, object], wire_store: dict[str, object], cacheable: bool
 ) -> None:
     response_body: Final = {

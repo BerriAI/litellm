@@ -1288,7 +1288,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             preserve_system_instructions=preserve_system_instructions
-            or request_params.get("store") is not False
             or provider not in _SYSTEM_INPUT_PROVIDERS
             or (provider == "azure_ai" and is_foundry_project_agent(model)),
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast

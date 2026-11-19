@@ -6341,24 +6341,26 @@ def _bridged_transform_request(
 @pytest.mark.parametrize(
     ("forwarded", "wire_store", "cacheable"),
     [
-        ({}, {}, False),
-        ({"store": True}, {"store": True}, False),
+        ({}, {}, True),
+        ({"store": True}, {"store": True}, True),
         ({"store": False}, {"store": False}, True),
-        ({"extra_body": {"store": True}}, {"store": True}, False),
+        ({"extra_body": {"store": True}}, {"store": True}, True),
         ({"extra_body": {"store": False}}, {"store": False}, True),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, True),
-        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
-        ({"store": False, "extra_body": {"store": None}}, {}, False),
-        ({"store": None}, {}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": False, "extra_body": {"store": None}}, {}, True),
+        ({"store": None}, {}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
         ({"store": False, "additional_drop_params": ["extra_body.store"]}, {"store": False}, True),
         ({"store": False, "additional_drop_params": ["extra_body"]}, {"store": False}, True),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, False),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, False),
-        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, True),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, True),
+        ({"previous_response_id": "resp_prior"}, {"previous_response_id": "resp_prior"}, False),
+        ({"store": True, "truncation": "auto"}, {"store": True, "truncation": "auto"}, False),
     ],
 )
-def test_only_forwarded_store_false_puts_chat_system_in_input(
+def test_chat_system_goes_in_input_unless_the_request_continues_a_chain(
     forwarded: dict[str, object], wire_store: dict[str, object], cacheable: bool
 ) -> None:
     response_body: Final = {
