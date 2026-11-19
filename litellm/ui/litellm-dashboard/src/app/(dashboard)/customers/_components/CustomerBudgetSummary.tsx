@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import type { CustomerUsageEntity } from "./customerUsageApi";
 import { CustomerBudgetWindow } from "./CustomerBudgetSpend";
 import { CUSTOMER_BUDGET_LABELS, customerBudgetPeriod, customerBudgetUsage } from "./customerBudgetUsage";
+import { CustomerRateLimitSummary } from "./CustomerRateLimits";
 
 export default function CustomerBudgetSummary({
   entity,
@@ -17,7 +18,11 @@ export default function CustomerBudgetSummary({
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
         <span className="text-muted-foreground">{t("customerPortal.analytics.budgetSummary")}</span>
         <a href={settingsHref} className="font-medium text-primary hover:underline">
-          {t(budgets.length > 0 ? "customerPortal.analytics.editBudget" : "customerPortal.analytics.setBudget")}
+          {t(
+            budgets.length > 0 || entity.rateLimits
+              ? "customerPortal.analytics.editBudget"
+              : "customerPortal.analytics.setBudget",
+          )}
         </a>
       </div>
       {budgets.map((budget) => {
@@ -35,7 +40,12 @@ export default function CustomerBudgetSummary({
           </div>
         );
       })}
-      {budgets.length === 0 && <p className="text-muted-foreground">{t("customerPortal.analytics.noBudget")}</p>}
+      {budgets.length === 0 && (
+        <p className="text-muted-foreground">
+          {t(entity.rateLimits ? "customerPortal.rateLimits.noSpendLimit" : "customerPortal.analytics.noBudget")}
+        </p>
+      )}
+      <CustomerRateLimitSummary limits={entity.rateLimits} />
     </section>
   );
 }

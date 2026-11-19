@@ -158,6 +158,7 @@ const metricsFor = (rows: readonly ClientLog[]): SpendMetrics => ({
   prompt_caching_savings_spend: 0,
   gateway_injected_caching_savings_spend: 0,
   autorouter_savings_spend: 0,
+  customer_margin_spend: 0,
   guardrail_spend: sum(rows, guardrailSpend),
   spend: sum(rows, (row) => row.spend),
   prompt_tokens: sum(rows, (row) => row.prompt_tokens),

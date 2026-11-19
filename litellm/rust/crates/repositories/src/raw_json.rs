@@ -1,6 +1,6 @@
 //! JSON columns read as raw text, so a store can hand them to its caller without parsing them.
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use sqlx::{
     Postgres,
@@ -42,6 +42,12 @@ impl RawJson {
     /// The column's JSON text exactly as Postgres returned it.
     pub(crate) fn get(&self) -> &str {
         self.0.get()
+    }
+}
+
+impl<'de> Deserialize<'de> for RawJson {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Box::<RawValue>::deserialize(deserializer).map(Self)
     }
 }
 

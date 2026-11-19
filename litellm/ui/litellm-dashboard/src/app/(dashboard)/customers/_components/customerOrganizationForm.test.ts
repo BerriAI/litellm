@@ -24,6 +24,8 @@ describe("buildCustomerOrganizationBody", () => {
           name: " power ",
           monthlyBudget: "200.50",
           yearlyBudget: "1500",
+          tpm: "",
+          rpm: "",
           capPolicy: defaultCustomerCapPolicy,
         },
       ],
@@ -65,8 +67,24 @@ describe("buildCustomerOrganizationBody", () => {
       ...fields(),
       monthlyBudget: "0",
       groups: [
-        { id: "monthly", name: "monthly", monthlyBudget: "0", yearlyBudget: "", capPolicy: defaultCustomerCapPolicy },
-        { id: "yearly", name: "yearly", monthlyBudget: "", yearlyBudget: "120", capPolicy: defaultCustomerCapPolicy },
+        {
+          id: "monthly",
+          name: "monthly",
+          monthlyBudget: "0",
+          yearlyBudget: "",
+          tpm: "",
+          rpm: "",
+          capPolicy: defaultCustomerCapPolicy,
+        },
+        {
+          id: "yearly",
+          name: "yearly",
+          monthlyBudget: "",
+          yearlyBudget: "120",
+          tpm: "",
+          rpm: "",
+          capPolicy: defaultCustomerCapPolicy,
+        },
       ],
       defaultGroupId: "yearly",
     };
@@ -132,5 +150,26 @@ describe("buildCustomerOrganizationBody", () => {
       ok: false,
       error: "defaultRequired",
     });
+  });
+
+  it("creates organization and member rate limits without dollar budgets and preserves zero", () => {
+    const input = fields();
+    const result = buildCustomerOrganizationBody({
+      ...input,
+      rpm: "120",
+      groups: input.groups.map((group) => ({ ...group, monthlyBudget: "", yearlyBudget: "", tpm: "50000", rpm: "0" })),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.budget).toEqual({ rpm_limit: 120 });
+    expect(result.body.default_budgets).toEqual(
+      input.groups.map((group) => ({
+        name: group.name,
+        cap_policy: group.capPolicy,
+        budget_limits: [],
+        tpm_limit: 50000,
+        rpm_limit: 0,
+      })),
+    );
   });
 });

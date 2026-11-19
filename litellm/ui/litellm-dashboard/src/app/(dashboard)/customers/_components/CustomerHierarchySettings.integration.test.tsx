@@ -91,6 +91,27 @@ describe("CustomerHierarchySettings", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sets organization rate limits without requiring a dollar budget", async () => {
+    const unlimited = { ...organization, budget: null };
+    fetchMock.mockResolvedValue(json(unlimited));
+    render(
+      <CustomerHierarchySettings
+        entity={{ kind: "organization", record: unlimited }}
+        organization={unlimited}
+        onSaved={onSaved}
+        onDeleted={onDeleted}
+      />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Set custom limits" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(await lastRequest().clone().json()).toMatchObject({
+      budget: { max_budget: null, tpm_limit: 50000, rpm_limit: 60 },
+    });
+  });
+
   it("should render the existing organization settings and read-only identifier", () => {
     render(
       <CustomerHierarchySettings
@@ -176,7 +197,9 @@ describe("CustomerHierarchySettings", () => {
     await user.clear(budget);
     if (amount) await user.type(budget, amount === "Growth" ? "$175" : amount);
     if (amount === "Growth") {
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "300" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute", hidden: true }), {
+        target: { value: "300" },
+      });
       await user.clear(budget);
       await user.click(screen.getByRole("option", { name: "Growth", exact: true }));
       expect(save).toBeDisabled();
@@ -187,7 +210,7 @@ describe("CustomerHierarchySettings", () => {
     expect(await lastRequest().clone().json()).toEqual(
       amount === "Growth"
         ? { alias: "Renamed" }
-        : { budget: amount ? { ...organization.budget, max_budget: 175, budget_limits: null } : null },
+        : { budget: { ...organization.budget, max_budget: amount ? 175 : null, budget_limits: null } },
     );
   });
 
@@ -222,7 +245,9 @@ describe("CustomerHierarchySettings", () => {
       await userEvent.clear(budget);
       await userEvent.type(budget, "$40");
       await userEvent.keyboard("{Escape}");
-      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "300" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute", hidden: true }), {
+        target: { value: "300" },
+      });
     }
     fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
@@ -248,7 +273,7 @@ describe("CustomerHierarchySettings", () => {
         onDeleted={onDeleted}
       />,
     );
-    await userEvent.click(screen.getByRole("checkbox", { name: "Set a budget and limits" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Set custom limits" }));
     expect(screen.getByRole("combobox", { name: "Customer budget (USD)" })).toHaveValue("");
     if (!enabled) {
       fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "10" } });
