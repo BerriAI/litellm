@@ -8682,6 +8682,63 @@ def test_non_streamed_content_filter_choice_keeps_google_reason(
     assert (resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens) == (23, 4, 27)
 
 
+def test_non_streamed_content_filter_choice_includes_thinking_tokens():
+    completion_response: Final = {
+        "candidates": [{"finishReason": "SAFETY", "index": 0}],
+        "usageMetadata": {
+            "promptTokenCount": 12,
+            "candidatesTokenCount": 0,
+            "thoughtsTokenCount": 589,
+            "totalTokenCount": 601,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}],
+        },
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 1
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.usage.prompt_tokens == 12
+    assert resp.usage.completion_tokens == 589
+    assert resp.usage.total_tokens == 601
+    assert resp.usage.reasoning_tokens == 589
+    assert resp.usage.completion_tokens_details.reasoning_tokens == 589
+
+
+def test_non_streamed_blocked_prompt_includes_thinking_tokens():
+    completion_response: Final = {
+        "promptFeedback": {"blockReason": "PROHIBITED_CONTENT"},
+        "usageMetadata": {
+            "promptTokenCount": 12,
+            "candidatesTokenCount": 0,
+            "thoughtsTokenCount": 589,
+            "totalTokenCount": 601,
+        },
+    }
+
+    resp: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+        completion_response=completion_response,
+        model_response=ModelResponse(),
+        model="gemini-2.5-flash",
+        logging_obj=MagicMock(),
+        raw_response=MagicMock(headers={}),
+    )
+
+    assert len(resp.choices) == 1
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.usage.prompt_tokens == 12
+    assert resp.usage.completion_tokens == 589
+    assert resp.usage.total_tokens == 601
+    assert resp.usage.reasoning_tokens == 589
+    assert resp.usage.completion_tokens_details.reasoning_tokens == 589
+
+
 @dataclass(frozen=True, slots=True)
 class _GoogleReasonOutcome:
     document: Mapping[str, object]
