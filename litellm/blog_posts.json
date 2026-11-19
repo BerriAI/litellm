@@ -1,10 +1,588 @@
 {
   "posts": [
     {
-      "title": "Realtime WebRTC HTTP Endpoints",
-      "description": "Use the LiteLLM proxy to route OpenAI-style WebRTC realtime via HTTP: client_secrets and SDP exchange.",
-      "date": "2026-03-12",
-      "url": "https://docs.litellm.ai/blog/realtime_webrtc_http_endpoints"
+      "title": "Release cadence changes and an LTS version pilot",
+      "description": "Starting the week of November 2, 2026, release candidates and stable releases ship on Tuesday mornings, and LiteLLM is piloting a long-term support line on 1.108 for one month.",
+      "date": "2026-11-02",
+      "url": "https://docs.litellm.ai/blog/release-cadence-and-lts-pilot",
+      "tags": [
+        "release",
+        "support"
+      ]
+    },
+    {
+      "title": "How to build an agent with grounding on LiteLLM",
+      "description": "Build a grounded chat agent in four steps with LiteLLM's AI Gateway. Connect your evidence, call a grounding guardrail, and show its verdict in chat.",
+      "date": "2026-10-31",
+      "url": "https://docs.litellm.ai/blog/grounded-agent",
+      "tags": [
+        "engineering",
+        "guardrails",
+        "agents"
+      ]
+    },
+    {
+      "title": "Introducing LiteLLM’s Unified Cost Accounting Engine",
+      "description": "Consistent cost reporting, independently scalable accounting, and spend analysis by team, user, model, or custom dimensions.",
+      "date": "2026-10-31",
+      "url": "https://docs.litellm.ai/blog/cost-infrastructure-makeover",
+      "tags": [
+        "engineering",
+        "reliability"
+      ]
+    },
+    {
+      "title": "What we are changing after October 21",
+      "description": "Why the controls built after March did not stop the v1.107.0 release, and the identity, credential and detection changes we are making in response.",
+      "date": "2026-10-30",
+      "url": "https://docs.litellm.ai/blog/security-changes-after-oct-21-2026",
+      "tags": [
+        "security",
+        "incident-report"
+      ]
+    },
+    {
+      "title": "Use Hex to analyze LiteLLM costs, then set budgets and routing",
+      "description": "Connect Hex to LiteLLM’s Postgres data, import a cost dashboard, then use the LiteLLM UI to set a budget or change model routing.",
+      "date": "2026-10-30",
+      "url": "https://docs.litellm.ai/blog/hex-litellm-roi",
+      "tags": [
+        "observability",
+        "cost tracking",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "Introducing the LiteLLM Private Registry",
+      "description": "LiteLLM is committing to a private registry to provide early access to fixes for the most severe security vulnerabilities, ahead of public release.",
+      "date": "2026-10-27",
+      "url": "https://docs.litellm.ai/blog/litellm-private-registry",
+      "tags": [
+        "security"
+      ]
+    },
+    {
+      "title": "Morph open-weight models on LiteLLM",
+      "description": "Use Morph's Kimi, GLM, and DeepSeek models through LiteLLM with tool calling, structured output, streaming, and prompt-cache cost tracking.",
+      "date": "2026-10-27",
+      "url": "https://docs.litellm.ai/blog/morph-provider",
+      "tags": []
+    },
+    {
+      "title": "Abliterated models on LiteLLM",
+      "description": "Call abliterated models from Refuseless and Abliteration through LiteLLM, with gateway access controls, streaming, tool calls, and cached-token pricing.",
+      "date": "2026-10-26",
+      "url": "https://docs.litellm.ai/blog/abliterated-models",
+      "tags": [
+        "engineering"
+      ]
+    },
+    {
+      "title": "GPT-6.1 Terra API Pricing and Day 0 Support on LiteLLM",
+      "description": "GPT-6.1 Terra costs $1 per 1M input tokens and $5 per 1M output tokens, half the price of GPT-6.1 Sol. LiteLLM supports it on day 0.",
+      "date": "2026-10-26",
+      "url": "https://docs.litellm.ai/blog/gpt-6-1-terra",
+      "tags": [
+        "openai",
+        "gpt-6.1",
+        "gpt-6.1-terra",
+        "pricing",
+        "day 0 support",
+        "card_title:GPT-6.1 Terra",
+        "card_summary:Half the price of GPT-6.1 Sol at $1 / $5 per 1M tokens, 50.3% on Terminal-Bench 4.0, 1.05M context."
+      ]
+    },
+    {
+      "title": "Rust Migration: /v1/messages end-to-end in Rust by Dec 1",
+      "description": "By December 1st, the proxy will handle Anthropic messages requests 20x faster",
+      "date": "2026-10-26",
+      "url": "https://docs.litellm.ai/blog/rust-migration-rerouted",
+      "tags": [
+        "rust",
+        "rust-migration",
+        "ai-gateway",
+        "engineering"
+      ]
+    },
+    {
+      "title": "OpenCode Go is now a LiteLLM provider",
+      "description": "Use your OpenCode Go subscription through LiteLLM. Connect once, route models to the right API, preserve sessions, and track estimated usage.",
+      "date": "2026-10-24",
+      "url": "https://docs.litellm.ai/blog/opencode-go",
+      "tags": [
+        "providers",
+        "tutorial"
+      ]
+    },
+    {
+      "title": "The attack chain behind the v1.107.0 LiteLLM release",
+      "description": "How an internal key committed to a public repository in May led to three stolen GitHub tokens and the compromised litellm v1.107.0 release.",
+      "date": "2026-10-23",
+      "url": "https://docs.litellm.ai/blog/security-incident-oct-21-2026-attack-chain",
+      "tags": [
+        "security",
+        "incident-report"
+      ]
+    },
+    {
+      "title": "Tokenize text across vLLM and Watsonx",
+      "description": "Choose token counting for prompt budgets or /tokenize to inspect tokens. Use one request format across vLLM and Watsonx through LiteLLM.",
+      "date": "2026-10-23",
+      "url": "https://docs.litellm.ai/blog/unified-tokenize",
+      "tags": [
+        "engineering"
+      ]
+    },
+    {
+      "title": "October Townhall Updates: 426 Bug Fixes, 88.4% Coverage, and the Decisions API",
+      "description": "A recap of the October LiteLLM town hall: security changes that need action before you upgrade, 426 bug fixes, test coverage at 88.4%, the Decisions API, Lens, Moyai, and LiteLLM Relay.",
+      "date": "2026-10-23",
+      "url": "https://docs.litellm.ai/blog/october-townhall-updates",
+      "tags": [
+        "townhall",
+        "security",
+        "reliability",
+        "product"
+      ]
+    },
+    {
+      "title": "Contained: Oct 21, 2026 LiteLLM release v1.107.0 Compromised",
+      "description": "LiteLLM release v1.107.0 was compromised by a malicious actor.",
+      "date": "2026-10-21",
+      "url": "https://docs.litellm.ai/blog/security-incident-oct-21-2026",
+      "tags": [
+        "security",
+        "incident-report"
+      ]
+    },
+    {
+      "title": "JevRank: decision models through LiteLLM’s rerank API",
+      "description": "Preview JevRank for low-cost reranking with Perplexity and TypeSafe decision models. Explore SciFact results, reproducible data and LiteLLM setup.",
+      "date": "2026-10-20",
+      "url": "https://docs.litellm.ai/blog/jevrank",
+      "tags": [
+        "engineering",
+        "reranking",
+        "decisions"
+      ]
+    },
+    {
+      "title": "Cache-Aware Routing for Self-Hosted Models",
+      "description": "Route each agent session to the same vLLM pod on Kubernetes to reuse cached prompt prefixes.",
+      "date": "2026-10-20",
+      "url": "https://docs.litellm.ai/blog/cache-aware-routing",
+      "tags": [
+        "routing",
+        "kubernetes",
+        "vllm",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "Day 0 Support: TypeSafe Jev 1.14: Adds images, box questions, and long context",
+      "description": "TypeSafe Jev 1.14 reads images, answers box questions with coordinates and takes long-context requests. LiteLLM serves all three on /v1/systemone and /v1/decisions behind TypeSafe's opt-in headers.",
+      "date": "2026-10-15",
+      "url": "https://docs.litellm.ai/blog/typesafe_jev_images",
+      "tags": [
+        "typesafe",
+        "jev",
+        "decisions",
+        "day 0 support",
+        "card_title:Jev 1.14",
+        "card_summary:Jev 1.14 reads PNG and JPEG images, answers box questions with coordinates, and takes long-context requests on LiteLLM."
+      ]
+    },
+    {
+      "title": "Decision models on LiteLLM: /v1/decisions and /v1/systemone",
+      "description": "Decision models return probabilities instead of text, which makes routing, triage and guardrail checks cheap and deterministic. LiteLLM serves nine providers of them behind one request shape.",
+      "date": "2026-10-14",
+      "url": "https://docs.litellm.ai/blog/decision-models",
+      "tags": [
+        "openai",
+        "typesafe",
+        "decisions",
+        "day 0 support",
+        "card_title:Decision Models",
+        "card_summary:Typed yes/no, choice and score answers as probabilities, from 9 providers on /v1/decisions and /v1/systemone."
+      ]
+    },
+    {
+      "title": "Workshop: Build a self-hosted cloud agent.",
+      "description": "Build a self-hosted cloud agent with the LiteLLM team. A two-week remote workshop, October 19–30, to build a working v0 and deploy an internal beta on your infrastructure.",
+      "date": "2026-10-13",
+      "url": "https://docs.litellm.ai/blog/cloud-agent-workshop",
+      "tags": [
+        "agents",
+        "infrastructure",
+        "announcement"
+      ]
+    },
+    {
+      "title": "Gemini 4 Argon API Pricing and Day 0 Support on LiteLLM",
+      "description": "Gemini 4 Argon costs $2.00 per 1M input tokens and $10.00 per 1M output tokens until Nov 30. LiteLLM supports it on day 0 on AI Studio and Google Cloud.",
+      "date": "2026-10-13",
+      "url": "https://docs.litellm.ai/blog/gemini-4-argon",
+      "tags": [
+        "gemini",
+        "gemini 4",
+        "gemini-4-argon",
+        "pricing",
+        "day 0 support",
+        "card_title:Gemini 4 Argon",
+        "card_summary:Google's new flagship: 77.9% on DeepSWE v1.1, 1M context, thinking levels, $2 / $10 per 1M tokens until Nov 30."
+      ]
+    },
+    {
+      "title": "October Townhall: Product + Roadmap Updates",
+      "description": "Join the LiteLLM October townhall on Friday, 23 October at 7:30 AM PT to learn about LiteLLM's product updates and roadmap.",
+      "date": "2026-10-10",
+      "url": "https://docs.litellm.ai/blog/october-townhall-announcement",
+      "tags": [
+        "announcement",
+        "townhall"
+      ]
+    },
+    {
+      "title": "Introducing Microsoft 365 Copilot in LiteLLM",
+      "description": "Use Microsoft 365 Copilot from your applications through LiteLLM, with access to your Microsoft 365 work data.",
+      "date": "2026-10-09",
+      "url": "https://docs.litellm.ai/blog/microsoft-365-copilot",
+      "tags": [
+        "announcement",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "Introducing litellm-core: the first step toward a leaner SDK",
+      "description": "Ongoing work to reduce LiteLLM's dependencies and installation footprint, improve runtime loading, and make imports faster",
+      "date": "2026-10-08",
+      "url": "https://docs.litellm.ai/blog/introducing-litellm-core",
+      "tags": []
+    },
+    {
+      "title": "Claude Haiku 5.5 API Pricing and Day 0 Support on LiteLLM",
+      "description": "Claude Haiku 5.5 costs $0.10 per 1M input tokens and $0.50 per 1M output tokens. LiteLLM supports it on day 0 on Anthropic, AWS, Google Cloud and Azure.",
+      "date": "2026-10-07",
+      "url": "https://docs.litellm.ai/blog/claude-haiku-5-5",
+      "tags": [
+        "anthropic",
+        "claude",
+        "claude haiku",
+        "haiku 5.5",
+        "pricing",
+        "day 0 support",
+        "card_title:Claude Haiku 5.5",
+        "card_summary:90% cheaper than Haiku 4.5 on short prompts, 1M context, 72.4% on OSWorld 2.1, $0.10 / $0.50 per 1M tokens."
+      ]
+    },
+    {
+      "title": "Open Sourcing Moyai: Self-Hosted Cloud Coding Agent",
+      "description": "Run cloud coding agents on your own infrastructure with Moyai. Choose your agent and models through LiteLLM, track costs, and follow the setup guide.",
+      "date": "2026-10-07",
+      "url": "https://docs.litellm.ai/blog/moyai-open-source",
+      "tags": [
+        "agents",
+        "open-source",
+        "infrastructure"
+      ]
+    },
+    {
+      "title": "Day 0 Support: Nano Banana 2.1",
+      "description": "Day 0 support for Gemini Nano Banana 2.1 on LiteLLM, on Google AI Studio and Gemini Enterprise Agent Platform, with image output at half Nano Banana 2's price.",
+      "date": "2026-10-06",
+      "url": "https://docs.litellm.ai/blog/nano_banana_2_1",
+      "tags": [
+        "gemini",
+        "gemini enterprise agent platform",
+        "nano banana",
+        "image generation",
+        "day 0 support",
+        "card_title:Nano Banana 2.1",
+        "card_summary:Gemini image model with image output at half Nano Banana 2's price: $30 / MTok image out, $1.50 text in."
+      ]
+    },
+    {
+      "title": "How LiteLLM Lens finds repeated failures across 1,000s of agent traces",
+      "description": "Inside Lens: parallel trace review, Python tools for large traces, and investigations that connect repeated failures to source evidence.",
+      "date": "2026-10-05",
+      "url": "https://docs.litellm.ai/blog/lens-failure-patterns",
+      "tags": [
+        "lens",
+        "agent-tracing",
+        "engineering"
+      ]
+    },
+    {
+      "title": "How we cut time to first byte by 94% for long prompts",
+      "description": "A 440k-token benchmark went from 553 ms to 35 ms median time to first byte. We removed unnecessary prompt-cache routing work before the model call.",
+      "date": "2026-10-03",
+      "url": "https://docs.litellm.ai/blog/long-prompt-latency",
+      "tags": [
+        "performance",
+        "proxy",
+        "engineering",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "How we built our own internal Devin in 2 days",
+      "description": "How we built Moyai Devin with Render, Modal, Hermes, Temporal, and LiteLLM: durable sessions, parallel agents, Slack, and shared organization connections.",
+      "date": "2026-10-03",
+      "url": "https://docs.litellm.ai/blog/internal-devin-two-days",
+      "tags": [
+        "engineering",
+        "agents",
+        "infrastructure",
+        "slack"
+      ]
+    },
+    {
+      "title": "Adding Self-hosted Auto Router Classifiers: Laya & Nimble",
+      "description": "Use Laya or Bespoke Nimble to classify Auto Router requests on your own infrastructure. Control where classification runs, which model you serve, and how you provision it.",
+      "date": "2026-10-02",
+      "url": "https://docs.litellm.ai/blog/laya-nimble-classifiers",
+      "tags": [
+        "auto-router",
+        "product",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "Launching LiteLLM Lens",
+      "description": "LiteLLM Lens turns the traces flowing through your gateway into findings your agents can act on. Built for agent swarms generating 200K+ traces.",
+      "date": "2026-10-01",
+      "url": "https://docs.litellm.ai/blog/litellm-lens-launch",
+      "tags": [
+        "lens",
+        "agent-tracing"
+      ]
+    },
+    {
+      "title": "How we cut LiteLLM's Redis round trips per request by 64%",
+      "description": "A governed request to the LiteLLM AI Gateway waited on Redis 22 times. It now waits 8 times: one pipeline per Redis backend before the model call, one after.",
+      "date": "2026-10-01",
+      "url": "https://docs.litellm.ai/blog/redis-request-pipelines",
+      "tags": [
+        "performance",
+        "redis",
+        "proxy",
+        "engineering",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "How we made the LiteLLM Usage page 120x faster",
+      "description": "From six minutes to 3.2 seconds: how moving aggregation into Postgres made LiteLLM's Usage page roughly 120x faster in our benchmark.",
+      "date": "2026-09-30",
+      "url": "https://docs.litellm.ai/blog/usage-page-bounded-loading",
+      "tags": [
+        "performance",
+        "admin-ui",
+        "postgres",
+        "engineering",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "Day 0 Support: GPT-6.1 Sol",
+      "description": "Day 0 support for GPT-6.1 Sol on LiteLLM, with cached input at half GPT-6 Sol's price.",
+      "date": "2026-09-29",
+      "url": "https://docs.litellm.ai/blog/gpt_6_1_sol",
+      "tags": [
+        "openai",
+        "gpt-6",
+        "gpt-6.1-sol",
+        "completion",
+        "day 0 support",
+        "card_title:GPT-6.1 Sol",
+        "card_summary:GPT-6 Sol successor with cached input at half GPT-6 Sol's price, same request family and params."
+      ]
+    },
+    {
+      "title": "Learn the LiteLLM gateway with a guided course",
+      "description": "Follow a request through the LiteLLM gateway, Router, and SDK. A guided course for teams deploying the gateway and contributors making code changes.",
+      "date": "2026-09-28",
+      "url": "https://docs.litellm.ai/blog/litellm-gateway-course",
+      "tags": [
+        "proxy",
+        "product"
+      ]
+    },
+    {
+      "title": "Day 0 Support: Claude Sonnet 5.5",
+      "description": "Day 0 support for Claude Sonnet 5.5 on the LiteLLM AI Gateway. Use it across Anthropic, Bedrock, Gemini Enterprise Agent Platform, and Azure.",
+      "date": "2026-09-28",
+      "url": "https://docs.litellm.ai/blog/claude_sonnet_5_5",
+      "tags": [
+        "anthropic",
+        "claude",
+        "sonnet 5.5",
+        "day 0 support",
+        "card_title:Claude Sonnet 5.5",
+        "card_summary:Same $2 / $10 price as Sonnet 5, 30%+ faster, 70.6% on Terminal-Bench 4.0 (Sonnet 5: 10.3%), 1M context."
+      ]
+    },
+    {
+      "title": "Introducing the LiteLLM ROI Calculator",
+      "description": "Compare each engineer's LiteLLM gateway spend with the estimated effort of their merged pull requests. Open source and self-hosted.",
+      "date": "2026-09-26",
+      "url": "https://docs.litellm.ai/blog/litellm-roi-calculator",
+      "tags": [
+        "cost",
+        "product",
+        "announcement"
+      ]
+    },
+    {
+      "title": "Introducing LiteAgents",
+      "description": "Switch agent harnesses without rewriting your agent. Keep your tools and model configuration, use native harness controls, and add Temporal when you need durable runs.",
+      "date": "2026-09-25",
+      "url": "https://docs.litellm.ai/blog/liteagents-sdk",
+      "tags": [
+        "agents",
+        "sdk"
+      ]
+    },
+    {
+      "title": "September Townhall Updates: 583 Bug Fixes, OCR on Rust, and 83.5% Coverage",
+      "description": "A recap of the September LiteLLM town hall: security and stability updates, OCR running on Rust by default, test coverage past the 80% target, and new Fusion and liteagents launches.",
+      "date": "2026-09-24",
+      "url": "https://docs.litellm.ai/blog/september-townhall-updates",
+      "tags": [
+        "townhall",
+        "reliability",
+        "product"
+      ]
+    },
+    {
+      "title": "Day 0 support: Gemini 3.8 Flash TTS and Flash-Lite TTS",
+      "description": "Day 0 support for Gemini 3.8 Flash TTS and Flash-Lite TTS on LiteLLM's /v1/audio/speech, with launch pricing tracked through 2026.",
+      "date": "2026-09-23",
+      "url": "https://docs.litellm.ai/blog/gemini_3_8_flash_tts",
+      "tags": [
+        "gemini",
+        "gemini-3.8-flash-tts",
+        "text to speech",
+        "day 0 support",
+        "card_title:Gemini 3.8 Flash TTS and Flash-Lite TTS",
+        "card_summary:Gemini speech models on /v1/audio/speech, Flash and Flash-Lite, with launch pricing tracked through 2026."
+      ]
+    },
+    {
+      "title": "Introducing LiteAdmin MCP",
+      "description": "Give your agent tools to create keys, add models, and manage budgets with LiteAdmin MCP. Use the same connector through LiteAdmin, our Slack admin agent.",
+      "date": "2026-09-23",
+      "url": "https://docs.litellm.ai/blog/litellm-admin-mcp",
+      "tags": [
+        "mcp",
+        "agents",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "Day 0 Support: GPT-6 Sol and GPT-6 Luna",
+      "description": "Day 0 support for GPT-6 Sol and GPT-6 Luna on LiteLLM, at half the price of their GPT-5.6 counterparts.",
+      "date": "2026-09-22",
+      "url": "https://docs.litellm.ai/blog/gpt_6_sol_luna",
+      "tags": [
+        "openai",
+        "gpt-6",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "completion",
+        "day 0 support",
+        "card_title:GPT-6 Sol and GPT-6 Luna",
+        "card_summary:Two GPT-6 variants at half the price of their GPT-5.6 counterparts, routed as the GPT-5 request family."
+      ]
+    },
+    {
+      "title": "Day 0 Support: Claude Opus 5.5",
+      "description": "Day 0 support for Claude Opus 5.5 on the LiteLLM AI Gateway. Use it across Anthropic, Bedrock, Gemini Enterprise Agent Platform, and Azure.",
+      "date": "2026-09-22",
+      "url": "https://docs.litellm.ai/blog/claude_opus_5_5",
+      "tags": [
+        "anthropic",
+        "claude",
+        "opus 5.5",
+        "day 0 support",
+        "card_title:Claude Opus 5.5",
+        "card_summary:20% cheaper than Opus 5 at $4 / $20 per 1M, 30% faster output, Terminal-Bench 4.0 66.4%, thinking always on."
+      ]
+    },
+    {
+      "title": "Getting Started with Fireworks AI on LiteLLM",
+      "description": "A beginner tutorial: run an open model on Fireworks AI behind a LiteLLM gateway, call it with the OpenAI SDK you already use, then add a second model and a fallback.",
+      "date": "2026-09-22",
+      "url": "https://docs.litellm.ai/blog/fireworks-getting-started",
+      "tags": [
+        "tutorial",
+        "providers",
+        "fireworks",
+        "getting-started"
+      ]
+    },
+    {
+      "title": "Day 0 Support: Xiaomi MiMo V2.6",
+      "description": "Day 0 support for Xiaomi MiMo V2.6 Pro and Flash on LiteLLM, priced on the native route for the first time.",
+      "date": "2026-09-22",
+      "url": "https://docs.litellm.ai/blog/mimo_v2_6",
+      "tags": [
+        "xiaomi",
+        "mimo",
+        "mimo-v2.6",
+        "day 0 support",
+        "card_title:Xiaomi MiMo V2.6",
+        "card_summary:Xiaomi's Pro ($0.435 / $0.87 per 1M) and Flash ($0.14 / $0.28), same rates as V2.5, priced on the native route."
+      ]
+    },
+    {
+      "title": "Claude Code server-side auto mode through LiteLLM",
+      "description": "Anthropic is moving Claude Code auto mode's safety classifier server-side. LiteLLM's native /v1/messages route now forwards the safeguards contract to the Anthropic API, Bedrock InvokeModel, Bedrock Mantle and Vertex AI. Here is the contract, what changed, which releases carry it, and how to verify it.",
+      "date": "2026-09-21",
+      "url": "https://docs.litellm.ai/blog/claude-code-server-side-auto-mode",
+      "tags": [
+        "announcement",
+        "claude-code",
+        "anthropic",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "Day 0 Support: Grok 4.7",
+      "description": "Day 0 support for Grok 4.7 on LiteLLM, at the same price as Grok 4.6.",
+      "date": "2026-09-21",
+      "url": "https://docs.litellm.ai/blog/grok_4_7",
+      "tags": [
+        "xai",
+        "grok",
+        "grok-4.7",
+        "day 0 support",
+        "card_title:Grok 4.7",
+        "card_summary:SpaceXAI's update to Grok 4.6 at the same price and limits, better at checking its own work and long context."
+      ]
+    },
+    {
+      "title": "JEV Classifier: 5.43x as Fast as Haiku, 96% Lower Cost",
+      "description": "JEV classified requests 5.43x as fast as Haiku by median latency in our AI Gateway benchmark. Explore the setup, cost savings and methodology.",
+      "date": "2026-09-20",
+      "url": "https://docs.litellm.ai/blog/jev-auto-router-benchmark",
+      "tags": [
+        "routing",
+        "complexity-router",
+        "engineering",
+        "ai-gateway"
+      ]
+    },
+    {
+      "title": "TypeSafe Jev on LiteLLM",
+      "description": "TypeSafe AI's Jev lands in LiteLLM v1.103.0-rc: call it through the proxy with logging and cost tracking.",
+      "date": "2026-09-20",
+      "url": "https://docs.litellm.ai/blog/typesafe_jev",
+      "tags": [
+        "typesafe",
+        "jev",
+        "product"
+      ]
     }
   ]
 }

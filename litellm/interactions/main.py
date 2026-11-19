@@ -95,6 +95,7 @@ async def acreate(
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
+    continuation_token: str | None = None,
     # Extra params
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
@@ -129,6 +130,7 @@ async def acreate(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a `requires_continuation` interaction to resume its long decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -164,6 +166,7 @@ async def acreate(
             response_format=response_format,
             response_mime_type=response_mime_type,
             previous_interaction_id=previous_interaction_id,
+            continuation_token=continuation_token,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout,
@@ -224,6 +227,7 @@ def create(
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
+    continuation_token: str | None = None,
     # Extra params
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
@@ -262,6 +266,7 @@ def create(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a `requires_continuation` interaction to resume its long decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -295,6 +300,26 @@ def create(
             )
         else:
             custom_llm_provider = custom_llm_provider or "gemini"
+        if agent and model and model != agent:
+            raise litellm.BadRequestError(
+                message=(
+                    f"agent '{agent}' can only run on a deployment of that agent, but the model is '{model}'. "
+                    "Configure a deployment whose model is the agent and send its model group."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        if extra_body and (
+            ("agent" in extra_body and extra_body["agent"] != agent) or (agent and "model" in extra_body)
+        ):
+            raise litellm.BadRequestError(
+                message=(
+                    "extra_body cannot set a different agent or add a model to an agent interaction. "
+                    "Send the agent and model as top-level fields."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
         interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,
@@ -335,7 +360,7 @@ def create(
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
-            model=model,
+            model=agent or model,
             optional_params=dict(optional_params),
             litellm_params={"litellm_call_id": litellm_call_id},
             custom_llm_provider=custom_llm_provider,

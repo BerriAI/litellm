@@ -360,3 +360,47 @@ class TestContentBlockState:
         ]
         assert BLOCK_MESSAGE in raw
         assert '"index": 1' in raw
+
+    @pytest.mark.parametrize(
+        "thinking_so_far, closing_deltas",
+        [
+            ((), [{"type": "signature_delta", "signature": ""}]),
+            (
+                ({"type": "signature_delta", "signature": "sig-abc"},),
+                [],
+            ),
+        ],
+        ids=["unsigned", "already-signed"],
+    )
+    def test_continuation_signs_an_open_thinking_block_once(self, thinking_so_far, closing_deltas):
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
+        seen = [
+            _sse_event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+                },
+            ),
+            _sse_event(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Hm"}},
+            ),
+            *(
+                _sse_event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta})
+                for delta in thinking_so_far
+            ),
+        ]
+        exc = ModifyResponseException(
+            message=BLOCK_MESSAGE, model="claude-3-5-sonnet", request_data={}, guardrail_name="g"
+        )
+
+        raw = b"".join(
+            self._handler().build_block_sse_chunks(exc, stream_started=True, responses_so_far=seen)
+        ).decode()
+        payloads = _parse_sse_payloads(raw)
+        stop_position = payloads.index({"type": "content_block_stop", "index": 0})
+
+        assert [payload["delta"] for payload in payloads[:stop_position]] == closing_deltas

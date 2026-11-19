@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import ClassVar, Final, cast
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -48,6 +48,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
 
     Note: Please make sure to modify the default parameters as required for your use case.
     """
+
+    _route: ClassVar[str] = "gemini"
+    _removes_undeclared_thinking_levels: ClassVar[bool] = True
 
     temperature: float | None = None
     max_output_tokens: int | None = None
