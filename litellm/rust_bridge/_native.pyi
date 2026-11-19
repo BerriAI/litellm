@@ -2016,6 +2016,7 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+def messages_optional_params() -> list[str]: ...
 
 @final
 class NativeModelCapacityState:
@@ -2299,6 +2300,7 @@ __all__ = [
     "jwt_presents_claims",
     "jwt_unverified_claims",
     "messages",
+    "messages_optional_params",
     "native_redis_breaker_states",
     "ocr",
     "ocr_health_check_document",
