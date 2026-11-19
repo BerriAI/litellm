@@ -570,6 +570,9 @@ _INPUT_VALUE_LABEL: Final = "input_value="
 _INPUT_TYPE_LABEL: Final = ", input_type="
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 _MAX_ECHO_OCCURRENCES: Final = 10_000
+_SEARCH_PADDING: Final = 30_000
+_DIRECT_SEARCH_COMPARISONS: Final = 4_096
+_MIN_PADDED_SEARCH_PIECE: Final = 6
 _QUOTES: Final = ("'", '"')
 _ESCAPE_TAIL: Final = re.compile(r"\\(?:[abfnrtv]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})\Z")
 _DIRECT_CAUSE_LINE: Final = "\nThe above exception was the direct cause of the following exception:\n\n"
@@ -630,8 +633,11 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
         return text
     if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
         return REDACTED_BY_LITELLM
+    padded: Final = _padded(text)
     echoes: Final = sorted(
-        frozenset(itertools.chain.from_iterable(_quotes_in(text, each) for each in texts)), key=len, reverse=True
+        frozenset(itertools.chain.from_iterable(_quotes_in(text, padded, each) for each in texts)),
+        key=len,
+        reverse=True,
     )
     label_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL in form)
     other_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL not in form)
@@ -652,18 +658,36 @@ def quoted_request_texts(text: str, texts: Collection[str]) -> frozenset[str]:
     """
     if _INPUT_VALUE_LABEL in text or len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
         return frozenset(texts)
-    return frozenset(each for each in texts if _quotes_in(text, each))
+    padded: Final = _padded(text)
+    return frozenset(each for each in texts if _quotes_in(text, padded, each))
 
 
-def _quotes_in(text: str, quoted: str) -> tuple[str, ...]:
-    """The forms of ``quoted`` that turn up in ``text``, each without a trailing ``input_value=``."""
+def _quotes_in(text: str, padded: str, quoted: str) -> tuple[str, ...]:
+    """The forms of ``quoted`` that turn up in ``text``, each without a trailing ``input_value=``. ``padded`` is
+    ``_padded(text)``."""
     if len(quoted) > len(text):
         return ()
     return tuple(
         form
         for form in (each.removesuffix(_INPUT_VALUE_LABEL) for each in _echo_forms(quoted))
-        if form and form in text
+        if form and _find(text, padded, form, 0) >= 0
     )
+
+
+def _padded(text: str) -> str:
+    """``text`` followed by enough ``\\0`` characters that CPython's ``str.find`` searches it from any of its indexes
+    in time linear in its length, for a piece of six to ``len(text)`` characters."""
+    return text + "\0" * max(_SEARCH_PADDING, 3 * len(text) + 8)
+
+
+def _find(text: str, padded: str, piece: str, start: int) -> int:
+    """``text.find(piece, start)``, searching ``padded``, which is ``_padded(text)``, wherever a direct search could
+    compare more than ``_DIRECT_SEARCH_COMPARISONS`` characters."""
+    last_start: Final = len(text) - len(piece)
+    if len(piece) < _MIN_PADDED_SEARCH_PIECE or (last_start - start + 1) * len(piece) <= _DIRECT_SEARCH_COMPARISONS:
+        return text.find(piece, start)
+    found: Final = padded.find(piece, start)
+    return found if found <= last_start else -1
 
 
 def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
@@ -673,9 +697,11 @@ def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
     word, so a prompt such as ``Error`` leaves ``RateLimitError`` alone. ``None`` when ``echoes`` turn up more often
     than a failure path should look through.
     """
+    padded: Final = _padded(text)
     found: Final = tuple(
         itertools.islice(
-            itertools.chain.from_iterable(_quote_spans(text, form) for form in echoes), _MAX_ECHO_OCCURRENCES + 1
+            itertools.chain.from_iterable(_quote_spans(text, padded, form) for form in echoes),
+            _MAX_ECHO_OCCURRENCES + 1,
         )
     )
     if len(found) > _MAX_ECHO_OCCURRENCES:
@@ -707,24 +733,27 @@ def _frontier_after(ends: Mapping[int, int], frontier: int, start: int) -> int:
     return ends[start] if start >= frontier else frontier
 
 
-def _quote_spans(text: str, form: str) -> Iterator[tuple[int, int, bool]]:
+def _quote_spans(text: str, padded: str, form: str) -> Iterator[tuple[int, int, bool]]:
     """Where each quote of ``form`` in ``text`` starts and ends, overlaps included, and whether ``form`` is a single
-    word. A form short enough to occur in ordinary wording only counts between quotes."""
+    word. A form short enough to occur in ordinary wording only counts between quotes. ``padded`` is
+    ``_padded(text)``."""
     if len(form) >= _MIN_UNQUOTED_TEXT_LENGTH:
         single_word: Final = form.isascii() and form.replace("_", "").isalnum()
-        return ((start, start + len(form), single_word) for start in _found(text, form))
+        return ((start, start + len(form), single_word) for start in _found(text, padded, form))
     quoted_starts: Final = itertools.chain.from_iterable(
-        _found(text, f"{opening}{form}{closing}") for opening, closing in itertools.product(_QUOTES, repeat=2)
+        _found(text, padded, f"{opening}{form}{closing}") for opening, closing in itertools.product(_QUOTES, repeat=2)
     )
     return ((start + 1, start + 1 + len(form), False) for start in quoted_starts)
 
 
-def _found(text: str, piece: str) -> Iterator[int]:
-    """Every index ``piece`` starts at in ``text``, overlaps included."""
+def _found(text: str, padded: str, piece: str) -> Iterator[int]:
+    """Every index ``piece`` starts at in ``text``, overlaps included. ``padded`` is ``_padded(text)``."""
     return itertools.takewhile(
         lambda start: start >= 0,
         itertools.accumulate(
-            itertools.repeat(None), lambda start, _: text.find(piece, start + 1), initial=text.find(piece)
+            itertools.repeat(None),
+            lambda start, _: _find(text, padded, piece, start + 1),
+            initial=_find(text, padded, piece, 0),
         ),
     )
 
@@ -814,8 +843,9 @@ def scrubbed_error_fields(payload: Mapping[str, object], texts: Collection[str])
 def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
     """
     The error message and traceback a failure logged when redaction scrubbed the request's text out of
-    either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was scrubbed.
-    Without a logged error message, the message is the exception text that ends the traceback.
+    either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was scrubbed,
+    including when the failure's message logging is not redacted. Without a logged error message, the message is
+    the exception text that ends the traceback.
     """
     payload: Final = _as_mapping(model_call_details.get("standard_logging_object")) or {}
     error_information: Final = _as_mapping(payload.get("error_information")) or {}
@@ -824,7 +854,9 @@ def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[s
     traceback_text: Final = (
         logged_traceback if isinstance(logged_traceback, str) else error_information.get("traceback")
     )
-    if not any(isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, traceback_text)):
+    if not any(
+        isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, traceback_text)
+    ) or not should_redact_failure_logging(model_call_details):
         return None
     logged_traceback_text: Final = traceback_text if isinstance(traceback_text, str) else ""
     return (message if isinstance(message, str) else _exception_text(logged_traceback_text), logged_traceback_text)

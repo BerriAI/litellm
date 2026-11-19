@@ -20,3 +20,13 @@ REQUEST_TEXTS: Final = request_texts("hi there")
 )
 def test_scrubbing_a_large_error(error: str, scrubbed: str) -> None:
     assert scrub_request_text(error, REQUEST_TEXTS) == scrubbed
+
+
+NEAR_MISS_TEXTS: Final = frozenset("a" * (1_190 - shift) + "b" + "a" * (9 + shift) for shift in range(4_000))
+
+
+@pytest.mark.benchmark
+def test_scrubbing_an_error_against_many_near_miss_texts() -> None:
+    error: Final = "x" * 60 + "a" * 2_300 + "y" * 77
+
+    assert scrub_request_text(error, NEAR_MISS_TEXTS) == error

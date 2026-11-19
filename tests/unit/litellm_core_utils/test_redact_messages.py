@@ -32,6 +32,8 @@ from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
+    _find,
+    _padded,
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
@@ -3018,6 +3020,10 @@ def test_should_redact_failed_request_reads_the_request_setting_past_non_mapping
     assert should_redact_failed_request({"metadata": {"headers": "x"}, "turn_off_message_logging": True}) is True
 
 
+def _redacted(model_call_details: Mapping[str, object]) -> dict[str, object]:
+    return {**model_call_details, "standard_callback_dynamic_params": {"turn_off_message_logging": True}}
+
+
 @pytest.mark.parametrize(
     "error_information",
     [
@@ -3027,10 +3033,33 @@ def test_should_redact_failed_request_reads_the_request_setting_past_non_mapping
     ids=["message", "traceback_only"],
 )
 def test_scrubbed_exception_text_reports_a_scrub_of_either_field(error_information: dict) -> None:
-    logged: Final = scrubbed_exception_text({"standard_logging_object": {"error_information": error_information}})
+    logged: Final = scrubbed_exception_text(
+        _redacted({"standard_logging_object": {"error_information": error_information}})
+    )
 
     assert logged == (error_information["error_message"], error_information["traceback"])
-    assert scrubbed_exception_text({"standard_logging_object": {"error_information": {"error_message": "bad"}}}) is None
+    assert (
+        scrubbed_exception_text(_redacted({"standard_logging_object": {"error_information": {"error_message": "bad"}}}))
+        is None
+    )
+
+
+@pytest.mark.parametrize("dynamic_params", [{}, {"turn_off_message_logging": False}], ids=["unset", "off"])
+def test_scrubbed_exception_text_skips_the_marker_in_an_error_that_redaction_left_alone(
+    monkeypatch: pytest.MonkeyPatch, dynamic_params: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    error_information: Final = {"error_message": "bad: note redacted-by-litellm here", "traceback": "tb"}
+
+    assert (
+        scrubbed_exception_text(
+            {
+                "standard_logging_object": {"error_information": error_information},
+                "standard_callback_dynamic_params": dynamic_params,
+            }
+        )
+        is None
+    )
 
 
 def test_scrubbed_exception_text_reports_a_scrub_of_the_logged_traceback() -> None:
@@ -3039,7 +3068,7 @@ def test_scrubbed_exception_text_reports_a_scrub_of_the_logged_traceback() -> No
         "standard_logging_object": {"error_information": {"error_message": "outer", "traceback": "frames"}},
     }
 
-    assert scrubbed_exception_text(model_call_details) == ("outer", "ValueError: bad: redacted-by-litellm")
+    assert scrubbed_exception_text(_redacted(model_call_details)) == ("outer", "ValueError: bad: redacted-by-litellm")
 
 
 def test_scrubbed_exception_text_reads_the_message_off_the_traceback_without_a_logged_message() -> None:
@@ -3051,7 +3080,7 @@ def test_scrubbed_exception_text_reads_the_message_off_the_traceback_without_a_l
         "Received Messages=['redacted-by-litellm']\n"
     )
 
-    assert scrubbed_exception_text({"traceback_exception": traceback_text}) == (
+    assert scrubbed_exception_text(_redacted({"traceback_exception": traceback_text})) == (
         "BadRequestError: Invalid content: 'redacted-by-litellm'\nReceived Messages=['redacted-by-litellm']",
         traceback_text,
     )
@@ -3078,7 +3107,7 @@ def _raised(chain: tuple[BaseException, ...]) -> BaseException:
 
 
 def _failure(exception: BaseException, error_information: Mapping[str, str]) -> dict[str, object]:
-    return {"exception": exception, "standard_logging_object": {"error_information": error_information}}
+    return _redacted({"exception": exception, "standard_logging_object": {"error_information": error_information}})
 
 
 SCRUBBED_ERROR: Final = {"error_message": "bad: redacted-by-litellm", "traceback": ""}
@@ -3157,3 +3186,42 @@ def test_scrubbed_error_information_for_request_scrubs_only_when_the_request_red
         "traceback": "tb redacted-by-litellm",
     }
     assert scrubbed_error_information_for_request(error_information, {"messages": messages}) == error_information
+
+
+LOW_ENTROPY_ERROR: Final = "x" * 60 + " " + "a" * 2_300 + " " + "y" * 77
+
+
+@pytest.mark.parametrize(
+    ("text", "piece", "start"),
+    [
+        ("abc", "c\0\0\0\0\0", 0),
+        ("ab\0\0\0\0\0c", "\0\0\0\0\0c", 0),
+        (LOW_ENTROPY_ERROR, "a" * 1_190 + "b" + "a" * 9, 0),
+        (LOW_ENTROPY_ERROR, "a" * 1_200, 0),
+        (LOW_ENTROPY_ERROR, "a" * 1_200, 1_200),
+        (LOW_ENTROPY_ERROR, "a" * 1_200 + "y", 2_000),
+        (LOW_ENTROPY_ERROR, "a" * 95 + "y", 61),
+    ],
+    ids=[
+        "piece_ends_in_padding",
+        "padding_inside_the_text",
+        "near_miss",
+        "found",
+        "found_after_start",
+        "past_start",
+        "short",
+    ],
+)
+def test_find_finds_what_str_find_finds(text: str, piece: str, start: int) -> None:
+    assert _find(text, _padded(text), piece, start) == text.find(piece, start)
+
+
+def test_scrub_request_text_leaves_near_misses_and_scrubs_a_long_low_entropy_quote() -> None:
+    near_misses: Final = frozenset("a" * (1_190 - shift) + "b" + "a" * (9 + shift) for shift in range(500))
+    quoted: Final = "a" * 2_300
+
+    assert scrub_request_text(LOW_ENTROPY_ERROR, near_misses) == LOW_ENTROPY_ERROR
+    assert quoted_request_texts(LOW_ENTROPY_ERROR, near_misses | {quoted}) == {quoted}
+    assert scrub_request_text(LOW_ENTROPY_ERROR, near_misses | {quoted}) == (
+        "x" * 60 + " redacted-by-litellm " + "y" * 77
+    )
