@@ -4593,6 +4593,7 @@ class ProviderSpecificHeader(TypedDict):
     yields_to_configured: NotRequired[ReadOnly[bool]]
     native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
     configured_credential_headers: NotRequired[ReadOnly[tuple[str, ...]]]
+    configured_credential_prefix: NotRequired[ReadOnly[str]]
 
 
 class SelectTokenizerResponse(TypedDict):

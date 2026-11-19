@@ -8470,11 +8470,25 @@ def test_a_completion_sends_the_client_profile_id_to_claude_models_unless_the_de
             ("x-api-key", "sk-ant-deployment"),
             "uprof_key",
         ),
+        (
+            "messages",
+            "sk-ant-oat01-caller",
+            {"Authorization": "Bearer sk-ant-oat01-deployment"},
+            ("authorization", "Bearer sk-ant-oat01-deployment"),
+            "uprof_key",
+        ),
         ("chat", "sk-ant-caller", {"x-api-key": "sk-ant-deployment"}, ("x-api-key", "sk-ant-caller"), "uprof_client"),
         ("chat", "sk-ant-caller", {}, ("x-api-key", "sk-ant-caller"), "uprof_client"),
         (
             "chat",
             "sk-ant-caller",
+            {"Authorization": "Bearer sk-ant-oat01-deployment"},
+            ("authorization", "Bearer sk-ant-oat01-deployment"),
+            "uprof_key",
+        ),
+        (
+            "chat",
+            "sk-ant-oat01-caller",
             {"Authorization": "Bearer sk-ant-oat01-deployment"},
             ("authorization", "Bearer sk-ant-oat01-deployment"),
             "uprof_key",
@@ -8486,9 +8500,11 @@ def test_a_completion_sends_the_client_profile_id_to_claude_models_unless_the_de
         "messages_sends_the_caller_key_beside_an_api_key_header_anthropic_ignores",
         "messages_sends_a_caller_oauth_token_over_the_deployment_key",
         "messages_keeps_the_deployment_key_and_pin_for_a_prefixed_oauth_body_key",
+        "messages_sends_a_configured_oauth_token_over_a_caller_oauth_body_key",
         "chat_sends_the_caller_key_over_a_configured_one",
         "chat_sends_the_caller_key",
         "chat_sends_a_configured_oauth_token_over_the_caller_key",
+        "chat_sends_a_configured_oauth_token_over_a_caller_oauth_body_key",
     ],
 )
 async def test_a_caller_api_key_skips_the_pin_only_when_anthropic_receives_it(

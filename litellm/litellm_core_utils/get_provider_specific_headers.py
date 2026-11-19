@@ -47,10 +47,21 @@ def _applies_to_call(
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
 
 
+def _configures_a_listed_credential(
+    scoped_header: ProviderSpecificHeader, configured_headers: Mapping[str, object]
+) -> bool:
+    credential_headers: Final = frozenset(
+        name.lower() for name in scoped_header.get("configured_credential_headers", ())
+    )
+    prefix: Final = scoped_header.get("configured_credential_prefix", "")
+    return not credential_headers or any(
+        not prefix or (isinstance(value, str) and value.startswith(prefix))
+        for name, value in configured_headers.items()
+        if name.lower() in credential_headers
+    )
+
+
 def _contributed_headers(scoped_header: ProviderSpecificHeader, configured_names: frozenset[str]) -> Mapping[str, str]:
-    credential_headers: Final = scoped_header.get("configured_credential_headers", ())
-    if credential_headers and configured_names.isdisjoint(name.lower() for name in credential_headers):
-        return {}
     headers: Final[Mapping[str, str]] = scoped_header.get("extra_headers", {})
     if not scoped_header.get("yields_to_configured"):
         return headers
@@ -77,7 +88,8 @@ class ProviderSpecificHeaderUtils:
         contribute only to a provider's native Messages route. Entries marked `claude_models_only` contribute
         only when `model` names a Claude model, entries marked `non_claude_models_only` only when it does not,
         entries marked `yields_to_configured` never replace a header already in `configured_headers`, and
-        entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them.
+        entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them,
+        whose value starts with `configured_credential_prefix` when the entry sets one.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider
@@ -89,11 +101,13 @@ class ProviderSpecificHeaderUtils:
             (provider_specific_header,) if isinstance(provider_specific_header, dict) else provider_specific_header
         )
 
-        configured_names: Final = frozenset(name.lower() for name in configured_headers or {})
+        configured: Final[Mapping[str, object]] = configured_headers or {}
+        configured_names: Final = frozenset(name.lower() for name in configured)
         applicable: Final = (
             scoped_header
             for scoped_header in scoped_headers
             if _applies_to_call(scoped_header, custom_llm_provider, native_anthropic_messages, model)
+            and _configures_a_listed_credential(scoped_header, configured)
         )
         return dict(
             chain.from_iterable(

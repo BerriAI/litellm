@@ -257,6 +257,33 @@ def test_a_configured_credential_entry_applies_only_beside_a_listed_configured_c
 
 
 @pytest.mark.parametrize(
+    "configured_headers,expected",
+    [
+        ({"Authorization": "Bearer sk-ant-oat01-deployment"}, {"anthropic-user-profile-id": "uprof_pinned"}),
+        ({"authorization": "Bearer sk-ant-deployment"}, {}),
+        ({"x-api-key": "Bearer sk-ant-oat01-deployment"}, {}),
+    ],
+    ids=["configured_oauth_token", "configured_api_key_bearer", "prefix_on_an_unlisted_header"],
+)
+def test_a_configured_credential_prefix_applies_only_beside_a_matching_value(
+    configured_headers: dict[str, str], expected: dict[str, str]
+) -> None:
+    scoped_header: Final[ProviderSpecificHeader] = {
+        "custom_llm_provider": "anthropic",
+        "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+        "configured_credential_headers": ("authorization",),
+        "configured_credential_prefix": "Bearer sk-ant-oat",
+    }
+
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            scoped_header, "anthropic", model="claude-sonnet-5-5", configured_headers=configured_headers
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     "headers,overrides,expected",
     [
         (
