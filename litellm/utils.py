@@ -103,6 +103,7 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     require_attributes,
     unbind_budget_reservation_from_callbacks,
+    without,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
@@ -12149,7 +12150,7 @@ def get_standard_openai_params(params: Mapping[str, object]) -> dict:
 
 
 def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict[str, object]:
-    return filter_out_litellm_params(kwargs, excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
+    return filter_out_litellm_params(without(kwargs, "litellm_params"), excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
 
 
 def reasoning_effort_with_summary_alias(
