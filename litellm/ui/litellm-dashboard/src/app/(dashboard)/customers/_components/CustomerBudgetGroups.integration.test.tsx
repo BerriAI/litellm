@@ -8,6 +8,7 @@ import {
   screen,
   fireEvent,
   waitFor,
+  within,
 } from "../../../../../tests/test-utils";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerSettings from "../settings/page";
@@ -43,6 +44,36 @@ describe("CustomerBudgetGroups", () => {
     vi.stubGlobal("fetch", fetchMock);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([false, true])("saves rate-only edits through the existing group endpoint, global=%s", async (global) => {
+    fetchMock.mockResolvedValue(json(organization));
+    render(
+      global ? (
+        <CustomerBudgetGroups organization={organization} onSaved={onSaved} global />
+      ) : (
+        <CustomerBudgetGroups organization={organization} onSaved={onSaved} />
+      ),
+    );
+    const rates = within(screen.getByRole("group", { name: "Group 1 rate limits" }));
+    fireEvent.change(rates.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
+    fireEvent.change(rates.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    const request = fetchMock.mock.calls[0][0] as Request;
+    expect(new URL(request.url).pathname).toBe(
+      global
+        ? "/management/v1/customer_organization_budget_groups"
+        : "/management/v1/customer_organizations/org-1/default_budgets",
+    );
+    expect(await request.clone().json()).toEqual({
+      expected_revision: organization.budget_groups_revision,
+      default_budget_template: "Standard",
+      default_budgets: [
+        { budget_id: "standard", name: "Standard", tpm_limit: 50000, rpm_limit: 0 },
+        { budget_id: "old", name: "Old" },
+      ],
+    });
+  });
 
   it("creates and removes organization groups through the shared editor in Settings", async () => {
     const user = userEvent.setup();

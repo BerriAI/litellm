@@ -4,6 +4,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import ImageUsage, ImageUsageInputTokensDetails
 
 _TOKEN_COUNT_ADAPTER: Final = TypeAdapter(int)
@@ -90,8 +91,20 @@ def transform_gemini_image_usage(usage_metadata: Mapping[str, object]) -> ImageU
     reasoning_tokens: Final = _get_usage_token_count(usage_metadata, "thoughtsTokenCount")
     candidate_tokens_are_inclusive: Final = VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata)
     completion_tokens: Final = candidate_tokens + (0 if candidate_tokens_are_inclusive else reasoning_tokens)
-    input_tokens_details: Final = _sum_modality_token_details(
+    input_modalities: Final = _sum_modality_token_details(
         _get_modality_token_details(usage_metadata, "promptTokensDetails", "prompt_tokens_details")
+    )
+    cache_details: Final = _get_modality_token_details(usage_metadata, "cacheTokensDetails", "cache_tokens_details")
+    cached_modalities: Final = _sum_modality_token_details(cache_details)
+    input_tokens_details: Final = ImageUsageInputTokensDetails(
+        text_tokens=input_modalities.text_tokens,
+        image_tokens=input_modalities.image_tokens,
+        cached_tokens=_get_usage_token_count(usage_metadata, "cachedContentTokenCount"),
+        cached_tokens_details=(
+            CachedTokensDetails(text_tokens=cached_modalities.text_tokens, image_tokens=cached_modalities.image_tokens)
+            if cache_details
+            else None
+        ),
     )
     candidate_token_details: Final = _get_modality_token_details(
         usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"

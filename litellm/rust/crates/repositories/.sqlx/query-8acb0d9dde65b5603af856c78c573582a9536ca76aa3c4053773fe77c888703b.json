@@ -1,0 +1,360 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.team_id,\n       t.team_alias,\n       t.organization_id,\n       COALESCE(t.admins, '{}') AS \"admins!\",\n       COALESCE(t.members, '{}') AS \"members!\",\n       t.members_with_roles AS \"members_with_roles: RawJson\",\n       t.metadata AS \"metadata: RawJson\",\n       t.max_budget,\n       t.soft_budget,\n       t.spend,\n       COALESCE(t.models, '{}') AS \"models!\",\n       t.max_parallel_requests,\n       t.tpm_limit,\n       t.rpm_limit,\n       t.tpd_limit,\n       t.budget_duration,\n       t.budget_reset_at,\n       t.blocked,\n       t.created_at,\n       t.updated_at,\n       t.model_spend AS \"model_spend: RawJson\",\n       t.model_max_budget AS \"model_max_budget: RawJson\",\n       t.router_settings AS \"router_settings: RawJson\",\n       COALESCE(t.team_member_permissions, '{}') AS \"team_member_permissions!\",\n       COALESCE(t.access_group_ids, '{}') AS \"access_group_ids!\",\n       COALESCE(t.policies, '{}') AS \"policies!\",\n       COALESCE(t.default_team_member_models, '{}') AS \"default_team_member_models!\",\n       t.budget_limits AS \"budget_limits: RawJson\",\n       t.model_id,\n       t.allow_team_guardrail_config,\n       t.object_permission_id,\n       CASE WHEN m.id IS NOT NULL THEN jsonb_build_object(\n           'id', m.id, 'model_aliases', m.aliases, 'created_by', m.created_by, 'updated_by', m.updated_by\n       ) END AS \"litellm_model_table?: RawJson\"\nFROM \"LiteLLM_TeamTable\" AS t\nLEFT JOIN \"LiteLLM_ModelTable\" AS m ON m.id = t.model_id\nWHERE t.team_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "team_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "team_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "team_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "organization_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "organization_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "admins!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "members!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "members_with_roles: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "members_with_roles"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "metadata: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "soft_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "soft_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "models!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "max_parallel_requests",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "max_parallel_requests"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "tpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "tpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "rpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "rpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "tpd_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "tpd_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "budget_duration",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "budget_duration"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "budget_reset_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "budget_reset_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "blocked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "blocked"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "model_spend: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "model_spend"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "model_max_budget: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "model_max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "router_settings: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "router_settings"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "team_member_permissions!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 24,
+        "name": "access_group_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 25,
+        "name": "policies!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 26,
+        "name": "default_team_member_models!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 27,
+        "name": "budget_limits: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "budget_limits"
+          }
+        }
+      },
+      {
+        "ordinal": 28,
+        "name": "model_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "model_id"
+          }
+        }
+      },
+      {
+        "ordinal": 29,
+        "name": "allow_team_guardrail_config",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "allow_team_guardrail_config"
+          }
+        }
+      },
+      {
+        "ordinal": 30,
+        "name": "object_permission_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "object_permission_id"
+          }
+        }
+      },
+      {
+        "ordinal": 31,
+        "name": "litellm_model_table?: RawJson",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      null,
+      null,
+      false,
+      false,
+      true,
+      true,
+      false,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      true,
+      true,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "8acb0d9dde65b5603af856c78c573582a9536ca76aa3c4053773fe77c888703b"
+}
