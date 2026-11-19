@@ -98,6 +98,27 @@ describe("MCPServerView", () => {
     expect(screen.getAllByText("demo_alias").length).toBeGreaterThan(0);
   });
 
+  it("lists each additional auth profile by id and kind without any secret", () => {
+    renderView({
+      additional_auth: [
+        { id: "tickets-bots", auth_type: "oauth2", oauth2_flow: "client_credentials", client_secret: "hidden" },
+        { id: "wiki-bots", auth_type: "bearer_token", authentication_token: "hidden" },
+      ],
+    });
+
+    expect(screen.getByText("tickets-bots")).toBeInTheDocument();
+    expect(screen.getByText("OAuth client credentials")).toBeInTheDocument();
+    expect(screen.getByText("wiki-bots")).toBeInTheDocument();
+    expect(screen.getByText("Bearer Token")).toBeInTheDocument();
+    expect(screen.queryByText("hidden")).not.toBeInTheDocument();
+  });
+
+  it("shows no profile list for a server without additional profiles", () => {
+    renderView();
+
+    expect(screen.queryByText("Additional profiles")).not.toBeInTheDocument();
+  });
+
   it("falls back to a placeholder name when the server has neither name nor alias", () => {
     renderView({ server_name: undefined, alias: undefined });
 

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { PROFILE_KIND_LABEL_KEYS, profileKindOf } from "./additionalAuthProfiles";
 import { MCPServer, TRANSPORT, handleTransport, handleAuth } from "@/components/mcp_tools/types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
@@ -192,6 +193,17 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 {t("mcpServers.serverView.overview.authentication")}
               </p>
               <div className="mt-3">{getAuthBadge(handleAuth(mcpServer.auth_type ?? undefined))}</div>
+              {(mcpServer.additional_auth ?? []).length > 0 && (
+                <div className="mt-3 space-y-1">
+                  <p className="text-xs text-muted-foreground">{t("mcpServers.additionalAuth.view.title")}</p>
+                  {(mcpServer.additional_auth ?? []).map((profile) => (
+                    <div key={profile.id} className="flex items-center gap-2">
+                      <span className="font-mono text-sm">{profile.id}</span>
+                      <Badge variant="outline">{t(PROFILE_KIND_LABEL_KEYS[profileKindOf(profile)])}</Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Card>
 
             <Card className="p-4">

@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
+import { toast } from "@/lib/toast";
 import { setToken } from "@/utils/mcpTokenStore";
+import { getSecureItem } from "@/utils/secureStorage";
 import CreateMCPServer from "./CreateMCPServer";
 import { selectOption } from "./testUtils";
 
@@ -35,6 +37,7 @@ const oauthHook = vi.hoisted(() => ({
     | null,
   getCredentials: null as (() => Record<string, unknown> | undefined) | null,
   getTemporaryPayload: null as (() => Record<string, unknown> | null) | null,
+  onBeforeRedirect: null as (() => void) | null,
 }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
@@ -44,8 +47,10 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
     ) => void;
     getCredentials?: () => Record<string, unknown> | undefined;
     getTemporaryPayload?: () => Record<string, unknown> | null;
+    onBeforeRedirect?: () => void;
   }) => {
     oauthHook.onTokenReceived = opts.onTokenReceived;
+    oauthHook.onBeforeRedirect = opts.onBeforeRedirect ?? null;
     oauthHook.getCredentials = opts.getCredentials ?? null;
     oauthHook.getTemporaryPayload = opts.getTemporaryPayload ?? null;
     return {
@@ -2289,5 +2294,164 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
 
     const payload = await submitCreate();
     expect(payload.dcr_bridge).toBe(true);
+  });
+});
+
+describe("CreateMCPServer additional auth profiles", () => {
+  const createdServer = {
+    server_id: "new-server-profiles",
+    server_name: "Profiles_Server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "none",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+  });
+
+  async function fillServerForm() {
+    render(<CreateMCPServer {...defaultProps} />);
+    await fillServerFields();
+  }
+
+  async function fillServerFields() {
+    await selectOption("Transport Type", "Streamable HTTP");
+    await screen.findByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(getServerNameInput(), {
+        target: { value: "Profiles_Server" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
+    });
+    await selectOption("Authentication", "None");
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+    });
+    await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+    return vi.mocked(networking.createMCPServer).mock.calls[0][1] as Record<string, unknown>;
+  }
+
+  it("sends the profile an admin adds, in the additional_auth key", async () => {
+    await fillServerForm();
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "tickets-bots" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "bot-app" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+
+    const payload = await submit();
+    expect(payload.additional_auth).toEqual([
+      {
+        id: "tickets-bots",
+        auth_type: "oauth2",
+        oauth2_flow: "client_credentials",
+        client_id: "bot-app",
+        client_secret: "s3cret",
+        token_url: "https://auth.example.com/token",
+      },
+    ]);
+  });
+
+  it("restores profile drafts after the OAuth redirect without storing their secrets", async () => {
+    const beforeRedirect = render(<CreateMCPServer {...defaultProps} />);
+    await fillServerFields();
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "tickets-bots" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "bot-app" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+    act(() => oauthHook.onBeforeRedirect?.());
+    expect(getSecureItem("litellm-mcp-oauth-create-state")).not.toContain("s3cret");
+    beforeRedirect.unmount();
+
+    render(<CreateMCPServer {...defaultProps} />);
+
+    expect(await screen.findByLabelText("Profile ID")).toHaveValue("tickets-bots");
+    expect(screen.getByLabelText("Client ID")).toHaveValue("bot-app");
+    expect(screen.getByLabelText("Token URL")).toHaveValue("https://auth.example.com/token");
+    expect(screen.getByLabelText("Client secret")).toHaveValue("");
+  });
+
+  it("does not send the profiles of a dismissed create on the next one", async () => {
+    const { rerender } = render(<CreateMCPServer {...defaultProps} />);
+    await fillServerFields();
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "tickets-bots" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "bot-app" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+    rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+    rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+    await fillServerFields();
+
+    const payload = await submit();
+    expect(Object.hasOwn(payload, "additional_auth")).toBe(false);
+  });
+
+  it("asks for a missing profile id instead of quoting an empty one", async () => {
+    await fillServerForm();
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "bot-app" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+    });
+
+    expect(toast.fromError).toHaveBeenCalledWith("Give every auth profile an id before saving.");
+    expect(networking.createMCPServer).not.toHaveBeenCalled();
+  });
+
+  it("sends no additional_auth key when the admin adds no profile", async () => {
+    await fillServerForm();
+
+    const payload = await submit();
+    expect(Object.hasOwn(payload, "additional_auth")).toBe(false);
+  });
+
+  it("drops profile drafts when the transport changes to OpenAPI", async () => {
+    await fillServerForm();
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "tickets-bots" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "bot-app" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+    await selectOption("Transport Type", "OpenAPI Spec");
+    const specInput = await screen.findByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json");
+    await act(async () => {
+      fireEvent.change(specInput, { target: { value: "https://example.com/openapi.json" } });
+    });
+
+    const payload = await submit();
+    expect(Object.hasOwn(payload, "additional_auth")).toBe(false);
+  });
+
+  it.each(["Standard Input/Output", "OpenAPI Spec"])(
+    "does not offer profiles when the transport is %s",
+    async (transport) => {
+      render(<CreateMCPServer {...defaultProps} />);
+      await selectOption("Transport Type", transport);
+
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Add auth profile" })).not.toBeInTheDocument());
+    },
+  );
+
+  it("does not offer profiles to a non-admin submitting for review", async () => {
+    render(<CreateMCPServer {...defaultProps} userRole="Internal User" />);
+    await selectOption("Transport Type", "Streamable HTTP");
+    await screen.findByPlaceholderText("https://your-mcp-server.com");
+
+    expect(screen.queryByRole("button", { name: "Add auth profile" })).not.toBeInTheDocument();
   });
 });

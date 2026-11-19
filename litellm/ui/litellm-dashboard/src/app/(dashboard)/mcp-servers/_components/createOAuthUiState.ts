@@ -1,5 +1,6 @@
 import { MCPServerCostInfo, withoutMintedTokenCredentials } from "@/components/mcp_tools/types";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { draftsWithoutSecrets, type AdditionalAuthDraft } from "./additionalAuthProfiles";
 
 const CREATE_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-create-state";
 
@@ -17,6 +18,7 @@ export interface CreateUiSnapshot {
   readonly aliasManuallyEdited: boolean;
   readonly logoUrl: string | undefined;
   readonly authorizedIdentity: string | undefined;
+  readonly additionalAuth: readonly AdditionalAuthDraft[];
 }
 
 // Only the fields that survived their own presence check. A key absent here means "leave the freshly
@@ -31,6 +33,7 @@ export type RestoredUiSnapshot = {
   readonly aliasManuallyEdited?: boolean;
   readonly logoUrl?: string;
   readonly authorizedIdentity?: string;
+  readonly additionalAuth?: readonly AdditionalAuthDraft[];
 };
 
 export const writeCreateUiSnapshot = (snapshot: CreateUiSnapshot): void => {
@@ -38,7 +41,10 @@ export const writeCreateUiSnapshot = (snapshot: CreateUiSnapshot): void => {
     return;
   }
   try {
-    setSecureItem(CREATE_OAUTH_UI_STATE_KEY, JSON.stringify(snapshot));
+    setSecureItem(
+      CREATE_OAUTH_UI_STATE_KEY,
+      JSON.stringify({ ...snapshot, additionalAuth: draftsWithoutSecrets(snapshot.additionalAuth) }),
+    );
   } catch (err) {
     console.warn("Failed to persist MCP create state", err);
   }
@@ -83,6 +89,7 @@ export const readCreateUiSnapshot = (): RestoredUiSnapshot | null => {
         : {}),
       ...(typeof parsed.aliasManuallyEdited === "boolean" ? { aliasManuallyEdited: parsed.aliasManuallyEdited } : {}),
       ...(parsed.logoUrl ? { logoUrl: parsed.logoUrl } : {}),
+      ...(Array.isArray(parsed.additionalAuth) ? { additionalAuth: parsed.additionalAuth } : {}),
     };
   } catch (err) {
     console.error("Failed to restore MCP create state", err);

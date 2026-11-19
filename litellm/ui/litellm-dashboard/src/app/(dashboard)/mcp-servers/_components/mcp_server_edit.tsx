@@ -50,6 +50,14 @@ import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
+import AdditionalAuthProfilesSection from "./AdditionalAuthProfilesSection";
+import {
+  draftsFromProfiles,
+  draftsWithoutSecrets,
+  sameProfileDrafts,
+  stillGrantedHolders,
+  type AdditionalAuthDraft,
+} from "./additionalAuthProfiles";
 import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
 import { AUTH_TYPES_REQUIRING_AUTH_VALUE } from "./createServerPayload";
@@ -177,6 +185,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [removeStoredApp, setRemoveStoredApp] = useState(false);
+  const [editedAuthProfiles, setEditedAuthProfiles] = useState<readonly AdditionalAuthDraft[] | null>(null);
+  const loadedAuthProfiles = React.useMemo(
+    () => draftsFromProfiles(mcpServer.additional_auth),
+    [mcpServer.additional_auth],
+  );
   // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
   // section warns that the saved app may not match the new upstream (the app is kept, not wiped).
   const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
@@ -190,6 +203,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const transportType = mountedValues.transport as string | undefined;
   const isStdioTransport = transportType === "stdio";
   const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
+  const profilesAllowed = (transportType === TRANSPORT.HTTP || transportType === TRANSPORT.SSE) && !mcpServer.is_byok;
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
@@ -237,6 +251,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           allowedTools,
           hasToolAllowlistInteraction,
           aliasManuallyEdited,
+          additionalAuth: editedAuthProfiles === null ? undefined : draftsWithoutSecrets(editedAuthProfiles),
         }),
       );
     } catch (err) {
@@ -360,6 +375,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     // stored app, and a stale warning would show on a server whose upstream did not change.
     setAppMayNotMatchUpstream(false);
     setRemoveStoredApp(false);
+    setEditedAuthProfiles(null);
   }, [mcpServer.server_id, initialValues, form]);
 
   // Initialize cost config from existing server data
@@ -429,6 +445,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
       if (typeof parsed.aliasManuallyEdited === "boolean") {
         setAliasManuallyEdited(parsed.aliasManuallyEdited);
+      }
+      if (Array.isArray(parsed.additionalAuth)) {
+        setEditedAuthProfiles(parsed.additionalAuth);
       }
     } catch (err) {
       console.error("Failed to restore MCP edit state", err);
@@ -756,6 +775,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       toast.fromError(t(DUPLICATE_IDENTIFIER_MESSAGE_KEY));
       return;
     }
+    const profilesClearedByHost = loadedAuthProfiles.length > 0 ? [] : null;
+    const changedAuthProfiles =
+      editedAuthProfiles === null || sameProfileDrafts(editedAuthProfiles, loadedAuthProfiles)
+        ? null
+        : editedAuthProfiles;
     try {
       const uiState = {
         dcrClient: dcrClientRef.current,
@@ -768,6 +792,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         toolNameToDisplayName,
         toolNameToDescription,
         removeStoredApp,
+        additionalAuth: profilesAllowed ? changedAuthProfiles : profilesClearedByHost,
       };
       const built = buildEditServerPayload(values, uiState);
       if (built.kind !== "ok") {
@@ -821,7 +846,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       setAppMayNotMatchUpstream(false);
       onSuccess(updated);
     } catch (error: any) {
-      const reason = mcpSubmitErrorReason(error);
+      const holders = stillGrantedHolders(error);
+      const heldBy =
+        holders.length === 0 ? [] : [t("mcpServers.additionalAuth.errors.heldBy", { holders: holders.join(", ") })];
+      const reason = [mcpSubmitErrorReason(error), ...heldBy].filter(Boolean).join(" ");
       toast.fromError(
         reason
           ? t("mcpServers.serverEdit.toasts.updateFailedWithReason", { reason })
@@ -1009,6 +1037,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     <MountedFormField
                       label={t("mcpServers.serverEdit.fields.authType")}
                       name="auth_type"
+                      help={t("mcpServers.additionalAuth.defaultProfileHelp")}
                       required
                       rules={{
                         validate: { required: requiredRule(t("mcpServers.serverEdit.fields.authTypeRequired")) },
@@ -1306,6 +1335,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       )}
                     </MountedFormField>
                   </>
+                )}
+
+                {profilesAllowed && (
+                  <div className="mt-6">
+                    <AdditionalAuthProfilesSection
+                      value={editedAuthProfiles ?? loadedAuthProfiles}
+                      onChange={setEditedAuthProfiles}
+                    />
+                  </div>
                 )}
 
                 {/* Environment Variables Section */}

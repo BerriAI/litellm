@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
-import { setSecureItem } from "@/utils/secureStorage";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import * as networking from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { selectOption } from "./testUtils";
@@ -30,8 +30,16 @@ const mockOauth: {
         },
       ) => void)
     | null;
+  onBeforeRedirect: (() => void) | null;
   reset: ReturnType<typeof vi.fn>;
-} = { status: "idle", tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
+} = {
+  status: "idle",
+  tokenResponse: null,
+  getTemporaryPayload: null,
+  onTokenReceived: null,
+  onBeforeRedirect: null,
+  reset: vi.fn(),
+};
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
     getTemporaryPayload?: () => Record<string, unknown> | null;
@@ -44,8 +52,10 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
         dcr_server_url?: string;
       },
     ) => void;
+    onBeforeRedirect?: () => void;
   }) => {
     mockOauth.getTemporaryPayload = opts?.getTemporaryPayload ?? null;
+    mockOauth.onBeforeRedirect = opts?.onBeforeRedirect ?? null;
     mockOauth.onTokenReceived = opts?.onTokenReceived ?? null;
     return {
       startOAuthFlow: vi.fn(),
@@ -1821,6 +1831,32 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     rerender(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
     await waitFor(() => expect(screen.getByLabelText("MCP Server URL")).toHaveValue("https://new.example/mcp"));
     expect(screen.getByLabelText("Issuer (optional)")).toHaveValue("https://new.example");
+  });
+
+  it("restores profile edits after OAuth without storing their secrets, so a new profile asks for its secret again", async () => {
+    const props = {
+      accessToken: "access-token",
+      userID: "user-1",
+      onCancel: vi.fn(),
+      onSuccess: vi.fn(),
+      availableAccessGroups: [],
+    };
+    const beforeRedirect = render(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "wiki-bots" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    act(() => mockOauth.onBeforeRedirect?.());
+    expect(getSecureItem(EDIT_OAUTH_UI_STATE_KEY)).not.toContain("s3cret");
+    beforeRedirect.unmount();
+
+    const { rerender } = render(
+      <MCPServerEdit {...props} mcpServer={{ ...interactiveOAuthServer, server_id: "", url: "" }} />,
+    );
+    rerender(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
+    expect(await screen.findByLabelText("Profile ID")).toHaveValue("wiki-bots");
+    expect(screen.getByLabelText("Token URL")).toHaveValue("https://auth.example.com/token");
+    expect(screen.getByLabelText("Client secret")).toHaveValue("");
   });
 
   it("preserves a stored client_id on OAuth-resume restore even when the saved snapshot is token-only", async () => {

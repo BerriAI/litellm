@@ -12916,6 +12916,7 @@
       },
       "errors": {
         "invalidProfile": "Fix auth profile \"{{id}}\" before saving.",
+        "missingProfileId": "Give every auth profile an id before saving.",
         "heldBy": "Held by {{holders}}."
       },
       "view": {

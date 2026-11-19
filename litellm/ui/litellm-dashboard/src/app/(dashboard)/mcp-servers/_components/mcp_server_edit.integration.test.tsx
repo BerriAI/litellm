@@ -8,6 +8,8 @@ import { selectOption } from "./testUtils";
 import MCPServerEdit from "./mcp_server_edit";
 import * as networking from "@/components/networking";
 import { MCPServer } from "@/components/mcp_tools/types";
+import { ApiError } from "@/lib/http/client";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   updateMCPServer: vi.fn(),
@@ -346,6 +348,174 @@ describe("mcp_server_edit save payload contract", () => {
   it.each(CASES.map((c) => [c.label, c] as const))("%s", async (_label, testCase) => {
     const payload = await saveAndCapture(testCase.server);
     expect(payload).toStrictEqual(testCase.expected);
+  });
+
+  const WITH_PROFILE = {
+    ...BASE,
+    additional_auth: [
+      {
+        id: "tickets-bots",
+        auth_type: "oauth2",
+        oauth2_flow: "client_credentials",
+        client_id: null,
+        client_secret: null,
+        token_url: "https://auth.example.com/token",
+      },
+    ],
+  } as MCPServer;
+
+  it("leaves the stored profiles alone when the admin saves without touching them", async () => {
+    const payload = await saveAndCapture(WITH_PROFILE);
+    expect(Object.hasOwn(payload, "additional_auth")).toBe(false);
+  });
+
+  it("sends an empty list when the admin removes the only profile", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(WITH_PROFILE as never);
+    render(
+      <MCPServerEdit
+        mcpServer={WITH_PROFILE}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    expect(screen.getByLabelText("Profile ID")).toHaveValue("tickets-bots");
+    fireEvent.click(screen.getByRole("button", { name: "Remove auth profile" }));
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect((payload as Record<string, unknown>).additional_auth).toEqual([]);
+  });
+
+  it("leaves the stored profiles alone when an added profile row is removed again before saving", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(WITH_PROFILE as never);
+    render(
+      <MCPServerEdit
+        mcpServer={WITH_PROFILE}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove auth profile" })[1]);
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(Object.hasOwn(payload as object, "additional_auth")).toBe(false);
+  });
+
+  const renderEdit = (server: MCPServer) =>
+    render(
+      <MCPServerEdit
+        mcpServer={server}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+  it.each([
+    ["an OpenAPI", { spec_path: "https://example.com/openapi.json" }],
+    ["a BYOK", { is_byok: true }],
+  ])("does not offer profiles on %s server, which cannot hold them", (_kind, overrides) => {
+    renderEdit({ ...BASE, ...overrides } as MCPServer);
+
+    expect(screen.queryByRole("button", { name: "Add auth profile" })).not.toBeInTheDocument();
+  });
+
+  it("asks for a missing profile id instead of quoting an empty one", async () => {
+    renderEdit(BASE);
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "bot-app" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+
+    expect(toast.fromError).toHaveBeenCalledWith("Give every auth profile an id before saving.");
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+  });
+
+  it("drops profile drafts when the transport changes to OpenAPI", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(BASE as never);
+    renderEdit(BASE);
+    fireEvent.click(screen.getByRole("button", { name: "Add auth profile" }));
+    fireEvent.change(screen.getByLabelText("Profile ID"), { target: { value: "wiki-bots" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "bot-app" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "s3cret" } });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://auth.example.com/token" } });
+    await selectOption("Transport Type", "OpenAPI Spec");
+    const specInput = await screen.findByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json");
+    fireEvent.change(specInput, { target: { value: "https://example.com/openapi.json" } });
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(Object.hasOwn(payload as object, "additional_auth")).toBe(false);
+  });
+
+  it("clears the stored profiles when the transport changes to OpenAPI and shows who still holds one", async () => {
+    const stillGranted = {
+      detail: {
+        error: "MCP auth profiles are still granted. Remove the grants first.",
+        grants: [{ kind: "key", name: "nightly-bot", mcp_auth_profiles: ["tickets-bots"] }],
+      },
+    };
+    vi.mocked(networking.updateMCPServer).mockRejectedValue(
+      new ApiError("MCP auth profiles are still granted. Remove the grants first.", 409, stillGranted),
+    );
+    renderEdit(WITH_PROFILE);
+    await selectOption("Transport Type", "OpenAPI Spec");
+    const specInput = await screen.findByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json");
+    fireEvent.change(specInput, { target: { value: "https://example.com/openapi.json" } });
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect((payload as Record<string, unknown>).additional_auth).toEqual([]);
+    expect(String(vi.mocked(toast.fromError).mock.calls[0][0])).toContain("key nightly-bot");
+  });
+
+  it("names the keys and teams that still hold a profile the admin removed", async () => {
+    const stillGranted = {
+      detail: {
+        error: "MCP auth profiles are still granted. Remove the grants first.",
+        grants: [
+          { kind: "key", name: "nightly-bot", mcp_auth_profiles: ["tickets-bots"] },
+          { kind: "team", name: "platform", mcp_auth_profiles: ["tickets-bots"] },
+        ],
+      },
+    };
+    vi.mocked(networking.updateMCPServer).mockRejectedValue(
+      new ApiError("MCP auth profiles are still granted. Remove the grants first.", 409, stillGranted),
+    );
+    renderEdit(WITH_PROFILE);
+    fireEvent.click(screen.getByRole("button", { name: "Remove auth profile" }));
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalled());
+    const shown = String(vi.mocked(toast.fromError).mock.calls[0][0]);
+    expect(shown).toContain("MCP auth profiles are still granted");
+    expect(shown).toContain("key nightly-bot");
+    expect(shown).toContain("team platform");
   });
 
   it("never sends a server-owned field the form does not bind", async () => {

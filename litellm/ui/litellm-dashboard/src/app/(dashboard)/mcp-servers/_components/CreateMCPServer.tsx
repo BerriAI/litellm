@@ -54,6 +54,8 @@ import { StdioDisabledBanner, TransportSelectItems } from "./StdioAvailability";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
+import AdditionalAuthProfilesSection from "./AdditionalAuthProfilesSection";
+import { invalidProfileMessage, type AdditionalAuthDraft } from "./additionalAuthProfiles";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
@@ -97,7 +99,7 @@ const payloadErrorMessage = (result: Exclude<BuildCreatePayloadResult, { kind: "
     case "invalid_token_validation_json":
       return t("mcpServers.createMcpServer.payloadErrors.invalidTokenValidationJson");
     case "invalid_additional_auth":
-      return t("mcpServers.additionalAuth.errors.invalidProfile", { id: result.profileId });
+      return invalidProfileMessage(result.profileId, t);
   }
 };
 
@@ -133,10 +135,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [additionalAuth, setAdditionalAuth] = useState<readonly AdditionalAuthDraft[]>([]);
   const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
+  const profilesAllowed = transportType === TRANSPORT.HTTP || transportType === TRANSPORT.SSE;
   const [keyTools, setKeyTools] = useState<OpenAPIKeyTool[]>([]);
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
@@ -192,6 +196,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       aliasManuallyEdited,
       logoUrl,
       authorizedIdentity,
+      additionalAuth,
     });
   };
 
@@ -353,6 +358,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (restored.logoUrl) {
       setLogoUrl(restored.logoUrl);
     }
+    if (restored.additionalAuth) {
+      setAdditionalAuth(restored.additionalAuth);
+    }
   }, [form, setModalVisible]);
 
   React.useEffect(() => {
@@ -441,6 +449,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       toolNameToDescription,
       logoUrl,
       dcrClient: dcrClientRef.current,
+      additionalAuth: profilesAllowed ? additionalAuth : [],
     });
     if (built.kind !== "ok") {
       toast.fromError(payloadErrorMessage(built, t));
@@ -495,6 +504,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setCostConfig({});
         clearTools();
         setAllowedTools([]);
+        setAdditionalAuth([]);
         setHasToolAllowlistInteraction(false);
         setAliasManuallyEdited(false);
         setLogoUrl(undefined);
@@ -519,6 +529,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setCostConfig({});
     clearTools();
     setAllowedTools([]);
+    setAdditionalAuth([]);
     setHasToolAllowlistInteraction(false);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
@@ -578,6 +589,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setFormValues({});
       setOauthAccessToken(null);
       clearTools();
+      setAdditionalAuth([]);
       resetOAuthFlow();
       setAuthorizedIdentity(undefined);
       dcrClientRef.current = null;
@@ -962,6 +974,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   )}
 
                   {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
+
+                  {isAdmin && profilesAllowed && (
+                    <AdditionalAuthProfilesSection value={additionalAuth} onChange={setAdditionalAuth} />
+                  )}
 
                   {/* Stdio Configuration - only show for stdio transport */}
                   {transportType === "stdio" && !stdioEnabled && <StdioDisabledBanner />}
