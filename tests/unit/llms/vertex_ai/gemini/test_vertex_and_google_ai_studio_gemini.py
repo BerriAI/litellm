@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
@@ -5162,6 +5162,7 @@ _ROWS_GOOGLE_ACCEPTS_LOGPROBS_ON: Final = (
     "vertex_ai/gemini-2.5-pro",
 )
 _REPO_ROOT: Final = Path(__file__).parents[5]
+_MODEL_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 
 
 def _mapped_logprob_fields(row: str, drop_params: bool) -> Mapping[str, object]:
@@ -5171,10 +5172,8 @@ def _mapped_logprob_fields(row: str, drop_params: bool) -> Mapping[str, object]:
 
 
 def _rows_refusing_logprobs(path: Path) -> frozenset[str]:
-    rows: Final = cast(Mapping[str, object], json.loads(path.read_text()))  # cast-ok: JSON object by model id
-    return frozenset(
-        name for name, row in rows.items() if isinstance(row, dict) and row.get("supports_logprobs") is False
-    )
+    rows: Final = _MODEL_MAP_ADAPTER.validate_json(path.read_bytes())
+    return frozenset(name for name, row in rows.items() if row.get("supports_logprobs") is False)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
