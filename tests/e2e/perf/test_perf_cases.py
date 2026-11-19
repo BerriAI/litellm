@@ -46,6 +46,7 @@ from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
 from setup.ramp import step_properties
 from setup.run import run_plan
+from setup.spend_insert_probe import spend_insert_probe
 from setup.telemetry import read_gateway_telemetry, telemetry_sampler
 
 pytestmark = pytest.mark.perf
@@ -173,6 +174,9 @@ def test_perf_case(
         stall_properties(case.event_loop, stall_rows) if case.event_loop is not None else junit_properties(rows)
     )
     item.user_properties.extend(step_properties(observation.steps()))
+    item.user_properties.extend(
+        spend_insert_probe(db_before, db_after, traffic_started_at, outcome.wall_seconds)
+    )
     print(render(case, observation, rows))
     if case.event_loop is not None:
         print(render_stalls(case.event_loop, stall_rows))
