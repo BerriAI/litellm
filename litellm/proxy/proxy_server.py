@@ -932,6 +932,7 @@ from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
     end_user_counter,
+    is_rejected,
     is_unavailable,
     key_counter,
     key_window_counter,
@@ -4719,7 +4720,11 @@ _increment_spend_counter_cache: Final = increment_spend_counter_cache
 async def _seed_spend_counter_cache(counter_key: str, spend: float) -> None:
     try:
         seeded: Final = await spend_counter_store.set_max(counter_key, spend)
-    except Exception:
+    except Exception as error:
+        if is_rejected(error):
+            # set_max is a Lua script; a Redis that refuses scripts still takes the plain increment.
+            await increment_spend_counter_cache(counter_key=counter_key, increment=spend)
+            return
         forget_spend_counter(counter_key)
         raise
     if seeded is not None:

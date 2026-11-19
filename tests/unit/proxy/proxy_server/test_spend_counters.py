@@ -1354,6 +1354,37 @@ async def test_ensure_spend_counter_initialized_cold_seed_raises_when_redis_fail
 
 
 @pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_increments_when_redis_refuses_the_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, failing=frozenset({"set_max"}), failure="rejected")
+    _cache_end_user_spend(monkeypatch, "no-lua", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:end_user:no-lua", source_cache_key=end_user_cache_key("no-lua")
+    )
+
+    assert spend.redis == {"spend:end_user:no-lua": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_does_not_increment_when_the_script_may_have_applied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, failing=frozenset({"set_max"}), failure="timeout")
+    _cache_end_user_spend(monkeypatch, "slow-redis", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with pytest.raises(NativeRedisStoreError, match="timeout"):
+        await ps._ensure_spend_counter_initialized(
+            counter_key="spend:end_user:slow-redis", source_cache_key=end_user_cache_key("slow-redis")
+        )
+
+    assert spend.redis == {}
+
+
+@pytest.mark.asyncio
 async def test_get_current_spend_cold_end_user_counter_keeps_the_cached_spend_over_a_lagging_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
