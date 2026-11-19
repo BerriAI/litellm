@@ -805,6 +805,9 @@ lens:
   service:
     name: ""
     port: 4318
+  # Namespace of the Lens release. When set, the chart copies the two Secrets
+  # below from that namespace into this one on every install and upgrade.
+  secretsNamespace: ""
   gatewaySecret:
     name: ""
     key: gateway-secret
