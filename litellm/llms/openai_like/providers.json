@@ -347,7 +347,7 @@
       "gpt-6.2-astra": ["/v1/responses"],
       "gpt-6.2-sol": ["/v1/responses"],
       "grok-4.7": ["/v1/responses"],
-      "kimi-k3.1-pro": ["/v1/responses"]
+      "kimi-k3.1-pro-Abliterated": ["/v1/responses"]
     }
   }
 }

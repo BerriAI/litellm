@@ -50302,15 +50302,15 @@
             }
         ]
     },
-    "topxai/kimi-k3.1-pro": {
-        "cache_read_input_token_cost": 3e-07,
-        "input_cost_per_token": 5e-07,
+    "topxai/kimi-k3.1-pro-Abliterated": {
+        "cache_read_input_token_cost": 3.25e-07,
+        "input_cost_per_token": 3.25e-06,
         "litellm_provider": "topxai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 5e-06,
-        "source": "https://api.topxai.xyz/pricing/kimi-k3.1-pro",
+        "output_cost_per_token": 6.5e-06,
+        "source": "https://api.topxai.xyz/pricing/kimi-k3.1-pro-abliterated",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -50319,7 +50319,7 @@
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_response_schema": false,
+        "supports_response_schema": true,
         "supports_tool_choice": false,
         "supports_vision": true
     },
@@ -50365,13 +50365,13 @@
         "supports_vision": true
     },
     "topxai/deepseek-flash-Abliterated": {
-        "cache_read_input_token_cost": 1.05e-07,
-        "input_cost_per_token": 4.2e-07,
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 3.6e-07,
         "litellm_provider": "topxai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 1.35e-06,
         "source": "https://api.topxai.xyz/pricing/deepseek-flash-abliterated",
         "supported_endpoints": [
             "/v1/chat/completions",

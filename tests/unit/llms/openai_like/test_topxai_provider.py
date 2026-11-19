@@ -146,7 +146,7 @@ class TestTopxAIProviderConfig:
         url = config.get_complete_url(
             api_base=TOPXAI_BASE_URL,
             api_key="sk-test",
-            model="topxai/kimi-k3.1-pro",
+            model="topxai/kimi-k3.1-pro-Abliterated",
             optional_params={},
             litellm_params={},
             stream=False,
@@ -160,7 +160,7 @@ class TestTopxAIProviderConfig:
             "gpt-6.2-astra",
             "grok-4.7",
             "gpt-6.1-terra",
-            "kimi-k3.1-pro",
+            "kimi-k3.1-pro-Abliterated",
             "deepseek-flash-Abliterated",
             "deepseek-flash-fast",
             "GLM-5.3-Flash-Abliterated",
@@ -234,7 +234,7 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    # Catalog and capabilities: https://api.topxai.xyz/api/pricing (verified 2026-11-18)
+    # Catalog and capabilities: https://api.topxai.xyz/api/pricing (verified 2026-11-19)
     TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
@@ -243,7 +243,7 @@ class TestTopxAIModelMetadata:
         "topxai/gpt-6.1-terra",
         "topxai/gpt-6.2-astra",
         "topxai/grok-4.7",
-        "topxai/kimi-k3.1-pro",
+        "topxai/kimi-k3.1-pro-Abliterated",
         "topxai/GLM-5.3-Abliterated",
         "topxai/GLM-5.3-Flash-Abliterated",
         "topxai/deepseek-flash-Abliterated",
@@ -287,7 +287,7 @@ class TestTopxAIModelMetadata:
     # (None where the route publishes no cache-write price). Claude, GPT and Grok are sold
     # on one route per lab at 80% of the lab's list price, long-context tiers included;
     # the GLM, Kimi and DeepSeek private deployments have fixed prices.
-    # https://api.topxai.xyz/api/pricing, route_prices[auto_route] (verified 2026-11-18)
+    # https://api.topxai.xyz/api/pricing, route_prices[auto_route] (verified 2026-11-19)
     AUTO_ROUTE_PRICES: Final = (
         ("topxai/claude-sonnet-5-5", 1.6, 8, 0.08, 2),
         ("topxai/claude-opus-5-5", 3.2, 16, 0.16, 4),
@@ -296,10 +296,10 @@ class TestTopxAIModelMetadata:
         ("topxai/gpt-6.1-terra", 0.8, 4, 0.04, 1),
         ("topxai/gpt-6.2-astra", 6.4, 32, 0.32, 8),
         ("topxai/grok-4.7", 1.6, 4.8, 0.4, None),
-        ("topxai/kimi-k3.1-pro", 0.5, 5, 0.3, None),
+        ("topxai/kimi-k3.1-pro-Abliterated", 3.25, 6.5, 0.325, None),
         ("topxai/GLM-5.3-Abliterated", 3, 6, 0.45, None),
         ("topxai/GLM-5.3-Flash-Abliterated", 0.36, 1.5, 0.075, None),
-        ("topxai/deepseek-flash-Abliterated", 0.42, 1.5, 0.105, None),
+        ("topxai/deepseek-flash-Abliterated", 0.36, 1.35, 0.075, None),
         ("topxai/deepseek-flash-fast", 0.02, 0.16, 0.004, None),
     )
 
