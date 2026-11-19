@@ -104,6 +104,24 @@ def test_files_needing_serial_runs_or_another_python_are_left_out(tmp_path):
     ) == ("tests/unit/db/test_pool.py",)
 
 
+def test_node_selected_core_tests_exclude_their_file_from_changed_tests(tmp_path):
+    root: Final = _tree(tmp_path, "tests/unit/test_router.py", "tests/unit/test_other.py")
+    workflow: Final = {
+        "jobs": {
+            "unit-core": {
+                "strategy": {
+                    "matrix": {
+                        "include": [{"test-path": "tests/unit/test_router.py::TestRetries::test_retry[timeout]"}]
+                    }
+                }
+            }
+        }
+    }
+    assert selector.select(
+        ("tests/unit/test_router.py", "tests/unit/test_other.py"), selector.exclusions(workflow, "3.12"), root
+    ) == ("tests/unit/test_other.py",)
+
+
 def test_deleted_files_helpers_and_package_inits_select_nothing(tmp_path):
     root: Final = _tree(
         tmp_path,
