@@ -61,6 +61,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     without,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.routing_common_utils import (
     format_content_policy_fallback_hint,
     format_fallback_outcome_message,
@@ -5313,11 +5314,10 @@ class _Driver:
         if passthrough is None:
             raise RuntimeError("router-core asked for an unrouted attempt the host did not offer")
         name: Final = str(step.get("model"))
-        params: Final = as_str_mapping(step.get("params"))
         self._attempts += 1
         self._attempt_started = datetime.now()  # noqa: DTZ005  # see _call
         try:
-            answered: Final = await passthrough(self._request if params is None else {**self._request, **params}, name)
+            answered: Final = await passthrough(self._hop_request(step, partial(inferred_provider, name)), name)
         except Exception as error:  # noqa: BLE001  # handed to the Rust call loop like any attempt failure
             return {**self._failed(step, {}, None, error), "recorded": True}
         self._last_response = answered
@@ -5370,29 +5370,45 @@ class _Driver:
         return None
 
     def _attempt_request(self, step: Mapping[str, object], deployment: Mapping[str, object]) -> Mapping[str, object]:
+        return self._hop_request(
+            step, partial(provider_of_deployment, as_str_mapping(deployment.get("litellm_params")) or {})
+        )
+
+    def _hop_request(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
         params: Final = as_str_mapping(step.get("params"))
-        request: Final = self._request_for_hop(step, deployment)
+        request: Final = self._request_for_hop(step, provider)
         return request if params is None else {**request, **params}
 
-    def _request_for_hop(self, step: Mapping[str, object], deployment: Mapping[str, object]) -> Mapping[str, object]:
+    def _request_for_hop(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
         """A fallback hop sends the caller's credentials only to a provider the requested group serves them to."""
         level: Final = step.get("fallback_level")
         if not isinstance(level, int) or level == 0 or self._request.keys().isdisjoint(PROVIDER_BOUND_PARAMS):
             return self._request
-        provider: Final = provider_of_deployment(as_str_mapping(deployment.get("litellm_params")) or {})
-        return request_for_provider(self._request, provider, self._credentials_sent_for)
+        return request_for_provider(self._request, provider(), self._credentials_sent_for)
 
     @cached_property
     def _credentials_sent_for(self) -> frozenset[str]:
         model: Final = _routed_model(self._request)
-        deployments: Final = (
-            self._core._hosted._core_get_model_list(model_name=model) if isinstance(model, str) else None  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        )
+        if not isinstance(model, str):
+            return frozenset()
         providers: Final = (
-            provider_of_deployment(as_str_mapping(row.get("litellm_params")) or {}) for row in deployments or ()
+            provider_of_deployment(as_str_mapping(row.get("litellm_params")) or {})
+            for row in self._requested_deployments(model)
         )
-        return frozenset(provider for provider in providers if provider is not None)
+        served: Final = frozenset(provider for provider in providers if provider is not None)
+        if served:
+            return served
+        named: Final = inferred_provider(model)
+        return frozenset(() if named is None else (named,))
+
+    def _requested_deployments(self, model: str) -> Sequence[Mapping[str, object]]:
+        import litellm.exceptions as litellm_exceptions
+
+        try:
+            return self._core._hosted._core_deployments_for_request(model, self._request)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+        except litellm_exceptions.BadRequestError:
+            return ()
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None

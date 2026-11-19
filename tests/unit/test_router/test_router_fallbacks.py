@@ -1459,3 +1459,77 @@ async def test_fallback_to_another_anthropic_group_keeps_the_callers_key(
         _CALLER_ANTHROPIC_KEY,
     )
     assert response.choices[0].message.content == "served by the anthropic backup"
+
+
+@pytest.mark.asyncio
+async def test_team_model_fallback_to_another_anthropic_group_keeps_the_callers_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "team-claude-internal",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-team-admin-key"},
+                "model_info": {"id": "team-claude", "team_id": "team-a", "team_public_model_name": "claude"},
+            },
+            {
+                "model_name": "claude-backup",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-backup-admin-key"},
+            },
+        ],
+        fallbacks=[{"claude": ["claude-backup"]}],
+        num_retries=0,
+    )
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=(_anthropic_overloaded_response(), _anthropic_message_response())
+    )
+
+    response: Final = await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key=_CALLER_ANTHROPIC_KEY,
+        metadata={"user_api_key_team_id": "team-a"},
+    )
+
+    assert tuple(call.request.headers["x-api-key"] for call in route.calls) == (
+        _CALLER_ANTHROPIC_KEY,
+        _CALLER_ANTHROPIC_KEY,
+    )
+    assert response.choices[0].message.content == "served by the anthropic backup"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_fallback_to_an_unregistered_azure_model_uses_its_own_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("AZURE_API_KEY", "azure-env-key")
+    monkeypatch.setenv("AZURE_API_BASE", "https://passthrough-backup.openai.azure.com")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vllm-primary",
+                "litellm_params": {"model": "hosted_vllm/primary", "api_base": "https://vllm-primary.local"},
+            }
+        ],
+        num_retries=0,
+    )
+    primary: Final = respx_mock.post(host="vllm-primary.local").mock(return_value=httpx.Response(503, json={}))
+    azure: Final = respx_mock.post(host="passthrough-backup.openai.azure.com").mock(
+        return_value=_fallback_chat_response("gpt-backup", "served by azure")
+    )
+
+    await router.allm_passthrough_route(
+        model="vllm-primary",
+        method="POST",
+        endpoint="/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        api_key=_CALLER_ANTHROPIC_KEY,
+        fallbacks=["azure/gpt-backup"],
+    )
+
+    assert primary.calls.last.request.headers["authorization"] == f"Bearer {_CALLER_ANTHROPIC_KEY}"
+    sent: Final = azure.calls.last.request
+    assert sent.headers["api-key"] == "azure-env-key"
+    assert all(_CALLER_ANTHROPIC_KEY not in value for value in sent.headers.values())
