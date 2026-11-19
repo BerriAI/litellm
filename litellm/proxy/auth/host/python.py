@@ -267,7 +267,7 @@ class PythonAuthHost:
         await prefetch_identity_keys(
             identity_cache_keys(token or "", end_user_id=end_user_id, key_is_resolved=token is None),
             user_api_key_cache=self.user_api_key_cache,
-            before_read=arm_routing_cooldowns,
+            before_read=self._arm_routing_cooldowns,
         )
 
     async def end_user(self, end_user_id: str | None) -> EndUserRow:
@@ -406,7 +406,15 @@ class PythonAuthHost:
             end_user_id=end_user.end_user_id,
             user_api_key_cache=self.user_api_key_cache,
             prisma_client=self.prisma_client,
+            requested_model=self._requested_model(),
         )
+
+    def _requested_model(self) -> str | None:
+        model: Final = None if self.http is None else self.http.request_data.get("model")
+        return model if isinstance(model, str) else None
+
+    def _arm_routing_cooldowns(self) -> None:
+        arm_routing_cooldowns(self._requested_model())
 
     async def key_owner(self, user_id: str) -> LiteLLM_UserTable | None:
         """Raises when the owner cannot be read; the core treats that as no owner."""

@@ -209,6 +209,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     sync_team_access_group_membership,
 )
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
+from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
@@ -237,19 +238,19 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     query_raw_within_statement_timeout,
 )
-from litellm.redis.stores.spend_counters import team_counter
+from litellm.redis.stores.spend_counters import team_counter, team_window_counter
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
-    AccessGroupRepository,
     DeletedTeamRepository,
     ModelTableRepository,
     OrganizationMembershipRepository,
-    TeamMembershipRepository,
 )
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -2020,6 +2021,7 @@ async def new_team(
         data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
             data_json=data_json,
             prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
 
         if TeamMemberBudgetHandler.should_create_budget(
@@ -2947,6 +2949,7 @@ async def update_team(
             updated_kv = await handle_update_object_permission(
                 data_json=updated_kv,
                 existing_team_row=existing_team_row,
+                can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             )
 
         # update team metadata fields
@@ -3103,7 +3106,9 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_tea
         updated_kv["budget_limits"] = json.dumps(initialized_windows)
 
 
-async def handle_update_object_permission(data_json: dict, existing_team_row: _ObjectPermissionRow) -> dict:
+async def handle_update_object_permission(
+    data_json: dict, existing_team_row: _ObjectPermissionRow, can_grant_apps: bool = False
+) -> dict:
     """
     Handle the update of object permission for a team.
 
@@ -3117,6 +3122,7 @@ async def handle_update_object_permission(data_json: dict, existing_team_row: _O
         data_json=data_json,
         existing_object_permission_id=existing_team_row.object_permission_id,
         prisma_client=prisma_client,
+        can_grant_apps=can_grant_apps,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
@@ -5629,6 +5635,12 @@ async def team_info(
                     entity_id=team_id,
                     model_max_budget=resolved_team_info.model_max_budget,
                     cache=model_max_budget_limiter.dual_cache,
+                ),
+                "budget_limits_usage": await build_budget_limits_usage(
+                    budget_limits=resolved_team_info.budget_limits,
+                    counter_key=lambda duration: team_window_counter(team_id, duration),
+                    entity_type="Team",
+                    entity_id=team_id,
                 ),
                 "caller_edit_access": _caller_edit_access(access_role, _general_settings()),
             }

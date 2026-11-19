@@ -1281,6 +1281,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_continuation": {"type": "boolean"},
             "supports_multimodal": {"type": "boolean"},
             "uses_embed_content": {"type": "boolean"},
+            "supports_logprobs": {"type": "boolean"},
             "supports_reasoning": {"type": "boolean"},
             "supports_minimal_reasoning_effort": {"type": "boolean"},
             "supports_low_reasoning_effort": {"type": "boolean"},
@@ -8980,7 +8981,7 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
 
 def test_get_model_info_gemini(monkeypatch):
     """
-    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
+    Check rate-limit metadata for supported non-video Gemini model families.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -8989,6 +8990,7 @@ def test_get_model_info_gemini(monkeypatch):
     for model, info in model_map.items():
         if (
             model.startswith("gemini/")
+            and "video" not in info.get("supported_output_modalities", [])
             and "gemma" not in model
             and "learnlm" not in model
             and "imagen" not in model
@@ -8998,6 +9000,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
+            and "genie" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"

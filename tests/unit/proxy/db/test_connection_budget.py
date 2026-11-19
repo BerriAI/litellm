@@ -1,3 +1,4 @@
+import os
 from typing import Final
 
 import pytest
@@ -11,6 +12,7 @@ from litellm.proxy.db.connection_budget import (
     RustConnections,
     UnsplittableConnectionLimit,
     rust_connections,
+    with_configured_connection_budget,
 )
 
 
@@ -73,3 +75,36 @@ def test_prisma_params_carry_prisma_share() -> None:
 )
 def test_a_worker_sizes_each_rust_pool_from_the_cli_split(environ: dict[str, str], expected: RustConnections) -> None:
     assert rust_connections(environ) == expected
+
+
+@pytest.mark.parametrize(
+    ("yaml_limit", "writer_query", "reader_query", "connections"),
+    [
+        (2, "schema=app&connection_limit=1", "connection_limit=1", RustConnections(1, 1)),
+        (10, "schema=app&connection_limit=8", "connection_limit=3", RustConnections(2, 2)),
+        (None, "schema=app", "connection_limit=3", RustConnections(4, 2)),
+    ],
+)
+def test_configured_budget_caps_prisma_and_reserves_rust_until_lifespan_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    yaml_limit: int | None,
+    writer_query: str,
+    reader_query: str,
+    connections: RustConnections,
+) -> None:
+    writer: Final = "postgresql://db/app?schema=app"
+    reader: Final = "postgresql://reader/app?connection_limit=3"
+    monkeypatch.setenv("DATABASE_URL", writer)
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", reader)
+    monkeypatch.setenv(RUST_WRITER_CONNECTIONS_ENV_VAR, "4")
+    monkeypatch.delenv(RUST_READER_CONNECTIONS_ENV_VAR, raising=False)
+
+    with with_configured_connection_budget(yaml_limit):
+        assert os.environ["DATABASE_URL"] == f"postgresql://db/app?{writer_query}"
+        assert os.environ["DATABASE_URL_READ_REPLICA"] == f"postgresql://reader/app?{reader_query}"
+        assert rust_connections(os.environ) == connections
+
+    assert os.environ["DATABASE_URL"] == writer
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == reader
+    assert rust_connections(os.environ) == RustConnections(4, 2)
+    assert RUST_READER_CONNECTIONS_ENV_VAR not in os.environ

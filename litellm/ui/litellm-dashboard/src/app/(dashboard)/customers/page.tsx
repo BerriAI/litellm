@@ -24,6 +24,7 @@ import {
   sortCustomerOrganizations,
 } from "./_components/customerOrganizations";
 import { mergeCustomerActivityPages } from "./_components/customerUsageData";
+import { customerUsageTotals } from "./_components/customerUsageTotals";
 import {
   calendarDate,
   CUSTOMER_USAGE_MAX_RANGE_DAYS,
@@ -81,9 +82,10 @@ function CustomerOrganizations() {
   const lastPage = Math.max(0, Math.ceil(sorted.length / pagination.pageSize) - 1);
   const page = Math.min(pagination.pageIndex, lastPage);
   const start = page * pagination.pageSize;
-  const loading = organizations.isPending || monthlyUsage.isPending;
+  const loading = organizations.isPending || monthlyUsage.isPending || usage.isPending;
   const activity = usage.data ?? EMPTY_USAGE;
   const totals = useMemo(() => overviewTotals(activity.metadata, null), [activity]);
+  const usageTotals = useMemo(() => (usage.data ? customerUsageTotals(usage.data.results) : null), [usage.data]);
 
   const onCreated = () => {
     setSearch("");
@@ -92,7 +94,7 @@ function CustomerOrganizations() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
+    <div className="mx-auto w-full max-w-[1920px] space-y-6 px-4 py-6 sm:px-6">
       <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
@@ -133,19 +135,9 @@ function CustomerOrganizations() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-pressed={sorting[0]?.id === "created_at" && sorting[0].desc}
-              onClick={() => onSortingChange([CUSTOMER_ORGANIZATION_TABLE.defaultSort])}
-            >
-              {t("customerPortal.list.newestFirst")}
-            </Button>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> {t("customerPortal.list.create")}
-            </Button>
-          </div>
+          <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" /> {t("customerPortal.list.create")}
+          </Button>
         </div>
         {organizations.isError || monthlyUsage.isError ? (
           <ErrorState
@@ -161,6 +153,7 @@ function CustomerOrganizations() {
             searching={Boolean(search)}
             startDate={startDate}
             endDate={endDate}
+            usageTotals={usageTotals}
           />
         )}
         <DataTablePagination

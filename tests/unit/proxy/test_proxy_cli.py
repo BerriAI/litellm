@@ -4559,7 +4559,23 @@ class TestRustForwardServer:
             run_hypercorn=params["run_hypercorn"] is True,
             run_granian=params["run_granian"] is True,
             tls=None not in (params["ssl_keyfile_path"], params["ssl_certfile_path"]),
+            config=params["config"],
         )
+
+    def test_the_supervisor_sees_the_config_file_python_would_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+        monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+        config: Final = tmp_path / "config.yaml"
+        config.write_text("model_list: []\n")
+        _, described = self._server(["--config", str(config)])
+        assert described.config_path == str(config)
+
+    def test_the_supervisor_sees_no_config_file_when_python_loads_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+        _, described = self._server([])
+        assert described.config_path is None
 
     @pytest.mark.parametrize(
         ("argv", "server", "listener"),

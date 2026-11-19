@@ -24,15 +24,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import (
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
-    LiteLLM_TeamMembership,
     hash_token,
 )
 from litellm.proxy.auth.auth_checks import (
@@ -280,7 +279,7 @@ async def test_get_team_object_warm_cache():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_warm_cache():
+async def test_get_user_object_warm_cache(rust_auth_stores: RustAuthStores):
     """
     Test get_user_object with a warm cache - should hit cache, no DB query.
     """
@@ -294,9 +293,6 @@ async def test_get_user_object_warm_cache():
     tracked_cache = _wrap_cache_with_tracker(cache, tracker)
 
     mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock()
 
     await get_user_object(
         user_id=user_id,
@@ -313,7 +309,7 @@ async def test_get_user_object_warm_cache():
     assert user_id in summary["cache_read_keys"]
 
     # DB should NOT have been called
-    mock_prisma.db.litellm_usertable.find_unique.assert_not_called()
+    assert rust_auth_stores.user.sign_ins == []
 
 
 # ============================================================================
@@ -521,7 +517,7 @@ async def test_full_hot_path_network_count():
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_missing_user_negative_cache():
+async def test_get_user_object_missing_user_negative_cache(rust_auth_stores: RustAuthStores):
     """
     A user_id with no DB row (e.g. the master key's default admin user_id)
     must not trigger a DB query on every request. The first lookup hits the
@@ -532,9 +528,6 @@ async def test_get_user_object_missing_user_negative_cache():
     cache = DualCache(in_memory_cache=InMemoryCache())
 
     mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     for _ in range(3):
         with pytest.raises(ValueError, match="User doesn't exist in db\\."):
@@ -547,11 +540,11 @@ async def test_get_user_object_missing_user_negative_cache():
                 user_id_upsert=False,
             )
 
-    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 1
+    assert len(rust_auth_stores.user.sign_ins) == 1
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_missing_user_rechecks_after_expiry():
+async def test_get_user_object_missing_user_rechecks_after_expiry(rust_auth_stores: RustAuthStores):
     """
     The negative cache must expire: a user created after a miss becomes
     visible once the db_cache_expiry window has passed.
@@ -563,9 +556,6 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
     cache = DualCache(in_memory_cache=InMemoryCache())
 
     mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     with pytest.raises(ValueError, match="User doesn't exist in db\\."):
         await get_user_object(
@@ -576,7 +566,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
             proxy_logging_obj=None,
             user_id_upsert=False,
         )
-    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 1
+    assert len(rust_auth_stores.user.sign_ins) == 1
 
     last_db_access_time[f"user_id:{user_id}"] = (
         None,
@@ -592,7 +582,7 @@ async def test_get_user_object_missing_user_rechecks_after_expiry():
             proxy_logging_obj=None,
             user_id_upsert=False,
         )
-    assert mock_prisma.db.litellm_usertable.find_unique.call_count == 2
+    assert len(rust_auth_stores.user.sign_ins) == 2
 
 
 def test_should_check_db_negative_entry_throttles_then_expires():
