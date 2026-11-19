@@ -1,8 +1,10 @@
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
     AmazonTwelveLabsPegasusConfig,
@@ -112,3 +114,47 @@ def test_transform_response_accepts_null_finish_reason(finish_reason: str | None
 
     assert result.choices[0].message.content == "A cat jumps."
     assert result.choices[0].finish_reason == expected
+
+
+class _VideoSummary(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    duration_seconds: int
+
+
+def _request_with_response_format(response_format: object) -> Mapping[str, object]:
+    config: Final = AmazonTwelveLabsPegasusConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="twelvelabs.pegasus-1-2-v1:0",
+        drop_params=False,
+    )
+    return config.transform_request(
+        model="twelvelabs.pegasus-1-2-v1:0",
+        messages=_make_messages(),
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+def test_pydantic_response_format_is_sent_as_the_json_schema_of_its_fields() -> None:
+    response_format: Final = _request_with_response_format(_VideoSummary)["responseFormat"]
+    assert isinstance(response_format, Mapping)
+    json_schema: Final = response_format["jsonSchema"]
+    assert isinstance(json_schema, Mapping)
+
+    assert set(json_schema["properties"]) == {"title", "duration_seconds"}
+
+
+def test_null_response_format_sends_no_response_format() -> None:
+    request: Final = _request_with_response_format(None)
+
+    assert "responseFormat" not in request
+
+
+def test_response_format_that_is_neither_a_schema_nor_a_model_raises_type_error() -> None:
+    with pytest.raises(TypeError):
+        _request_with_response_format("json")

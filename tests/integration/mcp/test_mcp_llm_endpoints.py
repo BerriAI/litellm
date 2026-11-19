@@ -42,7 +42,6 @@ from openai.types.chat import ChatCompletionMessageParam
 from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
 
-
 pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.mark.shares_worker_state]
 
 
@@ -589,7 +588,11 @@ def _upstream_model(surface: Surface) -> str:
     }[surface]
 
 
-PRICES: Final[Mapping[str, JsonValue]] = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "num_retries": 0}
+PRICES: Final[Mapping[str, JsonValue]] = {
+    "input_cost_per_token": 0.001,
+    "output_cost_per_token": 0.002,
+    "num_retries": 0,
+}
 
 
 @contextmanager
@@ -917,7 +920,9 @@ def test_an_open_server_in_another_gateway_cannot_widen_this_gateways_tools(gate
             register_mcp(scenario, local, "open" + uuid.uuid4().hex[:8], allow_all_keys=True)
             listed, called = official_client_outcomes(shared, key, "/mcp", f"{foreign_alias}-add", ADD)
             assert set(listed.tools) == {
-                f"{foreign_alias}-add", f"{foreign_alias}-multiply", f"{foreign_alias}-fail"
+                f"{foreign_alias}-add",
+                f"{foreign_alias}-multiply",
+                f"{foreign_alias}-fail",
             }, listed.tools
             assert called.ok and called.text == str(ADD["a"] + ADD["b"]), called
             assert [call["body"]["params"]["name"] for call in _peer_add_calls(foreign)] == ["add"]
@@ -1528,6 +1533,7 @@ def test_streaming_responses_blocked_by_a_post_call_guardrail_bills_every_round_
         one_round_rows: Final = _model_rows(
             one_round.headers["x-litellm-call-id"], _logs_a_failure_billing(_price(FIRST_ROUND) + FIXED_MARGIN)
         )
+        assert _statuses(one_round_rows) == ["failure"], one_round_rows
         rig.wire.drain()
         response: Final = rig.send(key, [AUTO], stream=True, guardrails=[STREAM_BLOCK])
         assert STREAM_BLOCK_DETAIL in response.text, response.text

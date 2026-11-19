@@ -24,7 +24,7 @@ from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
-IMAGE_EDIT_BACKEND: Final = "openai/gpt-image-1"
+IMAGE_EDIT_BACKEND: Final = "openai/gpt-image-2.5-sunburst"
 
 _TEST_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0lEQVR42u3PMQ0AAAwDoPo3"

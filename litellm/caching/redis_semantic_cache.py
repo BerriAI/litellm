@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 _CACHE_RESPONSE_ADAPTER: Final[TypeAdapter[str | bytes | None]] = TypeAdapter(
     str | bytes | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+_DECODED_CACHE_VALUE: Final = TypeAdapter(object)
 
 
 class RedisSemanticCache(BaseCache):
@@ -407,10 +408,10 @@ class RedisSemanticCache(BaseCache):
 
         # Convert string representation to Python object
         try:
-            return json.loads(response_text)
+            return _DECODED_CACHE_VALUE.validate_python(json.loads(response_text))
         except json.JSONDecodeError:
             try:
-                return ast.literal_eval(response_text)
+                return _DECODED_CACHE_VALUE.validate_python(ast.literal_eval(response_text))
             except (ValueError, SyntaxError) as e:
                 print_verbose(f"Error parsing cached response: {e}")
                 return None

@@ -1,4 +1,5 @@
 from abc import ABC
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -7,7 +8,7 @@ if TYPE_CHECKING:
 
 class BaseLLMObsOTELAttributes(ABC):
     @staticmethod
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: "Span", kwargs: Mapping[str, object]):
         pass
 
     @staticmethod
