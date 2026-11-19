@@ -4700,6 +4700,36 @@ def _bedrock_counted_request(request_body: bytes) -> str:
     return base64.b64decode(invoke_model.body).decode()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("provider", ["gemini", "bedrock"])
+async def test_nontranslating_provider_count_removes_only_the_first_billing_block(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, provider: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [{"type": "text", "text": text} for text in (billing_a, billing_b, "Be concise.")]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    expected: Final = (
+        [{"text": text} for text in (billing_b, "Be concise.")]
+        if as_blocks
+        else [{"text": billing_b + "\nBe concise."}]
+    )
+    if provider == "bedrock":
+        response, sent = await _count_on_a_bridged_provider_count_api(body, monkeypatch)
+        assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
+        assert json.loads(sent[0].content)["input"]["converse"]["system"] == expected
+        return
+    router: Final = Router(model_list=[_gemini_deployment("gemini-agent", {})])
+    response, sent_bodies = await _count_through_the_messages_endpoint(router, {**body, "model": "gemini-agent"})
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert json.loads(sent_bodies[0])["generateContentRequest"]["systemInstruction"] == {"parts": expected}
+
+
 async def _count_on_a_bridged_provider_count_api(
     request_body: Mapping[str, JsonValue],
     monkeypatch: pytest.MonkeyPatch,

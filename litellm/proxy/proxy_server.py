@@ -15623,6 +15623,7 @@ from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.access_group_repository import AccessGroupRepository
@@ -16801,7 +16802,13 @@ async def _count_request_tokens(
                 deployment=count_deployment,
                 request_model=request.model,
                 tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
-                system=inference_system,
+                system=(
+                    system_without_claude_code_billing_header(inference_system)
+                    if messages_format == "anthropic"
+                    and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)
+                    and not isinstance(provider_counter, (OpenAITokenCounter, MistralTokenCounter))
+                    else inference_system
+                ),
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=None if edited_request is not None else context_edits,
