@@ -3676,8 +3676,9 @@ class TestNativeWebSocketGuardrailMasking:
         assert msg["response"]["model"] == "auth-model"
         assert msg["model"] == "auth-model"
 
+    @pytest.mark.parametrize("event_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
-    async def test_unmask_response_event_completed(self):
+    async def test_unmask_response_event_completed(self, event_type):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(
             request_data={
@@ -3688,7 +3689,7 @@ class TestNativeWebSocketGuardrailMasking:
 
         event = json.dumps(
             {
-                "type": "response.completed",
+                "type": event_type,
                 "response": {
                     "output": [
                         {

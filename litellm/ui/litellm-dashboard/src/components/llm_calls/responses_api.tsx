@@ -308,8 +308,8 @@ export async function makeOpenAIResponsesRequest(
           }
         }
 
-        // Handle usage data at the response.completed event
-        if (event.type === "response.completed" && "response" in event) {
+        // Handle usage data at the response.completed or response.incomplete event
+        if ((event.type === "response.completed" || event.type === "response.incomplete") && "response" in event) {
           const response_obj = event.response;
           const usage = response_obj.usage;
 
