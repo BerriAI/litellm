@@ -30,6 +30,7 @@ from setup.datastore import (
 )
 from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase, Ramp
+from setup.podcpu import CpuSeries
 from setup.ramp import StepReading, render_steps, sustained_rps
 from setup.series import Series
 from setup.telemetry import GatewayTelemetry
@@ -127,7 +128,7 @@ class Observation:
     telemetry_after: GatewayTelemetry | None = None
     peak_connections: int | None = None
     ramp: Ramp | None = None
-    cpu_series: Series[float] | None = None
+    cpu_series: Series[float] | CpuSeries | None = None
     connection_series: Series[int] | None = None
     telemetry_series: Series[GatewayTelemetry] | None = None
 
@@ -286,7 +287,8 @@ class Observation:
 
     def _window_readings(self, start: float, seconds: float, completed: int) -> WindowReadings:
         end: Final = start + seconds
-        cpu: Final = None if self.cpu_series is None else sum(self.cpu_series.between(start, end))
+        cpu_samples: Final = None if self.cpu_series is None else self.cpu_series.between(start, end)
+        cpu: Final = None if cpu_samples is None else sum(cpu_samples)
         conns: Final = None if self.connection_series is None else self.connection_series.between(start, end)
         before: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(start)
         after: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(end)

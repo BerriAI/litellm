@@ -24,8 +24,6 @@ from urllib.parse import quote
 from e2e_http import AuthHeaders, Success, get_external
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
-from setup.series import Sample, Series
-
 SELECTOR_ENV: Final = "E2E_PERF_GATEWAY_POD_SELECTOR"
 _SERVICE_ACCOUNT: Final = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 _INTERVAL_S: Final = 5.0
@@ -99,19 +97,44 @@ def _window(pod: PodMetrics) -> _Window | None:
 
 
 @dataclass(frozen=True, slots=True)
+class CpuSample:
+    start: float
+    end: float
+    value: float
+
+    @property
+    def at(self) -> float:
+        return (self.start + self.end) / 2
+
+
+@dataclass(frozen=True, slots=True)
+class CpuSeries:
+    samples: tuple[CpuSample, ...]
+
+    def between(self, start: float, end: float) -> tuple[float, ...] | None:
+        if not self.samples:
+            return None
+        return tuple(
+            sample.value * (min(end, sample.end) - max(start, sample.start)) / (sample.end - sample.start)
+            for sample in self.samples
+            if min(end, sample.end) > max(start, sample.start)
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _Coverage:
     end: float
-    samples: tuple[Sample[float], ...] = ()
+    samples: tuple[CpuSample, ...] = ()
 
     def extend(self, window: _Window, stop: float) -> _Coverage:
         end: Final = min(window.end, stop)
         if window.start - self.end >= _SOURCE_TIME_RESOLUTION_S or end <= self.end:
             return self
-        sample: Final = Sample(at=(self.end + end) / 2, value=window.rate * (end - self.end))
+        sample: Final = CpuSample(start=self.end, end=end, value=window.rate * (end - self.end))
         return _Coverage(end, (*self.samples, sample))
 
 
-def _integrate(windows: tuple[_Window, ...], start: float, stop: float) -> tuple[Sample[float], ...] | None:
+def _integrate(windows: tuple[_Window, ...], start: float, stop: float) -> tuple[CpuSample, ...] | None:
     coverage: Final = reduce(
         lambda acc, window: acc.extend(window, stop), sorted(windows, key=lambda w: w.end), _Coverage(start)
     )
@@ -119,8 +142,8 @@ def _integrate(windows: tuple[_Window, ...], start: float, stop: float) -> tuple
 
 
 class GatewayCpuSampler:
-    """Integrate nonoverlapping source windows for every selected pod. Series values carry the midpoint
-    of their contributing interval, not the time the runner happened to fetch a response."""
+    """Integrate nonoverlapping source windows for every selected pod, retaining interval boundaries
+    so ramp steps receive only their share of each window's CPU."""
 
     def __init__(
         self,
@@ -158,10 +181,10 @@ class GatewayCpuSampler:
         return sum(sample.value for sample in samples) if samples is not None else None
 
     @property
-    def series(self) -> Series[float]:
-        return Series(samples=self._finished_samples() or ())
+    def series(self) -> CpuSeries:
+        return CpuSeries(samples=self._finished_samples() or ())
 
-    def _finished_samples(self) -> tuple[Sample[float], ...] | None:
+    def _finished_samples(self) -> tuple[CpuSample, ...] | None:
         if self._ended_at is None:
             return None
         self._thread.join()
@@ -185,7 +208,7 @@ class GatewayCpuSampler:
         windows: Final = tuple(window for pod in metrics.items if (window := _window(pod)) is not None)
         self._windows = tuple(dict.fromkeys((*self._windows, *windows)))
 
-    def _covered_samples(self) -> tuple[Sample[float], ...] | None:
+    def _covered_samples(self) -> tuple[CpuSample, ...] | None:
         start: Final = self._started_at
         stop: Final = self._ended_at
         if start is None or stop is None or stop <= start or not self._pods or self._population_changed:

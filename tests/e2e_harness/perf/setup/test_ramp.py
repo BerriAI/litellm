@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Final
 
 from cases.small_bodies_5rps import CASE
@@ -9,12 +10,81 @@ from memory_readings import RssCapture
 from setup.observe import Observation, evaluate, junit_properties
 from setup.performance_test_case import Limit, Ramp, ramped
 from setup.plan import build_plan
+from setup.podcpu import GatewayCpuSampler, PodMetricsList
 from setup.ramp import StepReading, send_offsets, step_properties, sustained_rps
 from setup.series import Sample, Series
 from setup.telemetry import GatewayTelemetry, HistogramTotals
 from setup.wire import WireRecord
 
 NO_RSS: Final = RssCapture(readings=(), failures=())
+
+
+def _cpu_metrics(end: float) -> PodMetricsList:
+    return PodMetricsList.model_validate(
+        {
+            "items": [
+                {
+                    "metadata": {"name": "gateway"},
+                    "timestamp": datetime.fromtimestamp(1000.0 + end, tz=UTC),
+                    "window": "20s",
+                    "containers": [{"usage": {"cpu": "2"}}],
+                }
+            ]
+        }
+    )
+
+
+def test_ramp_cpu_windows_are_split_by_overlap_and_missing_coverage_stays_missing() -> None:
+    ramp: Final = Ramp(first_rps=1.0, last_rps=2.0, step_rps=1.0, step_seconds=10.0, held_p99_seconds=5.0)
+    records: Final = tuple(
+        _record(seq, 1000.0 + (seq - 1 if seq <= 10 else 10.0 + (seq - 11) / 2), 0.1) for seq in range(1, 31)
+    )
+    responses: Final = iter((_cpu_metrics(0.0), _cpu_metrics(20.0)))
+    times: Final = iter((1000.0, 1020.0))
+    sampler: Final = GatewayCpuSampler(
+        "gateway",
+        "perf",
+        "token",
+        "ca.pem",
+        read_metrics=lambda: next(responses, None),
+        clock=lambda: next(times),
+        settle_timeout_s=0.0,
+    )
+    sampler.start()
+    sampler.stop()
+    observation: Final = Observation(
+        records=records,
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=NO_RSS,
+        rss_after=NO_RSS,
+        wall_seconds=20.0,
+        ramp=ramp,
+        gateway_cpu_seconds=sampler.seconds,
+        cpu_series=sampler.series,
+    )
+    first, second = observation.steps()
+
+    assert sampler.seconds == 40.0
+    assert first.cpu_seconds_per_request == 2.0
+    assert second.cpu_seconds_per_request == 1.0
+    assert sampler.series.between(1005.0, 1015.0) == (20.0,)
+    assert sampler.series.between(990.0, 1000.0) == ()
+    assert sampler.series.between(1020.0, 1030.0) == ()
+
+    missing_times: Final = iter((1000.0, 1020.0))
+    missing: Final = GatewayCpuSampler(
+        "gateway",
+        "perf",
+        "token",
+        "ca.pem",
+        read_metrics=lambda: None,
+        clock=lambda: next(missing_times),
+        settle_timeout_s=0.0,
+    )
+    missing.start()
+    missing.stop()
+    assert all(step.cpu_seconds_per_request is None for step in replace(observation, cpu_series=missing.series).steps())
 
 
 def test_send_offsets_put_each_step_s_requests_inside_its_window_in_plan_order() -> None:
