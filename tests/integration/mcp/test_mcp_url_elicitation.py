@@ -276,9 +276,12 @@ def _output_guardrail(gateway: Gateway, keyword: str, action: Literal["MASK", "B
         assert deleted.status_code == 200, deleted.text
 
 
-def _addressed_tools(email: str) -> tuple[ScriptedTool, ScriptedTool]:
+def _addressed_tools(email: str, hinted: str | None = None) -> tuple[ScriptedTool, ScriptedTool]:
     return (
-        ScriptedTool("consent", lambda params: JsonRpcFailure(_addressed_elicitation(_nonce(params), email, email))),
+        ScriptedTool(
+            "consent",
+            lambda params: JsonRpcFailure(_addressed_elicitation(_nonce(params), email, hinted or email)),
+        ),
         ScriptedTool("whoami", lambda _: text_result(f"Signed in as {email}.")),
     )
 
@@ -723,3 +726,75 @@ def test_held_url_elicitation_reply_does_not_block_other_calls_and_is_relayed_wh
             assert released.error and json.loads(released.error) == _elicitation("held"), released.raw
         finally:
             gate.set()
+
+
+def _proxy_call(gateway: Gateway, key: str, name: str, arguments: JsonRpc) -> Mapping[str, object]:
+    reply: Final = gateway.client.post(
+        "/mcp/proxy",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}},
+        headers={"x-litellm-api-key": key, "Accept": "application/json, text/event-stream"},
+    )
+    assert reply.status_code == 200, reply.text
+    body: Final = _parse_rpc_body(reply)
+    assert body is not None, reply.text
+    return body
+
+
+def _proxy_tool_id(gateway: Gateway, key: str, name: str) -> str:
+    found: Final = _proxy_call(gateway, key, "search_tools", {"query": name})
+    hits: Final = json.loads(found["result"]["content"][0]["text"])
+    return next(str(hit["tool_id"]) for hit in hits if hit["name"] == name)
+
+
+def test_url_elicitation_through_the_proxy_call_tool_is_relayed_and_logged_as_one_failure(gateway: Gateway) -> None:
+    with _granted(gateway, _consent_tool(), _echo_tool()) as (upstream, alias, _, key):
+        consent: Final = _proxy_tool_id(gateway, key, f"{alias}-consent")
+        echo: Final = _proxy_tool_id(gateway, key, f"{alias}-echo")
+        nonce: Final = uuid.uuid4().hex
+        relayed: Final = _proxy_call(gateway, key, "call_tool", {"tool_id": consent, "arguments": {"nonce": nonce}})
+        assert relayed == {"jsonrpc": "2.0", "id": 1, "error": _elicitation(nonce)}, relayed
+        control: Final = _proxy_call(gateway, key, "call_tool", {"tool_id": echo, "arguments": {"nonce": "control"}})
+        assert control["result"]["content"][0]["text"] == "control", control
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT status FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s',
+                (sha256(key.encode()).hexdigest(), "call_mcp_tool"),
+            ),
+            lambda found: "success" in [row["status"] for row in found],
+            seconds=70,
+            return_last_on_timeout=True,
+        )
+        assert sorted(str(row["status"]) for row in rows) == ["failure", "success"], rows
+        assert _upstream_nonces(upstream) == sorted(["control", nonce])
+
+
+def test_failure_log_of_a_masked_elicitation_never_stores_the_unmasked_message(gateway: Gateway) -> None:
+    email: Final = f"john.doe.{uuid.uuid4().hex[:8]}@example.com"
+    with (
+        _output_guardrail(gateway, email, "MASK"),
+        _granted(gateway, *_addressed_tools(email, "none")) as (_, alias, _identity, key),
+    ):
+        caller: Final = McpCaller(gateway, key, "mcp", alias)
+        control: Final = eventually(
+            lambda: caller.call(f"{alias}-whoami", {}),
+            lambda outcome: outcome.text == f"Signed in as {REDACTED}.",
+            seconds=40,
+            return_last_on_timeout=True,
+        )
+        assert control.text == f"Signed in as {REDACTED}.", control.raw
+        nonce: Final = uuid.uuid4().hex
+        outcome: Final = caller.call(f"{alias}-consent", {"nonce": nonce})
+        assert outcome.error is not None and json.loads(outcome.error) == _addressed_elicitation(
+            nonce, REDACTED, "none"
+        ), outcome.raw
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT metadata::text AS logged FROM "LiteLLM_SpendLogs"'
+                " WHERE api_key = %s AND call_type = %s AND status = %s",
+                (sha256(key.encode()).hexdigest(), "call_mcp_tool", "failure"),
+            ),
+            lambda found: len(found) >= 1,
+            seconds=70,
+            return_last_on_timeout=True,
+        )
+        assert [(REDACTED in str(row["logged"]), email in str(row["logged"])) for row in rows] == [(True, False)], rows

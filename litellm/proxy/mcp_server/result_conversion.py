@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from typing import Final, Protocol, TypeAlias, TypeVar
 
 from mcp import MCPError
@@ -78,6 +78,18 @@ def error_text_result(exc: Exception) -> CallToolResult:
 
 def is_url_elicitation_required(exc: BaseException) -> bool:
     return isinstance(exc, MCPError) and exc.error.code == URL_ELICITATION_REQUIRED
+
+
+_ToolResult: Final = TypeVar("_ToolResult")
+
+
+async def url_elicitation_as_error_result(execution: Awaitable[_ToolResult]) -> _ToolResult | CallToolResult:
+    try:
+        return await execution
+    except MCPError as error:
+        if is_url_elicitation_required(error):
+            return error_text_result(error)
+        raise
 
 
 def to_call_tool_result(outcome: ToolOutcome, compat: WireCompat) -> CallToolResult | InputRequiredResult:

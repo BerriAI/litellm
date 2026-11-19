@@ -2681,7 +2681,7 @@ async def _relay_guarded_url_elicitation(
             }
             if data is not None and replaced
             else error.error.data,
-        ) from error
+        ) from None
 
 
 def _guarded_progress_callback(

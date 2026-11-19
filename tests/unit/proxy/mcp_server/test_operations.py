@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 from collections.abc import Callable, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -1282,6 +1283,7 @@ async def test_url_elicitation_output_guardrail_rewrites_only_message_strings_an
         await operations._relay_guarded_url_elicitation(
             refuse(), logging_obj=None, original_auth=None, guardrail_auth=None, request_data={}
         )
+    assert "consent for a" not in "".join(traceback.format_exception(raised.value))
     assert raised.value.error.model_dump(exclude_none=True) == {
         "code": URL_ELICITATION_REQUIRED,
         "message": "CONSENT FOR A",

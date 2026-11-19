@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from traceback import walk_tb
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from uuid import uuid4
 
 import anyio
@@ -53,8 +53,7 @@ from litellm.proxy.mcp_server.oauth_utils import (  # noqa: F401  # legacy modul
 from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
-    error_text_result,
-    is_url_elicitation_required,
+    url_elicitation_as_error_result,
 )
 from litellm.proxy.mcp_server.ui_session_utils import (
     acting_user_auth,
@@ -334,16 +333,6 @@ if MCP_AVAILABLE:
             request_path=request.scope.get("_original_path") or request.url.path,
         )
 
-    _ToolResult: Final = TypeVar("_ToolResult")
-
-    async def _url_elicitation_as_error_result(execution: Awaitable[_ToolResult]) -> "_ToolResult | CallToolResult":
-        try:
-            return await execution
-        except Exception as e:
-            if is_url_elicitation_required(e):
-                return error_text_result(e)
-            raise
-
     async def _handle_virtual_mcp_tool(
         request: Request,
         data: dict[str, Any],
@@ -435,7 +424,7 @@ if MCP_AVAILABLE:
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
                 incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             )
-            result: Final = await _url_elicitation_as_error_result(virtual_execution)
+            result: Final = await url_elicitation_as_error_result(virtual_execution)
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
             await _safe_fire_mcp_tool_call_failure_logging(
@@ -1303,7 +1292,7 @@ if MCP_AVAILABLE:
             incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             guardrail_auth=guardrail_auth,
         )
-        return await _url_elicitation_as_error_result(execution), tool_start_time
+        return await url_elicitation_as_error_result(execution), tool_start_time
 
     async def _rest_tool_call_server_and_auth(
         user_api_key_auth: UserAPIKeyAuth,
