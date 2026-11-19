@@ -95,6 +95,7 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
+    S3_SHUTDOWN_FLUSH_TIMEOUT_SECONDS,
     SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
@@ -1487,6 +1488,45 @@ async def _flush_request_accumulators(prisma: PrismaClient) -> None:
     await flush_request_errors(prisma, request_error_accumulator)
 
 
+async def _drain_s3_v2_loggers_on_shutdown() -> None:
+    if "litellm.integrations.s3_v2" not in sys.modules:
+        return
+    try:
+        from litellm.integrations.s3_v2 import collect_active_s3_v2_loggers, flush_s3_v2_loggers
+
+        budget: Final = max(0.0, float(S3_SHUTDOWN_FLUSH_TIMEOUT_SECONDS))
+        loop: Final = asyncio.get_running_loop()
+        deadline: Final = loop.time() + budget
+        producer_budget: Final = budget * 0.5
+
+        await drain_logging_tasks(timeout=producer_budget)
+        if GLOBAL_LOGGING_WORKER.pending_count > 0:
+            worker_timeout: Final = max(0.0, min(producer_budget, deadline - loop.time()))
+            try:
+                await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=worker_timeout)
+            except asyncio.TimeoutError:
+                verbose_proxy_logger.warning(
+                    "Timed out draining %d pending logging worker callback(s) before S3 v2 shutdown flush",
+                    GLOBAL_LOGGING_WORKER.pending_count,
+                )
+
+        active_loggers: Final = collect_active_s3_v2_loggers()
+        if not active_loggers:
+            return
+
+        flush_timeout: Final = max(0.0, deadline - loop.time())
+        flushed: Final = await flush_s3_v2_loggers(timeout_seconds=flush_timeout, loggers=active_loggers)
+        if flushed:
+            verbose_proxy_logger.info("S3 v2 loggers flushed (%d instance(s))", len(active_loggers))
+        else:
+            verbose_proxy_logger.warning(
+                "S3 v2 shutdown flush incomplete: one or more S3 loggers failed to upload or did not finish within %.1fs",
+                flush_timeout,
+            )
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the S3 flush fails
+        verbose_proxy_logger.exception("Error flushing S3 v2 loggers on shutdown: %s", e)
+
+
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
@@ -1498,6 +1538,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         await _drain_audit_tasks_on_shutdown()
 
     await drain_post_call_redis_batches()
+    await _drain_s3_v2_loggers_on_shutdown()
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
