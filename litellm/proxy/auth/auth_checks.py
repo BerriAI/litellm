@@ -2580,7 +2580,10 @@ async def _load_model_access_group_registry(
     """The set of model access group names that have a row in ``LiteLLM_ModelAccessGroupBudgetTable``."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        return await ModelAccessGroupBudgetRepository(prisma_client).names(MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1)
+        return await bounded_db_lookup(
+            ModelAccessGroupBudgetRepository(prisma_client).names(MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1),
+            name="model_access_group_registry",
+        )
 
     return await _load_bounded_registry(
         cache_key=model_access_group_registry_cache_key(),

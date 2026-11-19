@@ -194,17 +194,17 @@ def _upstream_chats(gateway: Gateway, provider_model: str) -> int:
     return sum(object_value(object_value(entry)["body"]).get("model") == provider_model for entry in observed)
 
 
-def _managed(scenario: Scenario, **limits: JsonValue) -> Deployment:
+def _managed(scenario: Scenario, provider_model: str = "", **limits: JsonValue) -> Deployment:
     identity: Final = f"ws-admission-{uuid.uuid4().hex}"
-    provider_model: Final = f"ws-managed-{uuid.uuid4().hex}"
+    upstream_model: Final = provider_model or f"ws-managed-{uuid.uuid4().hex}"
     name: Final = scenario.model(
         model_info={"id": identity},
-        model=f"{MANAGED_PROVIDER}/{provider_model}",
+        model=f"{MANAGED_PROVIDER}/{upstream_model}",
         input_cost_per_token=INPUT_RATE,
         output_cost_per_token=OUTPUT_RATE,
         **limits,
     )
-    return Deployment(name, identity, lambda: _upstream_chats(scenario.gateway, provider_model))
+    return Deployment(name, identity, lambda: _upstream_chats(scenario.gateway, upstream_model))
 
 
 def _socket_url(gateway: Gateway, model: str) -> str:
@@ -466,6 +466,137 @@ def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_the_socket_serv
         for answered in failed:
             recorded = _assert_logged_as_its_own_failure(by_text[answered.text], answered, deployment)
             assert fault in string_value(recorded["error_message"]), recorded
+
+
+UPSTREAM_FAILURES_SCRIPTED: Final = 30
+
+
+def _script_upstream_failures(gateway: Gateway, provider_model: str, status: int) -> None:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as upstream:
+        upstream.post(
+            f"/__scripts/{provider_model}", json={"statuses": [status] * UPSTREAM_FAILURES_SCRIPTED}
+        ).raise_for_status()
+
+
+def _clear_upstream_script(gateway: Gateway, provider_model: str) -> None:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as upstream:
+        upstream.delete(f"/__scripts/{provider_model}").raise_for_status()
+
+
+def _assert_turn_ended_by_one_error_frame(received: tuple[dict[str, JsonValue], ...], status: int) -> None:
+    assert [event.get("type") for event in received].count("error") == 1, received
+    assert received[-1].get("type") == "error", received
+    assert received[-1].get("status") == status, received
+
+
+def _assert_completed_without_error(received: tuple[dict[str, JsonValue], ...]) -> None:
+    assert "error" not in [event.get("type") for event in received], received
+    completed(received)
+
+
+@pytest.mark.parametrize("status", (503, 429, 400))
+def test_a_managed_turn_whose_provider_call_fails_gets_an_error_frame_with_the_provider_status(
+    faulting: Gateway, status: int
+) -> None:
+    """Regression: Codex ignores an error frame without a numeric status and hangs on the open socket."""
+    with faulting.scenario() as scenario:
+        provider_model: Final = f"ws-managed-{uuid.uuid4().hex}"
+        deployment: Final = _managed(scenario, provider_model)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                first: Final = await _say(connection, deployment.name)
+                await asyncio.to_thread(_script_upstream_failures, faulting, provider_model, status)
+                failed: Final = await _say(connection, deployment.name)
+                await asyncio.to_thread(_clear_upstream_script, faulting, provider_model)
+                return first, failed, await _say(connection, deployment.name)
+
+        first, failed, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        _assert_turn_ended_by_one_error_frame(failed, status)
+        _assert_completed_without_error(after)
+
+
+def test_a_managed_socket_frame_that_is_not_json_gets_a_400_error_frame_and_the_next_turn_completes(
+    faulting: Gateway,
+) -> None:
+    """Regression: the malformed-frame error must carry status 400 so the client stops waiting on it."""
+    with faulting.scenario() as scenario:
+        deployment: Final = _managed(scenario)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                first: Final = await _say(connection, deployment.name)
+                rejected: Final = await turn(connection, f"not json {uuid.uuid4().hex}")
+                return first, rejected, await _say(connection, deployment.name)
+
+        first, rejected, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        _assert_turn_ended_by_one_error_frame(rejected, 400)
+        _assert_completed_without_error(after)
+        assert deployment.forwarded_turns() == 2
+
+
+def test_managed_turns_that_succeed_stream_from_created_to_completed_with_no_error_frame(faulting: Gateway) -> None:
+    """Guard: successful managed turns keep their frames."""
+    with faulting.scenario() as scenario:
+        deployment: Final = _managed(scenario)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                return (await _say(connection, deployment.name), await _say(connection, deployment.name))
+
+        turns: Final = asyncio.run(session())
+
+        for received in turns:
+            _assert_completed_without_error(received)
+            assert "response.created" in [event.get("type") for event in received], received
+        assert deployment.forwarded_turns() == 2
+
+
+def _provider_error_on_second_turn(error: Mapping[str, JsonValue]) -> Script:
+    def script(response_id: str) -> tuple[dict[str, JsonValue], ...]:
+        if response_id == "resp_peer_2":
+            return (dict(error),)
+        return events(f"resp_{uuid.uuid4().hex}", "seven")
+
+    return script
+
+
+def test_a_native_turn_the_provider_fails_relays_the_provider_error_frame_unchanged(
+    faulting: Gateway, cert: tuple[Path, Path]
+) -> None:
+    """Guard: the native relay forwards the provider's own error frame as is."""
+    error: Final = MappingProxyType(
+        {
+            "type": "error",
+            "status": 503,
+            "error": {"type": "server_error", "code": "server_is_overloaded", "message": f"busy {uuid.uuid4().hex}"},
+        }
+    )
+    with responses_peer(cert, _provider_error_on_second_turn(error)) as peer, faulting.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        key: Final = scenario.key(models=[deployment.name])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                return (
+                    await _say(connection, deployment.name),
+                    await _say(connection, deployment.name),
+                    await _say(connection, deployment.name),
+                )
+
+        first, failed, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        assert failed == (dict(error),), failed
+        _assert_completed_without_error(after)
+        assert deployment.forwarded_turns() == 3
 
 
 def test_a_turn_still_streaming_when_the_next_turns_check_fails_completes_and_is_billed(

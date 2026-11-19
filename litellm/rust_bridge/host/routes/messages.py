@@ -15,7 +15,13 @@ import socket
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
+from types import MappingProxyType
+from typing import (
+    Final,
+    TypeAlias,
+    TypeVar,
+    cast,  # noqa: TID251  # narrows native payloads to public TypedDicts
+)
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
@@ -649,6 +655,7 @@ _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 _INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
+_GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str])
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
     Callable[[object], object], handler.validate_anthropic_api_metadata
 )
@@ -669,6 +676,12 @@ _HTTPX_DNS_ERRNO: Final = {
     "Name or service not known": socket.EAI_NONAME,
     "Temporary failure in name resolution": socket.EAI_AGAIN,
 }
+# rustls' text for a TLS peer that closed without `close_notify`, which is how a provider reached
+# through a CONNECT tunnel closes before sending headers.
+_TLS_CLOSED_WITHOUT_NOTIFY: Final = (
+    "peer closed connection without sending TLS close_notify: "
+    "https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+)
 _TRANSPORT_TIMEOUTS: Final[Mapping[object, type[httpx.TimeoutException]]] = {
     "Connection": httpx.ConnectTimeout,
     "Read": httpx.ReadTimeout,
@@ -707,6 +720,11 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
         return _public_provider_error(rejection, error, request, request_provider)
     if getattr(error, "messages_unsupported_param", False):
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+        attributed_model: Final = getattr(error, "messages_unsupported_param_model", None)
+        if isinstance(attributed_model, str):
+            return litellm.UnsupportedParamsError(
+                message=str(error), llm_provider=request_provider, model=attributed_model
+            )
         return litellm.UnsupportedParamsError(message=str(error))
     named_provider: Final = optional_str(getattr(error, "messages_provider", None))
     return litellm.BadRequestError(
@@ -961,6 +979,37 @@ def _aiohttp_connect_failure(url: httpx.URL, port: int, request: Mapping[str, ob
     return f"Cannot connect to host {url.host}:{port} ssl:{'default' if ssl_config is True else ssl_config} [{reason}]"
 
 
+@functools.cache
+def _google_login_failure_classes() -> Mapping[str, _ERROR_CLASS]:
+    """The classes a Vertex AI login Rust could not complete may raise, by the name Rust gives."""
+    from google.auth import exceptions as google_exceptions
+
+    return MappingProxyType(
+        {
+            "ValueError": ValueError,
+            "OSError": OSError,
+            "google.auth.exceptions.DefaultCredentialsError": google_exceptions.DefaultCredentialsError,
+            "google.auth.exceptions.MalformedError": google_exceptions.MalformedError,
+            "google.auth.exceptions.InvalidValue": google_exceptions.InvalidValue,
+            "google.auth.exceptions.InvalidResource": google_exceptions.InvalidResource,
+            "google.auth.exceptions.RefreshError": google_exceptions.RefreshError,
+            "google.auth.exceptions.TransportError": google_exceptions.TransportError,
+            "google.auth.exceptions.OAuthError": google_exceptions.OAuthError,
+        }
+    )
+
+
+def _google_login_failure(error: Exception) -> Exception | None:
+    """The exception Python's `VertexBase.load_auth` raises for a Vertex AI login Rust could not
+    complete, from the class and text Rust names."""
+    try:
+        name, message = _GOOGLE_LOGIN_FAILURE.validate_python(getattr(error, "messages_google_login_failure", None))
+    except ValidationError:
+        return None
+    login_failure: Final = _google_login_failure_classes().get(name)
+    return None if login_failure is None else login_failure(message)
+
+
 def _transport_failure(
     error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
 ) -> str | None:
@@ -968,26 +1017,28 @@ def _transport_failure(
     body_cut: Final = getattr(error, "messages_body_cut", None)
     if body_cut is not None:
         return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
-    native: Final = str(error)
-    if native == _UNSENDABLE_HEADER and request_provider not in _MAIN_NATIVE_ERROR_PROVIDERS:
+    rust_error: Final = str(error)
+    if rust_error == _UNSENDABLE_HEADER and request_provider not in _MAIN_NATIVE_ERROR_PROVIDERS:
         # httpx names the header value in its text, which may be a credential.
-        return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else native
-    if native == _TOO_MANY_REDIRECTS:
+        return _AIOHTTP_UNSENDABLE_HEADER if http_transport.uses_aiohttp_transport() else rust_error
+    if rust_error == _TOO_MANY_REDIRECTS:
         return "Exceeded maximum allowed redirects."
-    if native.startswith(_SEND_FAILED):
-        reset: Final = native.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
-        closed: Final = native.endswith("connection closed before message completed")
+    if rust_error.startswith(_SEND_FAILED):
+        reset: Final = rust_error.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
+        closed: Final = rust_error.endswith("connection closed before message completed") or (
+            request_provider == "vertex_ai" and rust_error.endswith(_TLS_CLOSED_WITHOUT_NOTIFY)
+        )
         if http_transport.uses_aiohttp_transport():
             if reset:
                 return str(ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET)))
-            return "Server disconnected" if closed else native
+            return "Server disconnected" if closed else rust_error
         if reset:
             return ""
-        return "Server disconnected without sending a response." if closed else native
-    if not native.startswith(_UNREACHABLE):
+        return "Server disconnected without sending a response." if closed else rust_error
+    if not rust_error.startswith(_UNREACHABLE):
         return None
     connect: Final = _connect_failure(error, request, request_provider, secrets_read)
-    return native if connect is None else connect
+    return rust_error if connect is None else connect
 
 
 def _upstream_failure(
@@ -1238,6 +1289,9 @@ def map_failure(
             ),
             request_provider,
         )
+    google_login_failure: Final = _google_login_failure(error) if request_provider == "vertex_ai" else None
+    if google_login_failure is not None:
+        return map_token_failure(_raised(google_login_failure), request, request_provider, asynchronous)
     credential_failure: Final = (
         _bedrock_credential_failure(error, request, request_provider)
         if request_provider in ("bedrock", "bedrock_mantle")
@@ -1879,6 +1933,11 @@ def unencodable_header(value: bytes, received: bool) -> Exception:
     except UnicodeEncodeError as unencodable:
         return unencodable
     return ValueError(text)
+
+
+def unsendable_url(message: str) -> Exception:
+    """The `InvalidURL` Python's HTTP client raises for a URL it will not send, with the text Rust wrote."""
+    return httpx.InvalidURL(message)
 
 
 def _sent_url(request: Mapping[str, object], url: str) -> str:

@@ -1,4 +1,5 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
+import { useGrantedApps } from "@/app/(dashboard)/apps/_components/useGrantedApps";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { usePathname, useRouter } from "next/navigation";
@@ -62,6 +63,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
   const router = useRouter();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
+  const { isProxyAdmin, opensCustomerManagement } = useGrantedApps();
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = isWorkspaceRoute(normalizedPathname, CHAT);
@@ -83,7 +85,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
 
   const selectMode = (key: string) => {
     if (key === CUSTOMER_PORTAL) {
-      router.push(uiHref("customers"));
+      router.push(uiHref(isProxyAdmin ? "customers" : "apps"));
       return;
     }
     if (mode === CUSTOMER_PORTAL && key === GATEWAY) {
@@ -153,7 +155,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
       ),
       onClick: () => selectMode(e.key),
     })),
-    customerPortalItem,
+    ...[customerPortalItem].filter(() => opensCustomerManagement),
     chatItem,
     {
       key: LENS,

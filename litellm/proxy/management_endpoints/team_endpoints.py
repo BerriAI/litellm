@@ -2056,6 +2056,7 @@ async def new_team(
         data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
             data_json=data_json,
             prisma_client=prisma_client,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
 
         if TeamMemberBudgetHandler.should_create_budget(
@@ -2992,6 +2993,7 @@ async def update_team(
             updated_kv = await handle_update_object_permission(
                 data_json=updated_kv,
                 existing_team_row=existing_team_row,
+                can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             )
 
         # update team metadata fields
@@ -3148,7 +3150,9 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_tea
         updated_kv["budget_limits"] = json.dumps(initialized_windows)
 
 
-async def handle_update_object_permission(data_json: dict, existing_team_row: _ObjectPermissionRow) -> dict:
+async def handle_update_object_permission(
+    data_json: dict, existing_team_row: _ObjectPermissionRow, can_grant_apps: bool = False
+) -> dict:
     """
     Handle the update of object permission for a team.
 
@@ -3162,6 +3166,7 @@ async def handle_update_object_permission(data_json: dict, existing_team_row: _O
         data_json=data_json,
         existing_object_permission_id=existing_team_row.object_permission_id,
         prisma_client=prisma_client,
+        can_grant_apps=can_grant_apps,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
