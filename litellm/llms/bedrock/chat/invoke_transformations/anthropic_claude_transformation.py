@@ -75,9 +75,9 @@ def _anthropic_config_max_tokens() -> int | None:
 def _bedrock_tool_search_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
     match tool.get("type"):
         case "tool_search_tool_regex_20251119":
-            return {**tool, "type": "tool_search_tool_regex", "name": tool.get("name", "tool_search_tool_regex")}
+            return {**tool, "type": "tool_search_tool_regex"}
         case "tool_search_tool_bm25_20251119":
-            return {**tool, "type": "tool_search_tool_bm25", "name": tool.get("name", "tool_search_tool_bm25")}
+            return {**tool, "type": "tool_search_tool_bm25"}
         case _:
             return tool
 
