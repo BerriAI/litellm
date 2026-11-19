@@ -1,7 +1,7 @@
 """The litellm ``Usage`` a finished call's response reports, whatever shape the provider sent it in."""
 
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict, assert_never
@@ -34,17 +34,16 @@ from litellm.types.utils import (
 )
 
 
+def _reported_usage(completion_response: object) -> object:
+    if isinstance(completion_response, dict):
+        return completion_response.get("usage")
+    return getattr(completion_response, "get", lambda x: None)("usage")
+
+
 def get_usage_object(
     completion_response: object,
 ) -> Usage | None:
-    usage_obj: Final = cast(
-        Usage | ResponseAPIUsage | dict | BaseModel,
-        (
-            completion_response.get("usage")
-            if isinstance(completion_response, dict)
-            else getattr(completion_response, "get", lambda x: None)("usage")
-        ),
-    )
+    usage_obj: Final = _reported_usage(completion_response)
 
     if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
         return None if completion_response.usage is None else decisions_usage(completion_response.usage)
@@ -64,22 +63,16 @@ def get_usage_object(
         and ResponseAPILoggingUtils.is_response_api_usage(usage_obj)
     ):
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
-    elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj):
-        return TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
-            cast(
-                TranscriptionUsageDurationObject | TranscriptionUsageTokensObject,
-                usage_obj,
-            )
-        )
+    elif isinstance(usage_obj, (TranscriptionUsageDurationObject, TranscriptionUsageTokensObject)):
+        return TranscriptionUsageObjectTransformation.transform_transcription_usage_object(usage_obj)
     elif isinstance(usage_obj, dict) and InteractionsUsageObjectTransformation.is_interactions_usage_object(usage_obj):
         return InteractionsUsageObjectTransformation.transform_interactions_usage_object(usage_obj)
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
         return usage_from_model(usage_obj)
-    else:
-        verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
-        return None
+    verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
+    return None
 
 
 class _DumpedUsageFields(TypedDict, total=False, extra_items=object):

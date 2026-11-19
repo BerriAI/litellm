@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, overload
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -363,12 +363,13 @@ class GroqChatConfig(OpenAILikeChatConfig):
         """
         Ensure groq service tier is OpenAI compatible.
         """
-        if original_service_tier is None:
-            return "auto"
-        if original_service_tier not in ["auto", "default", "flex"]:
-            return "auto"
-
-        return cast(Literal["auto", "default", "flex"], original_service_tier)
+        match original_service_tier:
+            case "default":
+                return "default"
+            case "flex":
+                return "flex"
+            case _:
+                return "auto"
 
 
 class GroqChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
