@@ -163,7 +163,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     resolve_customer_request_usage,
     strip_client_guardrail_information,
 )
-from litellm.proxy.pass_through_endpoints.vector_store_passthrough import (
+from litellm.proxy.pass_through_endpoints.vector_store_fallbacks import (
     PASSTHROUGH_FALLBACK_STATE,
     VectorStorePassthroughPlan,
     send_with_vector_store_fallbacks,

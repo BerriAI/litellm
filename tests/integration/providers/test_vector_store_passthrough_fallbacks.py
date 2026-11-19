@@ -10,6 +10,9 @@ from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, gateway_from_environment
 from tests.integration._support.process import owned_proxy
+from tests.integration._support.forward_proxy import tunnelling_forward_proxy
+from tests.integration._support.tls import server_context, write_self_signed_cert
+from tests.integration._support.vertex import service_account_json
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 PROVIDERS: Final = ("azure_ai", "milvus", "opensearch")
@@ -72,6 +75,19 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
                     },
                 )
                 assert ordinary.status_code == 200, ordinary.text
+        for provider in ("azure_ai", "opensearch"):
+            registered_get: Final = gateway.request(
+                "POST",
+                "/v1/indexes",
+                {
+                    "index_name": f"get-fallback-{provider}",
+                    "litellm_params": {
+                        "vector_store_name": f"get-primary-{provider}",
+                        "vector_store_index": "physical-index",
+                    },
+                },
+            )
+            assert registered_get.status_code == 200, registered_get.text
         configuration: Final = yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
         configuration["router_settings"] = {"cooldown_time": 60}
         configuration["vector_store_registry"] = [
@@ -95,6 +111,23 @@ def native_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
             }
             for provider in PROVIDERS
             for role in ("primary", "backup")
+        ]
+        configuration["vector_store_registry"] += [
+            {
+                **entry,
+                "vector_store_name": "get-" + entry["vector_store_name"],
+                "litellm_params": {
+                    **entry["litellm_params"],
+                    "vector_store_id": "get-" + entry["litellm_params"]["vector_store_id"],
+                    **(
+                        {"fallbacks": ["get-" + entry["litellm_params"]["fallbacks"][0]]}
+                        if "fallbacks" in entry["litellm_params"]
+                        else {}
+                    ),
+                },
+            }
+            for entry in configuration["vector_store_registry"]
+            if entry["litellm_params"]["custom_llm_provider"] in ("azure_ai", "opensearch")
         ]
         config: Final = directory / "config.yaml"
         config.write_text(yaml.safe_dump(configuration))
@@ -202,3 +235,110 @@ def test_all_cooled_native_stores_return_retry_after_without_upstream_calls(
     assert int(cooled.headers["retry-after"]) > 0
     assert "All configured vector stores are in cooldown" in cooled.text
     assert wire.drain() == ()
+
+
+@pytest.mark.parametrize(
+    "provider,path,upstream_path",
+    [
+        (
+            "azure_ai",
+            "/azure/indexes/get-fallback-azure_ai/docs?search=hello&api-version=2024-07-01",
+            "/indexes/get-fallback-azure_ai/docs?search=hello&api-version=2024-07-01",
+        ),
+        (
+            "opensearch",
+            "/opensearch/get-fallback-opensearch/_search?q=hello&size=3",
+            "/physical-index/_search?q=hello&size=3",
+        ),
+    ],
+)
+def test_native_get_search_fails_over_with_query_and_no_body(
+    native_search_gateway: tuple[Gateway, Wire],
+    provider: str,
+    path: str,
+    upstream_path: str,
+) -> None:
+    gateway, wire = native_search_gateway
+    wire.drain()
+    response: Final = gateway.request("GET", path)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"native_results": ["document"]}
+    assert response.headers["x-litellm-vector-store-id"] == f"get-backup-{provider}"
+    observed: Final = wire.drain()
+    assert [(item.method, item.target, item.body) for item in observed] == [
+        ("GET", f"/{role}{upstream_path}", b"") for role in ("primary", "backup")
+    ]
+
+
+@pytest.fixture(scope="module")
+def vertex_search_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Wire]]:
+    directory: Final = tmp_path_factory.mktemp("vertex-search-fallback")
+
+    def search(request: Request) -> Reply:
+        assert request.headers["authorization"] == "Bearer scripted-search-token"
+        return Reply(
+            status=503 if "/dataStores/primary-store/" in request.target else 200,
+            body=b'{"results":[{"id":"backup-document"}]}',
+        )
+
+    with (
+        wire_server(search, tls=server_context(*write_self_signed_cert(directory))) as upstream,
+        wire_server(
+            lambda _: Reply(body=b'{"access_token":"scripted-search-token","expires_in":3600,"token_type":"Bearer"}')
+        ) as tokens,
+        tunnelling_forward_proxy(int(upstream.url.rsplit(":", 1)[1])) as tunnel,
+        gateway_from_environment() as gateway,
+    ):
+        configuration: Final = yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
+        configuration["vector_store_registry"] = [
+            {
+                "vector_store_name": f"{role}-store",
+                "litellm_params": {
+                    "vector_store_id": f"{role}-store",
+                    "custom_llm_provider": "vertex_ai/search_api",
+                    "vertex_project": f"{role}-project",
+                    "vertex_location": "global",
+                    "vertex_credentials": service_account_json(f"{role}-project", tokens.url),
+                    **({"fallbacks": ["backup-store"]} if role == "primary" else {}),
+                },
+            }
+            for role in ("primary", "backup")
+        ]
+        config: Final = directory / "config.yaml"
+        config.write_text(yaml.safe_dump(configuration))
+        ambient_credentials: Final = directory / "ambient-credentials.json"
+        ambient_credentials.write_text(service_account_json("primary-project", tokens.url))
+        with owned_proxy(
+            gateway,
+            directory,
+            {
+                "GOOGLE_APPLICATION_CREDENTIALS": str(ambient_credentials),
+                "HTTPS_PROXY": tunnel.url,
+                "NO_PROXY": "127.0.0.1,localhost",
+                "SSL_VERIFY": "False",
+                "AIOHTTP_TRUST_ENV": "True",
+                "DATABASE_URL": os.environ["DATABASE_URL"],
+            },
+            config=config,
+            workers=2,
+        ) as proxy:
+            yield proxy, upstream
+
+
+def test_vertex_search_fails_over_through_proxy_with_target_resource(
+    vertex_search_gateway: tuple[Gateway, Wire],
+) -> None:
+    gateway, wire = vertex_search_gateway
+    path: Final = "/v1/projects/primary-project/locations/global/collections/default_collection/dataStores/primary-store/servingConfigs/default_search:search"
+    response: Final = gateway.request("POST", "/vertex_ai/discovery" + path, {"query": "hello"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"results": [{"id": "backup-document"}]}
+    assert response.headers["x-litellm-vector-store-id"] == "backup-store"
+    assert [(request.method, request.target, json.loads(request.body)) for request in wire.drain()] == [
+        (
+            "POST",
+            path.replace("primary-project", f"{role}-project").replace("primary-store", f"{role}-store"),
+            {"query": "hello"},
+        )
+        for role in ("primary", "backup")
+    ]

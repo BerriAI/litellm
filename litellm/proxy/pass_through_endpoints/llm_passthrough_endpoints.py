@@ -169,7 +169,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     truncated_close_reason,
     websocket_passthrough_request,
 )
-from litellm.proxy.pass_through_endpoints.vector_store_passthrough import set_passthrough_fallback_plan
+from litellm.proxy.pass_through_endpoints.vector_store_fallbacks import set_passthrough_fallback_plan
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model, normalize_route_for_root_path
 from litellm.proxy.vector_store_endpoints.endpoints import build_request_data_from_managed_vector_store

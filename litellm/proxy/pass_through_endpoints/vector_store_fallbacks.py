@@ -15,6 +15,7 @@ from litellm.llms.opensearch.vector_stores.index_passthrough import (
     IndexPath,
     IndexRefusal,
     index_operation,
+    parse_index_path,
     prepare_index_request,
 )
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchIndexAWS, OpenSearchVectorStoreConfig
@@ -61,7 +62,7 @@ class VectorStorePassthroughPlan:
     primary_resource_id: str
 
 
-def _is_search(operation: NativeSearchOperation, method: str, endpoint: str) -> bool:
+def _is_supported_search_request(operation: NativeSearchOperation, method: str, endpoint: str) -> bool:
     path: Final = endpoint.strip("/")
     match operation:
         case "azure_ai":
@@ -71,7 +72,11 @@ def _is_search(operation: NativeSearchOperation, method: str, endpoint: str) -> 
         case "milvus":
             return method == "POST" and path == "v2/vectordb/entities/search"
         case "opensearch":
-            return method in ("GET", "POST") and re.fullmatch(r"[^/]+/_search", path) is not None
+            parsed: Final = parse_index_path(path)
+            if isinstance(parsed, IndexRefusal):
+                return False
+            selected: Final = index_operation(method, parsed.api)
+            return selected is not None and selected.api == "_search"
         case "vertex_ai":
             return (
                 method == "POST"
@@ -92,7 +97,7 @@ async def set_passthrough_fallback_plan(
     endpoint: str,
     primary_resource_id: str,
 ) -> None:
-    if not store.get("is_config") or not _is_search(operation, request.method, endpoint):
+    if not store.get("is_config") or not _is_supported_search_request(operation, request.method, endpoint):
         return
     from litellm.proxy.vector_store_endpoints.utils import resolve_vector_store_fallback_plan
 

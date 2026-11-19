@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy.pass_through_endpoints.vector_store_passthrough import (
+from litellm.proxy.pass_through_endpoints.vector_store_fallbacks import (
     PASSTHROUGH_FALLBACK_STATE,
     NativeSearchOperation,
     VectorStorePassthroughPlan,
@@ -206,6 +206,10 @@ async def test_vertex_retargets_datastore_project_and_credentials(
         (True, "openai", "POST", "indexes/public/docs/index", "none"),
         (True, "azure_ai", "GET", "indexes/public/docs", "plan"),
         (True, "azure_ai", "GET", "indexes/public/docs/key", "none"),
+        (True, "azure_ai", "DELETE", "indexes/public/docs/search", "none"),
+        (True, "azure_ai", "POST", "indexes/public/docs", "none"),
+        (True, "azure_ai", "GET", "indexes/public/docs/search", "none"),
+        (True, "azure_ai", "POST", "indexes/public/docs/search/extra", "none"),
     ],
 )
 async def test_config_only_same_provider_search_resolution(
@@ -257,7 +261,16 @@ async def test_config_only_same_provider_search_resolution(
     [
         ("milvus", "milvus", "POST", "v2/vectordb/entities/search", "plan"),
         ("milvus", "milvus", "POST", "v2/vectordb/entities/insert", "none"),
+        ("milvus", "milvus", "GET", "v2/vectordb/entities/search", "none"),
+        ("milvus", "milvus", "POST", "v2/vectordb/entities/query", "none"),
+        ("milvus", "milvus", "POST", "v2/vectordb/entities/hybrid_search", "none"),
         ("opensearch", "opensearch", "GET", "alias/_search", "plan"),
+        ("opensearch", "opensearch", "POST", "alias/_search", "plan"),
+        ("opensearch", "opensearch", "DELETE", "alias/_search", "none"),
+        ("opensearch", "opensearch", "GET", "alias/_count", "none"),
+        ("opensearch", "opensearch", "GET", "alias/_doc/1", "none"),
+        ("opensearch", "opensearch", "POST", "alias/_search/extra", "none"),
+        ("opensearch", "opensearch", "POST", "alias//_search", "none"),
         ("opensearch", "opensearch", "POST", "alias/_bulk", "none"),
         (
             "vertex_ai",
@@ -265,6 +278,20 @@ async def test_config_only_same_provider_search_resolution(
             "POST",
             "v1/projects/project/locations/global/collections/default_collection/dataStores/store/servingConfigs/default:search",
             "plan",
+        ),
+        (
+            "vertex_ai",
+            "vertex_ai/search_api",
+            "GET",
+            "v1/projects/project/locations/global/collections/default_collection/dataStores/store/servingConfigs/default:search",
+            "none",
+        ),
+        (
+            "vertex_ai",
+            "vertex_ai/search_api",
+            "POST",
+            "v1/projects/project/locations/global/collections/default_collection/dataStores/store/branches/default_branch/documents:import",
+            "none",
         ),
         (
             "vertex_ai",
