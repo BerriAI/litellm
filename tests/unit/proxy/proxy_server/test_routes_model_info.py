@@ -166,6 +166,93 @@ async def test_upstream_limits_reach_model_info_routes(
     publish(litellm.model_cost)
 
 
+def _router_with(*model_names: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/{name}", "api_key": "local-key"},
+                "model_info": {"id": f"{name}-deployment"},
+            }
+            for name in model_names
+        ]
+    )
+
+
+def _listed_names(client: TestClient, path: str) -> tuple[str, ...]:
+    response: Final = client.get(path)
+    assert response.status_code == 200, response.text
+    return tuple(
+        row["model_name"] if "model_name" in row else row["model_group"] for row in response.json()["data"]
+    )
+
+
+@pytest.mark.parametrize("path", ("/model/info", "/model_group/info"))
+def test_listing_is_served_from_memory_within_the_ttl_and_recomputed_after_a_deployment_change(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha"))
+    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", 60)
+    proxy_server.invalidate_model_listings()
+
+    with auth_as():
+        assert _listed_names(client, path) == ("alpha",)
+
+        monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha", "beta"))
+        monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+        assert _listed_names(client, path) == ("alpha",), "within the TTL the worker answers from memory"
+
+        proxy_server.invalidate_model_listings()
+        assert _listed_names(client, path) == ("alpha", "beta"), "a deployment change drops the entry"
+
+
+@pytest.mark.parametrize("path", ("/model/info", "/model_group/info"))
+def test_listing_is_computed_on_every_call_without_the_setting(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha"))
+    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.delitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", raising=False)
+    proxy_server.invalidate_model_listings()
+
+    with auth_as():
+        assert _listed_names(client, path) == ("alpha",)
+        monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha", "beta"))
+        monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+        assert _listed_names(client, path) == ("alpha", "beta")
+
+
+def test_listing_cache_is_per_caller(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha"))
+    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setitem(proxy_server.general_settings, "model_listing_cache_ttl_seconds", 60)
+    proxy_server.invalidate_model_listings()
+
+    with auth_as(user_id="first"):
+        assert _listed_names(client, "/model/info") == ("alpha",)
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with("alpha", "beta"))
+    monkeypatch.setattr(proxy_server, "llm_model_list", proxy_server.llm_router.get_model_list())
+    with auth_as(user_id="second"):
+        assert _listed_names(client, "/model/info") == ("alpha", "beta"), "another caller gets a fresh listing"
+
+
 # ---------------------------------------------------------------------------
 # GET /v2/model/info
 # ---------------------------------------------------------------------------
