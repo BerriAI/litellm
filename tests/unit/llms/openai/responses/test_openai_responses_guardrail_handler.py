@@ -48,7 +48,7 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import Gener
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
-from litellm.types.guardrails import ContentFilterAction, ContentFilterPattern
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, ContentFilterPattern
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ChatCompletionToolCallChunk,
@@ -5363,6 +5363,24 @@ class CallRecordingGuardrail(CustomGuardrail):
         return inputs
 
 
+class OneCallRecordingGuardrail(CallRecordingGuardrail):
+    def scans_each_text_separately(self) -> bool:
+        return True
+
+
+class LastTextScanningGuardrail(PersimmonTextMaskingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts: Final = inputs.get("texts", [])
+        self.scanned_texts.append(texts[-1])
+        return {**inputs, "texts": [*texts[:-1], texts[-1].replace("persimmon", "[MASKED]")]}
+
+
 class ResponseSnapshotGuardrail(PersimmonTextMaskingGuardrail):
     def __init__(self) -> None:
         super().__init__()
@@ -6501,14 +6519,50 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert guardrail.calls[1] == {"texts": ["a persimmon"], "model": "test-model"}
 
     @pytest.mark.asyncio
-    async def test_distinct_reasoning_texts_share_one_call(self) -> None:
+    async def test_each_distinct_reasoning_text_gets_its_own_call_by_default(self) -> None:
         guardrail: Final = CallRecordingGuardrail()
 
         await OpenAIResponsesHandler().process_output_response(
             {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
         )
 
+        assert [call["texts"] for call in guardrail.calls] == [["a fig"], ["a plum"]]
+
+    @pytest.mark.asyncio
+    async def test_distinct_reasoning_texts_share_one_call_with_a_guardrail_that_scans_each_text_separately(
+        self,
+    ) -> None:
+        guardrail: Final = OneCallRecordingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
+        )
+
         assert [call["texts"] for call in guardrail.calls] == [["a fig", "a plum"]]
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_that_reads_only_the_last_text_still_masks_every_reasoning_text(self) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a persimmon", "a fig")]}
+
+        await OpenAIResponsesHandler().process_output_response(response, LastTextScanningGuardrail())
+
+        assert [part["text"] for part in response["output"][0]["summary"]] == ["a [MASKED]", "a fig"]
+
+    @pytest.mark.asyncio
+    async def test_the_content_filter_masks_every_reasoning_text_in_one_call(self) -> None:
+        content_filter: Final = ContentFilterGuardrail(
+            guardrail_name="mask-persimmon",
+            blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK)],
+        )
+        response: Final = {
+            "output": [_openai_reasoning_item("a persimmon", "two persimmon trees"), _message_item("a fig")]
+        }
+        request_data: Final[dict] = {"metadata": {}}
+
+        await OpenAIResponsesHandler().process_output_response(response, content_filter, request_data=request_data)
+
+        assert not any("persimmon" in part["text"] for part in response["output"][0]["summary"])
+        assert len(request_data["metadata"]["standard_logging_guardrail_information"]) == 2
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("guardrail_class", [FirstTextOnlyGuardrail, LastTextOnlyGuardrail])
@@ -6769,6 +6823,42 @@ class TestReasoningOutputReachesOutputGuardrails:
             "role": "assistant",
             "content": ({"type": "output_text", "text": "a persimmon"},),
         }
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_released_next_to_reasoning_reaches_the_guardrail_after_the_stream_is_cut_short(
+        self,
+    ) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": "I think of a fig",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "a clean answer",
+            },
+            {
+                "type": "response.refusal.delta",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "the persimmon",
+            },
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=list(OpenAIResponsesHandler().released_stream_as_ended(events)),
+            guardrail_to_apply=guardrail,
+        )
+
+        assert any("the persimmon" in text for text in guardrail.scanned_texts)
 
     @pytest.mark.parametrize(
         "item",

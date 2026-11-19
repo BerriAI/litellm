@@ -231,16 +231,6 @@ def _reasoning_text_inputs(texts: Sequence[str], model: object) -> GenericGuardr
     )
 
 
-def _texts_placed_by_index(sent: tuple[str, ...], returned: Sequence[str]) -> tuple[str, ...] | None:
-    if not returned:
-        return sent
-    if len(returned) == len(sent):
-        return tuple(returned)
-    if len(sent) == 1:
-        return (returned[0],)
-    return None
-
-
 def _response_reasoning_texts(response: object) -> tuple[tuple[_ReasoningTextPosition, str], ...]:
     item_texts: Final = chain.from_iterable(
         _reasoning_output_texts(output_item, output_index)
@@ -1632,7 +1622,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 tool_calls_to_check=tool_calls_to_check,
             )
 
-        reasoning_texts: Final = _response_reasoning_texts(response)
+        reasoning_texts: Final = _response_reasoning_texts(response) if guardrail_to_apply.scans_reasoning() else ()
         reasoning_in_answer_call: Final = guardrail_to_apply.scans_all_response_texts_in_one_call()
         if reasoning_in_answer_call:
             texts_to_check.extend(text for _, text in reasoning_texts)
@@ -1763,9 +1753,14 @@ class OpenAIResponsesHandler(BaseTranslation):
                     tool_calls_to_check=tool_calls_to_check,
                 )
 
-            reasoning_texts: Final = _response_reasoning_texts(response_obj)
-            reasoning_outside_envelope: Final = _reasoning_streamed_outside_envelope(responses_so_far, reasoning_texts)
+            scans_reasoning: Final = guardrail_to_apply.scans_reasoning()
+            reasoning_texts: Final = _response_reasoning_texts(response_obj) if scans_reasoning else ()
             reasoning_in_answer_call: Final = guardrail_to_apply.scans_all_response_texts_in_one_call()
+            reasoning_outside_envelope: Final = (
+                _reasoning_streamed_outside_envelope(responses_so_far, reasoning_texts)
+                if scans_reasoning and not reasoning_in_answer_call
+                else ()
+            )
             answer_outside_envelope: Final = (
                 not texts_to_check and not tool_calls_to_check and _has_answer_stream_text(responses_so_far)
             )
@@ -1949,22 +1944,29 @@ class OpenAIResponsesHandler(BaseTranslation):
         request_data: dict[str, object],
     ) -> Mapping[_OutputPosition, str]:
         distinct_texts: Final = tuple(dict.fromkeys(text for _, text in reasoning_texts))
-        model: Final = stream_item_field(response, "model")
-        guardrailed: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=_reasoning_text_inputs(distinct_texts, model),
-            request_data=request_data,
-            input_type="response",
-            logging_obj=litellm_logging_obj,
+        batches: Final = (
+            (distinct_texts,)
+            if guardrail_to_apply.scans_each_text_separately()
+            else tuple((text,) for text in distinct_texts)
         )
-        placed_texts: Final = _texts_placed_by_index(distinct_texts, guardrailed.get("texts") or ())
-        rewritten_texts: Final = (
-            placed_texts
-            if placed_texts is not None
-            else await self._apply_guardrail_to_each_reasoning_text(
-                distinct_texts, model, guardrail_to_apply, litellm_logging_obj, request_data
+        model: Final = stream_item_field(response, "model")
+        guardrailed_batches: Final = await asyncio.gather(
+            *(
+                guardrail_to_apply.apply_guardrail(
+                    inputs=_reasoning_text_inputs(batch, model),
+                    request_data=request_data,
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+                for batch in batches
             )
         )
-        rewrites: Final = MappingProxyType(dict(zip(distinct_texts, rewritten_texts)))
+        rewritten_texts: Final = tuple(
+            chain.from_iterable(
+                guardrailed.get("texts") or batch for batch, guardrailed in zip(batches, guardrailed_batches)
+            )
+        )
+        rewrites: Final = MappingProxyType(dict(zip(distinct_texts, rewritten_texts, strict=True)))
         await self._apply_guardrail_responses_to_output(
             response=response,
             responses=tuple(rewrites[text] for _, text in reasoning_texts),
@@ -1972,29 +1974,6 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         return MappingProxyType(
             {position: rewrites[text] for position, text in reasoning_texts if rewrites[text] != text}
-        )
-
-    async def _apply_guardrail_to_each_reasoning_text(
-        self,
-        texts: tuple[str, ...],
-        model: object,
-        guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: "LiteLLMLoggingObj | None",
-        request_data: dict[str, object],
-    ) -> tuple[str, ...]:
-        guardrailed_texts: Final = await asyncio.gather(
-            *(
-                guardrail_to_apply.apply_guardrail(
-                    inputs=_reasoning_text_inputs((text,), model),
-                    request_data=request_data,
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
-                for text in texts
-            )
-        )
-        return tuple(
-            next(iter(guardrailed.get("texts") or ()), text) for text, guardrailed in zip(texts, guardrailed_texts)
         )
 
     async def _apply_guardrail_to_reasoning_outside_envelope(
@@ -2425,10 +2404,13 @@ class OpenAIResponsesHandler(BaseTranslation):
             bool(responses_so_far)
             and stream_item_field(responses_so_far[-1], "type") == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value
         )
+        envelope_holds_released_reasoning: Final = bool(
+            _released_reasoning_items(responses_so_far)
+        ) and not _has_unplaceable_stream_text(responses_so_far)
         if (
             not ends_on_finished_item
             and not self._has_streamed_tool_call_events(responses_so_far)
-            and not _released_reasoning_items(responses_so_far)
+            and not envelope_holds_released_reasoning
         ):
             return tuple(responses_so_far)
         return (*responses_so_far, _released_envelope(responses_so_far))

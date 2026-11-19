@@ -259,6 +259,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
     def supports_structured_messages(self) -> bool:
         return False
 
+    def scans_reasoning(self) -> bool:
+        return False
+
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

@@ -2370,6 +2370,9 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return LitellmContentFilterGuardrailConfigModel
 
+    def scans_each_text_separately(self) -> bool:
+        return True
+
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
