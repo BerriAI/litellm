@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_repositories::{KeyRepository, Side};
+use litellm_repositories::KeyRepository;
 use pyo3::prelude::*;
 
 use crate::db::{NativeDatabase, map_error};
@@ -26,7 +26,7 @@ impl RustKeyRepository {
         use_writer: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
-        let side = if use_writer { Side::Writer } else { Side::Read };
+        let side = super::side(use_writer);
         crate::execution::run_async_value(
             py,
             crate::db::for_caller(py, async move {

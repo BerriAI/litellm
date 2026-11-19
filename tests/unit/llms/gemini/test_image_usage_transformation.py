@@ -3,9 +3,45 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.types.llms.vertex_ai import UsageMetadata
+from litellm.types.utils import ImageResponse, ModelResponse
 
 PROMPT_DETAILS: Final = [{"modality": "TEXT", "tokenCount": 30}, {"modality": "IMAGE", "tokenCount": 5}]
+
+
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("cached_tokens", [0, 600])
+@pytest.mark.parametrize("cache_breakdown", [False, True])
+def test_image_generation_cached_usage_cost_matches_chat(
+    provider: str, cached_tokens: int, cache_breakdown: bool
+) -> None:
+    metadata: Final[UsageMetadata] = {
+        "promptTokenCount": 1000,
+        "candidatesTokenCount": 100,
+        "totalTokenCount": 1100,
+        "cachedContentTokenCount": cached_tokens,
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 800}, {"modality": "IMAGE", "tokenCount": 200}],
+        "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 100}],
+        **(
+            {
+                "cacheTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": cached_tokens * 5 // 6},
+                    {"modality": "IMAGE", "tokenCount": cached_tokens // 6},
+                ]
+            }
+            if cache_breakdown
+            else {}
+        ),
+    }
+    image_response: Final = ImageResponse(usage=transform_gemini_image_usage(metadata))
+    chat_response: Final = ModelResponse(usage=VertexGeminiConfig.calculate_usage({"usageMetadata": metadata}))
+    model: Final = f"{provider}/gemini-3.1-flash-lite-image"
+    assert litellm.completion_cost(completion_response=image_response, model=model) == pytest.approx(
+        litellm.completion_cost(completion_response=chat_response, model=model)
+    )
 
 
 @pytest.mark.parametrize(
@@ -36,11 +72,21 @@ def test_transform_gemini_image_usage_reports_image_and_chat_style_counts(
 
     assert usage.model_dump() == {
         "input_tokens": 35,
-        "input_tokens_details": {"image_tokens": 5, "text_tokens": 30},
+        "input_tokens_details": {
+            "image_tokens": 5,
+            "text_tokens": 30,
+            "cached_tokens": 0,
+            "cached_tokens_details": None,
+        },
         "output_tokens": 1716,
         "total_tokens": 1751,
         "prompt_tokens": 35,
-        "prompt_tokens_details": {"image_tokens": 5, "text_tokens": 30},
+        "prompt_tokens_details": {
+            "image_tokens": 5,
+            "text_tokens": 30,
+            "cached_tokens": 0,
+            "cached_tokens_details": None,
+        },
         "completion_tokens": 1716,
         "completion_tokens_details": expected_output_details,
         "output_tokens_details": expected_output_details,
@@ -113,7 +159,7 @@ def test_transform_gemini_image_usage_preserves_unspecified_output_modality(thou
     assert usage.output_tokens_details == usage.completion_tokens_details
 
 
-@pytest.mark.parametrize("count_field", ["promptTokenCount", "totalTokenCount"])
+@pytest.mark.parametrize("count_field", ["promptTokenCount", "totalTokenCount", "cachedContentTokenCount"])
 def test_transform_gemini_image_usage_rejects_a_count_that_is_not_a_number(count_field: str):
     with pytest.raises(ValidationError):
         transform_gemini_image_usage(
