@@ -1,3 +1,6 @@
+/app/.venv/bin/python
+/app/.venv/bin/python3
+/app/.venv/bin/python3.13
 /app/.venv/lib/python3.13/site-packages/_awscrt.abi3.so
 /app/.venv/lib/python3.13/site-packages/_cffi_backend.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/_polars_runtime_32/_polars_runtime.abi3.so
