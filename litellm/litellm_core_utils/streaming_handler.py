@@ -83,6 +83,7 @@ from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
+from .served_failure import ServedFailure, ServedResponseFailedError, served_failure_of
 
 if TYPE_CHECKING:
     from .litellm_logging import BilledRoundsSpend
@@ -2637,6 +2638,7 @@ class CustomStreamWrapper:
                 self.close()
                 raise  # Re-raise StopIteration
             else:
+                served_failure: Final = served_failure_of(self.completion_stream)
                 self.sent_last_chunk = True
                 processed_chunk: Final = self.finish_reason_handler()
                 final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
@@ -2649,6 +2651,8 @@ class CustomStreamWrapper:
                     processed_chunk,
                     cache_hit,
                 )  # log response
+                if served_failure is not None:
+                    self._end_sync_stream_on_served_failure(served_failure, cache_hit)
                 # Deliberately do NOT restore context here even though
                 # completion_stream is already exhausted: this chunk is still
                 # real data belonging to this call, and the caller's own
@@ -2878,12 +2882,15 @@ class CustomStreamWrapper:
             await self.aclose()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
+            served_failure: Final = served_failure_of(self.completion_stream)
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
             final_chunk_for_logging: Final = self._final_chunk_for_logging(processed_chunk)
             if final_chunk_for_logging is not None:
                 self.chunks.append(final_chunk_for_logging)
             self._maybe_set_final_chunk_usage(processed_chunk)
+            if served_failure is not None:
+                await self._end_async_stream_on_served_failure(served_failure, cache_hit)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2891,6 +2898,56 @@ class CustomStreamWrapper:
             # cleaned up on the next __anext__() call; one that stops here
             # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
+
+    def _end_sync_stream_on_served_failure(self, failure: ServedFailure, cache_hit: bool) -> NoReturn:
+        complete_streaming_response: Final = self._build_complete_streaming_response()
+        if complete_streaming_response is not None:
+            self._propagate_usage_cost_to_hidden_params(
+                complete_streaming_response, self.custom_llm_provider, self.chunks
+            )
+            executor.submit(self.logging_obj.stream_end_success_handler, complete_streaming_response, cache_hit)
+        self.close()
+        self._handle_stream_fallback_error(self._served_failure_error(failure, complete_streaming_response))
+
+    async def _end_async_stream_on_served_failure(self, failure: ServedFailure, cache_hit: bool) -> NoReturn:
+        from litellm.responses.streaming_iterator import spawn_logging_task
+
+        complete_streaming_response: Final = await self._async_build_complete_streaming_response()
+        if complete_streaming_response is not None:
+            self._propagate_usage_cost_to_hidden_params(
+                complete_streaming_response, self.custom_llm_provider, self.chunks
+            )
+        running_loop: Final = asyncio.get_running_loop()
+        logging_obj: Final = self.logging_obj
+
+        def log_success() -> None:
+            logging_obj.mark_async_success_log_enqueued()
+            spawn_logging_task(
+                running_loop,
+                logging_obj.dispatch_success_handlers(
+                    complete_streaming_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                    prefer_async_handlers=True,
+                ),
+                task_name="Chat completions stream success log",
+            )
+
+        if logging_obj.parks_served_failure:
+            logging_obj.deferred_success_result = (
+                complete_streaming_response,
+                logging_obj.start_time,
+                datetime.datetime.now(),  # noqa: DTZ005  # the logging object's own times are naive
+            )
+            logging_obj.enqueue_deferred_logging = log_success
+        else:
+            log_success()
+        await self.aclose()
+        self._handle_stream_fallback_error(self._served_failure_error(failure, complete_streaming_response))
+
+    def _served_failure_error(self, failure: ServedFailure, served: object) -> ServedResponseFailedError:
+        return ServedResponseFailedError(failure, served, self.model or "", self.custom_llm_provider or "")
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
         self._dispatch_stream_failure(e, traceback.format_exc())

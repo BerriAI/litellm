@@ -12,6 +12,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+    GeminiSseChunkParser,
     VertexPassthroughLoggingHandler,
 )
 from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
@@ -486,3 +487,28 @@ def test_build_complete_streaming_response_assembles_stream_generate_content_sse
     assert response.choices[0].message.content == "Hello there!"
     assert response.choices[0].finish_reason == "stop"
     assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (10, 8, 18)
+
+
+@pytest.mark.parametrize("reason", ["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL"])
+def test_log_parser_keeps_the_finish_of_a_stream_that_ended_on_a_failed_tool_call(reason: str) -> None:
+    logging_obj: Final = Logging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini-2.5-flash")
+    frame: Final = {
+        "candidates": [{"content": {"parts": [{"text": "Hi"}], "role": "model"}, "finishReason": reason, "index": 0}]
+    }
+
+    parsed: Final = GeminiSseChunkParser(
+        streaming_response=None, sync_stream=False, logging_obj=logging_obj
+    ).parse_sse_chunk(f"data: {json.dumps(frame)}")
+
+    assert parsed is not None
+    assert parsed.choices[0].finish_reason == "stop"
+    assert parsed.choices[0].provider_specific_fields == {"native_finish_reason": reason}

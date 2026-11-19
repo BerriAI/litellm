@@ -128,9 +128,9 @@ _FLAGGED_WITH_NOTE: Final = _flagged("SAFETY", "The candidate was blocked for sa
 _BLOCKED: Final = _blocked("SAFETY")
 _BLOCKED_WITH_NOTE: Final = _blocked("PROHIBITED_CONTENT", "The prompt was blocked.")
 _ANSWERED: Final = _finished_after_text("STOP", "stop")
-_MALFORMED: Final = _finished_after_text("MALFORMED_FUNCTION_CALL", "stop")
-_MALFORMED_WITH_NOTE: Final = _finished_after_text(
-    "MALFORMED_FUNCTION_CALL", "stop", "Malformed function call: print(default_api.lookup(city='Paris'"
+_MALFORMED_RESPONSE: Final = _finished_after_text("MALFORMED_RESPONSE", "stop")
+_MALFORMED_RESPONSE_WITH_NOTE: Final = _finished_after_text(
+    "MALFORMED_RESPONSE", "stop", "The model returned an unusable response."
 )
 _UPSTREAMS: Final = (
     *_FLAGGED.values(),
@@ -138,8 +138,8 @@ _UPSTREAMS: Final = (
     _BLOCKED,
     _BLOCKED_WITH_NOTE,
     _ANSWERED,
-    _MALFORMED,
-    _MALFORMED_WITH_NOTE,
+    _MALFORMED_RESPONSE,
+    _MALFORMED_RESPONSE_WITH_NOTE,
 )
 _FILTERED: Final = tuple(
     pytest.param(upstream, id=upstream.tag)
@@ -147,7 +147,7 @@ _FILTERED: Final = tuple(
 )
 _WITH_NOTE: Final = tuple(
     pytest.param(upstream, id=upstream.tag)
-    for upstream in (_FLAGGED_WITH_NOTE, _BLOCKED_WITH_NOTE, _MALFORMED_WITH_NOTE)
+    for upstream in (_FLAGGED_WITH_NOTE, _BLOCKED_WITH_NOTE, _MALFORMED_RESPONSE_WITH_NOTE)
 )
 _FILTERED_ON_BRIDGES: Final = tuple(
     pytest.param(upstream, id=upstream.tag) for upstream in (_FLAGGED["RECITATION"], _BLOCKED)
@@ -160,8 +160,8 @@ _STREAMED: Final = tuple(
         _BLOCKED,
         _BLOCKED_WITH_NOTE,
         _ANSWERED,
-        _MALFORMED,
-        _MALFORMED_WITH_NOTE,
+        _MALFORMED_RESPONSE,
+        _MALFORMED_RESPONSE_WITH_NOTE,
     )
 )
 

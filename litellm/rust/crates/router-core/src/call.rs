@@ -1337,6 +1337,7 @@ impl<H: RouterHost> Call<'_, H> {
                     Some(Blocked::Refusal) => self.refusal_fallback_available(
                         snapshot, request, target, at, attempted, served,
                     ),
+                    Some(Blocked::Unusable) => true,
                     None => false,
                 };
                 let tracks = output
@@ -1344,7 +1345,11 @@ impl<H: RouterHost> Call<'_, H> {
                     .unwrap_or_else(|| deployment.tracks_usage());
                 // A shared logging object logs the success of the response that serves the
                 // request alone, so a raised blocked response counts its request and no success.
-                let callbacks = match raised && request.outcome_callbacks.shared_logging {
+                // An unusable response was served and billed, so it counts its success.
+                let withholds_success = raised
+                    && request.outcome_callbacks.shared_logging
+                    && output.blocked != Some(Blocked::Unusable);
+                let callbacks = match withholds_success {
                     true => OutcomeCallbacks {
                         success: false,
                         ..request.outcome_callbacks
@@ -1378,9 +1383,20 @@ impl<H: RouterHost> Call<'_, H> {
                         model: target.group.clone(),
                         blocked,
                     });
-                    let mut failure =
-                        AttemptError::new(FailureKind::ContentPolicyViolation, Some(400));
-                    failure.classes = crate::retry::content_policy_classes();
+                    let failure = match blocked {
+                        Blocked::Unusable => {
+                            let mut failure =
+                                AttemptError::new(FailureKind::InternalServer, Some(500));
+                            failure.classes = crate::retry::internal_server_classes();
+                            failure
+                        }
+                        Blocked::ContentFilter | Blocked::Refusal => {
+                            let mut failure =
+                                AttemptError::new(FailureKind::ContentPolicyViolation, Some(400));
+                            failure.classes = crate::retry::content_policy_classes();
+                            failure
+                        }
+                    };
                     return Err(Failed {
                         error: Box::new(failure.into()),
                         deployment_id: Some(deployment.id.clone()),

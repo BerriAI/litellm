@@ -85,7 +85,7 @@ def _int_or_none(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _asks_for_one_candidate(generation_config: Mapping[str, object]) -> bool:
+def asks_for_one_candidate(generation_config: Mapping[str, object]) -> bool:
     return all(
         _int_or_none(generation_config[key] or 1) == 1 for key in _CANDIDATE_COUNT_KEYS if key in generation_config
     )
@@ -95,7 +95,7 @@ def continuation_cap_of(request_body: RequestBody) -> int | None:
     generation_config: Final = request_body.get("generationConfig")
     if generation_config is None or "max_output_tokens" not in generation_config:
         return None
-    if not _asks_for_one_candidate(generation_config):
+    if not asks_for_one_candidate(generation_config):
         return None
     return _int_or_none(generation_config["max_output_tokens"])
 

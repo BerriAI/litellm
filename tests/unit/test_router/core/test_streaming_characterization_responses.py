@@ -20,6 +20,7 @@ import pytest
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.served_failure import ServedFailure, ServedResponseFailedError
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.router_core import RouterCore
 from litellm.types.llms.openai import (
@@ -52,6 +53,7 @@ CREATED: Final = "response.created"
 IN_PROGRESS: Final = "response.in_progress"
 OUTPUT_ITEM_ADDED: Final = "response.output_item.added"
 TEXT_DELTA: Final = "response.output_text.delta"
+REASONING_DELTA: Final = "response.reasoning_summary_text.delta"
 COMPLETED: Final = "response.completed"
 
 
@@ -98,6 +100,15 @@ def completed_event(input_tokens: int, output_tokens: int) -> ResponseCompletedE
         ),
     )
     return ResponseCompletedEvent(type=COMPLETED, response=response)  # pyright: ignore[reportArgumentType]  # the enum accepts its value
+
+
+def served_failure() -> ServedResponseFailedError:
+    return ServedResponseFailedError(
+        ServedFailure(reason="MALFORMED_FUNCTION_CALL", message="the model's tool call came back malformed"),
+        served_response=None,
+        model="gpt-4o",
+        llm_provider="openai",
+    )
 
 
 # --- the returned stream ------------------------------------------------------------------------
@@ -320,6 +331,53 @@ async def test_after_text_a_content_policy_cut_raises_instead_of_continuing(
     with pytest.raises(litellm.ContentPolicyViolationError):
         await collect_event_types(stream)
     assert host.deployments_called() == ["a"]
+
+
+async def test_after_text_a_served_failure_raises_instead_of_continuing(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    failure: Final = served_failure()
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut("hel", failure)))
+    host.answer("openai/b", fallback_ok())
+    core: Final = build(make_core)
+    stream: Final = await open_stream(core)
+    with pytest.raises(litellm.InternalServerError):
+        await collect_event_types(stream)
+    assert host.deployments_called() == ["a"]
+
+
+async def test_before_any_output_a_served_failure_still_falls_back(make_core: MakeCore, host: ScriptedHost) -> None:
+    failure: Final = served_failure()
+    host.answer("openai/a", responses_stream(Event(CREATED), error=cut("", failure)))
+    host.answer("openai/b", fallback_ok())
+    core: Final = build(make_core)
+    await collect_event_types(await open_stream(core))
+    assert host.deployments_called() == ["a", "b"]
+
+
+async def test_after_reasoning_only_a_served_failure_raises_instead_of_falling_back(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    failure: Final = served_failure()
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(REASONING_DELTA), error=cut("", failure)))
+    host.answer("openai/b", fallback_ok())
+    core: Final = build(make_core)
+    stream: Final = await open_stream(core)
+    with pytest.raises(litellm.InternalServerError):
+        await collect_event_types(stream)
+    assert host.deployments_called() == ["a"]
+
+
+async def test_text_that_never_reached_the_caller_lets_a_served_failure_start_over(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    failure: Final = served_failure()
+    host.answer("openai/a", responses_stream(Event(CREATED), error=cut("hel", failure)))
+    host.answer("openai/b", fallback_ok())
+    core: Final = build(make_core)
+    await collect_event_types(await open_stream(core))
+    assert host.deployments_called() == ["a", "b"]
+    assert host.calls[1].kwargs["input"] == "hi"
 
 
 async def test_after_a_tool_call_began_the_primary_error_is_raised(make_core: MakeCore, host: ScriptedHost) -> None:

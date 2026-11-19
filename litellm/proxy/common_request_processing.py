@@ -3957,6 +3957,8 @@ class ProxyBaseLLMRequestProcessing:
 
         if not self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request):
             logging_obj.defer_async_logging = True
+        else:
+            logging_obj.parks_served_failure = True
 
         tasks: Final = []
         # Start the moderation check (during_call_hook) as early as possible

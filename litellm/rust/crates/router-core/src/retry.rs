@@ -118,6 +118,22 @@ pub(crate) fn content_policy_classes() -> Vec<std::sync::Arc<str>> {
     .collect()
 }
 
+/// `litellm.InternalServerError`'s classes, most specific first: a raised unusable response.
+pub(crate) fn internal_server_classes() -> Vec<std::sync::Arc<str>> {
+    [
+        "InternalServerError",
+        "APIStatusError",
+        "APIError",
+        "OpenAIError",
+        "Exception",
+        "BaseException",
+        "object",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect()
+}
+
 /// The exception classes a failure kind stands for, most specific first, for a host that
 /// reports no class names (`litellm/exceptions.py`).
 pub(crate) fn kind_classes(kind: FailureKind) -> &'static [&'static str] {

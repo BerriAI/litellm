@@ -97,6 +97,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_shaped_proxy_exception,
     with_litellm_call_id,
 )
+from litellm.proxy.spend_tracking.cost_finalization import log_parked_served_success
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.mcp.parked_stream_dispatch import held_round_spend
@@ -4381,6 +4382,7 @@ class ProxyLogging:
         """
 
         logging_obj: Final[object] = request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # legacy request data is narrowed to Logging below
+        await log_parked_served_success(logging_obj, original_exception)
         if isinstance(logging_obj, Logging) and logging_obj.baseline_cache_context is not None:
             await logging_obj.invalidate_baseline_cache_estimate("failed_request", completed=True)
 

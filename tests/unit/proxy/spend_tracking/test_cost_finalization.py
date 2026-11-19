@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cost
@@ -923,3 +924,94 @@ async def test_rule_pricing_preserves_free_headers_without_treating_capabilities
         assert headers.get("x-litellm-response-cost") == (None if price is None else str(finalized.amount))
     finally:
         set_fallback_generalizations(previous_rules)
+
+
+class SpendRows(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: tuple[StandardLoggingPayload, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.payloads = (
+            *self.payloads,
+            cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+        )  # cast-ok: the success payload contract
+
+
+@pytest.mark.asyncio
+async def test_an_unrescued_served_failure_settles_its_reservation_through_its_own_success_row(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch, native_budgets_on: None
+) -> None:
+    from fastapi import Request, Response
+
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.served_failure import ServedFailure, ServedResponseFailedError, mark_served_failure
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.spend_tracking.budget_reservation import release_unbound_budget_reservation
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    rows: Final = SpendRows()
+    db_logger: Final = ProxyDBLogger()
+    monkeypatch.setattr(litellm, "callbacks", [db_logger, rows])
+    monkeypatch.setattr(litellm, "_async_success_callback", [db_logger, rows])
+    monkeypatch.setattr(litellm, "apply_search_free_tier", False)
+    served: Final = response()
+    mark_served_failure(
+        served, ServedFailure(reason="MALFORMED_FUNCTION_CALL", message="tool call came back malformed")
+    )
+    counters: Final = SpendCounterStore(connect(None).spend_counters())
+    counters.set_local("spend:key:served-key", 1.5)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters)
+    auth: Final = UserAPIKeyAuth(request_route="/v1/chat/completions", api_key="served-key")
+    _ = await native_reservation(
+        counters, auth, [{"counter_key": "spend:key:served-key", "entity_type": "Key", "entity_id": "served-key"}], 0.4
+    )
+    metadata: Final = {"user_api_key": "served-key", "user_api_key_budget_reservation": auth.budget_reservation}
+    logging_obj.update_environment_variables(
+        model=MODEL, custom_llm_provider="vertex_ai", litellm_params={"metadata": metadata}, optional_params={}
+    )
+    data: Final = {
+        "model": MODEL,
+        "custom_llm_provider": "vertex_ai",
+        "messages": [{"role": "user", "content": "hello"}],
+        "mock_response": served,
+        "litellm_logging_obj": logging_obj,
+        "litellm_call_id": logging_obj.litellm_call_id,
+        "metadata": metadata,
+    }
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
+
+    with pytest.raises(ServedResponseFailedError) as raised:
+        await processor._process_llm_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=auth,
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging,
+            general_settings={},
+            proxy_config=ProxyConfig(),
+            user_model=MODEL,
+            skip_pre_call_logic=True,
+        )
+    with pytest.raises(ProxyException) as answered:
+        await processor.handle_llm_api_exception(
+            e=raised.value, user_api_key_dict=auth, proxy_logging_obj=proxy_logging
+        )
+    assert auth.budget_reservation is not None
+    await release_unbound_budget_reservation(auth.budget_reservation)
+    for _ in range(500):
+        if auth.budget_reservation["finalized"] is True:
+            break
+        await asyncio.sleep(0.01)
+
+    assert answered.value.code == "500"
+    assert [(row["status"], row["response_cost"]) for row in rows.payloads] == [("success", pytest.approx(0.5))]
+    assert counters.get_local("spend:key:served-key") == pytest.approx(1.5 + 0.5)

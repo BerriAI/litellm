@@ -1178,9 +1178,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 self.sent_last_message = True
                 return {"type": "message_stop"}
             raise StopIteration
-        except Exception as e:
-            verbose_logger.error("Anthropic Adapter - %s\n%s", e, traceback.format_exc())
-            raise StopIteration
 
     async def _anext_event(self) -> _AnthropicStreamEvent:
         from .transformation import LiteLLMAnthropicMessagesAdapter
@@ -1418,9 +1415,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Similar to the Bedrock bedrock_sse_wrapper implementation.
 
         This wrapper ensures dict chunks are SSE formatted with both event and data lines.
+        The inner stream logs its own failure, so an upstream error only becomes an error event.
         """
-        for chunk in self:
-            yield anthropic_sse_frame(chunk)
+        try:
+            for chunk in self:
+                yield anthropic_sse_frame(chunk)
+        except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
+            verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
+            self.stream_failure = _provider_error(e)
+            yield _mid_stream_error_sse_event(e)
 
     async def aclose(self) -> None:
         await self._combined_chunk_splitter.aclose()

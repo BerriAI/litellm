@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost, finalize_cost
+from litellm.litellm_core_utils.served_failure import is_served_failure
 from litellm.proxy.hooks.search_free_tier import SharedCounter, allocate_search_free_tier
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin,
@@ -136,3 +137,18 @@ async def finalize_proxy_response_cost(
         datetime.now(timezone.utc),
         guardrail_cost,
     )
+
+
+async def log_parked_served_success(logging_obj: object, error: BaseException) -> None:
+    """A served response the router could not rescue is the request's own success row, priced on the
+    model that served it, before the failure hook reports the error the caller sees."""
+    if not isinstance(logging_obj, Logging) or not is_served_failure(error):
+        return
+    parked: Final = logging_obj.deferred_success_result
+    log_success: Final = logging_obj.enqueue_deferred_logging
+    if parked is None or log_success is None:
+        return
+    logging_obj.enqueue_deferred_logging = None
+    _ = prepare_response_cost(logging_obj, parked[0], datetime.now(timezone.utc))
+    _ = await finalize_proxy_response_cost(logging_obj, parked[0])
+    log_success()

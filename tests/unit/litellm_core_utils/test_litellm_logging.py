@@ -70,7 +70,9 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.prompt_cache_alerts.detector import PromptCacheAlertLogger
 from litellm.litellm_core_utils import litellm_logging, streaming_handler
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.served_failure import ServedFailure, ServedResponseFailedError
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsSpend,
@@ -4254,6 +4256,64 @@ async def test_dispatch_success_handlers_invokes_async_callback_for_pass_through
         mock_sync_log.assert_not_called()
     finally:
         litellm._async_success_callback = original_async_callbacks
+
+
+class _FailureCount(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures = 0
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failures += 1
+
+
+def _served_failure() -> ServedResponseFailedError:
+    return ServedResponseFailedError(
+        ServedFailure(reason="MALFORMED_FUNCTION_CALL", message="the tool call came back malformed"),
+        served_response=None,
+        model="gemini-3.8-flash",
+        llm_provider="gemini",
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "failures"),
+    [
+        pytest.param(_served_failure(), 0, id="served-failure"),
+        pytest.param(
+            MidStreamFallbackError(
+                message="cut", model="gemini-3.8-flash", llm_provider="gemini", original_exception=_served_failure()
+            ),
+            0,
+            id="served-failure-mid-stream",
+        ),
+        pytest.param(
+            litellm.InternalServerError(message="boom", model="gemini-3.8-flash", llm_provider="gemini"),
+            1,
+            id="ordinary-500",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_served_failure_reaches_no_failure_callback(error: Exception, failures: int) -> None:
+    recorder: Final = _FailureCount()
+    logging_obj: Final = Logging(
+        model="gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime_unit_test(2026, 1, 1),
+        litellm_call_id="served-failure",
+        function_id="served-failure",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(model="gemini-3.8-flash", litellm_params={}, optional_params={})
+
+    await logging_obj.dispatch_failure_handlers(error, "traceback", prefer_async_handlers=True)
+
+    assert recorder.failures == failures
 
 
 @pytest.mark.asyncio
