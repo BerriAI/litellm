@@ -3,19 +3,17 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
-import litellm
 from litellm.proxy.middleware.litellm_response_headers_middleware import LiteLLMResponseHeadersMiddleware
 
 
 @pytest.mark.parametrize("include", [True, False])
 @pytest.mark.parametrize("status_code", [200, 400])
 @pytest.mark.parametrize("streaming", [True, False])
-def test_header_opt_out_preserves_body_and_other_headers(monkeypatch, include, status_code, streaming):
+def test_header_opt_out_preserves_body_and_other_headers(include, status_code, streaming):
     from starlette.responses import Response
 
-    monkeypatch.setattr(litellm, "include_litellm_headers", include)
     app = FastAPI()
-    app.add_middleware(LiteLLMResponseHeadersMiddleware)
+    app.add_middleware(LiteLLMResponseHeadersMiddleware, include_litellm_headers=lambda: include)
 
     @app.get("/reply")
     def reply():

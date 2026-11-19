@@ -23397,7 +23397,10 @@ app.add_middleware(
     get_settings=lambda: get_admission_control_settings(general_settings),
     state=admission_control_state,
 )
-app.add_middleware(LiteLLMResponseHeadersMiddleware)
+app.add_middleware(
+    LiteLLMResponseHeadersMiddleware,
+    include_litellm_headers=lambda: litellm.include_litellm_headers is not False,
+)
 
 # Added last on purpose - last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
