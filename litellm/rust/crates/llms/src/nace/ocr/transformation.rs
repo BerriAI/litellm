@@ -56,6 +56,7 @@ const UPLOAD_TOKEN_HEADER: &str = "X-Upload-Token";
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_USER_AGENT: &str = "litellm";
 const OUTPUT_PARAM: &str = "output";
+const INCLUDE_IMAGE_BASE64_PARAM: &str = "include_image_base64";
 const RESERVED_PARAMS: &[&str] = &["source", "corpus_sources", "parse_mode", "parser"];
 const SUPPORTED_PARAMS: &[&str] = &[
     "page_ranges",
@@ -69,6 +70,7 @@ const SUPPORTED_PARAMS: &[&str] = &[
     "name",
     "project_id",
     OUTPUT_PARAM,
+    INCLUDE_IMAGE_BASE64_PARAM,
 ];
 const URL_SOURCE_EXTENSIONS: &[&str] = &[
     "avi", "csv", "doc", "docm", "docx", "eml", "flac", "htm", "html", "jpeg", "jpg", "json",
@@ -325,7 +327,7 @@ impl BaseOcrConfig for NaceParseConfig {
             options: non_default_params
                 .select(SUPPORTED_PARAMS)
                 .into_iter()
-                .filter(|(name, _)| name != OUTPUT_PARAM)
+                .filter(|(name, _)| name != OUTPUT_PARAM && name != INCLUDE_IMAGE_BASE64_PARAM)
                 .collect(),
         })
     }
@@ -1641,8 +1643,9 @@ mod tests {
         assert_eq!(Value::Object(params.output), expected);
     }
 
-    /// Only the Nace options are mapped. The shared body composition still adds the other
-    /// top-level options to the request, which Nace refuses as unknown fields.
+    /// Only the Nace options are mapped. Other top-level options such as `pages` still go to
+    /// Nace on a host that passes them, which Nace refuses as unknown fields.
+    /// The top-level `include_image_base64` is accepted and never sent.
     #[test]
     fn only_nace_options_are_mapped_into_the_parse_options() {
         let params = NaceParseConfig
@@ -1660,6 +1663,26 @@ mod tests {
             Value::Object(params.options),
             json!({"page_ranges": [{"start": 1, "end": 2}], "ocr": {"languages": ["en"]}})
         );
+    }
+
+    #[rstest]
+    #[case::boolean_false(json!({"include_image_base64": false}))]
+    #[case::boolean_true(json!({"include_image_base64": true}))]
+    #[case::null(json!({"include_image_base64": null}))]
+    fn include_image_base64_is_accepted_and_never_sent(#[case] options: Value) {
+        let call = arguments(options);
+        let params = NaceParseConfig.map_ocr_params(&call, "parse-low").unwrap();
+        let request = params.request(NaceSource::Url {
+            url: "https://example.com/report.pdf".into(),
+            file_name: "report.pdf".into(),
+        });
+        let body = compose_body(
+            &call,
+            &request,
+            NaceParseConfig.get_supported_ocr_params("parse-low"),
+        )
+        .unwrap();
+        assert_eq!(body.get(INCLUDE_IMAGE_BASE64_PARAM), None);
     }
 
     #[rstest]

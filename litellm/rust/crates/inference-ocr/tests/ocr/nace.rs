@@ -238,6 +238,26 @@ async fn an_inline_document_is_uploaded_parsed_by_file_and_deleted() {
     assert_eq!(delete.header("x-trace"), None);
 }
 
+#[rstest]
+#[case::boolean_false(json!({"include_image_base64": false}))]
+#[case::boolean_true(json!({"include_image_base64": true}))]
+#[tokio::test]
+async fn an_open_webui_request_is_parsed_without_include_image_base64(#[case] options: Value) {
+    let upstream = upload_upstream([succeeded(workspace_source()), job_deleted(), deleted()]).await;
+
+    let response = perform(nace_request("nace/parse-low", &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        page_texts(&response),
+        [(0, "Invoice SYN-01"), (1, "Terms"), (2, "Delivery note")]
+    );
+    let requests = received(&upstream).await;
+    assert_eq!(requests[2].url.path(), "/v1/documents/parse");
+    assert_eq!(requests[2].json().get("include_image_base64"), None);
+}
+
 #[tokio::test]
 async fn the_upload_carries_only_the_grant_token() {
     let upstream = upload_upstream([succeeded(workspace_source()), job_deleted(), deleted()]).await;
