@@ -14889,7 +14889,7 @@ async def count_request_tokens(
     kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
     exact: Final = (
         await _kimi_k3_count(
-            request if bridged_system is system else request.model_copy(update={"system": bridged_system}),
+            request,
             messages_format,
             model_to_use,
             kimi_k3_messages,

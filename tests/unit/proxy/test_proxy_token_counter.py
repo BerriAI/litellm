@@ -2368,6 +2368,29 @@ async def test_openai_provider_count_and_generation_keep_second_adjacent_billing
 
 
 @pytest.mark.asyncio
+async def test_bedrock_kimi_k3_count_drops_only_the_first_of_two_leading_billing_blocks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _framed_kimi(monkeypatch)
+    _available_kimi_k3(monkeypatch, tmp_path)
+    first: Final = {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1; cc_entrypoint=cli; cch=A;"}
+    second: Final = {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1; cc_entrypoint=cli; cch=B;"}
+    instructions: Final = {"type": "text", "text": "Be terse."}
+
+    async def counted(system: list[dict[str, str]]) -> int:
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="kimi", system=system, messages=[{"role": "user", "content": "Hello"}]),
+            messages_format="anthropic",
+            call_endpoint=True,
+        )
+        return result.total_tokens
+
+    one_header: Final = await counted([first, instructions])
+    assert one_header == await counted([instructions])
+    assert await counted([first, second, instructions]) > one_header
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_framing_in_both_request_formats(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
