@@ -34,7 +34,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.responses.stored_system_prompt import awithout_stored_instructions
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
-from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
+from litellm.types.utils import Message, ModelResponse, StandardLoggingPayload, TextCompletionResponse
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -7777,7 +7777,7 @@ def test_convert_response_output_folds_two_messages_and_function_call_into_one_c
     ]
 
 
-def test_convert_response_output_folds_commentary_and_final_answer_into_one_choice() -> None:
+def test_convert_response_output_moves_commentary_into_reasoning_content() -> None:
     commentary: Final = ResponseOutputMessage.model_validate(
         {
             "id": "msg_commentary",
@@ -7806,7 +7806,8 @@ def test_convert_response_output_folds_commentary_and_final_answer_into_one_choi
     assert len(choices) == 1
     assert choices[0].index == 0
     assert choices[0].finish_reason == "stop"
-    assert choices[0].message.content == 'Let me answer that.{"city": "Paris"}'
+    assert choices[0].message.content == '{"city": "Paris"}'
+    assert choices[0].message.reasoning_content == "Let me answer that."
     assert choices[0].message.tool_calls is None
 
 
@@ -7936,3 +7937,385 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+
+
+
+
+def _commentary_item(item_id: str, *texts: str) -> Mapping[str, object]:
+    return {
+        "id": item_id,
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "phase": "commentary",
+        "content": [{"type": "output_text", "text": text, "annotations": []} for text in texts],
+    }
+
+
+def _answer_item(
+    item_id: str, text: str, phase: str | None = "final_answer", annotations: Sequence[object] = ()
+) -> Mapping[str, object]:
+    return {
+        "id": item_id,
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        **({"phase": phase} if phase else {}),
+        "content": [{"type": "output_text", "text": text, "annotations": list(annotations)}],
+    }
+
+
+def _summary_item(item_id: str, text: str) -> Mapping[str, object]:
+    return {"id": item_id, "type": "reasoning", "summary": [{"type": "summary_text", "text": text}]}
+
+
+_WEATHER_CALL_ITEM: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "id": "fc_weather",
+        "type": "function_call",
+        "status": "completed",
+        "call_id": "call_weather",
+        "name": "get_weather",
+        "arguments": '{"city":"Paris"}',
+    }
+)
+
+_TYPED_OUTPUT_ITEMS: Final = MappingProxyType(
+    {"message": ResponseOutputMessage, "reasoning": ResponseReasoningItem, "function_call": ResponseFunctionToolCall}
+)
+
+
+def _typed_output_item(item: Mapping[str, object]) -> object:
+    item_type: Final = item.get("type")
+    model: Final = _TYPED_OUTPUT_ITEMS.get(item_type) if isinstance(item_type, str) else None
+    return dict(item) if model is None else model.model_validate(dict(item))
+
+
+def _folded_message(items: Sequence[Mapping[str, object]], splits_commentary: bool = True) -> Message:
+    typed: Final = tuple(_typed_output_item(item) for item in items)
+    convert: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices  # pyright: ignore[reportPrivateUsage]  # the fold is the unit under test
+    (choice,) = convert(typed) if splits_commentary else convert(typed, splits_commentary=False)
+    return choice.message
+
+
+def _fragments(text: str) -> tuple[str, ...]:
+    return tuple(text[start : start + 4] for start in range(0, len(text), 4))
+
+
+def _text_deltas(event: Mapping[str, object], text: object) -> tuple[Mapping[str, object], ...]:
+    return tuple({**event, "delta": fragment} for fragment in _fragments(str(text)))
+
+
+def _part_events(index: int, part_index: int, part: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return _text_deltas(
+        {"type": "response.output_text.delta", "output_index": index, "content_index": part_index}, part["text"]
+    )
+
+
+def _summary_events(index: int, part_index: int, part: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"type": "response.reasoning_summary_part.added", "output_index": index, "summary_index": part_index},
+        *_text_deltas(
+            {"type": "response.reasoning_summary_text.delta", "output_index": index, "summary_index": part_index},
+            part["text"],
+        ),
+    )
+
+
+def _item_stream_events(index: int, item: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    match item.get("type"):
+        case "message":
+            parts: Final = cast(Sequence[Mapping[str, object]], item["content"])  # cast-ok: test fixture shape
+            return tuple(
+                itertools.chain.from_iterable(
+                    _part_events(index, position, part) for position, part in enumerate(parts)
+                )
+            )
+        case "reasoning":
+            summary: Final = cast(Sequence[Mapping[str, object]], item["summary"])  # cast-ok: test fixture shape
+            return tuple(
+                itertools.chain.from_iterable(
+                    _summary_events(index, position, part) for position, part in enumerate(summary)
+                )
+            )
+        case "function_call":
+            return (
+                {"type": "response.function_call_arguments.delta", "output_index": index, "delta": item["arguments"]},
+            )
+        case _:
+            return ()
+
+
+def _added_stream_item(item: Mapping[str, object]) -> Mapping[str, object]:
+    match item.get("type"):
+        case "message":
+            return {**item, "status": "in_progress", "content": []}
+        case "function_call":
+            return {**item, "status": "in_progress", "arguments": ""}
+        case _:
+            return item
+
+
+def _completed_event(items: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    return {"type": "response.completed", "response": {"status": "completed", "output": [dict(item) for item in items]}}
+
+
+def _stream_events(
+    items: Sequence[Mapping[str, object]], end_event: Mapping[str, object] | None = None
+) -> tuple[Mapping[str, object], ...]:
+    per_item: Final = (
+        (
+            {"type": "response.output_item.added", "output_index": index, "item": _added_stream_item(item)},
+            *_item_stream_events(index, item),
+            {"type": "response.output_item.done", "output_index": index, "item": dict(item)},
+        )
+        for index, item in enumerate(items)
+    )
+    return (
+        *itertools.chain.from_iterable(per_item),
+        _completed_event(items) if end_event is None else end_event,
+    )
+
+
+def _streamed_texts(
+    items: Sequence[Mapping[str, object]],
+    streams_reasoning_signatures: bool = False,
+    end_event: Mapping[str, object] | None = None,
+) -> tuple[str, str]:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, streams_reasoning_signatures=streams_reasoning_signatures
+    )
+    deltas: Final = tuple(
+        chunk.choices[0].delta
+        for chunk in (iterator.chunk_parser(dict(event)) for event in _stream_events(items, end_event))
+        if chunk.choices
+    )
+    return (
+        "".join(delta.content or "" for delta in deltas),
+        "".join(getattr(delta, "reasoning_content", None) or "" for delta in deltas),
+    )
+
+
+_COMMENTARY_SHAPES: Final = pytest.mark.parametrize(
+    ("items", "expected_content", "expected_reasoning"),
+    [
+        (
+            (
+                _summary_item("rs_plan", "Plan the reply."),
+                _commentary_item("msg_pre", "Checking the date."),
+                _summary_item("rs_known", "Date known."),
+                _answer_item("msg_final", "Hello!"),
+            ),
+            "Hello!",
+            "Plan the reply. Checking the date. Date known.",
+        ),
+        ((_commentary_item("msg_pre", "Looking it up."), _WEATHER_CALL_ITEM), None, "Looking it up."),
+        (
+            (_commentary_item("msg_pre", "First.", "Second."), _answer_item("msg_final", "Done.")),
+            "Done.",
+            "First. Second.",
+        ),
+        (
+            (_commentary_item("msg_pre", "Checking."), _answer_item("msg_a", "A."), _answer_item("msg_b", "B.")),
+            "A.B.",
+            "Checking.",
+        ),
+        (
+            (_answer_item("msg_a", "Plan.", phase=None), _answer_item("msg_b", "Hello!", phase=None)),
+            "Plan.Hello!",
+            None,
+        ),
+        (
+            (_answer_item("msg_final", "Hello!"), _commentary_item("msg_post", "Noting", "that.")),
+            "Hello!",
+            "Noting that.",
+        ),
+        (
+            (
+                _summary_item("rs_plan", "Plan."),
+                _WEATHER_CALL_ITEM,
+                _commentary_item("msg_post", "Called it."),
+                _commentary_item("msg_more", "Waiting."),
+            ),
+            None,
+            "Plan. Called it. Waiting.",
+        ),
+        ((_commentary_item("msg_pre", "Only a plan."), {"id": "item_without_type"}), "Only a plan.", None),
+        ((_commentary_item("msg_pre", "Only a plan."),), "Only a plan.", None),
+        (
+            (_commentary_item("msg_pre", "Only a plan."), _summary_item("rs_after", "Thinking it over.")),
+            "Only a plan.",
+            "Thinking it over.",
+        ),
+        (
+            (
+                _summary_item("rs_before", "Before."),
+                _commentary_item("msg_pre", "Only", " a plan."),
+                _summary_item("rs_after", "After."),
+            ),
+            "Only a plan.",
+            "Before. After.",
+        ),
+    ],
+    ids=[
+        "preamble-between-reasoning",
+        "preamble-before-tool-call",
+        "multi-part-preamble",
+        "two-final-answers",
+        "unphased-messages",
+        "commentary-after-answer",
+        "commentary-after-tool-call",
+        "commentary-beside-an-untyped-item",
+        "commentary-only-turn",
+        "commentary-then-reasoning-only",
+        "commentary-between-reasoning-only",
+    ],
+)
+
+
+@_COMMENTARY_SHAPES
+def test_convert_response_output_keeps_only_answers_in_content(
+    items: Sequence[Mapping[str, object]], expected_content: str | None, expected_reasoning: str | None
+) -> None:
+    message: Final = _folded_message(items)
+
+    assert message.content == expected_content
+    assert getattr(message, "reasoning_content", None) == expected_reasoning
+
+
+@_COMMENTARY_SHAPES
+def test_stream_keeps_only_answers_in_content(
+    items: Sequence[Mapping[str, object]], expected_content: str | None, expected_reasoning: str | None
+) -> None:
+    content, reasoning = _streamed_texts(items)
+
+    assert (content, reasoning) == (expected_content or "", expected_reasoning or "")
+
+
+_STANDALONE_COMMENTARY: Final = (
+    _commentary_item("msg_pre", "Only a plan."),
+    _summary_item("rs_after", "Thinking it over."),
+)
+
+
+@pytest.mark.parametrize(
+    "end_event",
+    [
+        _completed_event(_STANDALONE_COMMENTARY),
+        {
+            "type": "response.incomplete",
+            "response": {
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [dict(item) for item in _STANDALONE_COMMENTARY],
+            },
+        },
+        {"type": "response.failed", "response": {"status": "failed", "output": []}},
+        {"type": "error", "code": "server_error", "message": "upstream failed"},
+    ],
+    ids=["completed", "incomplete", "failed", "error"],
+)
+def test_stream_end_releases_standalone_commentary_as_content(end_event: Mapping[str, object]) -> None:
+    assert _streamed_texts(_STANDALONE_COMMENTARY, end_event=end_event) == ("Only a plan.", "Thinking it over.")
+
+
+def test_convert_response_output_moves_commentary_from_raw_dict_items() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # the fold is the unit under test
+        (dict(_commentary_item("msg_pre", "Checking.")), dict(_answer_item("msg_final", "Hello!"))),
+        handle_raw_dict_callback=LiteLLMResponsesTransformationHandler()._handle_raw_dict_response_item,  # pyright: ignore[reportPrivateUsage]  # the transform_response callback
+    )
+
+    assert (choices[0].message.content, getattr(choices[0].message, "reasoning_content", None)) == (
+        "Hello!",
+        "Checking.",
+    )
+
+
+def test_convert_response_output_keeps_answer_citations_where_the_answer_starts() -> None:
+    citation: Final = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 5,
+        "title": "Hi",
+        "url": "https://example.com",
+    }
+
+    message: Final = _folded_message(
+        (
+            _commentary_item("msg_pre", "Looking up a source."),
+            _answer_item("msg_final", "Hello!", annotations=[citation]),
+        )
+    )
+
+    assert message.content == "Hello!"
+    assert message.annotations == [citation]
+
+
+def test_convert_response_output_keeps_commentary_as_content_when_not_splitting() -> None:
+    message: Final = _folded_message(
+        (_commentary_item("msg_pre", "Checking."), _answer_item("msg_final", "Hello!")), splits_commentary=False
+    )
+
+    assert message.content == "Checking.Hello!"
+    assert getattr(message, "reasoning_content", None) is None
+
+
+def test_stream_serving_anthropic_messages_keeps_commentary_as_content() -> None:
+    content, reasoning = _streamed_texts(
+        (_commentary_item("msg_pre", "Checking."), _answer_item("msg_final", "Hello!")),
+        streams_reasoning_signatures=True,
+    )
+
+    assert (content, reasoning) == ("Checking.Hello!", "")
+
+
+@pytest.mark.parametrize(
+    ("call_type", "expected_content"),
+    [("completion", "Hello!"), ("anthropic_messages", "Checking.Hello!")],
+    ids=["chat-completions", "anthropic-messages"],
+)
+def test_transform_response_moves_commentary_only_for_chat_callers(call_type: str, expected_content: str) -> None:
+    from litellm.types.utils import Usage
+
+    raw_response: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_commentary",
+            "created_at": 1734366691,
+            "object": "response",
+            "model": "gpt-5.6",
+            "status": "completed",
+            "output": [_commentary_item("msg_pre", "Checking."), _answer_item("msg_final", "Hello!")],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        }
+    )
+    model_response: Final = ModelResponse(
+        id="chatcmpl-local",
+        created=1734366691,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result: Final = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.6",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(call_type=call_type),
+        request_data={"model": "gpt-5.6"},
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert result.choices[0].message.content == expected_content

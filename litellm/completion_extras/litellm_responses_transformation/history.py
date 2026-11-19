@@ -55,10 +55,18 @@ class _AnyMessage(_Frozen):
     type: Literal["message"]
 
 
+class _AnyItem(_Frozen):
+    type: str
+
+
+_TOOL_CALL_TYPES: Final = frozenset({"function_call", "custom_tool_call", "apply_patch_call"})
+
+
 class _MessageEntry(_Frozen):
     type: Literal["message"]
     parts: tuple[Annotated[int, Field(ge=0)], ...]
     phase: Phase | None = None
+    text: tuple[str, ...] | None = None
 
 
 class _IndexedEntry(_Frozen):
@@ -172,6 +180,25 @@ def _is_message(item: object) -> bool:
     return True
 
 
+def fills_turn(item: object) -> bool:
+    try:
+        item_type: Final = _AnyItem.model_validate(_as_json(item)).type
+    except ValidationError:
+        return False
+    if item_type == "message":
+        return message_item_phase(item) != "commentary"
+    return item_type in _TOOL_CALL_TYPES
+
+
+def turn_moves_commentary(output_items: Sequence[object]) -> bool:
+    """Commentary leaves content only when an answer or a tool call is left to carry the turn."""
+    return any(message_item_phase(item) == "commentary" for item in output_items) and any(map(fills_turn, output_items))
+
+
+def _is_moved(item: _OutputItem, moved_commentary: bool) -> bool:
+    return moved_commentary and isinstance(item, _OutputMessage) and item.phase == "commentary"
+
+
 def _chat_message(message: object) -> _ChatMessage | None:
     try:
         return _ChatMessage.model_validate(_as_json(message))
@@ -213,10 +240,13 @@ def retained_replay_fields(provider_specific_fields: object) -> Mapping[str, obj
     return retained.model_dump(exclude_none=True) or None
 
 
-def output_message_text(output_items: Sequence[object], *, first_message_only: bool) -> str:
+def output_message_text(
+    output_items: Sequence[object], *, first_message_only: bool, moved_commentary: bool = False
+) -> str:
     parsed: Final = map(_parsed_output_item, output_items)
     messages: Final = tuple(item for item in parsed if isinstance(item, _OutputMessage))
-    return "".join(_texts(messages[:1] if first_message_only else messages))
+    answers: Final = tuple(item for item in messages if not _is_moved(item, moved_commentary))
+    return "".join(_texts(messages[:1] if first_message_only else answers))
 
 
 def _tool_search_entries(message: _ChatMessage) -> tuple[Mapping[str, object], ...]:
@@ -252,10 +282,15 @@ def _kind(item: _OutputItem) -> str:
             return item.type
 
 
-def _entry(items: Sequence[_OutputItem], position: int) -> _MessageEntry | _IndexedEntry:
+def _entry(items: Sequence[_OutputItem], position: int, moved_commentary: bool) -> _MessageEntry | _IndexedEntry:
     item: Final = items[position]
     if isinstance(item, _OutputMessage):
-        return _MessageEntry(type="message", parts=tuple(len(part.text) for part in item.content), phase=item.phase)
+        return _MessageEntry(
+            type="message",
+            parts=tuple(len(part.text) for part in item.content),
+            phase=item.phase,
+            text=tuple(part.text for part in item.content) if _is_moved(item, moved_commentary) else None,
+        )
     ordinal: Final = sum(1 for earlier in items[:position] if _kind(earlier) == _kind(item))
     return _IndexedEntry(type=item.type, index=ordinal)
 
@@ -266,13 +301,14 @@ def _texts(items: Sequence[_OutputItem]) -> Iterator[str]:
             yield from (part.text for part in item.content)
 
 
-def _matches(items: Sequence[_OutputItem], message: _ChatMessage) -> bool:
+def _matches(items: Sequence[_OutputItem], message: _ChatMessage, moved_commentary: bool) -> bool:
+    answers: Final = tuple(item for item in items if not _is_moved(item, moved_commentary))
     reasoning_ids: Final = tuple(item.id for item in items if isinstance(item, _OutputReasoning))
     calls: Final = tuple(item for item in items if isinstance(item, _OutputToolCall))
     tool_calls: Final = message.tool_calls or ()
     searches: Final = sum(1 for item in items if isinstance(item, _OutputToolSearch))
     return (
-        "".join(_texts(items)) == (message.content or "")
+        "".join(_texts(answers)) == (message.content or "")
         and reasoning_ids == tuple(item.id for item in message.reasoning_items or ())
         and len(calls) == len(tool_calls)
         and all(chat.id in (call.call_id, call.id) for call, chat in zip(calls, tool_calls))
@@ -281,12 +317,17 @@ def _matches(items: Sequence[_OutputItem], message: _ChatMessage) -> bool:
 
 
 def _content_phase(
-    output_items: Sequence[object], parsed: Sequence[_OutputItem | None], *, first_message_only: bool
+    output_items: Sequence[object],
+    parsed: Sequence[_OutputItem | None],
+    *,
+    first_message_only: bool,
+    moved_commentary: bool,
 ) -> Phase | None:
     messages: Final = tuple(item for raw, item in zip(output_items, parsed) if _is_message(raw))
-    if not messages:
+    answers: Final = tuple(item for item in messages if item is None or not _is_moved(item, moved_commentary))
+    if not answers:
         return None
-    content_message: Final = messages[0] if first_message_only else messages[-1]
+    content_message: Final = answers[0] if first_message_only else answers[-1]
     return content_message.phase if isinstance(content_message, _OutputMessage) else None
 
 
@@ -298,17 +339,30 @@ def _with_phase(message: _ChatMessage, phase: Phase | None) -> _ChatMessage:
 
 
 def replay_fields(
-    output_items: Sequence[object], message: object, *, completed: bool, first_message_only: bool
+    output_items: Sequence[object],
+    message: object,
+    *,
+    completed: bool,
+    first_message_only: bool,
+    moved_commentary: bool = False,
 ) -> Mapping[str, object]:
     parsed: Final = tuple(map(_parsed_output_item, output_items))
-    phase: Final = _content_phase(output_items, parsed, first_message_only=first_message_only)
+    phase: Final = _content_phase(
+        output_items, parsed, first_message_only=first_message_only, moved_commentary=moved_commentary
+    )
     phase_fields: Final[Mapping[str, object]] = MappingProxyType({PHASE_FIELD: phase} if phase else {})
     items: Final = tuple(item for item in parsed if item is not None)
     parsed_message: Final = _chat_message(message)
     chat: Final = _with_phase(parsed_message, phase) if parsed_message is not None else None
-    if not completed or not items or len(items) != len(parsed) or chat is None or not _matches(items, chat):
+    if (
+        not completed
+        or not items
+        or len(items) != len(parsed)
+        or chat is None
+        or not _matches(items, chat, moved_commentary)
+    ):
         return phase_fields
-    entries: Final = tuple(_entry(items, position) for position in range(len(items)))
+    entries: Final = tuple(_entry(items, position, moved_commentary) for position in range(len(items)))
     replay: Final = _Replay(version=1, items=entries, checksum=_checksum(chat, entries))
     return MappingProxyType({**phase_fields, REPLAY_FIELD: replay.model_dump(mode="json", exclude_none=True)})
 
@@ -331,6 +385,17 @@ def _message_texts(entries: Sequence[_MessageEntry], content: str) -> tuple[tupl
     return tuple(parts[start:end] for start, end in pairwise(groups))
 
 
+def _sliced_entries(entries: Sequence[_MessageEntry | _IndexedEntry]) -> tuple[_MessageEntry, ...]:
+    """Message entries whose text is a slice of the chat content, not stored in the record."""
+    messages: Final = tuple(entry for entry in entries if isinstance(entry, _MessageEntry))
+    return tuple(entry for entry in messages if entry.text is None)
+
+
+def _stored_text(entry: _MessageEntry | _IndexedEntry) -> tuple[str, ...] | None:
+    """None marks a message whose text is sliced from the chat content."""
+    return entry.text if isinstance(entry, _MessageEntry) else ()
+
+
 class _StoredReplay(_Frozen):
     openai_responses_replay: _Replay
 
@@ -340,7 +405,7 @@ def phased_message_texts(provider_specific_fields: object, content: str) -> tupl
         replay: Final = _StoredReplay.model_validate(provider_specific_fields).openai_responses_replay
     except ValidationError:
         return ()
-    entries: Final = tuple(entry for entry in replay.items if isinstance(entry, _MessageEntry))
+    entries: Final = _sliced_entries(replay.items)
     if sum(chain.from_iterable(entry.parts for entry in entries)) != len(content):
         return ()
     if all(entry.phase is None for entry in entries):
@@ -419,7 +484,7 @@ def _fits(message: _ChatMessage, entries: Sequence[_MessageEntry | _IndexedEntry
             "tool_search_output": tool_searches,
         }
     )
-    parts: Final = chain.from_iterable(entry.parts for entry in entries if isinstance(entry, _MessageEntry))
+    parts: Final = chain.from_iterable(entry.parts for entry in _sliced_entries(entries))
     indexed: Final = (entry for entry in entries if isinstance(entry, _IndexedEntry))
     return sum(parts) == len(message.content or "") and all(entry.index < sizes[entry.type] for entry in indexed)
 
@@ -430,13 +495,14 @@ def _resolve(
     indexed: Final = tuple(entry for entry in entries if isinstance(entry, _IndexedEntry))
     if not replay_tool_search and any(entry.type in ("tool_search_call", "tool_search_output") for entry in indexed):
         return None
-    messages: Final = tuple(entry for entry in entries if isinstance(entry, _MessageEntry))
     calls: Final = tuple(entry for entry in indexed if entry.type in ("function_call", "custom_tool_call"))
-    texts: Final = _message_texts(messages, message.content or "")
-    positions: Final = tuple(position for position, entry in enumerate(entries) if isinstance(entry, _MessageEntry))
+    texts: Final = _message_texts(_sliced_entries(entries), message.content or "")
+    stored: Final = tuple(_stored_text(entry) for entry in entries)
+    positions: Final = tuple(position for position, text in enumerate(stored) if text is None)
+    stored_texts: Final = {position: text for position, text in enumerate(stored) if text is not None}
     resolved: Final = _Resolved(
         message=message,
-        texts=MappingProxyType(dict(zip(positions, texts, strict=True))),
+        texts=MappingProxyType({**dict(zip(positions, texts, strict=True)), **stored_texts}),
         tool_searches=_tool_search_entries(message),
     )
     tool_calls: Final = message.tool_calls or ()
