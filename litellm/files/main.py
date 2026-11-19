@@ -224,9 +224,22 @@ def create_file(
                 extra_body=extra_body,
             )
 
+        try:
+            _llm_provider = LlmProviders(custom_llm_provider)
+        except ValueError:
+            raise litellm.exceptions.BadRequestError(
+                message=f"Unsupported provider: '{custom_llm_provider}' is not a valid LLM provider for 'create_file'.",
+                model="n/a",
+                llm_provider=custom_llm_provider or "unknown",
+                response=httpx.Response(
+                    status_code=400,
+                    content=f"Unsupported provider: {custom_llm_provider}",
+                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),
+                ),
+            )
         provider_config: Final = ProviderConfigManager.get_provider_files_config(
             model="",
-            provider=LlmProviders(custom_llm_provider),
+            provider=_llm_provider,
         )
         if provider_config is not None:
             response = base_llm_http_handler.create_file(
@@ -412,9 +425,25 @@ def file_retrieve(
             )
         else:
             # Try using provider config pattern (for Manus, Bedrock, etc.)
+            try:
+                _llm_provider = LlmProviders(custom_llm_provider)
+            except ValueError:
+                raise litellm.exceptions.BadRequestError(
+                    message=f"Unsupported provider: '{custom_llm_provider}' is not a valid LLM provider for 'file_retrieve'.",
+                    model="n/a",
+                    llm_provider=custom_llm_provider or "unknown",
+                    response=httpx.Response(
+                        status_code=400,
+                        content=f"Unsupported provider: {custom_llm_provider}",
+                        request=httpx.Request(
+                            method="file_retrieve",
+                            url="https://github.com/BerriAI/litellm",
+                        ),
+                    ),
+                )
             provider_config: Final = ProviderConfigManager.get_provider_files_config(
                 model="",
-                provider=LlmProviders(custom_llm_provider),
+                provider=_llm_provider,
             )
             if provider_config is not None:
                 litellm_params_dict: Final = get_litellm_params(**kwargs)
@@ -588,9 +617,25 @@ def file_delete(
             )
         else:
             # Try using provider config pattern (for Manus, Bedrock, etc.)
+            try:
+                _llm_provider = LlmProviders(custom_llm_provider)
+            except ValueError:
+                raise litellm.exceptions.BadRequestError(
+                    message=f"Unsupported provider: '{custom_llm_provider}' is not a valid LLM provider for 'file_delete'.",
+                    model="n/a",
+                    llm_provider=custom_llm_provider or "unknown",
+                    response=httpx.Response(
+                        status_code=400,
+                        content=f"Unsupported provider: {custom_llm_provider}",
+                        request=httpx.Request(
+                            method="file_delete",
+                            url="https://github.com/BerriAI/litellm",
+                        ),
+                    ),
+                )
             provider_config: Final = ProviderConfigManager.get_provider_files_config(
                 model="",
-                provider=LlmProviders(custom_llm_provider),
+                provider=_llm_provider,
             )
             if provider_config is not None:
                 litellm_params_dict["api_key"] = optional_params.api_key
@@ -719,9 +764,22 @@ def file_list(
         _is_async: Final = kwargs.pop("is_async", False) is True
 
         # Check if provider has a custom files config (e.g., Manus, Bedrock, Vertex AI)
+        try:
+            _llm_provider = LlmProviders(custom_llm_provider)
+        except ValueError:
+            raise litellm.exceptions.BadRequestError(
+                message=f"Unsupported provider: '{custom_llm_provider}' is not a valid LLM provider for 'file_list'.",
+                model="n/a",
+                llm_provider=custom_llm_provider or "unknown",
+                response=httpx.Response(
+                    status_code=400,
+                    content=f"Unsupported provider: {custom_llm_provider}",
+                    request=httpx.Request(method="file_list", url="https://github.com/BerriAI/litellm"),
+                ),
+            )
         provider_config: Final = ProviderConfigManager.get_provider_files_config(
             model="",
-            provider=LlmProviders(custom_llm_provider),
+            provider=_llm_provider,
         )
         if provider_config is not None:
             litellm_params_dict: Final = get_litellm_params(**kwargs)
@@ -933,9 +991,22 @@ def file_content(
             )
 
         # Check if provider has a custom files config (e.g., Anthropic, Manus)
+        try:
+            _llm_provider = LlmProviders(custom_llm_provider)
+        except ValueError:
+            raise litellm.exceptions.BadRequestError(
+                message=f"Unsupported provider: '{custom_llm_provider}' is not a valid LLM provider for 'file_content'.",
+                model="n/a",
+                llm_provider=custom_llm_provider or "unknown",
+                response=httpx.Response(
+                    status_code=400,
+                    content=f"Unsupported provider: {custom_llm_provider}",
+                    request=httpx.Request(method="file_content", url="https://github.com/BerriAI/litellm"),
+                ),
+            )
         provider_config: Final = ProviderConfigManager.get_provider_files_config(
             model="",
-            provider=LlmProviders(custom_llm_provider),
+            provider=_llm_provider,
         )
         if provider_config is not None:
             response = base_llm_http_handler.retrieve_file_content(
