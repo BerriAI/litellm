@@ -2248,6 +2248,16 @@ def responses_ws_error_frame(
     )
 
 
+def responses_ws_error_type(status: int) -> str:
+    match status:
+        case 429:
+            return "rate_limit_exceeded"
+        case _ if 400 <= status < 500:
+            return "invalid_request_error"
+        case _:
+            return "server_error"
+
+
 def turn_refusal_frame(refusal: RateLimitError) -> str:
     return responses_ws_error_frame(429, "rate_limit_exceeded", str(refusal))
 
@@ -2366,9 +2376,8 @@ def _frame_rejection_event(rejection: Exception) -> str:
     provider_fields: Final = (
         rejection.provider_specific_fields if isinstance(rejection, ResponsesWsFrameRejection) else None
     )
-    return responses_ws_error_frame(
-        error_status_code(rejection, 400), "invalid_request_error", str(rejection), provider_fields
-    )
+    status: Final = error_status_code(rejection, 400)
+    return responses_ws_error_frame(status, responses_ws_error_type(status), str(rejection), provider_fields)
 
 
 async def _reject_guarded_turn(

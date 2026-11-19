@@ -126,6 +126,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
     responses_ws_error_frame,
+    responses_ws_error_type,
     spawn_logging_task,
     turn_refusal_frame,
 )
@@ -2162,10 +2163,7 @@ def _responses_ws_failure_frame(failure: Exception) -> str:
         return responses_ws_error_frame(400, "invalid_request_error", failure.message.split("\n\n", 1)[0])
     proxy_exception: Final = handle_exception_on_proxy(failure)
     status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
-    error_type: Final = (
-        "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
-    )
-    return responses_ws_error_frame(status, error_type, proxy_exception.message)
+    return responses_ws_error_frame(status, responses_ws_error_type(status), proxy_exception.message)
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -2815,8 +2813,9 @@ async def _responses_websocket_session(
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
+            open_status: Final = error_status_code(e, 500)
             await websocket.send_text(
-                responses_ws_error_frame(error_status_code(e, 500), "invalid_request_error", str(e))
+                responses_ws_error_frame(open_status, responses_ws_error_type(open_status), str(e))
             )
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass
