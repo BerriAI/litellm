@@ -126,6 +126,7 @@ def _configured_pool_env(limit: object, environ: Mapping[str, str]) -> Mapping[s
 
 @contextmanager
 def with_configured_connection_budget(limit: object) -> Generator[None, None, None]:
+    """Set the worker environment because Prisma and SQLx read it independently during startup."""
     updates: Final = _configured_pool_env(limit, os.environ)
     previous: Final = tuple((key, os.environ.get(key)) for key in updates)
     os.environ.update(updates)
