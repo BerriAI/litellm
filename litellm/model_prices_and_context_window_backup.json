@@ -12270,7 +12270,7 @@
         ]
     },
     "azure/tts-1": {
-        "successor_model": "azure/gpt-realtime-2.1-mini",
+        "successor_model": "azure/gpt-4o-mini-tts",
         "deprecation_date": "2026-12-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_character": 1.5e-05,
@@ -12279,7 +12279,7 @@
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure/tts-1-hd": {
-        "successor_model": "azure/gpt-realtime-2.1-mini",
+        "successor_model": "azure/gpt-4o-mini-tts",
         "deprecation_date": "2026-12-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_character": 3.3e-05,
