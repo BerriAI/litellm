@@ -26,14 +26,46 @@ def normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
 
 
+# The unit must be the whole remainder of the string. An unanchored prefix
+# treated "5dogs" as 5 days, "5meters" as 5 minutes, and "5wolves" as 5 weeks.
+_DURATION_PATTERN: Final = re.compile(r"(\d+)([a-z]+)?")
+_UNIT_ALIASES: Final[dict[str, str]] = {
+    "s": "s",
+    "sec": "s",
+    "second": "s",
+    "seconds": "s",
+    "m": "m",
+    "min": "m",
+    "minute": "m",
+    "minutes": "m",
+    "h": "h",
+    "hr": "h",
+    "hrs": "h",
+    "hour": "h",
+    "hours": "h",
+    "d": "d",
+    "day": "d",
+    "days": "d",
+    "w": "w",
+    "week": "w",
+    "weeks": "w",
+    "mo": "mo",
+    "mos": "mo",
+    "month": "mo",
+    "months": "mo",
+}
+
+
 def _extract_from_regex(duration: str) -> tuple[int, str]:
-    match: Final = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    match: Final = _DURATION_PATTERN.fullmatch(duration)
 
     if not match:
         raise ValueError("Invalid duration format")
 
-    value, unit = match.groups()
-    value = int(value)
+    value: Final = int(match.group(1))
+    unit: str | None = _UNIT_ALIASES.get(match.group(2) or "")
+    if unit is None:
+        raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
     return value, unit
 
@@ -229,14 +261,20 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
 
 
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
-    """Parse the duration string into value and unit."""
-    match: Final = re.match(r"(\d+)([a-z]+)", duration)
+    """Parse the duration string into value and unit.
+
+    Unknown units stay unrecognized, so a budget reset keeps the midnight
+    fallback instead of reading a prefix such as "5dogs" as days.
+    """
+    match: Final = re.fullmatch(r"(\d+)([a-z]+)", duration)
     if not match:
         return None, None
 
     value: Final = int(match.group(1))
     spelled_unit: Final = match.group(2)
-    unit: Final = _extract_from_regex(duration)[1] or spelled_unit
+    unit: str | None = _UNIT_ALIASES.get(spelled_unit)
+    if unit is None:
+        return None, None
     if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
         return value, spelled_unit
     return value, unit

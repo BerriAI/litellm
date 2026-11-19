@@ -521,5 +521,23 @@ def test_a_month_starting_now_matches_duration_in_seconds():
         assert duration_in_seconds("1mo") == duration_in_seconds_from(now, "1mo")
 
 
+@pytest.mark.parametrize("duration", ["5dogs", "5meters", "5wolves"])
+def test_a_word_that_only_starts_with_a_unit_is_rejected(duration: str) -> None:
+    with pytest.raises(ValueError, match="Unsupported duration unit"):
+        duration_in_seconds(duration)
+
+
+def test_a_word_that_only_starts_with_a_unit_keeps_the_nightly_reset() -> None:
+    now: Final = datetime(2023, 5, 15, 15, 0, tzinfo=timezone.utc)
+    with patch.object(duration_parser.verbose_logger, "warning") as mock_warning:
+        result: Final = get_next_standardized_reset_time("5dogs", now, "UTC")
+    assert result == datetime(2023, 5, 16, tzinfo=timezone.utc)
+    mock_warning.assert_called_once()
+
+
+def test_documented_hour_spelling_is_one_hour() -> None:
+    assert duration_in_seconds("1hr") == 3600
+
+
 if __name__ == "__main__":
     unittest.main()
