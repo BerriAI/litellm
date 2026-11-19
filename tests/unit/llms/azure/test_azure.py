@@ -187,7 +187,7 @@ def test_process_azure_headers_with_dict_input():
         "extra_headers",
     ],
 )
-def test_azure_extra_headers(input, call_type, header_value):
+def test_azure_extra_headers(input, call_type, header_value, monkeypatch: pytest.MonkeyPatch):
     from litellm import embedding, image_generation
 
     # Clear the LLM clients cache to ensure the new http_client is used
@@ -197,7 +197,7 @@ def test_azure_extra_headers(input, call_type, header_value):
 
     messages = [{"role": "user", "content": "Hello world"}]
     with patch.object(http_client, "send", new=MagicMock()) as mock_client:
-        litellm.client_session = http_client
+        monkeypatch.setattr(litellm, "client_session", http_client)
         try:
             if call_type == "completion":
                 func = completion
