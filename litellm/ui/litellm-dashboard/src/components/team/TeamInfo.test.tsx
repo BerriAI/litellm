@@ -2852,6 +2852,19 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
   });
 
+  it.each([null, 0, -1])("blocks team percentage alerts without a positive budget (%j)", async (max_budget) => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithTeamBudgetAlerts(user, { max_budget });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await screen.findByText("Enter a budget greater than zero to enable team percentage alerts");
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "100" } });
+    expect(wireBody(await save(user)).max_budget).toBe(100);
+  });
+
   it("blocks the save when a team budget alert threshold is repeated", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditorWithTeamBudgetAlerts(user);

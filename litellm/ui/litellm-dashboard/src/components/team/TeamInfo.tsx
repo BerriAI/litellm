@@ -381,8 +381,8 @@ const SUPPRESSED_BY_DESCRIPTION = "";
 
 const numericInputSchema = z.union([z.string(), z.number()]).nullish();
 
-const buildTeamUpdateFieldsSchema = (t: TFunction) =>
-  z.object({
+const buildTeamUpdateFieldsSchema = (t: TFunction) => {
+  const fields = z.object({
     team_alias: z.string().min(1, t("teams.teamInfo.validation.teamNameRequired")),
     models: z.array(z.string()).optional(),
     max_budget: numericInputSchema,
@@ -480,6 +480,17 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
     secret_manager_settings: z.string().optional(),
     metadata: metadataPairsSchema.optional(),
   });
+  return fields.superRefine((values, ctx) => {
+    const maxBudget = Number(values.max_budget);
+    if (values.max_budget_alert_emails?.length && (!Number.isFinite(maxBudget) || maxBudget <= 0)) {
+      ctx.addIssue({
+        code: "custom",
+        message: t("teams.teamInfo.validation.teamAlertBudgetRequired"),
+        path: ["max_budget"],
+      });
+    }
+  });
+};
 
 type TeamUpdateFormValues = z.infer<ReturnType<typeof buildTeamUpdateFieldsSchema>>;
 

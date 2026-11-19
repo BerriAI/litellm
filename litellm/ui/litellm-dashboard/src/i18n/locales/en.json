@@ -16827,6 +16827,7 @@
       },
       "validation": {
         "teamNameRequired": "Please input a team name",
+        "teamAlertBudgetRequired": "Enter a budget greater than zero to enable team percentage alerts",
         "teamAlertRecipientsRequired": "Enter at least one recipient for this team alert",
         "thresholdRange": "Enter a whole number from 1 to 100",
         "duplicateThreshold": "Duplicate threshold",
