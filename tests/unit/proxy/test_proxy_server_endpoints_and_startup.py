@@ -24,6 +24,10 @@ import fastapi.routing
 import httpx
 import pytest
 import yaml
+import redis
+import redis.asyncio
+from fakeredis import FakeRedis, FakeServer
+from fakeredis.aioredis import FakeConnection
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
@@ -13519,6 +13523,31 @@ def test_init_cache_redis_backend_reuses_cache_backend_over_environment():
     assert usage_cache is redis_backend
     assert usage_cache.init_kwargs["host"] == "cache-params-host"
     assert spend_redis is redis_backend
+
+
+def test_init_cache_accepts_default_redis_ttl_for_a_redis_response_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    server: Final = FakeServer()
+
+    class Pool(redis.asyncio.BlockingConnectionPool):
+        def __init__(self, **kwargs: object) -> None:  # kwargs-ok: forwarded to the redis pool
+            super().__init__(connection_class=FakeConnection, server=server, **kwargs)
+
+    monkeypatch.setattr(redis, "Redis", FakeRedis)
+    monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "default_redis_ttl", None)
+    with (
+        _patched_coordination_redis_module_state(
+            spend_cache=DualCache(), config_cache=types.SimpleNamespace(redis_cache=None)
+        ),
+        patch("litellm._redis._redis_kwargs_from_environment", return_value={}),
+    ):
+        proxy_server_module.ProxyConfig()._init_cache(
+            cache_params={"type": "redis", "host": "redis.invalid", "port": "6379", "default_redis_ttl": 600}
+        )
+
+    assert litellm.cache is not None
+    assert litellm.cache.cache.default_ttl == 600
 
 
 class _EnvBuiltClusterCache(RedisClusterCache):

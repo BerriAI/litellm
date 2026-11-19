@@ -14,3 +14,4 @@
 
 - `Environment` is the variables the proxy reads outside its config file, one field per variable, named as the variable in lower case. The host deserializes it once and hands it to whatever builds settings from it
 - Values stay as written: a comma-separated list is a `String`, an optional number is an `Option`. Splitting a list, applying a default and validating belong to the consumer
+- `Flag` is the one parsed shape, because every consumer would otherwise repeat Python's `strip().lower() == "true"`. Python string semantics it needs come from `python-compat`
