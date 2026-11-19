@@ -2813,7 +2813,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       metadata: { max_budget_alert_emails: alerts },
     });
 
-    expect(screen.getByText(/Legacy \(deprecated\)/)).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Legacy dollar alerts (deprecated)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Soft Budget (USD)")).toHaveValue(15);
     expect(screen.queryByText(/Each sends its own emails/)).not.toBeInTheDocument();
 

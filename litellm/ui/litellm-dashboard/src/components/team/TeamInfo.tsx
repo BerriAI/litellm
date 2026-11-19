@@ -1762,8 +1762,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     }}
                   />
 
-                  <p className="text-xs text-muted-foreground">{t("teams.teamInfo.editForm.legacySoftBudgetNote")}</p>
-
                   {hasBothBudgetAlertKinds && (
                     <Alert variant="warning">
                       <AlertDescription>
@@ -1772,29 +1770,39 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Alert>
                   )}
 
-                  <FormField control={form.control} name="soft_budget" label={t("teams.teamInfo.editForm.softBudget")}>
-                    {({ ref, value, ...field }) => (
-                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
-                    )}
-                  </FormField>
+                  <fieldset className="space-y-4 rounded-lg border p-4">
+                    <legend className="px-2 text-sm font-medium">
+                      {t("teams.teamInfo.editForm.legacySoftBudgetTitle")}
+                    </legend>
+                    <p className="text-xs text-muted-foreground">{t("teams.teamInfo.editForm.legacySoftBudgetNote")}</p>
+                    <FormField
+                      control={form.control}
+                      name="soft_budget"
+                      label={t("teams.teamInfo.editForm.softBudget")}
+                    >
+                      {({ ref, value, ...field }) => (
+                        <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+                      )}
+                    </FormField>
 
-                  <FormField
-                    control={form.control}
-                    name="soft_budget_alerting_emails"
-                    label={labelWithHint(
-                      t("teams.teamInfo.editForm.softBudgetAlertingEmails"),
-                      t("teams.teamInfo.editForm.softBudgetAlertingEmailsHint"),
-                    )}
-                  >
-                    {({ ref, value, ...field }) => (
-                      <UIInput
-                        {...field}
-                        ref={ref}
-                        value={typeof value === "string" ? value : ""}
-                        placeholder={codeSamples.teams.memberEmails}
-                      />
-                    )}
-                  </FormField>
+                    <FormField
+                      control={form.control}
+                      name="soft_budget_alerting_emails"
+                      label={labelWithHint(
+                        t("teams.teamInfo.editForm.softBudgetAlertingEmails"),
+                        t("teams.teamInfo.editForm.softBudgetAlertingEmailsHint"),
+                      )}
+                    >
+                      {({ ref, value, ...field }) => (
+                        <UIInput
+                          {...field}
+                          ref={ref}
+                          value={typeof value === "string" ? value : ""}
+                          placeholder={codeSamples.teams.memberEmails}
+                        />
+                      )}
+                    </FormField>
+                  </fieldset>
 
                   <Collapsible
                     open={teamMemberSettingsOpen}

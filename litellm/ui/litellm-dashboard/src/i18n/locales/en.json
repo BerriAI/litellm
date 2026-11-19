@@ -16891,7 +16891,8 @@
         "softBudget": "Soft Budget (USD)",
         "softBudgetAlertingEmails": "Soft Budget Alerting Emails",
         "softBudgetAlertingEmailsHint": "Comma-separated email addresses to receive alerts when the soft budget is reached",
-        "legacySoftBudgetNote": "Legacy (deprecated): the Soft Budget fields below send one fixed dollar alert. Prefer the percentage-based Team Budget Alerts above. Existing soft budget settings keep working.",
+        "legacySoftBudgetTitle": "Legacy dollar alerts (deprecated)",
+        "legacySoftBudgetNote": "These dollar-based settings send one fixed alert and remain supported for existing configurations. Use Team Budget Alerts for percentage-based emails.",
         "teamBudgetAlerts": {
           "label": "Team Budget Alerts",
           "hint": "Email the recipients below when the whole team's spend, across all of its keys, reaches a percentage of the team's Max Budget. Add one or more thresholds, each with its own recipients. Recipients are required because a team has no owner. Requires a Max Budget and email alerting to be configured on the proxy.",
