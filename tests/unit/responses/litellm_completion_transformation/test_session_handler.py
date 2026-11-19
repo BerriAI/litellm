@@ -1651,6 +1651,24 @@ async def test_a_stored_blank_user_turn_is_filled_only_when_the_follow_up_route_
 
 
 @pytest.mark.asyncio
+async def test_a_follow_up_whose_model_no_provider_resolves_still_replays_the_stored_turns() -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-unresolved-route", "What is 2+2?", "Four.")
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="chatcmpl-first",
+        litellm_completion_request={"model": "my-router-alias", "messages": [{"role": "user", "content": "Double it."}]},
+        instructions=None,
+        stored_turns=_stored_turns(first_turn),
+    )
+
+    assert _replayed_turns(ChatCompletionSession(messages=request["messages"], litellm_session_id=None)) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", "Double it."),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stored_blank_user_items_that_inference_continues_replay_one_turn_each() -> None:
     replay: Final = await _replay_of_a_blank_follow_up(
         _ROUTE_THAT_FILLS, [{"role": "user", "content": ""}, {"role": "user", "content": "  "}], empty_user_turn_text=""

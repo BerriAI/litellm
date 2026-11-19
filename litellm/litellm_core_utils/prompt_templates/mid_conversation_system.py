@@ -311,6 +311,12 @@ def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResult
         return None
 
 
+def _answers_server_tool_use(result: object, tool_id: str) -> bool:
+    return message_field(result, "tool_use_id") == tool_id and (
+        tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) or message_field(result, "type") == "mcp_tool_result"
+    )
+
+
 def find_anthropic_server_tool_result(
     tool_id: str,
     web_search_results: Sequence[object] | None,
@@ -318,13 +324,7 @@ def find_anthropic_server_tool_result(
 ) -> dict[str, object] | None:
     candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
     return next(
-        (
-            result
-            for result in candidates
-            if isinstance(result, dict)
-            and result.get("tool_use_id") == tool_id
-            and (tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) or result.get("type") == "mcp_tool_result")
-        ),
+        (result for result in candidates if _answers_server_tool_use(result, tool_id) and isinstance(result, dict)),
         None,
     )
 

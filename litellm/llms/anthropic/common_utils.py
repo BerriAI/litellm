@@ -78,7 +78,6 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
-    ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
@@ -2539,7 +2538,7 @@ def with_server_tool_call_arguments(
     return ChatCompletionAssistantToolCall(
         id=call["id"],
         type=call["type"],
-        function=ChatCompletionToolCallFunctionChunk(name=call["function"].get("name"), arguments=arguments),
+        function={**call["function"], "arguments": arguments},
     )
 
 

@@ -4937,3 +4937,50 @@ def test_split_out_moves_a_rewritten_mcp_tool_call_back_to_server_tool_calls() -
         "tool_calls": None,
         "provider_specific_fields": {"server_tool_calls": [masked]},
     }
+
+
+def test_a_guardrail_rewrite_of_an_mcp_call_still_replays_the_mcp_block_pair() -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+    from litellm.llms.anthropic.common_utils import write_anthropic_server_tool_call_arguments
+    from litellm.types.utils import Message
+
+    mcp_tool_result: Final = {
+        "type": "mcp_tool_result",
+        "tool_use_id": "mcptoolu_01",
+        "is_error": False,
+        "content": [{"type": "text", "text": "Found one account."}],
+    }
+    message: Final = Message(
+        role="assistant",
+        content="Done.",
+        provider_specific_fields={
+            "server_tool_calls": [
+                {
+                    **_mcp_tool_call("alice@example.com"),
+                    "function": {
+                        **_mcp_tool_call("alice@example.com")["function"],
+                        "provider_specific_fields": {"server_name": "crm"},
+                    },
+                }
+            ],
+            "tool_results": [mcp_tool_result],
+        },
+    )
+
+    write_anthropic_server_tool_call_arguments(message, 0, json.dumps({"query": "<EMAIL>"}))
+    replayed: Final = anthropic_messages_pt(
+        messages=[{"role": "user", "content": "Find alice."}, message.model_dump()],
+        model="claude-sonnet-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert replayed[1]["content"][1:] == [
+        {
+            "type": "mcp_tool_use",
+            "id": "mcptoolu_01",
+            "name": "lookup",
+            "server_name": "crm",
+            "input": {"query": "<EMAIL>"},
+        },
+        mcp_tool_result,
+    ]

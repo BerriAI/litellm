@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     require_attributes,
 )
+from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import mcp_replay_plan, mcp_server_name
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -2165,6 +2166,11 @@ def _block_id(block: Mapping[str, object]) -> object:
     return block.get("id")
 
 
+def _is_replayed_server_tool_block(block: Mapping[str, object]) -> bool:
+    block_type: Final = string_field(block, "type") or ""
+    return block_type in ("server_tool_use", "mcp_tool_use") or block_type.endswith("_tool_result")
+
+
 def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
     result_ids: Final = frozenset(block.get("tool_use_id") for block in blocks if _is_server_tool_result(block))
     return frozenset(
@@ -2174,10 +2180,16 @@ def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozen
     )
 
 
-def _paused_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
+def _paused_server_tool_use_ids(
+    blocks: Sequence[Mapping[str, object]], answered_later_ids: frozenset[str] = frozenset()
+) -> frozenset[object]:
     if any(block.get("type") == "tool_use" for block in blocks):
         return frozenset()
-    return _unrun_server_tool_use_ids(blocks)
+    return _unrun_server_tool_use_ids(blocks) - answered_later_ids
+
+
+def _is_or_answers(block: Mapping[str, object], ids: frozenset[str]) -> bool:
+    return _block_id(block) in ids or block.get("tool_use_id") in ids
 
 
 def _last_block_id_among(blocks: Sequence[Mapping[str, object]], ids: frozenset[object]) -> object:
@@ -2189,17 +2201,20 @@ def _paused_turn_replay(
     thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
     *,
     is_final_message: bool,
+    answered_later_ids: frozenset[str] = frozenset(),
+    dropped_mcp_ids: frozenset[str] = frozenset(),
 ) -> tuple[
     tuple[_AnthropicToolInvokeItem, ...],
     tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
 ]:
-    unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes)
+    kept: Final = tuple(block for block in tool_invokes if not _is_or_answers(block, dropped_mcp_ids))
+    unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes, answered_later_ids)
     if not unrun_ids:
-        return tuple(tool_invokes), tuple(thinking_blocks)
+        return kept, tuple(thinking_blocks)
     dropped_ids: Final = (
         unrun_ids - frozenset((_last_block_id_among(tool_invokes, unrun_ids),)) if is_final_message else unrun_ids
     )
-    return tuple(block for block in tool_invokes if _block_id(block) not in dropped_ids), ()
+    return tuple(block for block in kept if _block_id(block) not in dropped_ids), ()
 
 
 _BACK_TO_BACK_JSON_OBJECTS: Final = re.compile(r"\}\s*\{")
@@ -2399,13 +2414,10 @@ def convert_to_anthropic_tool_invoke(
             if tool_id in answered_tool_ids
             else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         )
-        mcp_server_name: Final = message_field(
-            message_field(get_attribute_or_key(tool, "function"), "provider_specific_fields"), "server_name"
-        )
-        if (server_tool_result is not None and server_tool_result.get("type") == "mcp_tool_result") or (
-            isinstance(mcp_server_name, str) and mcp_server_name
-        ):
-            if not isinstance(mcp_server_name, str) or not mcp_server_name:
+        mcp_server_name_of_tool = mcp_server_name(tool)
+        is_mcp_tool_result = server_tool_result is not None and server_tool_result.get("type") == "mcp_tool_result"
+        if mcp_server_name_of_tool is not None or is_mcp_tool_result:
+            if mcp_server_name_of_tool is None:
                 continue
             _reject_split_server_tool_call(tool_inputs, tool_name)
             anthropic_tool_invoke.append(
@@ -2413,7 +2425,7 @@ def convert_to_anthropic_tool_invoke(
                     "type": "mcp_tool_use",
                     "id": tool_id,
                     "name": tool_name,
-                    "server_name": mcp_server_name,
+                    "server_name": mcp_server_name_of_tool,
                     "input": tool_inputs[0][1],
                 }
             )
@@ -3373,6 +3385,7 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
+    mcp_replay: Final = mcp_replay_plan(messages)
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
     split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
@@ -3541,6 +3554,11 @@ def anthropic_messages_pt(
                 if _compaction_blocks and isinstance(_compaction_blocks, list):
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)
+            assistant_content.extend(
+                cast(  # cast-ok: an mcp_tool_result block Claude returned goes back exactly as it arrived
+                    tuple[AnthropicMessagesAssistantMessageValues, ...], mcp_replay.lone_results_at(msg_i)
+                )
+            )
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
@@ -3576,12 +3594,16 @@ def anthropic_messages_pt(
                 if assistant_tool_calls is not None
                 else ()
             )
-            turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results))
+            turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results, mcp_replay.answered_later_ids))
             replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
-                tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
+                tool_invoke_results,
+                thinking_blocks or (),
+                is_final_message=msg_i == len(messages) - 1,
+                answered_later_ids=mcp_replay.answered_later_ids,
+                dropped_mcp_ids=mcp_replay.dropped_ids_at(msg_i),
             )
-            _has_server_tool_calls: Final = any(
-                item.get("type") in ("server_tool_use", "mcp_tool_use") for item in replayed_tool_invokes
+            _has_server_tool_calls = any(
+                message_field(item, "type") in ("server_tool_use", "mcp_tool_use") for item in replayed_tool_invokes
             )
 
             if (
@@ -3725,9 +3747,7 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesTextParam, _cached_message))
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
-                        elif m.get("type", "") in ("server_tool_use", "mcp_tool_use") or m.get("type", "").endswith(
-                            "_tool_result"
-                        ):
+                        elif _is_replayed_server_tool_block(m):
                             assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block

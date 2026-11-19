@@ -64,6 +64,7 @@ from openai.types.responses.response_create_params import (
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from openai.types.responses.response_output_item import McpCall
 from pydantic import (
     ConfigDict,
     Discriminator,
@@ -1607,6 +1608,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | OutputToolSearchCall
             | OutputToolSearchOutput
             | ResponseCompactionItem
+            | McpCall
         ]
     )
     parallel_tool_calls: bool | None = None

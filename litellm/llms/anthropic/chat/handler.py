@@ -1044,7 +1044,11 @@ class ModelResponseIterator:
                     self.thinking_block_index += 1
                 if content_block_start["content_block"]["type"] == "text":
                     text = self._release_answer_close() + self._hold_prose(content_block_start["content_block"]["text"])
-                elif content_block_start["content_block"]["type"] in ("tool_use", "server_tool_use", "mcp_tool_use"):
+                elif (
+                    content_block_start["content_block"]["type"] == "tool_use"
+                    or content_block_start["content_block"]["type"] == "server_tool_use"
+                    or content_block_start["content_block"]["type"] == "mcp_tool_use"
+                ):
                     # Reverse-map the (sanitized) tool name back to the
                     # caller's original. No-op when the map is empty.
                     _stream_tool_name = content_block_start["content_block"]["name"]
@@ -1068,7 +1072,7 @@ class ModelResponseIterator:
                     # The initial input in content_block_start is typically {}
                     # for streaming; the full input arrives via input_json_delta
                     # and is assembled at content_block_stop.
-                    if content_block_start["content_block"]["type"] in ("server_tool_use", "mcp_tool_use"):
+                    if content_block_start["content_block"]["type"] != "tool_use":
                         self._current_server_tool_id = content_block_start["content_block"]["id"]
                         self._current_server_tool_name = _stream_tool_name
                         mcp_server_name: Final = content_block_start["content_block"].get("server_name")

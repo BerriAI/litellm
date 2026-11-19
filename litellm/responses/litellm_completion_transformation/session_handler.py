@@ -328,6 +328,7 @@ class ResponsesSessionHandler:
         tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
         empty_user_turn_text: str | None = None,
+        replay_mcp_calls: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -370,6 +371,7 @@ class ResponsesSessionHandler:
             item_cache_control,
             tool_call_provider_fields,
             empty_user_turn_text,
+            replay_mcp_calls,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
@@ -377,6 +379,7 @@ class ResponsesSessionHandler:
             item_cache_control,
             tool_call_provider_fields,
             empty_user_turn_text,
+            replay_mcp_calls,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -438,6 +441,7 @@ class ResponsesSessionHandler:
         item_cache_control: bool,
         tool_call_provider_fields: bool,
         empty_user_turn_text: str | None = None,
+        replay_mcp_calls: bool = False,
     ) -> list["SessionMessage"]:
         return reduce(
             lambda history, turn: ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
@@ -447,6 +451,7 @@ class ResponsesSessionHandler:
                 item_cache_control=item_cache_control,
                 tool_call_provider_fields=tool_call_provider_fields,
                 empty_user_turn_text=empty_user_turn_text,
+                replay_mcp_calls=replay_mcp_calls,
             ),
             zip(spend_logs, proxy_server_requests, strict=True),
             [],
@@ -466,6 +471,7 @@ class ResponsesSessionHandler:
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
         empty_user_turn_text: str | None = None,
+        replay_mcp_calls: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -496,7 +502,7 @@ class ResponsesSessionHandler:
                 )
 
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
-            _stored_response(spend_log), stored_tools, item_cache_control, tool_call_provider_fields
+            _stored_response(spend_log), stored_tools, item_cache_control, tool_call_provider_fields, replay_mcp_calls
         )
         if response_input_param is not None:
             stored_input: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -507,6 +513,7 @@ class ResponsesSessionHandler:
                 tool_call_provider_fields=tool_call_provider_fields,
                 only_since_compaction=True,
                 replay_tool_search=True,
+                replay_mcp_calls=replay_mcp_calls,
             )
             input_before_blank_tail: Final = without_blank_user_tail(stored_input)
             inference_continues_the_blank_tail: Final = empty_user_turn_text == "" and len(
@@ -531,7 +538,11 @@ class ResponsesSessionHandler:
 
     @staticmethod
     def _stored_output_messages(
-        stored_response: object, stored_tools: object | None, item_cache_control: bool, tool_call_provider_fields: bool
+        stored_response: object,
+        stored_tools: object | None,
+        item_cache_control: bool,
+        tool_call_provider_fields: bool,
+        replay_mcp_calls: bool,
     ) -> Sequence[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -552,6 +563,7 @@ class ResponsesSessionHandler:
                 tool_call_provider_fields=tool_call_provider_fields,
                 only_since_compaction=True,
                 replay_tool_search=True,
+                replay_mcp_calls=replay_mcp_calls,
             )
         if not isinstance(stored_response, dict) or not stored_response:
             return ()
