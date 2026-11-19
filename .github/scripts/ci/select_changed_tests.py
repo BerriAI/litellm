@@ -25,7 +25,7 @@ SOURCE_ROOT: Final = PurePosixPath("litellm")
 
 def _shard_paths(shard: Mapping[str, object]) -> tuple[PurePosixPath, ...]:
     tokens: Final = str(shard.get("test-path", "")).split()
-    return tuple(PurePosixPath(token) for token in tokens if not token.startswith("-"))
+    return tuple(PurePosixPath(token.split("::", 1)[0]) for token in tokens if not token.startswith("-"))
 
 
 def _shards(workflow: Mapping[str, object], job: str) -> tuple[Mapping[str, object], ...]:

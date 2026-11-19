@@ -121,6 +121,24 @@ def test_include_core_selects_core_tests_but_still_excludes_incompatible_shards(
     assert selector.select(paths, excluded, root) == paths[:2]
 
 
+def test_node_selected_core_tests_exclude_their_file_from_changed_tests(tmp_path):
+    root: Final = _tree(tmp_path, "tests/unit/test_router.py", "tests/unit/test_other.py")
+    workflow: Final = {
+        "jobs": {
+            "unit-core": {
+                "strategy": {
+                    "matrix": {
+                        "include": [{"test-path": "tests/unit/test_router.py::TestRetries::test_retry[timeout]"}]
+                    }
+                }
+            }
+        }
+    }
+    assert selector.select(
+        ("tests/unit/test_router.py", "tests/unit/test_other.py"), selector.exclusions(workflow, "3.12"), root
+    ) == ("tests/unit/test_other.py",)
+
+
 def test_deleted_files_helpers_and_package_inits_select_nothing(tmp_path):
     root: Final = _tree(
         tmp_path,

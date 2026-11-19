@@ -160,6 +160,13 @@ impl Error {
         }
     }
 
+    pub fn refused_response(&self) -> Option<&ErrorDetail> {
+        match self {
+            Self::Llm(error) => error.invalid_response(),
+            _ => None,
+        }
+    }
+
     /// The provider's response headers on an upstream failure; empty for every other error.
     pub fn upstream_headers(&self) -> &[(String, String)] {
         match self {
@@ -175,6 +182,15 @@ impl Error {
             Self::Llm(error) => error.is_body_read_timeout(),
             Self::Http(error) => error.is_body_read_timeout(),
             _ => false,
+        }
+    }
+
+    /// The `scheme://host:port` a request that never connected was sent to.
+    pub fn connect_origin(&self) -> Option<&str> {
+        match self {
+            Self::Llm(error) => error.connect_origin(),
+            Self::Http(error) => error.connect_origin(),
+            _ => None,
         }
     }
 
