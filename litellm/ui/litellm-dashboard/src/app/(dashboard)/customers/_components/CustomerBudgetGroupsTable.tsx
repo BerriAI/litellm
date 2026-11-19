@@ -42,7 +42,7 @@ export default function CustomerBudgetGroupsTable({
   groups: CustomerBudgetGroupFields[];
   defaultGroupId: string;
   disabled: boolean;
-  scope: "member" | "organization" | "app";
+  scope: "member" | "organization" | "app" | "overall-app";
   title: string;
   description: string;
   onUpdate: (id: string, patch: Partial<Omit<CustomerBudgetGroupFields, "id">>) => void;
@@ -126,6 +126,7 @@ export default function CustomerBudgetGroupsTable({
                   </Label>
                   <CustomerAllowedModelsSelect
                     id={`${id}-models-${group.id}`}
+                    showHint={false}
                     value={group.allowedModels ?? []}
                     onChange={(allowedModels) => onUpdate(group.id, { allowedModels })}
                   />
@@ -198,7 +199,7 @@ export default function CustomerBudgetGroupsTable({
           </Button>
         </div>
       </div>
-      {scope !== "app" && (
+      {(memberGroups || scope === "organization") && (
         <div className="grid items-center gap-3 rounded-lg bg-muted/40 p-4 sm:grid-cols-[1fr_14rem]">
           <div className="space-y-1">
             <Label htmlFor={`${id}-default-group`}>

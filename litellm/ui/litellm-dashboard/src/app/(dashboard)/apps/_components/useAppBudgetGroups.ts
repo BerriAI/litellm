@@ -2,6 +2,10 @@
 
 import { $api } from "@/lib/http/api";
 
+export function useOverallAppBudgetGroups() {
+  return $api.useQuery("get", "/management/v1/app_budget_groups", {});
+}
+
 export function useAppBudgetGroups(existingIds: (string | null | undefined)[] = [], enabled = true) {
   const groups = $api.useQuery("get", "/management/v1/app_customer_organization_budget_groups", {}, { enabled });
   const missingIds = existingIds.filter(

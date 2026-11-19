@@ -54,7 +54,11 @@
     "retry": "Retry",
     "spend": "Tracked spend (USD)",
     "appBudget": "Overall app budget",
+    "appBudgetHint": "Optional. Caps total usage across all customer organizations and members in this app.",
+    "organizationDefault": "Default for app × customer organizations",
     "memberDefault": "Default per-member budget",
+    "memberDefaultHint": "Optional. Applies separately to each member unless they have a more specific app budget.",
+    "noAdditionalLimits": "No additional limits at this level",
     "actions": "Actions",
     "none": "None",
     "unlimited": "No spend limit",
@@ -62,6 +66,7 @@
     "selectApp": "Select an app",
     "profile": "Budget group",
     "manageProfiles": "Manage app × customer organization budget groups",
+    "manageOverallProfiles": "Manage overall app budget groups",
     "chooseProfile": "Select a budget group",
     "noDefaultProfile": "No default budget group",
     "defaultProfileHint": "Customers without their own app budget or selected budget group inherit this group.",
@@ -21000,6 +21005,10 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "overallAppGroups": {
+      "title": "Overall app budget groups",
+      "help": "Presets for an app's total usage across all customer organizations and members. Blank means no limit."
+    },
     "appOrganizationGroups": {
       "title": "App × customer organization budget groups",
       "help": "Each customer organization gets these limits separately within an app. Blank means no limit."
@@ -21027,7 +21036,8 @@
     "budgetGroups": {
       "organizationDefault": "Use organization default",
       "organizationDefaultHelp": "Apply the configured default when this organization is created.",
-      "settingsHint": "Manage separate presets for organization-wide limits and for each customer's usage within an app.",
+      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's usage within an app.",
+      "overallAppTab": "Overall App Budget Groups",
       "overallTab": "Overall Organization Budget Groups",
       "appTab": "Per-App Organization Budget Groups",
       "newOrganizationsJoin": "New organizations join",

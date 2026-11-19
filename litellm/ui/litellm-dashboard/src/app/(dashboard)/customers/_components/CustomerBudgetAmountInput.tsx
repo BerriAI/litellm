@@ -10,6 +10,7 @@ export default function CustomerBudgetAmountInput({
   disabled,
   placeholder,
   children,
+  "aria-describedby": describedBy,
 }: {
   id: string;
   label: string;
@@ -18,6 +19,7 @@ export default function CustomerBudgetAmountInput({
   disabled?: boolean;
   placeholder?: string;
   children?: ReactNode;
+  "aria-describedby"?: string;
 }) {
   const { t } = useTranslation();
   return (
@@ -28,6 +30,7 @@ export default function CustomerBudgetAmountInput({
       <InputGroupInput
         id={id}
         aria-label={label}
+        aria-describedby={describedBy}
         type="number"
         min={0}
         step="any"

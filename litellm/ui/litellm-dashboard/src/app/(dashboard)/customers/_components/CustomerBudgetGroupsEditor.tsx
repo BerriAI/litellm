@@ -9,18 +9,21 @@ export default function CustomerBudgetGroupsEditor({
   onChange,
   disabled = false,
   memberGroups = true,
-  appGroups = false,
+  scope = "organization",
 }: {
   groups: CustomerBudgetGroupFields[];
   defaultGroupId: string;
   onChange: (groups: CustomerBudgetGroupFields[], defaultGroupId: string) => void;
   disabled?: boolean;
   memberGroups?: boolean;
-  appGroups?: boolean;
+  scope?: "organization" | "app" | "overall-app";
 }) {
   const { t } = useTranslation();
-  const globalScope = appGroups ? "app" : "organization";
-  const globalGroupKey = appGroups ? "customerPortal.appOrganizationGroups" : "customerPortal.organizationGroups";
+  const globalGroupKey = {
+    app: "customerPortal.appOrganizationGroups",
+    "overall-app": "customerPortal.overallAppGroups",
+    organization: "customerPortal.organizationGroups",
+  }[scope];
   const updateGroup = (id: string, patch: Partial<Omit<CustomerBudgetGroupFields, "id">>) =>
     onChange(
       groups.map((group) => (group.id === id ? { ...group, ...patch } : group)),
@@ -48,7 +51,7 @@ export default function CustomerBudgetGroupsEditor({
       groups={groups}
       defaultGroupId={defaultGroupId}
       disabled={disabled}
-      scope={memberGroups ? "member" : globalScope}
+      scope={memberGroups ? "member" : scope}
       title={t(memberGroups ? "customerPortal.createDialog.memberGroups" : `${globalGroupKey}.title`)}
       description={t(memberGroups ? "customerPortal.createDialog.memberGroupsHelp" : `${globalGroupKey}.help`)}
       onUpdate={updateGroup}

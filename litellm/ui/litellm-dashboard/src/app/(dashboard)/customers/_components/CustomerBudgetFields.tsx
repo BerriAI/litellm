@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { BudgetFields } from "./customerBudgetForm";
@@ -111,13 +112,18 @@ export function CustomerBudgetLimitFields({
   );
 }
 
-export function CustomerBudgetFields({ layout = "detailed", ...props }: Props & { layout?: "scalar" | "detailed" }) {
+export function CustomerBudgetFields({
+  layout = "detailed",
+  children,
+  ...props
+}: Props & { layout?: "scalar" | "detailed"; children?: ReactNode }) {
   const { t } = useTranslation();
   const { fields, onChange, idPrefix, disabled = false } = props;
   if (layout === "scalar")
     return (
       <div className="space-y-5">
         <CustomerBudgetLimitFields {...props} />
+        {children}
         <div className="border-t pt-5">
           <CustomerBudgetAdvancedFields {...props} />
         </div>

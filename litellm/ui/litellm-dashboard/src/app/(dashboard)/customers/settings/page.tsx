@@ -13,11 +13,17 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { uiHref } from "@/utils/uiHref";
 
-const budgetGroupTab = parseAsStringLiteral(["organization", "app"])
+const budgetGroupTab = parseAsStringLiteral(["organization", "app", "overall-app"])
   .withDefault("organization")
   .withOptions({ history: "push" });
 
 const catalogs = [
+  {
+    scope: "overall-app",
+    label: "customerPortal.budgetGroups.overallAppTab",
+    endpoint: "/management/v1/app_budget_groups",
+    invalidate: ["apps", "app"],
+  },
   {
     scope: "organization",
     label: "customerPortal.budgetGroups.overallTab",
@@ -54,7 +60,7 @@ export default function CustomerSettings() {
   const { t } = useTranslation();
   const [tab, setTab] = useQueryState("tab", budgetGroupTab);
   const changeTab = (value: unknown) => {
-    if (value === "organization" || value === "app") void setTab(value);
+    if (value === "organization" || value === "app" || value === "overall-app") void setTab(value);
   };
   const { accessToken, userRole } = useAuthorized();
   const canManage = Boolean(accessToken && isProxyAdminRole(userRole));

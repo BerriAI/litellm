@@ -16,11 +16,13 @@ export default function CustomerBudgetPeriodSelect({
   onChange,
   disabled,
   standardOnly = false,
+  allowNoReset = true,
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   standardOnly?: boolean;
+  allowNoReset?: boolean;
 }) {
   const { t } = useTranslation();
   const [custom, setCustom] = useState(false);
@@ -51,6 +53,7 @@ export default function CustomerBudgetPeriodSelect({
         <SelectContent>
           {Object.entries(periodLabels)
             .slice(0, standardOnly ? 2 : undefined)
+            .filter(([period]) => allowNoReset || period !== "none")
             .map(([value, label]) => (
               <SelectItem key={value} value={value}>
                 {t(label)}

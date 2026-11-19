@@ -2,6 +2,8 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import CustomerBudgetAmountInput from "./CustomerBudgetAmountInput";
+import CustomerBudgetPeriodSelect from "./CustomerBudgetPeriodSelect";
 import type { BudgetEditorFields } from "./customerBudgetForm";
 import { isCalendarBudgetDuration } from "@/lib/forms/budgetWindows";
 
@@ -12,38 +14,68 @@ export default function CustomerBudgetWindows({
   windows,
   onChange,
   removable = false,
+  disabled = false,
 }: {
   id: string;
   windows: Windows;
   onChange: (windows: Windows) => void;
   removable?: boolean;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const WindowLabel = removable ? "label" : Label;
   const rows = windows.map(({ budget, maxBudget }, index) => {
     const period = budget.budget_duration;
     if (!removable && isCalendarBudgetDuration(period)) return null;
     const inputId = `${id}-window-${index}`;
+    const changeAmount = (value: string) =>
+      onChange(windows.map((entry, i) => (i === index ? { ...entry, maxBudget: value } : entry)));
     return (
-      <div key={`${period}-${index}`} className={removable ? "space-y-1.5" : "space-y-2"}>
-        <WindowLabel htmlFor={inputId} className={removable ? "block text-sm" : "font-normal text-muted-foreground"}>
-          {t("apps.windowBudget", { period })}
-        </WindowLabel>
+      <div key={index} className="space-y-2">
+        <Label htmlFor={inputId} className="font-normal text-muted-foreground">
+          {t(removable ? "apps.additionalSpendLimit" : "apps.windowBudget", { period })}
+        </Label>
         <div className={removable ? "flex items-center gap-2" : undefined}>
-          <Input
-            id={inputId}
-            type="number"
-            min={0}
-            step="any"
-            value={maxBudget}
-            placeholder={t("customerPortal.createDialog.noLimit")}
-            aria-describedby={removable ? `${id}-windows-hint` : undefined}
-            onChange={(event) =>
-              onChange(windows.map((entry, i) => (i === index ? { ...entry, maxBudget: event.target.value } : entry)))
-            }
-          />
+          {removable ? (
+            <CustomerBudgetAmountInput
+              id={inputId}
+              label={t("apps.additionalSpendLimit")}
+              aria-describedby={`${id}-windows-hint`}
+              value={maxBudget}
+              onChange={changeAmount}
+              disabled={disabled}
+            >
+              <CustomerBudgetPeriodSelect
+                value={period}
+                allowNoReset={false}
+                disabled={disabled}
+                onChange={(value) =>
+                  onChange(
+                    windows.map((entry, i) =>
+                      i === index ? { ...entry, budget: { ...entry.budget, budget_duration: value } } : entry,
+                    ),
+                  )
+                }
+              />
+            </CustomerBudgetAmountInput>
+          ) : (
+            <Input
+              id={inputId}
+              type="number"
+              min={0}
+              step="any"
+              value={maxBudget}
+              disabled={disabled}
+              placeholder={t("customerPortal.createDialog.noLimit")}
+              onChange={(event) => changeAmount(event.target.value)}
+            />
+          )}
           {removable && (
-            <Button type="button" variant="outline" onClick={() => onChange(windows.filter((_, i) => i !== index))}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={disabled}
+              onClick={() => onChange(windows.filter((_, i) => i !== index))}
+            >
               {t("apps.removeWindow")}
             </Button>
           )}

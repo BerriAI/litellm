@@ -32,6 +32,7 @@ export function CustomerBudgetSourceSelect({
   loading = false,
   inheritedOption,
   noTemplate = false,
+  custom = true,
 }: {
   profiles: Organization["default_budgets"];
   value: string;
@@ -41,6 +42,7 @@ export function CustomerBudgetSourceSelect({
   loading?: boolean;
   inheritedOption?: { label: string; summary: string };
   noTemplate?: boolean;
+  custom?: boolean;
 }) {
   const { t } = useTranslation();
   const profileOptions = profiles.map((group) => {
@@ -93,7 +95,7 @@ export function CustomerBudgetSourceSelect({
     ...(inheritedOption ? [{ ...inheritedOption, value: "inherit" }] : []),
     ...profileOptions,
     ...(noTemplate ? [noTemplateOption] : []),
-    customOption,
+    ...(custom ? [customOption] : []),
   ];
   const selection =
     options.find((option) => option.value === value) ??

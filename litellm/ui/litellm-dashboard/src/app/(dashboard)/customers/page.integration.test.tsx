@@ -152,9 +152,7 @@ afterEach(() => {
 });
 
 const customerLinks = () =>
-  within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link", {
-    name: (name) => name !== "App budgets",
-  });
+  within(screen.getByRole("table", { name: "Customer organizations" })).getAllByRole("link");
 
 describe("customer organization overview", () => {
   it("shows each organization's assigned tier or custom budget in the budget group column", async () => {
@@ -207,9 +205,6 @@ describe("customer organization overview", () => {
       "href",
       "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15",
     );
-    expect(
-      within(screen.getByRole("row", { name: /Customer 29/ })).getByRole("link", { name: "App budgets" }),
-    ).toHaveAttribute("href", "/ui/customers/usage?org=customer-29&from=2024-03-01&to=2024-03-15#app-budgets");
     const overview = screen.getByRole("region", { name: "Overall customer usage" });
     expect(within(overview).getByText("$100.00")).toBeInTheDocument();
     expect(within(overview).getByText("20")).toBeInTheDocument();

@@ -24,6 +24,9 @@ import ApplicationsTable from "./ApplicationsTable";
 import AppBudgetEditor from "./AppBudgetEditor";
 import AppDefinitionSetting from "./AppDefinitionSetting";
 import AppProfileSelect from "./AppProfileSelect";
+import { useOverallAppBudgetGroups } from "./useAppBudgetGroups";
+import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
+import { uiHref } from "@/utils/uiHref";
 
 const APPLICATIONS_PAGE_SIZE = 25;
 
@@ -186,6 +189,7 @@ function ApplicationsList({
 
 function ResourceDefaults({ resource }: { resource: AppResource }) {
   const { t } = useTranslation();
+  const groups = useOverallAppBudgetGroups();
   const app = useQuery({
     queryKey: ["app", resource.app_id],
     queryFn: async () => {
@@ -196,26 +200,47 @@ function ResourceDefaults({ resource }: { resource: AppResource }) {
     },
     enabled: resource.app_id !== null,
   });
-  if (resource.app_id && app.isPending) return <p role="status">{t("apps.loading")}</p>;
+  if (groups.isPending || (resource.app_id && app.isPending)) return <p role="status">{t("apps.loading")}</p>;
+  if (groups.isError)
+    return <ErrorState message={extractProxyErrorMessage(groups.error)} onRetry={() => void groups.refetch()} />;
   if (app.isError)
     return <ErrorState message={extractProxyErrorMessage(app.error)} onRetry={() => void app.refetch()} />;
-  return <AppDefaultsForm resource={resource} app={app.data} />;
+  return <AppDefaultsForm resource={resource} app={app.data} profiles={groups.data.default_budgets} />;
 }
 
-function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }) {
+const appDefaultsFields = (app: App | undefined, profiles: BudgetGroups["default_budgets"]) => {
+  const customSource = app?.budget ? "custom" : "inherit";
+  return {
+    budget: budgetEditorFields(app?.budget),
+    budgetSource: profiles.some((profile) => profile.budget_id === app?.budget_id)
+      ? `profile:${app?.budget_id}`
+      : customSource,
+    member: budgetEditorFields(app?.default_customer_member_budget),
+    profile: app?.default_tier_budget_id ?? "",
+    autoCreate: app?.auto_create_customers ?? true,
+    surcharge: appSurchargeField(app?.customer_margin),
+  };
+};
+
+function AppDefaultsForm({
+  resource,
+  app,
+  profiles,
+}: {
+  resource: AppResource;
+  app?: App;
+  profiles: BudgetGroups["default_budgets"];
+}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [saved, setSaved] = useState(false);
-  const { fields, update, pending, error, save } = useCustomerBudgetForm({
-    initial: {
-      budget: budgetEditorFields(app?.budget),
-      member: budgetEditorFields(app?.default_customer_member_budget),
-      profile: app?.default_tier_budget_id ?? "",
-      autoCreate: app?.auto_create_customers ?? true,
-      surcharge: appSurchargeField(app?.customer_margin),
-    },
+  const { fields, setFields, update, pending, error, save } = useCustomerBudgetForm({
+    initial: appDefaultsFields(app, profiles),
     parse: (fields) => {
-      const budget = permanentBudgetEditorValue(fields.budget, app?.budget);
+      const budget =
+        fields.budgetSource === "custom"
+          ? permanentBudgetEditorValue(fields.budget, app?.budget)
+          : ({ ok: true, value: null } as const);
       const member = permanentBudgetEditorValue(fields.member, app?.default_customer_member_budget);
       if (!budget.ok || !member.ok) return { ok: false, error: t("customerPortal.hierarchy.invalidNumber") };
       const margin = appSurchargeValue(fields.surcharge);
@@ -223,7 +248,9 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
       return {
         ok: true,
         value: {
-          budget: budget.value,
+          ...(fields.budgetSource === "custom"
+            ? { budget: budget.value }
+            : { budget_id: fields.budgetSource.startsWith("profile:") ? fields.budgetSource.slice(8) : null }),
           default_customer_member_budget: member.value,
           default_tier_budget_id: fields.profile || null,
           auto_create_customers: fields.autoCreate,
@@ -233,12 +260,12 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
     },
     write: async (body) => {
       setSaved(false);
-      if (app)
-        await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body });
-      else
-        await fetchClient.POST("/management/v1/apps", {
-          body: { ...body, resource_id: resource.resource_id, resource_type: resource.resource_type },
-        });
+      const response = app
+        ? await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body })
+        : await fetchClient.POST("/management/v1/apps", {
+            body: { ...body, resource_id: resource.resource_id, resource_type: resource.resource_type },
+          });
+      if (response.data) setFields(appDefaultsFields(response.data, profiles));
       await Promise.all(
         ["app-resources", "apps", "app", "app-organization", "app-member"].map((key) =>
           queryClient.invalidateQueries({ queryKey: [key] }),
@@ -248,31 +275,53 @@ function AppDefaultsForm({ resource, app }: { resource: AppResource; app?: App }
     },
   });
   return (
-    <form onSubmit={save} className="space-y-5" aria-label={t("apps.defaultsFor", { alias: resource.alias })}>
-      <h3 className="text-sm font-semibold">{t("apps.defaultsFor", { alias: resource.alias })}</h3>
-      <div className="max-w-md">
+    <form onSubmit={save} className="space-y-6" aria-label={t("apps.defaultsFor", { alias: resource.alias })}>
+      <AppBudgetEditor
+        modelScope={resource}
+        title={t("apps.appBudget")}
+        description={t("apps.appBudgetHint")}
+        id="app-budget"
+        fields={fields.budget}
+        onChange={(value) => update("budget", value)}
+        disabled={pending}
+        source={{
+          profiles,
+          value: fields.budgetSource,
+          onChange: (source) => {
+            if (source)
+              setFields((current) => ({
+                ...current,
+                budgetSource: source,
+                budget: { ...current.budget, budgetEnabled: source === "custom" },
+              }));
+          },
+        }}
+      />
+      <a href={`${uiHref("customers/settings")}?tab=overall-app`} className="text-xs text-primary hover:underline">
+        {t("apps.manageOverallProfiles")}
+      </a>
+      <section className="space-y-4 border-t pt-6" aria-labelledby="app-org-default-heading">
+        <div className="space-y-1">
+          <h3 id="app-org-default-heading" className="font-semibold">
+            {t("apps.organizationDefault")}
+          </h3>
+          <p className="text-sm text-muted-foreground">{t("apps.defaultProfileHint")}</p>
+        </div>
         <AppProfileSelect
-          id="app-default-profile"
           value={fields.profile}
           onChange={(value) => update("profile", value)}
-          emptyLabel={t("apps.noDefaultProfile")}
+          emptyLabel={t("customerPortal.createDialog.noLimit")}
         />
-      </div>
-      <p className="text-xs text-muted-foreground">{t("apps.defaultProfileHint")}</p>
-      <div className="grid gap-6 lg:grid-cols-2">
-        <AppBudgetEditor
-          modelScope={resource}
-          title={t("apps.appBudget")}
-          id="app-budget"
-          fields={fields.budget}
-          onChange={(value) => update("budget", value)}
-        />
+      </section>
+      <div className="border-t pt-6">
         <AppBudgetEditor
           modelScope={resource}
           title={t("apps.memberDefault")}
+          description={t("apps.memberDefaultHint")}
           id="app-member"
           fields={fields.member}
           onChange={(value) => update("member", value)}
+          disabled={pending}
         />
       </div>
       <div className="space-y-1.5 border-t pt-4">

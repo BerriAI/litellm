@@ -15,9 +15,17 @@ interface Props {
   onChange: (value: string[]) => void;
   disabled?: boolean;
   modelScope?: CustomerModelScope;
+  showHint?: boolean;
 }
 
-export default function CustomerAllowedModelsSelect({ id, value, onChange, disabled, modelScope }: Props) {
+export default function CustomerAllowedModelsSelect({
+  id,
+  value,
+  onChange,
+  disabled,
+  modelScope,
+  showHint = true,
+}: Props) {
   const { t } = useTranslation();
   const gatewayModels = useAllProxyModels({ enabled: !modelScope });
   const scopedModels = useQuery({
@@ -43,7 +51,7 @@ export default function CustomerAllowedModelsSelect({ id, value, onChange, disab
     options.push(unavailableOption);
   }
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2 whitespace-normal">
       <MultiSelect
         id={id}
         options={options}
@@ -55,7 +63,7 @@ export default function CustomerAllowedModelsSelect({ id, value, onChange, disab
         loading={models.isLoading}
         disabled={disabled}
       />
-      <p className="text-xs text-muted-foreground">{t("customerPortal.hierarchy.allowedModelsHint")}</p>
+      {showHint && <p className="text-xs text-muted-foreground">{t("customerPortal.hierarchy.allowedModelsHint")}</p>}
       {models.isError && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
           <span>{t("customerPortal.hierarchy.modelsLoadError")}</span>

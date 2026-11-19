@@ -42,36 +42,40 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 describe("CustomerBudgetGroups", () => {
-  it.each(["organization", "app"] as const)("saves model-only %s groups and reloads their selection", async (scope) => {
-    const user = userEvent.setup();
-    const source = { ...organization, default_budget_template_id: null, default_budgets: [] };
-    const saved = {
-      ...source,
-      default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
-    };
-    fetchMock.mockResolvedValue(json(saved));
-    const view = renderWithProviders(
-      <CustomerBudgetGroups organization={source} onSaved={onSaved} global scope={scope} />,
-    );
-    await user.click(screen.getByRole("button", { name: "Add budget group" }));
-    fireEvent.change(screen.getByLabelText("Group name 1"), { target: { value: "Models" } });
-    await user.click(screen.getByRole("combobox", { name: "Search gateway models" }));
-    await user.click(await screen.findByRole("option", { name: "model-a" }));
-    await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    const request = fetchMock.mock.calls[0][0] as Request;
-    expect(new URL(request.url).pathname).toBe(
-      scope === "app"
-        ? "/management/v1/app_customer_organization_budget_groups"
-        : "/management/v1/customer_organization_budget_groups",
-    );
-    expect(await request.clone().json()).toMatchObject({
-      default_budgets: [{ name: "Models", allowed_models: ["model-a"] }],
-    });
-    view.rerender(<CustomerBudgetGroups organization={saved} onSaved={onSaved} global scope={scope} />);
-    expect(screen.getByLabelText("model-a")).toBeInTheDocument();
-  });
+  it.each(["organization", "app", "overall-app"] as const)(
+    "saves model-only %s groups and reloads their selection",
+    async (scope) => {
+      const user = userEvent.setup();
+      const source = { ...organization, default_budget_template_id: null, default_budgets: [] };
+      const saved = {
+        ...source,
+        default_budgets: [{ budget_id: "models", name: "Models", allowed_models: ["model-a"] }],
+      };
+      fetchMock.mockResolvedValue(json(saved));
+      const view = renderWithProviders(
+        <CustomerBudgetGroups organization={source} onSaved={onSaved} global scope={scope} />,
+      );
+      await user.click(screen.getByRole("button", { name: "Add budget group" }));
+      fireEvent.change(screen.getByLabelText("Group name 1"), { target: { value: "Models" } });
+      await user.click(screen.getByRole("combobox", { name: "Search gateway models" }));
+      await user.click(await screen.findByRole("option", { name: "model-a" }));
+      await user.keyboard("{Escape}");
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+      const request = fetchMock.mock.calls[0][0] as Request;
+      const endpoints = {
+        app: "/management/v1/app_customer_organization_budget_groups",
+        organization: "/management/v1/customer_organization_budget_groups",
+        "overall-app": "/management/v1/app_budget_groups",
+      };
+      expect(new URL(request.url).pathname).toBe(endpoints[scope]);
+      expect(await request.clone().json()).toMatchObject({
+        default_budgets: [{ name: "Models", allowed_models: ["model-a"] }],
+      });
+      view.rerender(<CustomerBudgetGroups organization={saved} onSaved={onSaved} global scope={scope} />);
+      expect(screen.getByLabelText("model-a")).toBeInTheDocument();
+    },
+  );
 
   beforeEach(() => {
     testQueryClient.clear();
@@ -115,6 +119,7 @@ describe("CustomerBudgetGroups", () => {
   });
 
   it.each([
+    ["Overall app budget groups", "Overall App Budget Groups", "/management/v1/app_budget_groups", "overall-app"],
     [
       "Organization budget groups",
       "Overall Organization Budget Groups",

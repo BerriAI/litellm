@@ -30,6 +30,16 @@ const app = {
   created_by: "",
   updated_by: "",
 };
+const overallPreset = {
+  budget_id: "overall-standard",
+  name: "App Standard",
+  max_budget: 150,
+  budget_duration: "1mo",
+  rpm_limit: 20,
+  tpm_limit: 1000,
+  allowed_models: ["model-a"],
+  budget_limits: [{ max_budget: 1200, budget_duration: "12mo" }],
+};
 const paginatedResources = Array.from({ length: 30 }, (_, index) => ({
   resource_type: "team",
   resource_id: `team-${index}`,
@@ -59,6 +69,8 @@ beforeEach(() => {
     }
     if (path.endsWith("/apps/resources")) return json(resources);
     if (path.endsWith("/apps/app-chat")) return json(configuredApps[0]);
+    if (path.endsWith("/app_budget_groups"))
+      return json({ default_budgets: [overallPreset], budget_groups_revision: "a".repeat(64) });
     if (path.endsWith("/customer_organization_budget_groups"))
       return json({ default_budgets: [{ budget_id: "org-standard", name: "Standard", max_budget: 1000 }] });
     if (path.endsWith("/app_customer_organization_budget_groups"))
@@ -112,8 +124,7 @@ describe("Gateway app definition", () => {
 
   it("should reuse a shared customer budget group when configuring an existing resource", async () => {
     const user = await openAppSettings();
-    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), "Tier 1");
-    expect(screen.getByText("$100.00")).toBeInTheDocument();
+    await chooseAppOption(user, await screen.findByRole("combobox", { name: "Budget group" }), /^Tier 1/);
     await user.click(screen.getByRole("button", { name: "Save app settings" }));
     await waitFor(() => expect(requests.some((request) => request.method === "POST")).toBe(true));
     const expectedSettings = {
@@ -137,8 +148,8 @@ describe("Gateway app definition", () => {
     };
     configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
     const user = await openAppSettings();
-    const overall = within(await screen.findByRole("group", { name: "Overall app budget" }));
-    const member = within(screen.getByRole("group", { name: "Default per-member budget" }));
+    const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
+    const member = within(screen.getByRole("region", { name: "Default per-member budget" }));
     expect(overall.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
     fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
     fireEvent.change(member.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "30" } });
@@ -147,6 +158,50 @@ describe("Gateway app definition", () => {
     const body = await requests.find((request) => request.method === "PATCH")!.json();
     expect(body.budget).toEqual({ rpm_limit: 0 });
     expect(body.default_customer_member_budget).toEqual({ rpm_limit: 30 });
+  });
+
+  it("keeps overall presets linked until a custom edit and excludes presets from member defaults", async () => {
+    resources = [{ ...resource, app_id: app.app_id }];
+    configuredApps = [{ ...app, budget_id: overallPreset.budget_id, budget: { ...overallPreset, max_budget: 250 } }];
+    const user = await openAppSettings();
+    const overall = within(await screen.findByRole("region", { name: "Overall app budget" }));
+    await user.click(screen.getByRole("combobox", { name: "Default per-member budget" }));
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    expect(screen.getByRole("option", { name: "Enter custom limits instead" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    const source = overall.getByRole("combobox", { name: "Overall app budget" });
+    expect(source).toHaveTextContent("App Standard");
+    expect(overall.queryByRole("spinbutton")).not.toBeInTheDocument();
+    await user.click(source);
+    expect(await screen.findByRole("option", { name: /^App Standard/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^Tier 1/ })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(1));
+    const linked = await requests.find((request) => request.method === "PATCH")!.json();
+    expect(linked.budget_id).toBe(overallPreset.budget_id);
+    expect(linked).not.toHaveProperty("budget");
+    await chooseAppOption(user, source, "Enter custom limits instead");
+    fireEvent.change(overall.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(2));
+    const custom = await requests.filter((request) => request.method === "PATCH")[1].json();
+    expect(custom.budget).toEqual({ rpm_limit: 0 });
+    expect(custom).not.toHaveProperty("budget_id");
+    expect(custom.default_customer_member_budget).toBeNull();
+  });
+
+  it("clears an overall preset with No limit without changing member defaults", async () => {
+    resources = [{ ...resource, app_id: app.app_id }];
+    configuredApps = [{ ...app, budget_id: overallPreset.budget_id, budget: overallPreset }];
+    const user = await openAppSettings();
+    await chooseAppOption(user, screen.getByRole("combobox", { name: "Overall app budget" }), /^No limit/);
+    await user.click(screen.getByRole("button", { name: "Save app settings" }));
+    await waitFor(() => expect(requests.some((request) => request.method === "PATCH")).toBe(true));
+    const body = await requests.find((request) => request.method === "PATCH")!.json();
+    expect(body.budget_id).toBeNull();
+    expect(body).not.toHaveProperty("budget");
+    expect(body.default_customer_member_budget).toBeNull();
   });
 
   it.each([
@@ -164,8 +219,8 @@ describe("Gateway app definition", () => {
     };
     configuredApps = [{ ...app, budget, default_customer_member_budget: budget }];
     const user = await openAppSettings();
-    const editor = within(await screen.findByRole("group", { name: title }));
-    const amount = editor.getByRole("spinbutton", { name: "1mo spend limit (USD)" });
+    const editor = within(await screen.findByRole("region", { name: title }));
+    const amount = editor.getAllByRole("spinbutton", { name: "Additional spend limit (USD)" })[0];
     expect(amount).toHaveAttribute("placeholder", "No limit");
     expect(amount).toHaveAccessibleDescription(
       "Leave an amount blank to remove that spend limit. Other spend limits and TPM/RPM limits stay unchanged.",

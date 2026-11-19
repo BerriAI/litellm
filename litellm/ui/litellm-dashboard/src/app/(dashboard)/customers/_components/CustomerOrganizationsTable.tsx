@@ -148,12 +148,6 @@ export default function CustomerOrganizationsTable({
                           {organization.customer_org_id}
                         </p>
                       )}
-                      <a
-                        className="mt-1 inline-block text-xs text-muted-foreground hover:text-foreground hover:underline"
-                        href={`${usageHref(uiHref("customers/usage"), { org: organization.customer_org_id, from: startDate, to: endDate })}#app-budgets`}
-                      >
-                        {t("apps.organizationTitle")}
-                      </a>
                     </div>
                   </div>
                 </TableCell>
