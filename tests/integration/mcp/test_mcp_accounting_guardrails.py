@@ -231,6 +231,14 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 
 SINK = "{sink}/native"
+HOSTILE_HEADERS = {{
+    "Content-Type": "text/plain",
+    "content-length": "0",
+    "Set-Cookie": "recorder=1",
+    "Access-Control-Allow-Origin": "*",
+    "WWW-Authenticate": "Bearer realm=recorder",
+    "x-recorder-safe": "kept",
+}}
 
 
 def _record(stage, data, call_type):
@@ -272,9 +280,11 @@ class HookRecorder(CustomLogger):
         )
 
     async def async_post_call_response_headers_hook(self, data, user_api_key_dict, response, request_headers=None):
+        hostile = "x-recorder-hostile" in (request_headers or {{}})
         return {{
             "x-recorder-response": "absent" if response is None else "present",
             "x-recorder-model": str(data.get("model")),
+            **(HOSTILE_HEADERS if hostile else {{}}),
         }}
 
 
@@ -751,3 +761,81 @@ def test_rejected_rest_tool_call_carries_callback_response_headers_with_status_a
         assert hooked_response.headers.get("x-recorder-response") == "absent", hooked_response.headers
     assert with_callback[0].json()["detail"]["error"] == "missing_parameter", with_callback[0].text
     assert with_callback[1].headers.get("x-recorder-model") == "MCP: no-such-server-add", with_callback[1].headers
+
+
+HOSTILE: Final = {"x-recorder-hostile": "1"}
+UPSTREAM_CHALLENGE: Final = 'Bearer error="invalid_token", resource_metadata="https://upstream.invalid/prm"'
+
+
+def _assert_unsafe_callback_headers_dropped(response: httpx.Response) -> None:
+    assert response.headers.get("x-recorder-safe") == "kept", response.headers
+    assert response.headers["content-type"].startswith("application/json"), response.headers
+    assert int(response.headers["content-length"]) == len(response.content) > 0, response.headers
+    assert "set-cookie" not in response.headers, response.headers
+    assert "access-control-allow-origin" not in response.headers, response.headers
+
+
+def test_rest_tool_call_drops_unsafe_callback_headers_on_success_and_on_a_rejected_call(hooks_rig: HooksRig) -> None:
+    with mcp_peer() as peer, hooks_rig.gateway.scenario() as scenario:
+        alias: Final = "hdrunsafe" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        succeeded: Final = call_tool(
+            hooks_rig.gateway, key, identity, f"{alias}-add", {"a": 2, "b": 3}, headers=HOSTILE
+        )
+        rejected: Final = hooks_rig.gateway.client.post(
+            "/mcp-rest/tools/call",
+            headers={"x-litellm-api-key": key, **HOSTILE},
+            json={"name": f"{alias}-add", "arguments": {"a": 2, "b": 3}},
+        )
+        assert [call["body"]["params"]["arguments"] for call in tool_calls(peer.drain())] == [{"a": 2, "b": 3}]
+    assert succeeded.status_code == 200, succeeded.text
+    assert [item["text"] for item in succeeded.json()["content"]] == ["5"], succeeded.text
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["detail"]["error"] == "missing_parameter", rejected.text
+    _assert_unsafe_callback_headers_dropped(succeeded)
+    _assert_unsafe_callback_headers_dropped(rejected)
+
+
+def _unauthorized_upstream(params: Mapping[str, object]) -> Reply:
+    return Reply(status=401, body=b'{"error":"invalid_token"}', headers={"WWW-Authenticate": UPSTREAM_CHALLENGE})
+
+
+def test_relayed_upstream_challenge_wins_over_a_callback_www_authenticate(hooks_rig: HooksRig) -> None:
+    with (
+        scripted_peer(ScriptedTool("guarded", _unauthorized_upstream)) as peer,
+        hooks_rig.gateway.scenario() as scenario,
+    ):
+        alias: Final = "hdrauth" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type="oauth_delegate")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        response: Final = call_tool(
+            hooks_rig.gateway,
+            key,
+            identity,
+            f"{alias}-guarded",
+            {},
+            headers={f"x-mcp-{alias}-authorization": "Bearer expired-upstream-token", **HOSTILE},
+        )
+        assert len(tool_calls(peer.drain())) == 1
+    assert response.status_code == 401, response.text
+    assert response.headers.get_list("www-authenticate") == [UPSTREAM_CHALLENGE], response.headers
+    assert response.headers.get("x-recorder-response") == "absent", response.headers
+    assert response.headers.get("x-recorder-safe") == "kept", response.headers
+
+
+def test_virtual_tool_search_call_carries_callback_response_headers(hooks_rig: HooksRig) -> None:
+    with mcp_peer() as peer, hooks_rig.gateway.scenario() as scenario:
+        alias: Final = "hdrsearch" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity], "mcp_tool_search_enabled": True})
+        response: Final = hooks_rig.gateway.client.post(
+            "/mcp-rest/tools/call",
+            headers={"x-litellm-api-key": key},
+            json={"name": "mcp_tool_search", "arguments": {"query": "add"}},
+        )
+        assert tool_calls(peer.drain()) == ()
+    assert response.status_code == 200, response.text
+    listed: Final = json.loads(response.json()["content"][0]["text"])
+    assert f"{alias}-add" in [tool["name"] for tool in listed], response.text
+    assert response.headers.get("x-recorder-response") == "present", response.headers
