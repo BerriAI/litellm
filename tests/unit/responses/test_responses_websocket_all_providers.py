@@ -12,7 +12,9 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import respx
 
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
@@ -370,6 +372,58 @@ class TestManagedWebSocketHandlerIntegration:
         second_call_input: Final = aresponses_mock.call_args_list[1].kwargs["input"]
         assert second_call_input == expected_input, terminal_type
 
+    @pytest.mark.parametrize(
+        "call, answer",
+        [
+            (
+                {"type": "custom_tool_call", "id": "ctc_1", "call_id": "call_exec", "name": "exec", "input": "1 + 1"},
+                {"type": "custom_tool_call_output", "call_id": "call_exec", "output": "2"},
+            ),
+            (
+                {"type": "function_call", "id": "fc_1", "call_id": "call_weather", "name": "weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_weather", "output": "sunny"},
+            ),
+            (
+                {
+                    "type": "apply_patch_call",
+                    "id": "apc_1",
+                    "call_id": "call_patch",
+                    "status": "completed",
+                    "operation": {"type": "create_file", "path": "notes.txt", "diff": "+hi"},
+                },
+                {"type": "apply_patch_call_output", "call_id": "call_patch", "status": "completed", "output": "done"},
+            ),
+        ],
+        ids=["custom_tool_call", "function_call", "apply_patch_call"],
+    )
+    @pytest.mark.asyncio
+    async def test_next_turn_sends_the_provider_the_call_its_output_answers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        call: dict[str, object],
+        answer: dict[str, object],
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((call,)), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            "openai/gpt-5-mini",
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": [answer]}),
+            ),
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item for item in second_turn_input if item.get("call_id") == call["call_id"]] == [call, answer]
+
     @pytest.mark.asyncio
     async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(
         self, monkeypatch
@@ -618,6 +672,7 @@ class TestChunkTransformation:
                     {
                         "type": "function_call",
                         "id": "call_123",
+                        "call_id": "call_weather",
                         "name": "get_weather",
                         "arguments": '{"location": "Paris"}',
                     }
@@ -1034,6 +1089,7 @@ class TestMultiTurnSessionHistory:
                     {
                         "type": "function_call",
                         "id": "call_123",
+                        "call_id": "call_weather",
                         "name": "get_weather",
                         "arguments": "{}",
                     },
@@ -1342,6 +1398,59 @@ class TestWebSocketProjectQuotaEnforcement:
 
         assert allowed is True
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
+
+
+def _provider_turn_answering(output: tuple[dict[str, object], ...]) -> httpx.Response:
+    completed: Final = {
+        "id": "resp_turn",
+        "object": "response",
+        "created_at": 1767271505,
+        "status": "completed",
+        "model": "gpt-5-mini",
+        "output": list(output),
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+    }
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        text="".join(
+            f"event: {kind}\ndata: {json.dumps({'type': kind, 'response': completed})}\n\n"
+            for kind in ("response.created", "response.completed")
+        ),
+    )
+
+
+async def _relay_turns_to(model: str, frames: tuple[str, ...], api_key: str) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+    first, *later = frames
+    websocket: Final = MagicMock()
+    websocket.send_text = AsyncMock()
+    websocket.receive_text = AsyncMock(side_effect=[*later, RuntimeError("client closed")])
+    handler: Final = ManagedResponsesWebSocketHandler(
+        websocket=websocket,
+        model=model,
+        logging_obj=Logging(
+            model=model,
+            messages=[],
+            stream=True,
+            call_type="aresponses",
+            start_time=0,
+            litellm_call_id="test-id",
+            function_id="test-func",
+        ),
+        litellm_metadata={},
+        api_key=api_key,
+        first_message=first,
+    )
+
+    await handler.run()
 
 
 def _deployment_defaults():
