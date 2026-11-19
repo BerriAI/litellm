@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 from typing import Final, Literal
 from unittest.mock import MagicMock
@@ -490,22 +489,21 @@ def test_success_handler_dispatches_eu_jev_to_the_shared_handler():
 
 
 @pytest.mark.asyncio
-async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row() -> None:
     """The spend row's token columns must carry the usage the typesafe handler read
     from the provider body, not zeros recomputed from the opaque pass-through response.
 
     Mirrors the proxy call site: the caller passes its init kwargs (no usage yet);
-    pass_through_async_success_handler normalizes with the provider handler and then
-    finalizes cost before dispatching the success callbacks.
+    pass_through_async_success_handler normalizes with the provider handler and the
+    log dispatch then finalizes cost before the success callbacks run.
     """
     from fastapi import Request
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+    from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-    from litellm.types.utils import StandardPassThroughResponseObject
+    from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
     model_key: Final = "typesafe/jev-1.13.0"
     pricing: Final = litellm.model_cost[model_key]
@@ -548,16 +546,17 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row(
     body: Final = {"model": "jev-1.13.0", "usage": {"input_tokens": 12, "output_tokens": 1}}
     expected_cost: Final = 12 * pricing["input_cost_per_token"] + 1 * pricing["output_cost_per_token"]
 
-    captured: dict = {}
-    dispatched = asyncio.Event()
+    finalized_details: Final[list[dict[str, object]]] = []  # mutable-ok: records what the injected dispatch saw
 
-    async def capture_dispatch(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
-        captured["kwargs"] = kwargs
-        captured["details"] = dict(self.model_call_details)
-        dispatched.set()
+    async def finalize_then_record(
+        logging_obj: Logging,
+        standard_logging_response_object: object,
+        **_: object,
+    ) -> None:
+        await finalize_proxy_response_cost(logging_obj, standard_logging_response_object)
+        finalized_details.append(dict(logging_obj.model_call_details))
 
-    monkeypatch.setattr(Logging, "dispatch_success_handlers", capture_dispatch)
-    await PassThroughEndpointLogging().pass_through_async_success_handler(
+    await PassThroughEndpointLogging(log_dispatch=finalize_then_record).pass_through_async_success_handler(
         httpx_response=httpx.Response(
             200, request=httpx.Request("POST", "https://api.typesafe.ai/v1/systemone"), json=body
         ),
@@ -573,15 +572,15 @@ async def test_finalize_before_dispatch_keeps_handler_usage_in_the_spend_row(
         finalize_before_dispatch=True,
         **caller_kwargs,
     )
-    await asyncio.wait_for(dispatched.wait(), timeout=10)
 
-    assert captured, "finalize-before-dispatch never reached the success dispatch"
-    dispatched_usage = captured["details"].get("combined_usage_object")
-    assert dispatched_usage is not None and dispatched_usage.total_tokens == 13, (
-        f"finalization dropped the handler usage: {dispatched_usage}"
+    assert len(finalized_details) == 1, "the success handler never reached the log dispatch"
+    details: Final = finalized_details[0]
+    finalized_usage: Final = details.get("combined_usage_object")
+    assert isinstance(finalized_usage, Usage) and finalized_usage.total_tokens == 13, (
+        f"finalization dropped the handler usage: {finalized_usage}"
     )
     row: Final = get_logging_payload(
-        kwargs=captured["details"],
+        kwargs=details,
         response_obj=StandardPassThroughResponseObject(response="{}"),
         start_time=start,
         end_time=datetime.now(),
