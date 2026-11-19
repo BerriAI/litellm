@@ -1343,7 +1343,11 @@ if MCP_AVAILABLE:
                 response=result,
                 request_headers=dict(request.headers),
             )
-            return {name: value for name, value in headers.items() if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
+            return {
+                name: value
+                for name, value in headers.items()
+                if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS and isinstance(value, str)  # pyright: ignore[reportUnnecessaryIsInstance]  # callbacks return any value
+            }
 
         try:
             reject_disallowed_mcp_client(request.headers, user_api_key_dict)

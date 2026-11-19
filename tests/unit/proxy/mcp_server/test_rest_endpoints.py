@@ -5308,10 +5308,14 @@ async def test_failed_rest_tool_call_gives_the_headers_callback_the_request_data
     assert error.value.headers == {"x-callback-stamp": "call_mcp_tool", "x-callback-response": "None"}
 
 
-@pytest.mark.parametrize("unsafe_header", ["content-length", "X-Frame-Options"])
+@pytest.mark.parametrize(
+    "dropped",
+    [{"content-length": "from-callback"}, {"X-Frame-Options": "from-callback"}, {"x-callback-count": 5}],
+    ids=["content-length", "X-Frame-Options", "non_string_value"],
+)
 @pytest.mark.parametrize("succeeds", [True, False], ids=["success", "failure"])
-async def test_rest_tool_call_drops_unsafe_callback_response_headers(
-    monkeypatch: pytest.MonkeyPatch, unsafe_header: str, succeeds: bool
+async def test_rest_tool_call_drops_unsafe_and_non_string_callback_response_headers(
+    monkeypatch: pytest.MonkeyPatch, dropped: dict[str, object], succeeds: bool
 ) -> None:
     from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 
@@ -5322,8 +5326,8 @@ async def test_rest_tool_call_drops_unsafe_callback_response_headers(
             user_api_key_dict: UserAPIKeyAuth,
             response: object,
             request_headers: dict[str, str] | None = None,
-        ) -> dict[str, str]:
-            return {unsafe_header: "from-callback", "x-callback-trace": "trace-1"}
+        ) -> dict[str, object]:
+            return {**dropped, "x-callback-trace": "trace-1"}
 
     async def echo() -> str:
         return "filtered-result"
@@ -5354,12 +5358,12 @@ async def test_rest_tool_call_drops_unsafe_callback_response_headers(
     )
     try:
         if succeeds:
-            assert (await call).is_error is False
+            assert [item.text for item in (await call).content] == ["filtered-result"]
             sent: Final = dict(response.headers)
         else:
             with pytest.raises(HTTPException) as error:
                 await call
-            assert error.value.status_code == 400
+            assert (error.value.status_code, error.value.detail["error"]) == (400, "missing_parameter")
             sent = dict(error.value.headers or {})
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("filtered-")
