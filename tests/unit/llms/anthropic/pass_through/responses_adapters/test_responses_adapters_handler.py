@@ -2,6 +2,8 @@ import datetime
 import json
 import os
 import sys
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -29,6 +31,118 @@ RESPONSES_SSE_BODY = (
     b'"parallel_tool_calls":true,"tool_choice":"auto","tools":[],'
     b'"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}\n\n'
 )
+
+
+@pytest.mark.parametrize(
+    ("system", "params", "expected_instructions", "expected_role"),
+    [
+        ("System prefix", {"instructions": "Caller prompt"}, "System prefix\nCaller prompt", "user"),
+        (
+            "System prefix",
+            {"store": False, "extra_body": {"truncation": "auto", "instructions": "Caller prompt"}},
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {"extra_body": {"store": False, "instructions": "Caller prompt"}},
+            "Caller prompt",
+            "developer",
+        ),
+        (None, {"instructions": "Caller prompt"}, "Caller prompt", "user"),
+        ("System prefix", {"store": False, "instructions": "Caller prompt"}, "Caller prompt", "developer"),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "truncation": "auto",
+                "extra_body": {"truncation": "disabled", "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "truncation": "disabled",
+                "extra_body": {"truncation": "auto", "instructions": "Caller prompt"},
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "previous_response_id": "resp_prior",
+                "extra_body": {"previous_response_id": None, "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": "conv_prior",
+                "extra_body": {"conversation": None, "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "previous_response_id": None,
+                "extra_body": {"previous_response_id": "resp_prior", "instructions": "Caller prompt"},
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": None,
+                "extra_body": {"conversation": "conv_prior", "instructions": "Caller prompt"},
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {"store": False, "previous_response_id": "resp_previous", "instructions": "Caller prompt"},
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+    ],
+)
+def test_build_responses_kwargs_preserves_caller_instructions(
+    system: str | None, params: Mapping[str, object], expected_instructions: str, expected_role: str
+) -> None:
+    result: Final = _build_responses_kwargs(
+        model="openai/gpt-6.2-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=16,
+        system=system,
+        extra_kwargs=params,
+    )
+    extra_body: Final = result.get("extra_body")
+    instructions: Final = (
+        extra_body.get("instructions", result.get("instructions"))
+        if isinstance(extra_body, dict)
+        else result.get("instructions")
+    )
+    assert instructions == expected_instructions
+    user_message: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    developer_message: Final = {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": system}],
+    }
+    assert result["input"] == ([developer_message, user_message] if expected_role == "developer" else [user_message])
 
 
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():

@@ -19,6 +19,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
 )
+from litellm.llms.anthropic.pass_through.responses_adapters.handler import SYSTEM_PLACEMENT_PARAMS
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_response_usage as _blocked_response_usage,
 )
@@ -361,6 +362,7 @@ async def count_tokens(
             call_endpoint=True,
             messages_format="anthropic",
             output_format=_requested_output_format(data),
+            request_litellm_params={key: data[key] for key in SYSTEM_PLACEMENT_PARAMS if key in data},
         )
     except HTTPException as e:
         return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
