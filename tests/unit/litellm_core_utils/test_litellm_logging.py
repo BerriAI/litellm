@@ -5973,9 +5973,6 @@ async def test_native_messages_logs_subscription_cost_from_upstream_headers(
             "is_overage": not covered,
             "status": signals["status"],
             "overage_status": None,
-            "utilization_5h": None,
-            "utilization_7d": None,
-            "overage_utilization": None,
         }
         if signals
         else None

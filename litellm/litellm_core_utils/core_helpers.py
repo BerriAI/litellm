@@ -630,9 +630,6 @@ def claude_subscription_usage(
         "is_overage": is_overage,
         "status": status,
         "overage_status": overage_status,
-        "utilization_5h": headers.get(f"{prefix}5h-utilization"),
-        "utilization_7d": headers.get(f"{prefix}7d-utilization"),
-        "overage_utilization": headers.get(f"{prefix}overage-utilization"),
     }
 
 

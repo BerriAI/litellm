@@ -119,9 +119,6 @@ async def test_oauth_stream_retains_billing_headers_through_reassembly_and_spend
         else {
             "anthropic-ratelimit-unified-status": "allowed",
             "anthropic-ratelimit-unified-overage-in-use": "true" if overage else "false",
-            "anthropic-ratelimit-unified-5h-utilization": "0.3",
-            "anthropic-ratelimit-unified-7d-utilization": "0.8",
-            "anthropic-ratelimit-unified-overage-utilization": "0.2",
         }
     )
     observed: Final[asyncio.Future[tuple[float | None, ClaudeSubscriptionUsage | None, SpendLogsPayload]]] = (
@@ -194,9 +191,6 @@ async def test_oauth_stream_retains_billing_headers_through_reassembly_and_spend
             "is_overage": overage,
             "status": "allowed",
             "overage_status": None,
-            "utilization_5h": "0.3",
-            "utilization_7d": "0.8",
-            "overage_utilization": "0.2",
         }
     )
     assert b"".join(forwarded) == body

@@ -75,7 +75,7 @@ def test_claude_subscription_usage_reads_oauth_billing_signals(
             "litellm_params": {"litellm_metadata": {"used_client_oauth_token": True}},
             "response_headers": {
                 f"{prefix}anthropic-ratelimit-unified-{key}": value
-                for key, value in {**signals, "5h-utilization": "0.3", "7d-utilization": "0.8"}.items()
+                for key, value in signals.items()
             },
         }
     )
@@ -83,9 +83,6 @@ def test_claude_subscription_usage_reads_oauth_billing_signals(
         "is_overage": expected_overage,
         "status": signals.get("status"),
         "overage_status": signals.get("overage-status"),
-        "utilization_5h": "0.3",
-        "utilization_7d": "0.8",
-        "overage_utilization": None,
     }
 
 

@@ -3504,9 +3504,6 @@ class ClaudeSubscriptionUsage(TypedDict):
     is_overage: ReadOnly[bool]
     status: ReadOnly[str | None]
     overage_status: ReadOnly[str | None]
-    utilization_5h: ReadOnly[str | None]
-    utilization_7d: ReadOnly[str | None]
-    overage_utilization: ReadOnly[str | None]
 
 
 class StandardLoggingKubernetesPodRouting(TypedDict):

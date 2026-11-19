@@ -111,7 +111,6 @@ def test_spend_log_keeps_subscription_usage_from_standard_logging(call_type: str
     response._hidden_params["additional_headers"] = {
         "llm_provider-anthropic-ratelimit-unified-status": "rejected",
         "llm_provider-anthropic-ratelimit-unified-overage-status": "allowed",
-        "llm_provider-anthropic-ratelimit-unified-overage-utilization": "0.25",
     }
     standard: Final = get_standard_logging_object_payload(
         kwargs=logger.model_call_details,
@@ -132,9 +131,6 @@ def test_spend_log_keeps_subscription_usage_from_standard_logging(call_type: str
         "is_overage": True,
         "status": "rejected",
         "overage_status": "allowed",
-        "utilization_5h": None,
-        "utilization_7d": None,
-        "overage_utilization": "0.25",
     }
     assert standard["metadata"]["claude_subscription_usage"] == expected
     assert json.loads(payload["metadata"])["claude_subscription_usage"] == expected
