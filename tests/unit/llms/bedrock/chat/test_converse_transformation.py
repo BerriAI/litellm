@@ -5378,120 +5378,60 @@ def test_anthropic_messages_converse_thinking_budget_is_preserved_in_request_bod
     }
 
 
-def test_drop_thinking_param_when_thinking_blocks_missing():
-    """
-    Test that thinking param is dropped when modify_params=True and
-    thinking_blocks are missing from assistant message with tool_calls.
+_SEARCH_TOOL_CALL: Final = {"id": "call_123", "type": "function", "function": {"name": "search", "arguments": "{}"}}
 
-    This prevents the Anthropic/Bedrock error:
-    "Expected thinking or redacted_thinking, but found tool_use"
+_TOOL_TURN_WITHOUT_THINKING_BLOCKS: Final = (
+    {"role": "user", "content": "Search for weather"},
+    {"role": "assistant", "content": "", "tool_calls": [_SEARCH_TOOL_CALL]},
+    {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
+)
 
-    Related issue: https://github.com/BerriAI/litellm/issues/14194
-    """
-    from litellm.utils import last_assistant_with_tool_calls_has_no_thinking_blocks
+_TOOL_TURN_WITH_THINKING_BLOCKS: Final = (
+    {"role": "user", "content": "Search for weather"},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [_SEARCH_TOOL_CALL],
+        "thinking_blocks": [{"type": "thinking", "thinking": "Let me search", "signature": "sig"}],
+    },
+    {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
+)
 
-    # Save original modify_params setting
-    original_modify_params = litellm.modify_params
+_ENABLED_THINKING: Final = {"type": "enabled", "budget_tokens": 1024}
+_ADAPTIVE_THINKING: Final = {"type": "adaptive"}
 
-    try:
-        # Test case 1: thinking should be dropped when modify_params=True
-        # and assistant message has tool_calls but no thinking_blocks
-        litellm.modify_params = True
 
-        messages_without_thinking_blocks = [
-            {"role": "user", "content": "Search for weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {"name": "search", "arguments": "{}"},
-                    }
-                ],
-                # No thinking_blocks - simulates OpenAI-compatible client
-            },
-            {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
-        ]
+@pytest.mark.parametrize(
+    ("thinking", "messages", "modify_params", "expect_thinking_sent"),
+    [
+        (_ENABLED_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, True, False),
+        (_ADAPTIVE_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, True, True),
+        (_ENABLED_THINKING, _TOOL_TURN_WITH_THINKING_BLOCKS, True, True),
+        (_ENABLED_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, False, True),
+    ],
+)
+def test_drop_thinking_param_when_thinking_blocks_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: Mapping[str, object],
+    messages: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expect_thinking_sent: bool,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
 
-        optional_params = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=list(messages),
+        optional_params={
+            "thinking": dict(thinking),
+            "tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}],
+        },
+        litellm_params={},
+        headers={},
+    )
 
-        # Verify the condition is detected
-        assert last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks), (
-            "Should detect missing thinking_blocks"
-        )
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params.get("thinking") is not None
-            and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params.pop("thinking", None)
-
-        assert "thinking" not in optional_params, (
-            "thinking param should be dropped when modify_params=True and thinking_blocks are missing"
-        )
-
-        # Test case 2: thinking should NOT be dropped when thinking_blocks are present
-        messages_with_thinking_blocks = [
-            {"role": "user", "content": "Search for weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {"name": "search", "arguments": "{}"},
-                    }
-                ],
-                "thinking_blocks": [{"type": "thinking", "thinking": "Let me search for weather..."}],
-            },
-            {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
-        ]
-
-        optional_params_with_thinking = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
-
-        # Verify the condition is NOT detected when thinking_blocks are present
-        assert not last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks), (
-            "Should NOT detect missing thinking_blocks when they are present"
-        )
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params_with_thinking.get("thinking") is not None
-            and messages_with_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params_with_thinking.pop("thinking", None)
-
-        assert "thinking" in optional_params_with_thinking, (
-            "thinking param should NOT be dropped when thinking_blocks are present"
-        )
-
-        # Test case 3: thinking should NOT be dropped when modify_params=False
-        litellm.modify_params = False
-
-        optional_params_no_modify = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params_no_modify.get("thinking") is not None
-            and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params_no_modify.pop("thinking", None)
-
-        assert "thinking" in optional_params_no_modify, "thinking param should NOT be dropped when modify_params=False"
-
-    finally:
-        # Restore original modify_params setting
-        litellm.modify_params = original_modify_params
+    sent_thinking: Final = request.get("additionalModelRequestFields", {}).get("thinking")
+    assert sent_thinking == (thinking if expect_thinking_sent else None)
 
 
 def test_create_output_config_for_response_format():

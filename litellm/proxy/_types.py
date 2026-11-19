@@ -3417,6 +3417,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     model_max_budget: Mapping[str, object] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -4647,6 +4648,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
     caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
@@ -4747,7 +4749,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # `x-litellm-timeout`/`x-litellm-stream-timeout` headers, or a `timeout`/`request_timeout`/
     # `stream_timeout` field in the request body) rather than deployment config, so a
     # deliberately tiny value isn't treated as a deployment health signal (see
-    # cooldown_handlers._trigger_cooldown_for_failed_deployment).
+    # router_rust.surface.health.RustHealthCallbacks.blocked_failure_exempt).
     client_side_timeout: bool
     keepalive_seconds: float | None
 

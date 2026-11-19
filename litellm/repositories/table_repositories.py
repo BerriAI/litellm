@@ -9,7 +9,6 @@ methods; richer repositories live in their own modules.
 
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
-from importlib import import_module
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
@@ -17,7 +16,6 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
@@ -260,28 +258,6 @@ class ClaudeCodePluginRepository(PrismaTableRepository["prisma_models.LiteLLM_Cl
     table_name = "litellm_claudecodeplugintable"
 
 
-class TeamMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_TeamMembership"]):
-    table_name = "litellm_teammembership"
-
-
-_END_USER_ID_ROWS: Final = TypeAdapter(list[dict[str, str]])
-_END_USER_QUERY: Final = TypeAdapter(str)
-
-
-class EndUserRepository(PrismaTableRepository["prisma_models.LiteLLM_EndUserTable"]):
-    table_name = "litellm_endusertable"
-
-    async def find_restricted_ids(self, limit: int) -> tuple[str, ...]:
-        from litellm.proxy.db.db_span import db_span
-
-        database: Final = require_attributes(self._selected_database(), LedgerTransaction, "query_raw")
-        module: Final = import_module("litellm_proxy_extras.request_log_indexes")
-        query: Final = _END_USER_QUERY.validate_python(module.END_USER_RESTRICTED_QUERY)
-        async with db_span("find_many", "LiteLLM_EndUserTable"):
-            rows: Final = _END_USER_ID_ROWS.validate_python(await database.query_raw(query, limit))
-        return tuple(row["user_id"] for row in rows)
-
-
 class ManagedVectorStoresRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedVectorStoresTable"]):
     table_name = "litellm_managedvectorstorestable"
 
@@ -296,10 +272,6 @@ class MCPServerOAuthClientRepository(PrismaTableRepository["prisma_models.LiteLL
 
 class PromptRepository(PrismaTableRepository["prisma_models.LiteLLM_PromptTable"]):
     table_name = "litellm_prompttable"
-
-
-class TagRepository(PrismaTableRepository["prisma_models.LiteLLM_TagTable"]):
-    table_name = "litellm_tagtable"
 
 
 class InvitationLinkRepository(PrismaTableRepository["prisma_models.LiteLLM_InvitationLink"]):
@@ -336,14 +308,6 @@ class WorkflowRunRepository(PrismaTableRepository["prisma_models.LiteLLM_Workflo
 
 class ModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelTable"]):
     table_name = "litellm_modeltable"
-
-
-class AccessGroupRepository(PrismaTableRepository["prisma_models.LiteLLM_AccessGroupTable"]):
-    table_name = "litellm_accessgrouptable"
-
-    async def find_by_name(self, name: str) -> LiteLLM_AccessGroupTable | None:
-        row: Final = await self.table.find_unique(where={"access_group_name": name})
-        return LiteLLM_AccessGroupTable.model_validate(row, from_attributes=True) if row is not None else None
 
 
 class SSOConfigRepository(PrismaTableRepository["prisma_models.LiteLLM_SSOConfig"]):

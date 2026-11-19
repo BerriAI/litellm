@@ -51,7 +51,8 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     TeamMappings,
 )
 from tests._master_key import MASTER_KEY
-from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row
+from tests.unit.proxy.auth._user_table import UserTable, prisma_over, user_row, user_store_over
+from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
 
 
 @pytest.mark.asyncio
@@ -1944,7 +1945,7 @@ def test_sso_lookup_user_ids_never_offers_a_blank_id(
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_user_not_exists_creates_user() -> None:
+async def test_get_user_info_from_db_user_not_exists_creates_user(rust_auth_stores: RustAuthStores) -> None:
     """
     Test that get_user_info_from_db creates a new user when user doesn't exist in DB.
 
@@ -1957,7 +1958,6 @@ async def test_get_user_info_from_db_user_not_exists_creates_user() -> None:
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     user_api_key_cache = MagicMock()
     proxy_logging_obj = MagicMock()
     user_email = "newuser@example.com"
@@ -2037,7 +2037,7 @@ async def test_get_user_info_from_db_user_not_exists_creates_user() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_user_exists_updates_user() -> None:
+async def test_get_user_info_from_db_user_exists_updates_user(rust_auth_stores: RustAuthStores) -> None:
     """
     Test that get_user_info_from_db updates existing user when user exists in DB.
 
@@ -2050,7 +2050,6 @@ async def test_get_user_info_from_db_user_exists_updates_user() -> None:
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     user_api_key_cache = MagicMock()
     proxy_logging_obj = MagicMock()
     user_email = "existing@example.com"
@@ -2179,9 +2178,10 @@ async def _sso_user_info_from_db(
 @pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
 @pytest.mark.asyncio
 async def test_get_user_info_from_db_fails_with_500_when_the_database_is_down_for_a_sign_in_with_no_user_id(
-    custom_user_id: object,
+    rust_auth_stores: RustAuthStores, custom_user_id: object
 ) -> None:
-    prisma_client: Final = MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(side_effect=_database_outage())})
+    rust_auth_stores.user.error = _database_outage()
+    prisma_client: Final = MagicMock()
 
     with pytest.raises(HTTPException) as exc_info:
         await _sso_user_info_from_db(custom_user_id, prisma_client)
@@ -2190,13 +2190,10 @@ async def test_get_user_info_from_db_fails_with_500_when_the_database_is_down_fo
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_fails_with_500_when_the_database_drops_while_creating_the_account() -> None:
-    prisma_client: Final = MagicMock(
-        **{
-            "db.litellm_usertable.find_unique": AsyncMock(return_value=None),
-            "db.litellm_usertable.find_first": AsyncMock(return_value=None),
-        }
-    )
+async def test_get_user_info_from_db_fails_with_500_when_the_database_drops_while_creating_the_account(
+    rust_auth_stores: RustAuthStores,
+) -> None:
+    prisma_client: Final = MagicMock()
 
     with pytest.raises(HTTPException) as exc_info:
         await _sso_user_info_from_db(None, prisma_client)
@@ -2207,21 +2204,19 @@ async def test_get_user_info_from_db_fails_with_500_when_the_database_drops_whil
 @pytest.mark.parametrize("custom_user_id", ["", "   "])
 @pytest.mark.asyncio
 async def test_get_user_info_from_db_resolves_no_account_when_the_database_finds_none_for_a_blank_user_id(
-    custom_user_id: str,
+    rust_auth_stores: RustAuthStores, custom_user_id: str
 ) -> None:
-    prisma_client: Final = MagicMock(
-        **{
-            "db.litellm_usertable.find_unique": AsyncMock(return_value=None),
-            "db.litellm_usertable.find_first": AsyncMock(return_value=None),
-        }
-    )
+    prisma_client: Final = MagicMock()
 
     assert await _sso_user_info_from_db(custom_user_id, prisma_client) is None
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_keeps_reading_a_database_outage_as_no_account_for_a_mapped_user_id() -> None:
-    prisma_client: Final = MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(side_effect=_database_outage())})
+async def test_get_user_info_from_db_keeps_reading_a_database_outage_as_no_account_for_a_mapped_user_id(
+    rust_auth_stores: RustAuthStores,
+) -> None:
+    rust_auth_stores.user.error = _database_outage()
+    prisma_client: Final = MagicMock()
 
     assert await _sso_user_info_from_db("mapped-user-id", prisma_client) is None
 
@@ -11508,9 +11503,10 @@ async def _sso_sign_in(table: UserTable, sso_id: str, email_verified: bool | Non
     [("owner@example.com", None), ("other@example.com", "owner@example.com")],
 )
 async def test_repeat_sso_sign_in_stores_an_email_only_when_no_other_user_has_it(
-    other_email: str, stored: str | None
+    rust_auth_stores: RustAuthStores, other_email: str, stored: str | None
 ) -> None:
     table: Final = UserTable(user_row("owner", other_email, sso_user_id="idp-owner"), user_row("idp-new", None))
+    rust_auth_stores.user = user_store_over(table)
 
     user: Final = await _sso_sign_in(table, "idp-new")
 
@@ -11520,14 +11516,15 @@ async def test_repeat_sso_sign_in_stores_an_email_only_when_no_other_user_has_it
     assert table.row("owner").sso_user_id == "idp-owner"
 
 
-class _EmailLookupDown(UserTable):
-    async def find_first(self, where: Mapping[str, object], include: object = None) -> LiteLLM_UserTable | None:
+class _EmailLookupDown(FakeUserStore):
+    async def email_belongs_to_another_user(self, user_email: str, user_id: str) -> bool:
         raise TimeoutError("user table timed out")
 
 
 @pytest.mark.asyncio
-async def test_sso_sign_in_keeps_the_user_when_the_email_in_use_check_fails() -> None:
-    table: Final = _EmailLookupDown(user_row("idp-new", "old@example.com", sso_user_id="idp-new"))
+async def test_sso_sign_in_keeps_the_user_when_the_email_in_use_check_fails(rust_auth_stores: RustAuthStores) -> None:
+    table: Final = UserTable(user_row("idp-new", "old@example.com", sso_user_id="idp-new"))
+    rust_auth_stores.user = user_store_over(table, _EmailLookupDown)
 
     user: Final = await _sso_sign_in(table, "idp-new")
 
@@ -11537,28 +11534,32 @@ async def test_sso_sign_in_keeps_the_user_when_the_email_in_use_check_fails() ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "owner_sso_user_id, email_verified, new_user_email",
-    [("idp-owner", None, None), (None, False, None), (None, None, None)],
+    "owner_sso_user_id, email_verified",
+    [("idp-owner", None), (None, False)],
 )
 async def test_first_sso_sign_in_creates_its_own_user_without_another_users_email(
-    owner_sso_user_id: str | None, email_verified: bool | None, new_user_email: str | None
+    rust_auth_stores: RustAuthStores,
+    owner_sso_user_id: str | None,
+    email_verified: bool | None,
 ) -> None:
     table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id=owner_sso_user_id))
-    links_owner: Final = owner_sso_user_id is None and email_verified is None
+    rust_auth_stores.user = user_store_over(table)
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma_over(table)):
         user: Final = await _sso_sign_in(table, "idp-new", email_verified=email_verified)
 
-    assert getattr(user, "user_id", None) == ("owner" if links_owner else "idp-new")
-    assert table.row("owner").sso_user_id == ("idp-new" if links_owner else owner_sso_user_id)
-    if not links_owner:
-        assert table.row("idp-new").user_email == new_user_email
+    assert getattr(user, "user_id", None) == "idp-new"
+    assert table.row("owner").sso_user_id == owner_sso_user_id
+    assert table.row("idp-new").user_email is None
 
 
 @pytest.mark.asyncio
-async def test_repeat_sso_sign_in_keeps_the_earlier_email_write_when_opted_out(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_repeat_sso_sign_in_keeps_the_earlier_email_write_when_opted_out(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+) -> None:
     monkeypatch.setenv("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER", "true")
     table: Final = UserTable(user_row("owner", "owner@example.com", sso_user_id="idp-owner"), user_row("idp-new", None))
+    rust_auth_stores.user = user_store_over(table)
 
     await _sso_sign_in(table, "idp-new")
 
@@ -11566,22 +11567,28 @@ async def test_repeat_sso_sign_in_keeps_the_earlier_email_write_when_opted_out(m
 
 
 @pytest.mark.asyncio
-async def test_repeat_sso_sign_in_with_an_unchanged_email_runs_no_email_lookup() -> None:
+async def test_repeat_sso_sign_in_with_an_unchanged_email_runs_no_email_lookup(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     table: Final = UserTable(user_row("idp-new", "Owner@Example.com", sso_user_id="idp-new"))
+    rust_auth_stores.user = user_store_over(table)
 
     await _sso_sign_in(table, "idp-new")
 
-    assert table.first_lookups == []
+    assert rust_auth_stores.user.email_checks == []
 
 
 @pytest.mark.asyncio
-async def test_sso_sign_in_with_custom_values_missing_user_id_finds_the_existing_user() -> None:
+async def test_sso_sign_in_with_custom_values_missing_user_id_finds_the_existing_user(
+    rust_auth_stores: RustAuthStores,
+) -> None:
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     auth_checks.last_db_access_time.clear()
     table: Final = UserTable(user_row("idp-new", "owner@example.com", sso_user_id="idp-new"))
+    rust_auth_stores.user = user_store_over(table)
 
     user: Final = await get_user_info_from_db(
         result=CustomOpenID(id="idp-new", email="owner@example.com", team_ids=[]),
