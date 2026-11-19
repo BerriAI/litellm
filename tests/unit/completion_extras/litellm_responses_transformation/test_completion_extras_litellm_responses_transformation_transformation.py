@@ -5367,6 +5367,75 @@ def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
 
+def _stored_chain(*items: dict[str, object]) -> dict[str, object]:
+    return {"object": "list", "data": list(items), "first_id": "msg_1", "last_id": "msg_2", "has_more": False}
+
+
+_STORED_USER_TURN: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_chain", "sent_instructions"),
+    [
+        (httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN)), None),
+        (
+            httpx.Response(200, json=_stored_chain(_system_input_item("Older prefix"), _STORED_USER_TURN)),
+            "Stable prefix",
+        ),
+        (httpx.Response(200, json=_stored_chain(_STORED_USER_TURN)), "Stable prefix"),
+        (
+            httpx.Response(404, json={"error": {"message": "Response not found", "type": "invalid_request_error"}}),
+            "Stable prefix",
+        ),
+    ],
+)
+async def test_acompletion_follow_up_sends_the_system_prompt_only_when_the_stored_chain_lacks_it(
+    stored_chain: httpx.Response, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=stored_chain
+        )
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        response: Final = await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "again"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            previous_response_id="resp_prior",
+        )
+    assert dict(chain.calls[0].request.url.params) == {"order": "asc", "limit": "20"}
+    assert chain.calls[0].request.headers["authorization"] == "Bearer sk-test"
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6.2-sol",
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}],
+        "previous_response_id": "resp_prior",
+        **({"instructions": sent_instructions} if sent_instructions else {}),
+    }
+    assert response.choices[0].message.content == "ok"
+
+
 @pytest.mark.parametrize(
     ("content_block", "expected_content"),
     [
