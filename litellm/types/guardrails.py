@@ -1569,7 +1569,8 @@ class GuardrailResponseFormat(Enum):
 
 
 class ApplyGuardrailRequest(LiteLLMBaseModel):
-    guardrail_name: str
+    guardrail_name: str | None = None
+    policy_name: str | None = None
     text: str = ""
     images: tuple[str, ...] | None = Field(
         default=None,
@@ -1587,6 +1588,14 @@ class ApplyGuardrailRequest(LiteLLMBaseModel):
     def _require_text_or_images(self) -> "ApplyGuardrailRequest":
         if "text" not in self.model_fields_set and not self.images:
             raise ValueError("Provide 'text', 'images', or both.")
+        return self
+
+    @model_validator(mode="after")
+    def _require_one_target(self) -> "ApplyGuardrailRequest":
+        if (self.guardrail_name is None) == (self.policy_name is None):
+            raise ValueError("Provide exactly one of 'guardrail_name' or 'policy_name'.")
+        if self.policy_name is not None and self.response_format is GuardrailResponseFormat.NATIVE:
+            raise ValueError("'response_format: native' is not supported with 'policy_name'.")
         return self
 
 

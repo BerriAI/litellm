@@ -7,7 +7,7 @@ import copy
 import inspect
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import (
@@ -2576,6 +2577,75 @@ async def _run_guardrail(
     )
 
 
+async def _run_guardrail_chain(
+    guardrails: tuple[tuple[str, CustomGuardrail], ...],
+    request: ApplyGuardrailRequest,
+    request_data: dict[str, object],  # mutable-ok: every guardrail records its verdict on the shared request dict
+    response_handler: StandardGuardrailResponseHandler,
+) -> GenericGuardrailAPIInputs:
+    if not guardrails:
+        return {"texts": [request.text]}
+    name, active = guardrails[0]
+    step: Final = request.model_copy(update={"guardrail_name": name})
+    outputs: Final = await _run_guardrail(active, step, request_data, response_handler.resolve_input_type(step, active))
+    texts: Final = outputs.get("texts", [])
+    next_step: Final = step.model_copy(update={"text": texts[0]}) if texts else step
+    return await _run_guardrail_chain(guardrails[1:], next_step, request_data, response_handler)
+
+
+def _in_registration_order(names: Iterable[str]) -> tuple[str, ...]:
+    registered: Final = tuple(
+        callback.guardrail_name for callback in litellm.callbacks if isinstance(callback, CustomGuardrail)
+    )
+    return tuple(
+        sorted(names, key=lambda name: (registered.index(name), "") if name in registered else (len(registered), name))
+    )
+
+
+def _policy_guardrail_names(policy_name: str) -> tuple[str, ...]:
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+    from litellm.proxy.utils import premium_user_check
+
+    premium_user_check()
+    registry: Final = get_policy_registry()
+    policy: Final = registry.get_policy(policy_name)
+    if policy is None:
+        raise HTTPException(status_code=404, detail=f"Policy '{policy_name}' not found.")
+    if policy.pipeline is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Policy '{policy_name}' defines a pipeline, which apply_guardrail does not support yet.",
+        )
+    resolved: Final = PolicyResolver.resolve_policy_guardrails(
+        policy_name=policy_name, policies=registry.get_all_policies()
+    )
+    return _in_registration_order(resolved.guardrails)
+
+
+async def _require_guardrail(guardrail_name: str) -> CustomGuardrail:
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_initialized_guardrail_with_read_through,
+    )
+
+    active_guardrail: Final = await get_initialized_guardrail_with_read_through(guardrail_name=guardrail_name)
+    if active_guardrail is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Guardrail '{guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
+        )
+    return active_guardrail
+
+
+async def _requested_guardrails(request: ApplyGuardrailRequest) -> tuple[tuple[str, CustomGuardrail], ...]:
+    names: Final = (
+        _policy_guardrail_names(request.policy_name)
+        if request.policy_name is not None
+        else tuple(name for name in (request.guardrail_name,) if name is not None)
+    )
+    return tuple([(name, await _require_guardrail(name)) for name in names])
+
+
 def _record_verdict_for_logging(
     request_data: dict[str, object],  # mutable-ok: the logging bridge takes the request dict itself
     data: dict[str, object],  # mutable-ok: the logged request receives the guardrail's verdict
@@ -2634,6 +2704,7 @@ async def apply_guardrail(
     Apply a guardrail to text input and return the processed result.
 
     This endpoint allows testing guardrails by applying them to custom text inputs.
+    With policy_name, every guardrail the policy resolves to runs in turn, ignoring model conditions.
     """
     import traceback
 
@@ -2663,19 +2734,8 @@ async def apply_guardrail(
     litellm_logging_obj = None
     start_time: Final = datetime.now(timezone.utc)
 
-    from litellm.proxy.common_utils.registry_read_through import (
-        get_initialized_guardrail_with_read_through,
-    )
-
     try:
-        active_guardrail: Final[CustomGuardrail | None] = await get_initialized_guardrail_with_read_through(
-            guardrail_name=request.guardrail_name
-        )
-        if active_guardrail is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
-            )
+        guardrails: Final = await _requested_guardrails(request)
 
         request_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -2696,9 +2756,8 @@ async def apply_guardrail(
 
         response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
         request_data: Final = dict(response_handler.prepare_request_data(request))
-        input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
         try:
-            guardrailed_inputs: Final = await _run_guardrail(active_guardrail, request, request_data, input_type)
+            guardrailed_inputs: Final = await _run_guardrail_chain(guardrails, request, request_data, response_handler)
         finally:
             _record_verdict_for_logging(request_data, data, litellm_logging_obj)
         response: Final = response_handler.build_response(request, guardrailed_inputs, request_data)
