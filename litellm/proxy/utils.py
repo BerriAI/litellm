@@ -335,9 +335,9 @@ from litellm.proxy.v2_proxy_fields import (
 )
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
 from litellm.repositories.table_repositories import (
-    EndUserRepository,
     HealthCheckRepository,
     SpendLogsRepository,
     UserNotificationsRepository,
@@ -6027,6 +6027,7 @@ class PrismaClient:
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
         self.autorouter_turn_transactions: list[AutoRouterTurnTransaction] = []
         self.baseline_accounting_lock: Final = asyncio.Lock()
+        self.baseline_accounting_recovery_due_at = 0.0
         self.proxy_logging_obj = proxy_logging_obj
         self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")

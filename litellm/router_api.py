@@ -1541,56 +1541,8 @@ class RouterSettings:
         return self._owner("_core_deployment_call_timeout")._core_deployment_call_timeout(litellm_params)
 
 
-class _HealthHost(Protocol):
-    """The router members ``RouterHealth`` reads, typed as the view hands them on."""
-
-    @property
-    def _core_cache(self) -> "DualCache": ...
-
-    @property
-    def _core_cooldown_cache(self) -> "CooldownCache": ...
-
-    @property
-    def _core_session_pins(self) -> "RouterSessionPinStore": ...
-
-    @property
-    def _core_health_state_cache(self) -> "DeploymentHealthCache": ...
-
-    @property
-    def _core_deployment_latency_map(self) -> "UntypedDict": ...
-
-    @property
-    def _core_ctx(self) -> "RoutingContext": ...
-
-    @property
-    def _core_cooldown_time(self) -> float | None: ...
-
-    def _core_get_fully_blocked_model_names(self) -> "ModelNameSet": ...
-
-    async def _core_async_get_fully_unhealthy_model_names(self) -> "ModelNameSet": ...
-
-    async def _core_get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]: ...
-
-    async def _core_get_remaining_model_group_usage(self, model_group: str) -> Mapping[str, int]: ...
-
-    def _core_team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None": ...
-
-    def _core_split_request_priority(
-        self, model: str, kwargs: Mapping[str, object]
-    ) -> tuple[int | None, Mapping[str, object]]: ...
-
-    def priority_header_update(
-        self, model: str, kwargs: Mapping[str, object], header: str | None
-    ) -> Mapping[str, int | str]: ...
-
-
-class RouterHealth:
+class RouterHealth(Protocol):
     """Cooldowns, blocked deployments, health checks and usage (``health()``)."""
-
-    __slots__ = ("_router",)
-
-    def __init__(self, router: _HealthHost) -> None:
-        self._router = router
 
     @property
     def store(self) -> "DualCache":
@@ -1599,29 +1551,29 @@ class RouterHealth:
         in-memory plus the router's Redis when configured. Read and write it with the router's own
         key names. Replaces the ``cache`` attribute.
         """
-        return self._router._core_cache
+        ...
 
     @property
     def cooldowns(self) -> "CooldownCache":
         """The cooldown store (was ``cooldown_cache``)."""
-        return self._router._core_cooldown_cache
+        ...
 
     @property
     def session_pins(self) -> "RouterSessionPinStore":
         """The session affinity pins deployment affinity and the complexity router claim and read."""
-        return self._router._core_session_pins
+        ...
 
     @property
     def health_checks(self) -> "DeploymentHealthCache":
         """Background health check results (was ``health_state_cache``)."""
-        return self._router._core_health_state_cache
+        ...
 
     @property
     def latency(
         self,
     ) -> "UntypedDict":  # a mutable list/dict, as before: the deployment_latency_map attribute's type, the live dict
         """Latency samples by deployment (was ``deployment_latency_map``)."""
-        return self._router._core_deployment_latency_map
+        ...
 
     @staticmethod
     def is_blocked(deployment: "Deployment") -> bool:
@@ -1639,11 +1591,11 @@ class RouterHealth:
 
     def fully_blocked_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment is paused (was ``get_fully_blocked_model_names``)."""
-        return self._router._core_get_fully_blocked_model_names()
+        ...
 
     async def fully_unhealthy_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment failed its health check (was ``async_get_fully_unhealthy_model_names``)."""
-        return await self._router._core_async_get_fully_unhealthy_model_names()
+        ...
 
     @overload
     async def usage(
@@ -1662,27 +1614,19 @@ class RouterHealth:
         tpm/rpm usage of a group this minute (``current``, was ``get_model_group_usage``) or what is
         left of its limits (``remaining``, was ``get_remaining_model_group_usage``).
         """
-        if kind == "current":
-            return await self._router._core_get_model_group_usage(model_group=model_group)
-        if kind == "remaining":
-            return await self._router._core_get_remaining_model_group_usage(model_group=model_group)
-        raise ValueError(f"unknown usage kind {kind!r}")
+        ...
 
     def team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None":
         """A team's PTU share ceiling on a group (was ``team_ptu_ceiling``)."""
-        return self._router._core_team_ptu_ceiling(team_id, model_group)
+        ...
 
     def split_priority(self, model: str, kwargs: Mapping[str, object]) -> tuple[int | None, Mapping[str, object]]:
         """The request priority and the kwargs without it (was ``split_request_priority``)."""
-        return self._router._core_split_request_priority(model, kwargs)
+        ...
 
     def failures_this_minute(self, deployment_id: str) -> int:
         """Failures counted against a deployment this minute (was ``get_deployment_failures_for_current_minute``)."""
-        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-            get_deployment_failures_for_current_minute,
-        )
-
-        return get_deployment_failures_for_current_minute(self._router._core_ctx, deployment_id)
+        ...
 
     def record_failure(self, deployment_id: str, exception: Exception, exception_status: str | int) -> bool:
         """
@@ -1690,26 +1634,13 @@ class RouterHealth:
         fails (was ``increment_deployment_failures_for_current_minute`` then ``set_cooldown_deployments``).
         Returns whether the deployment was cooled down.
         """
-        from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
-        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-            increment_deployment_failures_for_current_minute,
-        )
-
-        ctx: Final = self._router._core_ctx
-        increment_deployment_failures_for_current_minute(ctx, deployment_id)
-        return set_cooldown_deployments(
-            ctx,
-            original_exception=exception,
-            exception_status=exception_status,
-            deployment=deployment_id,
-            time_to_cooldown=self._router._core_cooldown_time,
-        )
+        ...
 
     def priority_header_fields(
         self, model: str, kwargs: Mapping[str, object], header: str | None
     ) -> Mapping[str, int | str]:
         """The request fields a priority header sets (was ``priority_header_update``)."""
-        return self._router.priority_header_update(model=model, kwargs=kwargs, header=header)
+        ...
 
 
 @dataclass

@@ -1079,7 +1079,7 @@ def test_prompt_cache_controls_reach_an_openai_deployment_unchanged(
     upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
         json={
             "model": "gpt-6-luna",
-            "answers": _OPENAI_FORMAT_ANSWERS[:1],
+            "answers": [{**_OPENAI_FORMAT_ANSWERS[0], "name": _PREDICATE["name"]}],
             "usage": {
                 "input_tokens": _INPUT_TOKENS,
                 "output_tokens": _OUTPUT_TOKENS,
@@ -1323,7 +1323,7 @@ _UNACCEPTED_PROMPT_CACHE_IDS: Final = (
 )
 _OPENAI_DECISION_RESPONSE: Final[Mapping[str, object]] = {
     "model": "gpt-6-luna",
-    "answers": _OPENAI_FORMAT_ANSWERS[:1],
+    "answers": [{**_OPENAI_FORMAT_ANSWERS[0], "name": _PREDICATE["name"]}],
     "usage": {
         "input_tokens": _INPUT_TOKENS,
         "output_tokens": _OUTPUT_TOKENS,

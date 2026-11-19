@@ -38,6 +38,7 @@ from litellm.router_api import RoutingContext
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import get_available_models_for_user
 from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 _TEAMS: Final[Mapping[str, LiteLLM_TeamTableCachedObj]] = {
     UI_TEAM_ID: LiteLLM_TeamTableCachedObj(team_id=UI_TEAM_ID, models=[]),
@@ -332,21 +333,29 @@ async def _list_models(
 async def test_dashboard_listing_respects_wildcard_exclusion(
     monkeypatch: pytest.MonkeyPatch, teams: None, return_wildcard_routes: bool
 ) -> None:
-    router: Final = litellm.Router(model_list=[
-        {"model_name": name, "litellm_params": {"model": name, "api_key": "test-key"}}
-        for name in ("openai/gpt-5.6", "openai/*")
-    ])
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": name, "api_key": "test-key"}}
+            for name in ("openai/gpt-5.6", "openai/*")
+        ]
+    )
     owner: Final = LiteLLM_UserTable(user_id="u1", models=[], teams=[])
     token: Final = UserAPIKeyAuth(
-        token="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
+        token="dashboard-key",
+        user_id="u1",
+        team_id=UI_TEAM_ID,
+        models=[],
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
     listed: Final = await _list_models(
         monkeypatch, owner, token, llm_router=router, return_wildcard_routes=return_wildcard_routes
     )
     ordinary: Final = await _list_models(
-        monkeypatch, owner, token.model_copy(update={"team_id": None, "user_role": LitellmUserRoles.PROXY_ADMIN}),
-        llm_router=router, return_wildcard_routes=return_wildcard_routes,
+        monkeypatch,
+        owner,
+        token.model_copy(update={"team_id": None, "user_role": LitellmUserRoles.PROXY_ADMIN}),
+        llm_router=router,
+        return_wildcard_routes=return_wildcard_routes,
     )
     assert set(listed) == set(ordinary)
     assert ("openai/*" in listed) is return_wildcard_routes
@@ -634,7 +643,7 @@ def _billing_database(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable)
     for team in _TEAMS.values():
         cache.set_cache(f"team_id:{team.team_id}", team, model_type=LiteLLM_TeamTableCachedObj)
     database: Final = prisma_with_empty_config()
-    database.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows=dict(_TEAMS))))
 
     async def team_row(where: Mapping[str, object], **_: object) -> LiteLLM_TeamTableCachedObj | None:
         return _TEAMS.get(str(where["team_id"]))
@@ -664,7 +673,10 @@ async def test_dashboard_batches_require_own_model_grants(
     owner: Final = LiteLLM_UserTable(user_id="u1", models=own_models, teams=["team-a"])
     _billing_database(monkeypatch, owner)
     token: Final = UserAPIKeyAuth(
-        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
+        api_key="dashboard-key",
+        user_id="u1",
+        team_id=UI_TEAM_ID,
+        models=[],
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
@@ -672,13 +684,21 @@ async def test_dashboard_batches_require_own_model_grants(
         if denied:
             with pytest.raises(HTTPException) as error:
                 await _authorize_authenticated_request(
-                    token, request, {"model": "gpt-a,shared"}, "/chat/completions", "dashboard-key",
+                    token,
+                    request,
+                    {"model": "gpt-a,shared"},
+                    "/chat/completions",
+                    "dashboard-key",
                     force_virtual_key_checks=True,
                 )
             assert error.value.status_code == 403
         else:
             billed: Final = await _authorize_authenticated_request(
-                token, request, {"model": "gpt-a,shared"}, "/chat/completions", "dashboard-key",
+                token,
+                request,
+                {"model": "gpt-a,shared"},
+                "/chat/completions",
+                "dashboard-key",
                 force_virtual_key_checks=True,
             )
             assert (billed or token).team_id == UI_TEAM_ID
@@ -703,8 +723,13 @@ async def test_dashboard_admitted_team_reservation_does_not_deny_same_team_fallb
     proxy_server.prisma_client.db.litellm_spendlogs.group_by = AsyncMock(return_value=[])
     proxy_server.spend_counter_store.set_local(counter, 0.0)
     token: Final = UserAPIKeyAuth(
-        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
-        user_role=LitellmUserRoles.INTERNAL_USER, max_budget=20, spend=0,
+        api_key="dashboard-key",
+        user_id="u1",
+        team_id=UI_TEAM_ID,
+        models=[],
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        max_budget=20,
+        spend=0,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     billed: Final = await _authorize_authenticated_request(
@@ -715,9 +740,12 @@ async def test_dashboard_admitted_team_reservation_does_not_deny_same_team_fallb
     assert reservation["reserved_cost"] == pytest.approx(window_limit)
     assert proxy_server.spend_counter_store.get_local(counter) == pytest.approx(window_limit)
     try:
-        assert await RouterFallbackAccessCheck(is_enforced=lambda: True)(
-            model="gpt-b", request_kwargs={"metadata": {"user_api_key_auth": billed}}, ctx=RoutingContext(_ROUTER)
-        ) is True
+        assert (
+            await RouterFallbackAccessCheck(is_enforced=lambda: True)(
+                model="gpt-b", request_kwargs={"metadata": {"user_api_key_auth": billed}}, ctx=RoutingContext(_ROUTER)
+            )
+            is True
+        )
         await _check_dashboard_request_billing(
             SimpleNamespace(data={"model": "gpt-b"}, dashboard_fallback_model="gpt-b"), billed, _ROUTER
         )
@@ -736,7 +764,10 @@ async def test_dashboard_own_primary_alias_keeps_its_admitted_billing_identity(
     owner: Final = LiteLLM_UserTable(user_id="u1", models=["caller-alias"], teams=["team-billing-a"])
     _billing_database(monkeypatch, owner)
     token: Final = UserAPIKeyAuth(
-        api_key="dashboard-key", user_id="u1", team_id=UI_TEAM_ID, models=[],
+        api_key="dashboard-key",
+        user_id="u1",
+        team_id=UI_TEAM_ID,
+        models=[],
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
@@ -753,9 +784,12 @@ async def test_dashboard_own_primary_alias_keeps_its_admitted_billing_identity(
     await _check_dashboard_request_billing(prepared, billed, _ROUTER)
     assert billed.team_id == UI_TEAM_ID
     proxy_server.user_api_key_cache.set_cache(owner.user_id, owner, model_type=LiteLLM_UserTable)
-    assert await RouterFallbackAccessCheck(is_enforced=lambda: True)(
-        model="shared", request_kwargs={"metadata": {"user_api_key_auth": billed}}, ctx=RoutingContext(_ROUTER)
-    ) is True
+    assert (
+        await RouterFallbackAccessCheck(is_enforced=lambda: True)(
+            model="shared", request_kwargs={"metadata": {"user_api_key_auth": billed}}, ctx=RoutingContext(_ROUTER)
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
