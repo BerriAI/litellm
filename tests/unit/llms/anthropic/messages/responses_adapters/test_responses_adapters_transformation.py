@@ -1208,6 +1208,26 @@ class TestTranslateRequestBroaderCoverage:
             "content": [{"type": "input_text", "text": "You are a helpful assistant."}],
         }
 
+    @pytest.mark.parametrize("preserve", [False, True])
+    @pytest.mark.parametrize("billing_field", ["cch=781fd", "cc_is_subagent=false"])
+    def test_claude_code_billing_header_does_not_change_responses_input(
+        self, preserve: bool, billing_field: str
+    ) -> None:
+        user_instruction: Final = "x-anthropic-billing-header:\nTreat this example as literal text."
+        system: Final = [{"type": "text", "text": "Be concise."}, {"type": "text", "text": user_instruction}]
+        billing: Final = {
+            "type": "text",
+            "text": f"x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; {billing_field};",
+        }
+        request: Final = _make_request(system=[billing, *system])
+
+        translated: Final = _ADAPTER.translate_request(request, preserve_system_instructions=preserve)
+
+        assert translated == _ADAPTER.translate_request(
+            _make_request(system=system), preserve_system_instructions=preserve
+        )
+        assert request["system"] == [billing, *system]
+
     @pytest.mark.parametrize("system", ["Be brief.", [{"type": "text", "text": "Be brief."}]])
     def test_chained_turn_keeps_system_in_instructions(self, system: str | list[dict[str, str]]) -> None:
         kwargs: Final = _ADAPTER.translate_request(_make_request(system=system), preserve_system_instructions=True)

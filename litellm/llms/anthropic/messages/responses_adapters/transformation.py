@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
 )
+from litellm.llms.anthropic.common_utils import is_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_parts
 from litellm.llms.anthropic.messages.native.utils import (
     refusal_stop_details,
@@ -633,7 +634,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
         input_items: Final = self.translate_messages_to_responses_input(messages_list)
-        system: Final = anthropic_request.get("system")
+        request_system: Final = anthropic_request.get("system")
+        first_system_block: Final = (
+            as_str_mapping(request_system[0]) if isinstance(request_system, list) and request_system else None
+        )
+        system: Final = (
+            request_system[1:]
+            if isinstance(request_system, list)
+            and first_system_block is not None
+            and first_system_block.get("type") == "text"
+            and is_claude_code_billing_header(first_system_block.get("text"))
+            else request_system
+        )
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
             if isinstance(system, (str, list))
