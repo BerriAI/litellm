@@ -112,6 +112,37 @@ pub(crate) struct NativeRejected {
 )]
 pub(crate) struct CostMapRefreshed(CostMap);
 
+/// Ends a blocking refresh from another thread. A daemon thread that comes back from native code once the
+/// interpreter is finalizing aborts the process, so interpreter exit calls `stop`, which returns only after the
+/// refresh has left native code
+#[pyclass(
+    frozen,
+    name = "CostMapRefreshStop",
+    module = "litellm.rust_bridge._native"
+)]
+pub(crate) struct CostMapRefreshStop {
+    stopped: tokio::sync::watch::Sender<bool>,
+    /// Read by a refresh for as long as it is in native code, and written by `stop` to wait for it
+    in_native: Arc<parking_lot::RwLock<()>>,
+}
+
+#[pymethods]
+impl CostMapRefreshStop {
+    #[new]
+    fn new() -> Self {
+        Self {
+            stopped: tokio::sync::watch::Sender::new(false),
+            in_native: Arc::default(),
+        }
+    }
+
+    fn stop(&self, py: Python<'_>) {
+        self.stopped.send_replace(true);
+        let in_native = self.in_native.clone();
+        litellm_host_python::release_gil(py, move || drop(in_native.write()));
+    }
+}
+
 /// A finished registration pass, with the registrations no built-in row matched, by registered key
 #[pyclass(
     frozen,
@@ -187,8 +218,41 @@ impl NativeModelCostMap {
         }
     }
 
-    /// Fetches and reads the document on the shared runtime, off the GIL, and installs nothing. The result is a
-    /// `CostMapRefreshed`, a `NativeFetchFailed` or a `NativeRejected`
+    /// Fetches and reads the document on a throwaway runtime, off the GIL, and installs nothing. The result is a
+    /// `CostMapRefreshed`, a `NativeFetchFailed` or a `NativeRejected`, or `None` once `stop` was called
+    fn refresh_blocking(
+        &self,
+        py: Python<'_>,
+        source: PyRef<'_, NativeCostMapSource>,
+        policy: PyRef<'_, NativeFetchPolicy>,
+        stop: PyRef<'_, CostMapRefreshStop>,
+    ) -> PyResult<Py<PyAny>> {
+        let _in_native = stop.in_native.read();
+        if *stop.stopped.borrow() {
+            return Ok(py.None());
+        }
+        let mut stopped = stop.stopped.subscribe();
+        let (connection, policy, limits) = (source.0.clone(), policy.0, self.limits);
+        let logger = crate::logger::capture(py);
+        let refreshed = litellm_host_python::release_gil(py, move || {
+            logger.scope(|| {
+                let source = connection.unpooled(policy)?;
+                litellm_host_python::run_isolated(async {
+                    tokio::select! {
+                        refreshed = refresh(&source, limits) => Some(refreshed),
+                        _ = stopped.wait_for(|stopped| *stopped) => None,
+                    }
+                })
+                .map_err(PyErr::from)
+            })
+        })?;
+        match refreshed {
+            Some(refreshed) => Outcome(refreshed).into_pyobject(py).map(Bound::unbind),
+            None => Ok(py.None()),
+        }
+    }
+
+    /// `refresh_blocking` on the shared runtime with a pooled client, for workers after the fork
     fn refresh<'py>(
         &self,
         py: Python<'py>,

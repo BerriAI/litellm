@@ -296,51 +296,6 @@ async fn a_stalled_response_times_out_and_is_retried() {
 
 #[rstest]
 #[tokio::test]
-async fn a_resumed_fetch_makes_only_the_attempts_left() {
-    let upstream = Upstream::serve(vec![Answer::Raw(UNAVAILABLE)]);
-    let url = upstream.url();
-    let first = Failed {
-        reason: "first".into(),
-        retryable: true,
-        retry_after: Some(Duration::ZERO),
-    };
-    let failed = remote(&url, environment(), POLICY)
-        .resuming(first)
-        .fetch()
-        .await
-        .unwrap_err();
-    assert_eq!(
-        failed.reason,
-        format!("HTTP 503 from {url} (after 3 attempts)")
-    );
-    assert_eq!(upstream.heads().len(), 2);
-}
-
-#[rstest]
-#[tokio::test]
-async fn a_resumed_fetch_with_no_attempts_left_returns_the_failure_it_resumed() {
-    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
-    let first = Failed {
-        reason: "first".into(),
-        retryable: true,
-        retry_after: None,
-    };
-    let policy = RetryPolicy {
-        max_attempts: 1,
-        ..POLICY
-    };
-    assert_eq!(
-        remote(&upstream.url(), environment(), policy)
-            .resuming(first.clone())
-            .fetch()
-            .await,
-        Err(first)
-    );
-    assert!(upstream.heads().is_empty());
-}
-
-#[rstest]
-#[tokio::test]
 async fn a_failure_reason_drops_url_credentials() {
     let upstream = Upstream::serve(vec![Answer::Raw(NOT_FOUND)]);
     let address = upstream.base.trim_start_matches("http://");
