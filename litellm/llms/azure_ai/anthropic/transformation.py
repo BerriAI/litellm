@@ -2,12 +2,17 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 
+from collections.abc import Mapping
 from typing import Final
 
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from pydantic import TypeAdapter
+
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, extra_body_without_guarded_keys
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+
+_EXTRA_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
@@ -18,13 +23,13 @@ def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
     ``add_provider_specific_params_to_optional_params``. For the Azure→Anthropic
     route those keys must reach the request body and be validated, so promote
     them. The caller's values overwrite mapped top-level duplicates, matching
-    the native ``anthropic`` provider, where the same passthrough lands on
-    top-level ``optional_params`` after mapping.
+    the native ``anthropic`` provider, and like it never replace the model,
+    messages, system prompt, tools, or stream flag litellm builds.
     """
     extra_body: Final = optional_params.get("extra_body")
     if not isinstance(extra_body, dict) or not extra_body:
         return
-    optional_params.update(extra_body)
+    optional_params.update(extra_body_without_guarded_keys(_EXTRA_BODY_ADAPTER.validate_python(extra_body)))
     optional_params.pop("extra_body", None)
 
 

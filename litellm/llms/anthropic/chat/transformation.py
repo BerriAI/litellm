@@ -166,7 +166,7 @@ _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _EXTRA_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools"})
+EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools", "stream"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -462,6 +462,23 @@ def _own_max_output_tokens(model: str) -> int | None:
         return get_max_tokens(model)
     except Exception:
         return None
+
+
+def extra_body_without_guarded_keys(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS})
+
+
+def _request_extra_body(extra_body: object) -> Mapping[str, object]:
+    match extra_body:
+        case None:
+            return MappingProxyType({})
+        case Mapping():
+            return _EXTRA_BODY_ADAPTER.validate_python(extra_body)
+        case _:
+            raise AnthropicError(
+                status_code=400,
+                message=f"Invalid type for 'extra_body': expected an object, got {type(extra_body).__name__}",
+            )
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -2438,7 +2455,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
             dict[str, object], optional_params
         )
-        extra_body: Final = _EXTRA_BODY_ADAPTER.validate_python(request_params.pop("extra_body", None) or {})
+        extra_body: Final = _request_extra_body(request_params.pop("extra_body", None))
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2470,15 +2487,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **request_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
-        withheld_extra_body_keys: Final = request_body.keys() | _EXTRA_BODY_GUARDED_KEYS
-        data: Final = {
-            **request_body,
-            **{k: v for k, v in extra_body.items() if k not in withheld_extra_body_keys},
-        }
+        data: Final = {**request_body, **extra_body_without_guarded_keys(extra_body)}
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 
         return data
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body_without_guarded_keys(extra_body)
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.

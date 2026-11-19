@@ -385,6 +385,30 @@ class TestAzureAnthropicConfig:
 
         assert result["output_config"] == {"effort": "high"}
 
+    def test_extra_body_promotion_never_replaces_the_model_conversation_or_tools(self) -> None:
+        result = AzureAnthropicConfig().transform_request(
+            model="claude-opus-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={
+                "max_tokens": 100,
+                "extra_body": {
+                    "model": "claude-opus-5-5",
+                    "messages": [{"role": "user", "content": "unchecked"}],
+                    "system": "unchecked",
+                    "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                    "stream": True,
+                    "stop_sequences": ["5"],
+                },
+            },
+            litellm_params={"api_key": "test-key"},
+            headers={"api-key": "test-key", "anthropic-version": "2023-06-01"},
+        )
+
+        assert result["model"] == "claude-opus-4-6"
+        assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        assert {"system", "tools", "stream"}.isdisjoint(result)
+        assert result["stop_sequences"] == ["5"]
+
     def test_legacy_thinking_upgrade_keeps_caller_effort_from_extra_body(self, local_model_cost_map):
         config = AzureAnthropicConfig()
 
