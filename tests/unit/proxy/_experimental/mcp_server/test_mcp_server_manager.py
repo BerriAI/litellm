@@ -37,6 +37,7 @@ from mcp.types import (
     CallToolRequestParams as MCPCallToolRequestParams,
     CallToolResult,
     GetPromptResult,
+    PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
     TextResourceContents,
@@ -11658,7 +11659,7 @@ class TestMCPToolsListAuthSurfacing:
         )
         challenge: Final = 'Bearer error="insufficient_scope", scope="read:tools"'
         client: Final = AsyncMock()
-        client.list_tools_result = AsyncMock(side_effect=_upstream_status_error(403, challenge))
+        client.list_tools = AsyncMock(side_effect=_upstream_status_error(403, challenge))
         client.list_tools_page = AsyncMock(side_effect=_upstream_status_error(403, challenge))
         manager: Final = MCPServerManager()
         manager.create_mcp_client = AsyncMock(return_value=client)
