@@ -209,6 +209,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     sync_team_access_group_membership,
 )
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
+from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
@@ -237,7 +238,7 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     query_raw_within_statement_timeout,
 )
-from litellm.redis.stores.spend_counters import team_counter
+from litellm.redis.stores.spend_counters import team_counter, team_window_counter
 from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
@@ -5629,6 +5630,12 @@ async def team_info(
                     entity_id=team_id,
                     model_max_budget=resolved_team_info.model_max_budget,
                     cache=model_max_budget_limiter.dual_cache,
+                ),
+                "budget_limits_usage": await build_budget_limits_usage(
+                    budget_limits=resolved_team_info.budget_limits,
+                    counter_key=lambda duration: team_window_counter(team_id, duration),
+                    entity_type="Team",
+                    entity_id=team_id,
                 ),
                 "caller_edit_access": _caller_edit_access(access_role, _general_settings()),
             }

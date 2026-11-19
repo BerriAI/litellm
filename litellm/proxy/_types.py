@@ -3407,6 +3407,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     model_max_budget: Mapping[str, object] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3979,6 +3980,7 @@ class SpendLogsMetadata(TypedDict):
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    route_call_type: ReadOnly[NotRequired[str | None]]
     upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool | None]]
@@ -4637,6 +4639,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_limits_usage: Mapping[str, Mapping[str, object]] | None = None
     caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 

@@ -29,6 +29,7 @@ from litellm.rust_bridge._native import RustTeamMembershipRepository
 from tests.unit.proxy.rust_auth_stores import (
     FakeTeamMembershipStore,
     FakeTeamStore,
+    GroupBudget,
     RustAuthStores,
     install_rust_auth_stores,
 )
@@ -2141,7 +2142,7 @@ class TestJWTOAuth2Coexistence:
             patch("litellm.proxy.proxy_server.premium_user", False),
             patch("litellm.proxy.proxy_server.master_key", "sk-master"),
             patch("litellm.proxy.proxy_server.prisma_client", prisma_with_empty_config()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
             patch(
                 "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
                 new_callable=AsyncMock,
@@ -3335,7 +3336,7 @@ def _proxy_attrs_for_centralized_checks(user_custom_auth=None, flag=False, maste
     """
     return {
         "prisma_client": None,
-        "user_api_key_cache": DualCache(),
+        "user_api_key_cache": UserApiKeyCache(),
         "proxy_logging_obj": MagicMock(),
         "general_settings": ({"custom_auth_run_common_checks": True} if flag else {}),
         "llm_router": None,
@@ -9656,11 +9657,9 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         ] == _team_member_model_budget_spend_keys(["gpt-4o"])
 
     @pytest.mark.asyncio
-    async def test_fallback_checks_candidate_access_group_budget_and_stamps_candidate_groups(self):
-        import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy.common_utils.user_api_key_cache import model_access_group_cache_key
-        from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-
+    async def test_fallback_checks_candidate_access_group_budget_and_stamps_candidate_groups(
+        self, rust_auth_stores: RustAuthStores
+    ) -> None:
         valid_token: Final = UserAPIKeyAuth(
             token="test-key",
             models=["gpt-4o", "gpt-4o-mini", "fallback-group"],
@@ -9674,11 +9673,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"gpt-4o": 10.0})
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
-        await proxy_server.user_api_key_cache.async_set_cache(
-            key=model_access_group_cache_key("fallback-group"),
-            value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=0.0, max_budget=10.0),
-            model_type=ModelAccessGroupBudget,
-        )
+        rust_auth_stores.model_access_group.groups["fallback-group"] = GroupBudget(spend=0.0, max_budget=10.0)
         router: Final = litellm.Router(
             model_list=[
                 {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
@@ -9706,11 +9701,9 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         assert valid_token.matched_model_access_groups == ["fallback-group"]
 
     @pytest.mark.asyncio
-    async def test_access_group_budget_exhaustion_skips_fallback_candidate(self):
-        import litellm.proxy.proxy_server as proxy_server
-        from litellm.proxy.common_utils.user_api_key_cache import model_access_group_cache_key
-        from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-
+    async def test_access_group_budget_exhaustion_skips_fallback_candidate(
+        self, rust_auth_stores: RustAuthStores
+    ) -> None:
         valid_token: Final = UserAPIKeyAuth(
             token="test-key",
             models=["gpt-4o", "gpt-4o-mini", "fallback-group"],
@@ -9724,11 +9717,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         limiter, _ = await _real_model_budget_limiter(member_spend={"gpt-4o": 10.0})
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
-        await proxy_server.user_api_key_cache.async_set_cache(
-            key=model_access_group_cache_key("fallback-group"),
-            value=ModelAccessGroupBudget(access_group_name="fallback-group", spend=5.0, max_budget=5.0),
-            model_type=ModelAccessGroupBudget,
-        )
+        rust_auth_stores.model_access_group.groups["fallback-group"] = GroupBudget(spend=5.0, max_budget=5.0)
         router: Final = litellm.Router(
             model_list=[
                 {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
@@ -10282,7 +10271,7 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     user_id = "user-alert-thresholds"
     alert_emails = {"50": [], "100": ["finance@example.com"]}
 
-    user_api_key_cache = DualCache()
+    user_api_key_cache = UserApiKeyCache()
     await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
@@ -11875,7 +11864,7 @@ _VIDEO_SPENDING_REQUESTS: Final = (
 async def _authenticate_video_request(
     key: UserAPIKeyAuth, api_key: str, method: str, route: str, request_data: dict[str, object]
 ) -> UserAPIKeyAuth:
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     await cache_key_object(
         hashed_token=key.token or "",
         user_api_key_obj=key,
