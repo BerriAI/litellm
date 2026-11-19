@@ -72,7 +72,7 @@ pub struct AmazonAnthropicClaudeMessagesConfig;
 pub const BEDROCK_ANTHROPIC_MESSAGES_CONFIG: AmazonAnthropicClaudeMessagesConfig =
     AmazonAnthropicClaudeMessagesConfig;
 
-fn bearer_token(
+pub(crate) fn bearer_token(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
@@ -137,7 +137,7 @@ fn contains_bedrock_arn(model: &str) -> bool {
 }
 
 /// Port of Python's `BaseAWSLLM._get_aws_region_from_model_arn`.
-fn get_aws_region_from_model_arn(model: &str) -> Option<String> {
+pub(crate) fn get_aws_region_from_model_arn(model: &str) -> Option<String> {
     contains_bedrock_arn(model)
         .then(|| model.split(':').nth(3))
         .flatten()
@@ -145,12 +145,14 @@ fn get_aws_region_from_model_arn(model: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Port of Python's `AmazonInvokeConfig.get_complete_url`.
-fn region_from_model(model: &str) -> Option<String> {
+/// The region a Bedrock model names: an ARN's region, else a `<region>/` path segment after the
+/// routing prefixes, as Python's `BaseAWSLLM._get_aws_region_name` reads it before the environment.
+pub(crate) fn region_from_model(model: &str) -> Option<String> {
     get_aws_region_from_model_arn(model)
         .or_else(|| split_bedrock_region_path(model).0.map(str::to_string))
 }
 
+/// Port of Python's `AmazonInvokeConfig.get_complete_url`.
 fn invoke_url(
     api_base: Option<&str>,
     model: &str,
@@ -192,7 +194,10 @@ fn invoke_url(
 }
 
 /// The header half of Python's `validate_anthropic_messages_environment`.
-fn invoke_headers(headers: Headers, litellm_params: &LitellmParams) -> Result<Headers, Error> {
+pub(crate) fn invoke_headers(
+    headers: Headers,
+    litellm_params: &LitellmParams,
+) -> Result<Headers, Error> {
     let guardrail = match litellm_params.extra.get(GUARDRAIL_CONFIG_PARAM) {
         None | Some(Value::Null) => Vec::new(),
         Some(raw) => bedrock_invoke_guardrail_headers(raw)?,
@@ -213,6 +218,47 @@ fn without_native_output(context: &MessagesTransformContext) -> MessagesTransfor
         ..fallback.thinking.capabilities.bedrock.native_output
     };
     fallback
+}
+
+/// Port of Python's `native_output_fallback_litellm_params`.
+pub(crate) fn native_output_fallback_litellm_params(
+    request: &MessagesRequest,
+    context: &MessagesTransformContext,
+) -> Option<MessagesTransformContext> {
+    let native = context.thinking.capabilities.bedrock.native_output;
+    let Ok(Value::Object(params)) = serde_json::to_value(&request.params) else {
+        return None;
+    };
+    if !bedrock_native_output_retry_requested(&params, native) {
+        return None;
+    }
+    let output_format = requested_output_format(&params)?;
+    bedrock_native_output_format(output_format, native)
+        .ok()
+        .flatten()
+        .map(|_| without_native_output(context))
+}
+
+/// Port of Python's `should_retry_anthropic_messages_without_native_output`.
+pub(crate) fn should_retry_anthropic_messages_without_native_output(
+    status: u16,
+    error_text: &str,
+    request_body: &Value,
+    model: &str,
+) -> bool {
+    let retries = sent_output_config_format(request_body)
+        && is_bedrock_native_output_rejection(status, error_text);
+    if retries {
+        let opt_out_advice = if error_text.contains(NATIVE_OUTPUT_UNSUPPORTED) {
+            " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the rejected call."
+        } else {
+            ""
+        };
+        litellm_tracing::warn!(
+            "Bedrock rejected native structured output for model={model}, so litellm sent the request again without it.{opt_out_advice}"
+        );
+    }
+    retries
 }
 
 impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
@@ -261,30 +307,22 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         headers: Headers,
         context: &MessagesTransformContext,
     ) -> Result<(MessagesRequest, Headers), Error> {
-        request::transform_anthropic_messages_request(request, context, headers)
+        request::transform_anthropic_messages_request(
+            request,
+            context,
+            headers,
+            &request::BEDROCK_INVOKE_REQUEST_SETTINGS,
+        )
     }
 
-    /// Port of Python's `native_output_fallback_litellm_params`.
     fn native_output_fallback(
         &self,
         request: &MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Option<MessagesTransformContext> {
-        let native = context.thinking.capabilities.bedrock.native_output;
-        let Ok(Value::Object(params)) = serde_json::to_value(&request.params) else {
-            return None;
-        };
-        if !bedrock_native_output_retry_requested(&params, native) {
-            return None;
-        }
-        let output_format = requested_output_format(&params)?;
-        bedrock_native_output_format(output_format, native)
-            .ok()
-            .flatten()
-            .map(|_| without_native_output(context))
+        native_output_fallback_litellm_params(request, context)
     }
 
-    /// Port of Python's `should_retry_anthropic_messages_without_native_output`.
     fn retries_without_native_output(
         &self,
         status: u16,
@@ -292,19 +330,12 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         request_body: &Value,
         model: &str,
     ) -> bool {
-        let retries = sent_output_config_format(request_body)
-            && is_bedrock_native_output_rejection(status, error_text);
-        if retries {
-            let opt_out_advice = if error_text.contains(NATIVE_OUTPUT_UNSUPPORTED) {
-                " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the rejected call."
-            } else {
-                ""
-            };
-            litellm_tracing::warn!(
-                "Bedrock rejected native structured output for model={model}, so litellm sent the request again without it.{opt_out_advice}"
-            );
-        }
-        retries
+        should_retry_anthropic_messages_without_native_output(
+            status,
+            error_text,
+            request_body,
+            model,
+        )
     }
 
     fn wire_body(&self, body: Value) -> Value {

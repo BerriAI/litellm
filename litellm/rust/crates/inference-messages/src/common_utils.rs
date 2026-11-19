@@ -13,6 +13,7 @@ use litellm_llms::{
 };
 use litellm_llms::{
     bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+    bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
     bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -57,11 +58,14 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         }
         LlmProviders::Bedrock if has_route_prefix(model, "converse/") => return None,
         LlmProviders::Bedrock if has_route_prefix(model, "mantle/") => {
-            &BEDROCK_MANTLE_MESSAGES_CONFIG
+            &AMAZON_MANTLE_MESSAGES_CONFIG
         }
         LlmProviders::Bedrock if model.contains("claude") => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Bedrock => return None,
-        LlmProviders::BedrockMantle => &BEDROCK_MANTLE_MESSAGES_CONFIG,
+        LlmProviders::BedrockMantle if model.to_ascii_lowercase().contains("claude") => {
+            &BEDROCK_MANTLE_MESSAGES_CONFIG
+        }
+        LlmProviders::BedrockMantle => return None,
         LlmProviders::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Edenai => &EDENAI_MESSAGES_CONFIG,
         LlmProviders::Minimax => &MINIMAX_MESSAGES_CONFIG,
@@ -131,6 +135,7 @@ mod tests {
     #[case::anthropic(LlmProviders::Anthropic, "anthropic")]
     #[case::azure_ai(LlmProviders::AzureAi, "azure_ai")]
     #[case::bedrock(LlmProviders::Bedrock, "bedrock")]
+    #[case::bedrock_mantle(LlmProviders::BedrockMantle, "bedrock_mantle")]
     #[case::deepseek(LlmProviders::Deepseek, "deepseek")]
     #[case::edenai(LlmProviders::Edenai, "edenai")]
     #[case::minimax(LlmProviders::Minimax, "minimax")]
@@ -144,11 +149,20 @@ mod tests {
     #[rstest]
     #[case::openai(LlmProviders::Openai, "gpt-5")]
     #[case::vertex_gemini(LlmProviders::VertexAi, "gemini-2.5-pro")]
+    #[case::bedrock_mantle_non_claude(LlmProviders::BedrockMantle, "openai.gpt-oss-120b")]
     fn provider_without_a_messages_config_is_rejected(
         #[case] provider: LlmProviders,
         #[case] model: &str,
     ) {
         assert!(messages_provider(provider, model).is_none());
+    }
+
+    #[rstest]
+    #[case::lowercase("anthropic.claude-sonnet-5-5")]
+    #[case::capitalized("anthropic.Claude-Sonnet-5-5")]
+    #[case::region_prefixed("us-east-1/anthropic.claude-opus-5-5")]
+    fn bedrock_mantle_serves_messages_for_claude_in_any_case(#[case] model: &str) {
+        assert!(messages_provider(LlmProviders::BedrockMantle, model).is_some());
     }
 
     #[rstest]
@@ -192,7 +206,7 @@ mod tests {
         use litellm_llms::{
             base_llm::messages::transformation::BaseMessagesConfig,
             bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-            bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
+            bedrock::messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
         };
         let params = litellm_router_types::LitellmParams::default();
         let region = |key: &str| {
@@ -210,7 +224,7 @@ mod tests {
             .config());
         assert_eq!(
             (
-                routed == url(&BEDROCK_MANTLE_MESSAGES_CONFIG),
+                routed == url(&AMAZON_MANTLE_MESSAGES_CONFIG),
                 routed == url(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG),
             ),
             (mantle, claude_platform)

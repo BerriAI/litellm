@@ -183,6 +183,16 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customerHierarchyUsageCall", () => {
+  it("should pass the app filter to every usage query without changing global budget policy", async () => {
+    const scopedRequest = { ...request, appId: "app-search", startDate: "2026-11-10", endDate: "2026-11-12" };
+    const result = await customerHierarchyUsageCall(scopedRequest);
+    const activityRequests = urls().filter((url) => url.pathname.includes("/daily/activity"));
+    expect(activityRequests.length).toBeGreaterThan(0);
+    expect(activityRequests.every((url) => url.searchParams.get("app_id") === "app-search")).toBe(true);
+    expect(result.organization.budgetLimit).toBe(100);
+    expect(result.organization.spend).toBe(40);
+  });
+
   it("should preserve scalar and concurrent effective caps without treating recorded spend as window spend", async () => {
     const budget = {
       max_budget: 25,

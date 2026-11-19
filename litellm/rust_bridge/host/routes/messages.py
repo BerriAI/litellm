@@ -302,9 +302,13 @@ def _shape_bedrock_tools(tools: object, model: str) -> None:
     ensure_bedrock_anthropic_messages_tool_names(body)
 
 
-def body_params(request: Mapping[str, object], asynchronous: bool, hooked: bool = False) -> Mapping[str, object]:
+def body_params(
+    request: Mapping[str, object], asynchronous: bool, hooked: bool = False, shapes_invoke_tools: bool = False
+) -> Mapping[str, object]:
+    """`shapes_invoke_tools` is set by Rust for a Bedrock invoke call, whose Python transform shapes the caller's
+    own tool dicts in place."""
     fields: Final = _body_fields(request)
-    if _resolved_provider(request) == "bedrock":
+    if shapes_invoke_tools:
         _shape_bedrock_tools(fields.get("tools"), str(request["model"]).removeprefix("bedrock/"))
     if not detectors.cache_control_injection(NativeCall(args=(), kwargs=request, base={})):
         return {**fields, "messages": request["messages"]} if hooked else fields
@@ -712,14 +716,18 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
         except ValidationError as invalid:
             return invalid
     provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
+    model: Final = _provider_model(error, request, request_provider)
     if isinstance(provider_rejection, str):
-        _log_resolved_call(request, request_provider)
+        # Python's handler logs the route model before its provider config's transform refuses the call.
+        _log_resolved_call(request, request_provider, optional_str(getattr(error, "messages_logged_model", None)))
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         rejection: Final = _provider_rejection(
             provider_rejection,
             getattr(error, "messages_provider_bad_request", False) is True,
+            optional_str(getattr(error, "messages_provider", None)),
             request,
             request_provider,
+            model,
         )
         if isinstance(rejection, litellm.BadRequestError):
             return rejection
@@ -727,26 +735,29 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     if getattr(error, "messages_unsupported_param", False):
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         return litellm.UnsupportedParamsError(message=str(error))
+    named_provider: Final = optional_str(getattr(error, "messages_provider", None))
     return litellm.BadRequestError(
-        message=str(error),
-        model=str(request["model"]).removeprefix(f"{request_provider}/"),
-        llm_provider=request_provider,
+        message=str(error), model=model, llm_provider=request_provider if named_provider is None else named_provider
     )
 
 
 def _provider_rejection(
-    text: str, bad_request: bool, request: Mapping[str, object], request_provider: str
+    text: str,
+    bad_request: bool,
+    named_provider: str | None,
+    request: Mapping[str, object],
+    request_provider: str,
+    model: str,
 ) -> Exception:
     """The Bedrock invoke config raises its own `BadRequestError`, which other configs' HTTP handler
-    maps into their error class by its text."""
+    maps into their error class by its text. A config that raises it naming another provider, as
+    the Mantle configs name `bedrock`, is one Rust names."""
     if not bad_request:
         return _config_error(400, text, (), request, request_provider)
     raised: Final = litellm.BadRequestError(
-        message=text,
-        model=str(request["model"]).removeprefix(f"{request_provider}/"),
-        llm_provider=request_provider,
+        message=text, model=model, llm_provider=request_provider if named_provider is None else named_provider
     )
-    if request_provider == "bedrock":
+    if request_provider == "bedrock" or named_provider is not None:
         return raised
     return _config_error(400, str(raised), (), request, request_provider)
 
@@ -833,17 +844,11 @@ def _complete_url(call: _ProviderCall, request: Mapping[str, object]) -> str:
     )
 
 
-def _bedrock_url(request: Mapping[str, object]) -> str | None:
-    """The URL Python's bedrock Messages config builds for the call."""
-    call: Final = _provider_call(request)
-    return None if call is None else _complete_url(call, request)
-
-
-def _signing_failure(kind: str) -> Exception | None:
+def _signing_failure(kind: str, profile: str | None) -> Exception | None:
     """The exception Python's AWS signing raises for a credential failure whose outcome needs no STS,
     IMDS or secret manager call. botocore's environment provider raises `PartialCredentialsError`
     for an access key without its secret, where Rust's default chain finds nothing."""
-    from botocore.exceptions import NoCredentialsError
+    from botocore.exceptions import NoCredentialsError, ProfileNotFound
 
     from litellm.llms.bedrock.base_aws_llm import AwsAuthError
 
@@ -853,18 +858,59 @@ def _signing_failure(kind: str) -> Exception | None:
         return AwsAuthError(status_code=401, message="OIDC token could not be retrieved from secret manager.")
     if kind == "no_credentials" and not os.environ.get("AWS_ACCESS_KEY_ID"):
         return NoCredentialsError()
+    if kind == "profile_not_found" and profile is not None:
+        return ProfileNotFound(profile=profile)
     return None
 
 
-def _bedrock_credential_failure(error: Exception, request: Mapping[str, object]) -> Exception | None:
+_STS_FAILURE: Final = TypeAdapter(tuple[str, str, str, str])
+
+
+def _sts_failure(failure: object) -> Exception | None:
+    """The exception Python's AWS credential code lets through for an STS call that failed, which the
+    Bedrock Mantle signer does not wrap: botocore's own class, or `AwsAuthError` for a refused web identity token."""
+    from botocore.exceptions import ClientError, EndpointConnectionError
+
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+
+    try:
+        kind, operation, code, message = _STS_FAILURE.validate_python(failure)
+    except ValidationError:
+        return None
+    if kind == "invalid_web_identity_token":
+        return AwsAuthError(status_code=401, message=f"AWS STS rejected the web identity token: {message}")
+    if kind == "rejected":
+        return ClientError({"Error": {"Code": code, "Message": message}}, operation)
+    return EndpointConnectionError(endpoint_url="AWS STS") if kind == "unreachable" else None
+
+
+def _bedrock_credential_failure(
+    error: Exception, request: Mapping[str, object], request_provider: str
+) -> Exception | None:
     """The exception Python's bedrock config raises while signing a call whose credentials Rust
-    could not acquire, from botocore's `NoCredentialsError` to an STS or `AwsAuthError` failure."""
+    could not acquire, from botocore's `NoCredentialsError` to an STS or `AwsAuthError` failure. Only a
+    Bedrock invoke call (`replay`) runs Python's signing again; Rust names the Mantle routes' failure."""
+    from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+    from litellm.llms.bedrock_mantle.common_utils import MANTLE_AUTH_FAILED
+
     kind: Final = getattr(error, "messages_credential_failure", None)
     if not isinstance(kind, str):
         return None
-    known: Final = _signing_failure(kind)
+    known: Final = _signing_failure(kind, optional_str(getattr(error, "messages_missing_profile", None)))
+    if request_provider == "bedrock_mantle":
+        sts: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
+        if sts is not None:
+            return _raised(sts)
+        return _raised(known if isinstance(known, AwsAuthError) else ValueError(MANTLE_AUTH_FAILED))
     if known is not None:
         return _raised(known)
+    if kind == "unavailable":
+        from botocore.exceptions import NoCredentialsError
+
+        sts_failure: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
+        return _raised(sts_failure if sts_failure is not None else NoCredentialsError())
+    # TODO: Rust migration: this reruns Python's signing on Bedrock invoke to produce the exception for credential
+    # failures Rust does not name yet. Have Rust name each kind (as it does for `profile_not_found`) and drop the replay.
     call: Final = _provider_call(request)
     if call is None:
         return None
@@ -884,9 +930,15 @@ def _bedrock_credential_failure(error: Exception, request: Mapping[str, object])
     return None
 
 
-def _sent_base(request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead) -> str | None:
+def _sent_base(
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+) -> str | None:
     """The base the call was sent to: azure_ai's falls back to the `AZURE_API_BASE` the host read
-    to send it, anthropic's to its default and bedrock's to the URL its config builds."""
+    to send it and anthropic's to its default. Bedrock's is the origin Rust could not connect to,
+    which can differ from the caller's `api_base` (Mantle rebuilds a public host in its region)."""
+    origin: Final = optional_str(getattr(error, "messages_connect_origin", None))
+    if origin is not None and request_provider in ("bedrock", "bedrock_mantle"):
+        return origin
     api_base: Final = request.get("api_base")
     if isinstance(api_base, str) and (api_base or request_provider != "azure_ai"):
         return api_base
@@ -894,20 +946,19 @@ def _sent_base(request: Mapping[str, object], request_provider: str, secrets_rea
         return anthropic_pass_through_api_base()
     if request_provider == "azure_ai":
         return dict(secrets_read).get("AZURE_API_BASE")
-    if request_provider == "bedrock":
-        return _bedrock_url(request)
     return None
 
 
 def _connect_failure(
-    native: str, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
+    error: Exception, request: Mapping[str, object], request_provider: str, secrets_read: _SecretsRead
 ) -> str | None:
-    base: Final = _sent_base(request, request_provider, secrets_read)
+    rust_error_text: Final = str(error)
+    base: Final = _sent_base(error, request, request_provider, secrets_read)
     if base is None:
         return None
-    refused: Final = "tcp connect error: Connection refused" in native
-    dns_reason: Final = native.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in native else None
-    tls_eof: Final = native.endswith("tls handshake eof")
+    refused: Final = "tcp connect error: Connection refused" in rust_error_text
+    dns_reason: Final = rust_error_text.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in rust_error_text else None
+    tls_eof: Final = rust_error_text.endswith("tls handshake eof")
     if not http_transport.uses_aiohttp_transport():
         if refused:
             return "All connection attempts failed"
@@ -962,7 +1013,7 @@ def _transport_failure(
         return "Server disconnected without sending a response." if closed else native
     if not native.startswith(_UNREACHABLE):
         return None
-    connect: Final = _connect_failure(native, request, request_provider, secrets_read)
+    connect: Final = _connect_failure(error, request, request_provider, secrets_read)
     return native if connect is None else connect
 
 
@@ -1055,16 +1106,22 @@ def _public_provider_error(
         return mapped
 
 
-def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> None:
+def _provider_model(error: Exception, request: Mapping[str, object], request_provider: str) -> str:
+    """The model the provider config resolved the call to: the one Rust names, else the request's own."""
+    named: Final = optional_str(getattr(error, "messages_provider_model", None))
+    return named if named is not None else str(request["model"]).removeprefix(f"{request_provider}/")
+
+
+def _log_resolved_call(request: Mapping[str, object], request_provider: str, model: str | None = None) -> None:
     """Tells the logger the resolved call, as Python's handler does before its provider config
-    transforms the request."""
+    transforms the request: under `model` when Rust names it, else the request's own."""
     logger: Final = request.get("litellm_logging_obj")
     if not isinstance(logger, LiteLLMLoggingObj):
         return
     callbacks_legacy_python.update_logging(
         logger,
         kwargs={name: value for name, value in request.items() if name != "metadata"},
-        model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        model=model if model is not None else str(request["model"]).removeprefix(f"{request_provider}/"),
         optional_params=dict(_body_fields(request)),
         litellm_params={"model_info": request.get("model_info"), **_body_fields(request)},
         custom_llm_provider=request_provider,
@@ -1184,7 +1241,7 @@ def map_failure(
         chained: Final = transport_timeout(str(error))
         error.__context__ = chained  # rebind-ok: Python chains the transport timeout as the exception context
     if getattr(error, "messages_late_rejection", False):
-        _log_resolved_call(request, request_provider)
+        _log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
     if getattr(error, "messages_python_raised", False):
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
@@ -1192,6 +1249,13 @@ def map_failure(
         return _raised_like_python(error, request_provider)
     if getattr(error, "messages_request_error", False):
         return _rejection(error, request, request_provider, asynchronous)
+    if getattr(error, "messages_refused_reply", False):
+        return litellm.APIError(
+            status_code=500,
+            message=str(error),
+            llm_provider=request_provider,
+            model=_provider_model(error, request, request_provider),
+        )
     if getattr(error, "messages_missing_credential", False):
         return _raised_like_python(
             litellm.AuthenticationError(
@@ -1201,9 +1265,13 @@ def map_failure(
             ),
             request_provider,
         )
-    credential_failure: Final = _bedrock_credential_failure(error, request) if request_provider == "bedrock" else None
+    credential_failure: Final = (
+        _bedrock_credential_failure(error, request, request_provider)
+        if request_provider in ("bedrock", "bedrock_mantle")
+        else None
+    )
     if credential_failure is not None:
-        _log_resolved_call(request, request_provider)
+        _log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:

@@ -79,7 +79,7 @@ async def _exercise_lifespans(mode: Mode) -> None:
                 async with proxy_server.proxy_startup_event(proxy_server.app) as state:
                     database: Final = state["database"]
                     assert database is not None
-                    assert database.native is None
+                    assert database.native is not None
                     assert await database.prisma.writer_db.query_raw("SELECT 42 AS answer") == [{"answer": 42}]
                     assert await database.prisma.read_db.query_raw("SELECT 43 AS answer") == [{"answer": 43}]
                     assert psutil.Process().children(recursive=True)

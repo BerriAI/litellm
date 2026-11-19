@@ -84,6 +84,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.utils import CallTypes, CallTypesLiteral
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe, host_in_loop_probing_vault
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -12132,7 +12133,7 @@ class TestOpenSearchProxyRoute:
             key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
         )
         monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
-        monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
         monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
