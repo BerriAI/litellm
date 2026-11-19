@@ -229,9 +229,10 @@ import os
 import httpx
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 SINK = "{sink}/native"
-HOSTILE_HEADERS = {{
+HOSTILE_HEADERS: dict[str, str] = {{
     "Content-Type": "text/plain",
     "content-length": "0",
     "Set-Cookie": "recorder=1",
@@ -279,7 +280,13 @@ class HookRecorder(CustomLogger):
             }}
         )
 
-    async def async_post_call_response_headers_hook(self, data, user_api_key_dict, response, request_headers=None):
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         hostile = "x-recorder-hostile" in (request_headers or {{}})
         return {{
             "x-recorder-response": "absent" if response is None else "present",

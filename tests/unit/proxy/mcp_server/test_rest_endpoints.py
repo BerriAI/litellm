@@ -3496,8 +3496,12 @@ class TestCallToolRestAPI:
         ],
     )
     async def test_virtual_mcp_tool_call_relays_upstream_auth_failure(
-        self, monkeypatch, upstream_status, callback_headers, relayed_callback_headers
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        upstream_status: int,
+        callback_headers: dict[str, str],
+        relayed_callback_headers: dict[str, str],
+    ) -> None:
         """The virtual mcp_tool_call REST branch reaches execute_mcp_tool via handle_mcp_tool_call
         without the direct branch's relay wrapper, so an MCPUpstreamAuthError from it must be relayed
         by the endpoint-level handler (a real 401/403 + WWW-Authenticate) rather than falling through
@@ -3516,8 +3520,12 @@ class TestCallToolRestAPI:
 
         class CallbackHeaders(CustomLogger):
             async def async_post_call_response_headers_hook(
-                self, data, user_api_key_dict, response, request_headers=None
-            ):
+                self,
+                data: dict[str, object],
+                user_api_key_dict: UserAPIKeyAuth,
+                response: object,
+                request_headers: dict[str, str] | None = None,
+            ) -> dict[str, str]:
                 return callback_headers
 
         monkeypatch.setattr(litellm, "callbacks", [CallbackHeaders()])
