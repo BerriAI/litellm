@@ -149,9 +149,23 @@ class CommittedWindowSpend(BaseModel):
     window_duration: str
     window_start: datetime
     spend: float
+    reset_at: datetime | None = None
 
 
 _COMMITTED_WINDOWS: Final = TypeAdapter(tuple[CommittedWindowSpend, ...])
+
+
+def _with_charged_reset(
+    rows: Sequence[CommittedWindowSpend], transaction: WindowSpendTransaction
+) -> tuple[CommittedWindowSpend, ...]:
+    reset: Final = transaction.get("reset_at")
+    start: Final = datetime.fromisoformat(transaction["window_start"])
+    return tuple(
+        row.model_copy(update={"reset_at": datetime.fromisoformat(reset)})
+        if reset and to_naive_utc(row.window_start) == start
+        else row
+        for row in rows
+    )
 
 
 class _SeedTotalsQuery(Protocol):
@@ -500,12 +514,15 @@ async def _write_windows(
         return tuple(
             chain.from_iterable(
                 [
-                    _COMMITTED_WINDOWS.validate_python(
-                        await database.query_raw(
-                            _UPSERT_WINDOW_SPEND_SQL
-                            + " RETURNING entity_type, entity_id, window_duration, window_start, spend",
-                            *_upsert_params(transaction, seed_base, now),
-                        )
+                    _with_charged_reset(
+                        _COMMITTED_WINDOWS.validate_python(
+                            await database.query_raw(
+                                _UPSERT_WINDOW_SPEND_SQL
+                                + " RETURNING entity_type, entity_id, window_duration, window_start, spend",
+                                *_upsert_params(transaction, seed_base, now),
+                            )
+                        ),
+                        transaction,
                     )
                     for transaction, seed_base in items
                 ]

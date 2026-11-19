@@ -80,4 +80,5 @@ def _window(item: Contribution) -> WindowSpendTransaction:
         window_start=values["window_start"] or "",
         spend=float(dict(item.increments)["spend"]),
         started_at=values["started_at"],
+        **({"reset_at": reset} if (reset := values.get("reset_at")) else {}),
     )

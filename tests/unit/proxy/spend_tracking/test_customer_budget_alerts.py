@@ -45,14 +45,16 @@ _ROWS: Final[Mapping[CustomerBudgetScope, Mapping[str, object]]] = {
 
 @pytest.mark.parametrize("scope", ("app", "app_customer_org", "app_customer_member"))
 @pytest.mark.parametrize(
-    "duration,reset_at",
+    "duration,reset_at,charged_reset",
     (
-        (None, None),
-        ("1mo", None),
-        ("12mo", None),
-        ("7d", None),
-        ("1mo", _NOW.replace(year=2028)),
-        ("12mo", _NOW.replace(year=2028)),
+        (None, None, None),
+        ("1mo", None, None),
+        ("12mo", None, None),
+        ("7d", None, None),
+        ("1mo", _NOW.replace(year=2028), None),
+        ("12mo", _NOW.replace(year=2028), None),
+        ("1mo", _NOW.replace(year=2028), _NOW.replace(month=3, day=31)),
+        ("12mo", _NOW.replace(year=2028), _NOW.replace(year=2028, month=2, day=29)),
     ),
 )
 @pytest.mark.parametrize("hard_limit", (None, 10.0))
@@ -66,6 +68,7 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
     scope: CustomerBudgetScope,
     duration: str | None,
     reset_at: datetime | None,
+    charged_reset: datetime | None,
     hard_limit: float | None,
     delayed: bool,
     legacy: bool,
@@ -79,9 +82,7 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
             "max_budget": hard_limit,
             "soft_budget": 5,
             "budget_duration": duration,
-            "budget_limits": [
-                {"max_budget": hard_limit, "budget_duration": duration, "reset_at": reset_at.isoformat()}
-            ]
+            "budget_limits": [{"max_budget": hard_limit, "budget_duration": duration, "reset_at": reset_at.isoformat()}]
             if hard_limit is not None and reset_at is not None
             else [],
         }
@@ -97,6 +98,13 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
     entity_id: Final = app.app_id + (
         ":org" if scope == "app_customer_org" else ":member" if scope == "app_customer_member" else ""
     )
+    charged_start: Final = (
+        _NOW.replace(year=2027 if duration == "12mo" else 2026, month=2, day=28)
+        if charged_reset is not None
+        else _NOW - timedelta(days=3)
+        if duration == "7d"
+        else _NOW
+    )
     for spend in (4, 6, 11, 12):
         if duration is None:
             for table in (
@@ -111,8 +119,9 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
                     entity_type=scope,
                     entity_id=entity_id,
                     window_duration=duration,
-                    window_start=_NOW - timedelta(days=3) if duration == "7d" else _NOW,
+                    window_start=charged_start,
                     spend=spend,
+                    reset_at=charged_reset,
                 ),
             )
             if duration is not None
@@ -145,7 +154,9 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
         {"member"} if scope == "app_customer_member" else {None}
     )
     assert {item["period"] for item in payloads} == {
-        {
+        charged_reset.isoformat()
+        if charged_reset is not None
+        else {
             "1mo": "2026-02-01T00:00:00+00:00",
             "12mo": "2027-01-01T00:00:00+00:00",
             "7d": "2026-01-05T00:00:00+00:00",
@@ -158,7 +169,10 @@ async def test_app_alerts_use_inherited_limits_and_current_spend_without_repeati
         assert len(receiver.calls) == len(expected)
     if duration is not None and delayed:
         rolled: Final = windows[0].model_copy(
-            update={"window_start": _NOW.replace(year=2027, day=4 if duration == "7d" else 1)}
+            update={
+                "window_start": _NOW.replace(year=2030 if charged_reset else 2027, day=4 if duration == "7d" else 1),
+                "reset_at": None,
+            }
         )
         for seconds in (15, 18):
             delivered_at: Final = _NOW + timedelta(days=400, seconds=seconds)

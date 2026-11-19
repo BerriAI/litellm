@@ -14,7 +14,9 @@ from litellm.proxy.db.budget_window_spend_writer import (
     spend_logs_seed_totals,
 )
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    WindowSpendUpdateQueue,
     build_window_spend_transaction,
+    to_wire_payload,
 )
 from litellm.proxy.db.log_db_metrics import record_db_io
 
@@ -157,22 +159,48 @@ def _existing(entity_type: str, entity_id: str, window_duration: str) -> dict[st
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capture", (False, True))
-async def test_alert_snapshots_keep_each_committed_balance_before_the_next_rollover(capture: bool) -> None:
+@pytest.mark.parametrize("already_rolled", (False, True))
+async def test_alert_snapshots_keep_each_committed_balance_before_the_next_rollover(
+    capture: bool, already_rolled: bool
+) -> None:
+    periods: Final = (
+        (datetime(2026, 2, 28, tzinfo=timezone.utc), datetime(2026, 3, 31, tzinfo=timezone.utc), 11.0, 2.0),
+        (datetime(2026, 3, 31, tzinfo=timezone.utc), datetime(2026, 4, 30, tzinfo=timezone.utc), 6.0, 6.0),
+    )
     rows: Final = tuple(
-        dict(entity_type="app", entity_id="app", window_duration="1mo", window_start=start, spend=total)
-        for start, total in ((WINDOW_A, 11.0), (WINDOW_B, 6.0))
+        dict(
+            entity_type="app",
+            entity_id="app",
+            window_duration="1mo",
+            window_start=periods[1][0] if already_rolled else start,
+            spend=total,
+        )
+        for start, _, total, _ in periods
     )
     database: Final = _FakeDB([_existing("app", "app", "1mo")], rows)
     committed: Final = await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(database),
-        transactions=tuple(
-            build_window_spend_transaction("app", "app", "1mo", start, delta)
-            for start, delta in ((WINDOW_A, 2.0), (WINDOW_B, 6.0))
+        transactions=WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
+            (
+                tuple(
+                    to_wire_payload(build_window_spend_transaction("app", "app", "1mo", start, delta, reset_at=reset))
+                    for start, reset, _, delta in periods
+                ),
+            )
         ),
         capture_spend=capture,
     )
-    assert tuple((row.window_start, row.spend) for row in committed) == (
-        ((WINDOW_A, 11.0), (WINDOW_B, 6.0)) if capture else ()
+    assert tuple((row.window_start, row.reset_at, row.spend) for row in committed) == (
+        tuple(
+            (
+                periods[1][0] if already_rolled else start,
+                None if already_rolled and start != periods[1][0] else reset,
+                total,
+            )
+            for start, reset, total, _ in periods
+        )
+        if capture
+        else ()
     )
 
 

@@ -186,8 +186,9 @@ def _app_usages(
             max_budget=limit.max_budget,
             spend=window.spend,
             window_start=window.window_start,
-            reset_at=get_budget_window_end(
-                window.window_duration, window.window_start, store.customers.settings.timezone
+            reset_at=window.reset_at
+            or get_budget_window_end(
+                window.window_duration, window.window_start, store.customers.settings.timezone, limit.reset_at
             ),
         )
         for window, limit in product(windows, app_budget_limits(budget))

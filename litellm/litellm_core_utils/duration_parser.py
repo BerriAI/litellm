@@ -187,8 +187,13 @@ def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
     return _shift_budget_window(duration, reset_at, -1)
 
 
-def get_budget_window_end(duration: str, start: datetime, timezone_str: str = "UTC") -> datetime:
+def get_budget_window_end(
+    duration: str, start: datetime, timezone_str: str = "UTC", reset_at: datetime | None = None
+) -> datetime:
     boundary: Final = _setup_timezone(start, timezone_str)[0]
+    configured: Final = _setup_timezone(reset_at, timezone_str)[0] if reset_at is not None else None
+    if configured is not None and get_budget_window_start(duration, configured) == boundary:
+        return configured.astimezone(timezone.utc)
     return _shift_budget_window(duration, boundary, 1).astimezone(timezone.utc)
 
 
