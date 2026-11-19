@@ -17,6 +17,7 @@ pub mod query;
 pub mod quote;
 pub mod rates;
 pub mod receipt;
+pub mod reported;
 mod rerank;
 pub mod row;
 pub mod schedule;
@@ -26,6 +27,7 @@ mod speech;
 #[cfg(test)]
 mod testing;
 mod tokens;
+pub mod tools;
 mod transcription;
 mod units;
 pub mod usage;

@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     ModelFacts,
     OcrDocument,
     OtherClip,
+    PricedSides,
     PricedUsage,
     ReceiptFacts,
     ReportedCost,
@@ -62,6 +63,7 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     SpeechDocument,
     TokenCandidateUse,
     TokenClip,
+    ToolsOfCall,
     TranscriptionDocument,
     TranslationUse,
     VectorStoreSearchDocument,
@@ -73,7 +75,9 @@ from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     custom_receipt,
     part_costs,
     price,
+    price_reported,
     price_session,
+    price_tools,
     price_units,
     priced_usage,
     prompt_and_completion,
@@ -1768,18 +1772,19 @@ def _cost_map_priced_input_output(
         return 0.0, 0.0
 
 
-def split_reported_cost_by_cost_map_ratio(
-    reported_total: float,
+def reported_cost_receipt(
+    reported: ReportedCost,
     model: str | None,
     custom_llm_provider: str | None,
     usage: Usage | None,
     call_type: CallTypesLiteral | None,
     service_tier: str | None,
     data_residency: str | None,
-) -> tuple[float, float]:
-    """Apportions a provider-reported total between input and output in the ratio litellm's own cost map would
-    price the same usage, so a per-input-token model books the whole total on input. Unmapped or zero-priced
-    usage keeps the whole total on output."""
+    adjust: AdjustFacts | None = None,
+) -> NativeReceipt | None:
+    """``reported`` billed in Rust by its source's policy, its billed total split between input and output in the
+    ratio litellm's own cost map prices the same usage, so a per-input-token model books the whole total on input.
+    Unmapped or zero-priced usage keeps the whole total on output."""
     priced_input, priced_output = _cost_map_priced_input_output(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -1788,11 +1793,8 @@ def split_reported_cost_by_cost_map_ratio(
         service_tier=service_tier,
         data_residency=data_residency,
     )
-    priced_total: Final = priced_input + priced_output
-    if priced_total <= 0:
-        return 0.0, reported_total
-    input_cost: Final = reported_total * (priced_input / priced_total)
-    return input_cost, reported_total - input_cost
+    receipt: Final = price_reported(reported, PricedSides(prompt=priced_input, completion=priced_output), adjust)
+    return receipt if isinstance(receipt, NativeReceipt) else None
 
 
 def _adjusted_provider_billed_cost(
@@ -1807,32 +1809,34 @@ def _adjusted_provider_billed_cost(
     service_tier: str | None,
     data_residency: str | None,
 ) -> float:
-    adjusted: Final = adjusted_cost(reported_cost, custom_llm_provider, model, region_name)
-    input_cost, output_cost = split_reported_cost_by_cost_map_ratio(
-        reported_total=adjusted.cost,
+    receipt: Final = reported_cost_receipt(
+        ReportedCost(source="upstream_usage_cost", usd=reported_cost),
         model=model,
         custom_llm_provider=pricing_provider,
         usage=usage,
         call_type=call_type,
         service_tier=service_tier,
         data_residency=data_residency,
+        adjust=AdjustFacts(provider=custom_llm_provider, model=model, region=region_name),
     )
+    if receipt is None:
+        return reported_cost
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
-        prompt_tokens_cost_usd_dollar=input_cost,
-        completion_tokens_cost_usd_dollar=output_cost,
+        prompt_tokens_cost_usd_dollar=receipt.prompt_cost,
+        completion_tokens_cost_usd_dollar=receipt.completion_cost,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
-        total_cost_usd_dollar=adjusted.cost,
-        original_cost=reported_cost,
-        discount_percent=adjusted.discount_percent,
-        discount_amount=adjusted.discount_amount,
-        margin_percent=adjusted.margin_percent,
-        margin_fixed_amount=adjusted.margin_fixed_amount,
-        margin_total_amount=adjusted.margin_total_amount,
+        total_cost_usd_dollar=receipt.total,
+        original_cost=receipt.original_cost,
+        discount_percent=receipt.discount_percent,
+        discount_amount=receipt.discount_amount,
+        margin_percent=receipt.margin_percent,
+        margin_fixed_amount=receipt.margin_fixed_amount,
+        margin_total_amount=receipt.margin_total_amount,
         service_tier=service_tier,
         data_residency=data_residency,
     )
-    return adjusted.cost
+    return receipt.total
 
 
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -2011,7 +2015,7 @@ def _candidate_cost(
 ) -> float:
     """One candidate's ``completion_cost``: its token receipt with the tool fees, the Model Router fee and the row the
     stored breakdown reads, stored on the logging object."""
-    tool_fees: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+    tools, tool_rows = StandardBuiltInToolCostTracking.built_in_tool_use(
         model=model,
         response_object=completion_response,
         usage=usage,
@@ -2037,7 +2041,8 @@ def _candidate_cost(
         receipt=ReceiptFacts(
             breakdown=stored_row[0],
             breakdown_row=stored_row[1],
-            tool_fees=tool_fees,
+            tools=tools,
+            tool_rows=tool_rows,
             router_fee=None if fee_row is None else "additional",
             fee_row=fee_row,
         ),
@@ -2053,7 +2058,7 @@ def _candidate_cost(
             data_residency=data_residency,
             vertex_location=vertex_location,
             stored_row=stored_row,
-            tool_fees=tool_fees,
+            tool_fees=price_tools(ToolsOfCall(call=tools), tool_rows) or 0.0,
             fee_row=fee_row,
             adjust=adjust,
             litellm_logging_obj=litellm_logging_obj,
@@ -2756,8 +2761,8 @@ def response_cost_calculator(
                                 router_model_id=router_model_id,
                                 region_name=region_name,
                             )
-                            header_input_cost, header_output_cost = split_reported_cost_by_cost_map_ratio(
-                                reported_total=provider_response_cost,
+                            header_receipt: Final = reported_cost_receipt(
+                                ReportedCost(source="llm_provider-x-litellm-response-cost", usd=provider_response_cost),
                                 model=header_priced_model or model,
                                 custom_llm_provider=pricing_provider or custom_llm_provider,
                                 usage=get_usage_object(response_object),
@@ -2767,8 +2772,12 @@ def response_cost_calculator(
                             )
                             _store_cost_breakdown_in_logging_obj(
                                 litellm_logging_obj=litellm_logging_obj,
-                                prompt_tokens_cost_usd_dollar=header_input_cost,
-                                completion_tokens_cost_usd_dollar=header_output_cost,
+                                prompt_tokens_cost_usd_dollar=0.0
+                                if header_receipt is None
+                                else header_receipt.prompt_cost,
+                                completion_tokens_cost_usd_dollar=provider_response_cost
+                                if header_receipt is None
+                                else header_receipt.completion_cost,
                                 cost_for_built_in_tools_cost_usd_dollar=0.0,
                                 total_cost_usd_dollar=provider_response_cost,
                                 original_cost=provider_response_cost,
@@ -3210,6 +3219,51 @@ def transcription_cost(model: str, custom_llm_provider: str | None, duration: fl
     return openai_cost_per_second(model=model, custom_llm_provider=custom_llm_provider, duration=duration)
 
 
+def default_image_row_key(
+    model: str, custom_llm_provider: str | None, quality: str | None, size: str | None
+) -> tuple[str | None, int, tuple[str | None, ...]]:
+    """The ``litellm.model_cost`` key ``default_image_cost_calculator`` reads for an image of ``size`` at ``quality``,
+    ``None`` when no name it tries is a key, the image's pixels and the names it tried. Raises on a size that is not
+    two numbers."""
+    size_text: Final = size or "1024-x-1024"
+    size_str: Final = size_text.replace("x", "-x-") if "x" in size_text and "-x-" not in size_text else size_text
+    height, width = map(int, size_str.split("-x-"))
+    without_provider: Final = (
+        model.replace(f"{custom_llm_provider}/", "")
+        if custom_llm_provider and model.startswith(f"{custom_llm_provider}/")
+        else None
+    )
+    base_model_name: Final = (
+        f"{custom_llm_provider}/{size_str}/{without_provider}"
+        if without_provider is not None
+        else f"{size_str}/{model}"
+    )
+    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{without_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
+    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
+    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
+    model_with_quality_without_provider: Final = (
+        f"{quality}/{model_without_provider}" if quality else model_without_provider
+    )
+    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
+    models_to_check: Final = (
+        model_name_with_quality,
+        provider_first_model_name_with_quality,
+        base_model_name,
+        model_name_with_v2_quality,
+        model_with_quality_without_provider,
+        model_without_provider,
+        model,
+        without_provider,
+    )
+    matched: Final = next((name for name in models_to_check if name is not None and name in litellm.model_cost), None)
+    return matched, height * width, models_to_check
+
+
 def default_image_cost_calculator(
     model: str,
     custom_llm_provider: str | None = None,
@@ -3236,47 +3290,7 @@ def default_image_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Standardize size format to use "-x-"
-    size_str: str = size or "1024-x-1024"
-    size_str = size_str.replace("x", "-x-") if "x" in size_str and "-x-" not in size_str else size_str
-
-    # Parse dimensions
-    height, width = map(int, size_str.split("-x-"))
-
-    # Build model names for cost lookup
-    base_model_name = f"{size_str}/{model}"
-    model_name_without_custom_llm_provider: str | None = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
-        base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
-    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
-    provider_first_model_name_with_quality: Final = (
-        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
-        if quality and custom_llm_provider
-        else None
-    )
-
-    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
-    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
-
-    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
-
-    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
-    model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
-
-    models_to_check: Final = (
-        model_name_with_quality,
-        provider_first_model_name_with_quality,
-        base_model_name,
-        model_name_with_v2_quality,
-        model_with_quality_without_provider,
-        model_without_provider,
-        model,
-        model_name_without_custom_llm_provider,
-    )
-    matched_model: Final = next(
-        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
-    )
+    matched_model, pixels, models_to_check = default_image_row_key(model, custom_llm_provider, quality, size)
     if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
@@ -3288,7 +3302,7 @@ def default_image_cost_calculator(
             provider=custom_llm_provider,
             calculator="default",
             images=image_count,
-            pixels=height * width * image_count,
+            pixels=pixels * image_count,
             input_images=0,
         ),
         (model_info,) if model_info is not None else (),

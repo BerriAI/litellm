@@ -19,6 +19,7 @@ pub use crate::guardrail::{GuardrailQuery, GuardrailUse, PromptShield};
 pub use crate::image::{ImageCalculator, ImageQuery};
 pub use crate::mcp::McpQuery;
 pub use crate::ocr::OcrQuery;
+pub use crate::reported::{PricedSides, ReportSource, ReportedQuery};
 pub use crate::rerank::RerankQuery;
 pub use crate::search::SearchQuery;
 pub use crate::session::{
@@ -26,6 +27,7 @@ pub use crate::session::{
     TranscriptionClip, Translation,
 };
 pub use crate::speech::SpeechQuery;
+pub use crate::tools::{ToolUse, ToolsQuery};
 pub use crate::transcription::TranscriptionQuery;
 pub use crate::vector_store::VectorStoreSearchQuery;
 pub use crate::video::VideoQuery;
@@ -53,6 +55,12 @@ pub enum PriceQuery {
     Guardrail(Box<GuardrailQuery>),
     A2a(Box<A2aQuery>),
     Mcp(Box<McpQuery>),
+    /// Built-in tool fees on their own, beside a call another kind prices
+    #[cfg_attr(feature = "serde", serde(skip))]
+    Tools(Box<ToolsQuery>),
+    /// A cost a provider or the gateway in front of it reported
+    #[cfg_attr(feature = "serde", serde(skip))]
+    Reported(Box<ReportedQuery>),
 }
 
 /// The kind of a query, named in `Unpriced::NotPorted`
@@ -86,6 +94,10 @@ pub enum Kind {
     A2a,
     #[strum(serialize = "mcp")]
     Mcp,
+    #[strum(serialize = "tools")]
+    Tools,
+    #[strum(serialize = "reported")]
+    Reported,
 }
 
 /// What every kind carries
@@ -212,8 +224,7 @@ pub enum AdjustmentPolicy {
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct ReportedCost {
-    /// Which field stated it, such as `usage.cost`
-    pub source: Box<str>,
+    pub source: ReportSource,
     pub usd: f64,
 }
 
@@ -246,10 +257,9 @@ pub struct TokensQuery {
     /// The row the stored token-type breakdown and its billed rates are read off
     #[cfg_attr(feature = "serde", serde(default))]
     pub breakdown: BreakdownRow,
-    /// Built-in tool fees the caller priced, for the tools this crate does not price yet. They join the receipt's
-    /// tools before discount and margin
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub tool_fees: f64,
+    /// The built-in tools the call used, billed on the receipt's tools before discount and margin
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub tools: ToolUse,
     #[cfg_attr(feature = "serde", serde(default))]
     pub router_fee: Option<RouterFee>,
 }
@@ -426,6 +436,8 @@ impl PriceQuery {
             Self::Guardrail(_) => Kind::Guardrail,
             Self::A2a(_) => Kind::A2a,
             Self::Mcp(_) => Kind::Mcp,
+            Self::Tools(_) => Kind::Tools,
+            Self::Reported(_) => Kind::Reported,
         }
     }
 }
@@ -444,7 +456,7 @@ impl TokensQuery {
             raw: RawCounts::default(),
             decisions: false,
             breakdown: BreakdownRow::Priced,
-            tool_fees: 0.0,
+            tools: ToolUse::default(),
             router_fee: None,
         }
     }
