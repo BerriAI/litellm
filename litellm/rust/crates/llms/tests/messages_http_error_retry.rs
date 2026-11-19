@@ -6,6 +6,7 @@ use litellm_llms::{
     bedrock::{
         claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
         messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        messages::mantle_transformation::AMAZON_MANTLE_MESSAGES_CONFIG,
     },
     bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
@@ -24,6 +25,7 @@ use serde_json::Value;
 #[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+#[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
 #[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
@@ -77,6 +79,7 @@ fn every_messages_provider_retries_like_the_python_base_config(
 #[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+#[case::bedrock_mantle_route(&AMAZON_MANTLE_MESSAGES_CONFIG)]
 #[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG)]

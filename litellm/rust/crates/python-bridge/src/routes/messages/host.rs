@@ -19,11 +19,13 @@ use litellm_inference_messages::{
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::{
+    anthropic::model_capabilities::with_invoke_flags,
     azure_ai::common_utils::{
         CALLABLE_TOKEN_PROVIDER, CALLER_TOKEN_PROVIDER_PARAM, ENTRA_ID_PARAMS,
     },
     base_llm::messages::context::MessagesModelCapabilities,
     bedrock::chat::invoke_handler::BedrockStreamRaise,
+    bedrock_mantle::messages::transformation::{mantle_capability_lookup, mantle_logged_model},
 };
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
@@ -41,7 +43,7 @@ use super::agentic::HookedRequest;
 use super::safeguards::{SafeguardsCall, SafeguardsHost};
 use super::transport::{HostedTransport, Selected, TransportCall, python_failure};
 use crate::{
-    errors::{RequestMarker, route_failure},
+    errors::{RequestMarker, raises_bad_request, route_failure},
     marshal::{
         ArgumentError, optional_timeout, project_optional_fields, public_json_response,
         python_timeout_seconds,
@@ -150,6 +152,18 @@ fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
 
 pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
+/// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
+const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
+/// The model Python's handler logs a Mantle call under before the config transforms the request.
+const MESSAGES_LOGGED_MODEL: &str = "messages_logged_model";
+/// The provider litellm's error names when it is not the route's: none for a call refused while
+/// resolving its provider, as Python's `get_llm_provider` raises it, and `bedrock` for a Mantle
+/// refusal the inherited Bedrock invoke transform raises as `BadRequestError`.
+const MESSAGES_PROVIDER: &str = "messages_provider";
+const MESSAGES_CREDENTIAL_FAILURE: &str = "messages_credential_failure";
+const REPLAYED_CREDENTIAL_FAILURE: &str = "replay";
+/// No usable credentials, which the host raises as botocore's `NoCredentialsError` unless an STS call failed.
+const UNAVAILABLE_CREDENTIALS: &str = "unavailable";
 pub(super) const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(
@@ -596,12 +610,13 @@ impl MessagesPythonHost {
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        shapes_invoke_tools: bool,
     ) -> PyResult<Map<String, Value>> {
         let request = effective_py_args(self.view.request(py)?, arguments)?;
         let params = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("body_params")?
-            .call1((request, self.asynchronous, self.hooked))?
+            .call1((request, self.asynchronous, self.hooked, shapes_invoke_tools))?
             .cast_into::<PyMapping>()?;
         params
             .items()?
@@ -630,7 +645,26 @@ impl MessagesPythonHost {
         };
         let model = settings.model;
         let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
-        let mut fields = self.body_params(py, arguments)?;
+        let api_key = string("api_key")?;
+        let api_base = string("api_base")?;
+        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
+        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
+        let custom_llm_provider = match string("custom_llm_provider")? {
+            Some(provider) => Some(provider),
+            None => py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("inferred_provider")?
+                .call1((&model, api_base.as_deref()))?
+                .extract()?,
+        };
+        let mantle = custom_llm_provider
+            .as_deref()
+            .and_then(|provider| mantle_capability_lookup(provider, &model));
+        // Python's Bedrock invoke transform shapes the caller's own tool dicts in place; Rust logs
+        // the tools it shapes for the Mantle routes instead.
+        let shapes_invoke_tools =
+            custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) && mantle.is_none();
+        let mut fields = self.body_params(py, arguments, shapes_invoke_tools)?;
         let prepared = fields.remove("messages");
         let presanitized = prepared.is_some();
         let messages = match prepared {
@@ -648,18 +682,6 @@ impl MessagesPythonHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let api_key = string("api_key")?;
-        let api_base = string("api_base")?;
-        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
-        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
-        let custom_llm_provider = match string("custom_llm_provider")? {
-            Some(provider) => Some(provider),
-            None => py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("inferred_provider")?
-                .call1((&model, api_base.as_deref()))?
-                .extract()?,
-        };
         let filters_beta: bool = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("filters_beta_headers")?
@@ -681,12 +703,30 @@ impl MessagesPythonHost {
             Some(AZURE_AI_PROVIDER) => Some(azure_module_settings(|name| module_global(py, name))?),
             _ => None,
         };
-        let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER);
-        let mut capabilities = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
-        if bedrock {
-            capabilities.bedrock =
-                super::model_catalog::bedrock_capabilities(py, &model, argument("model_info")?)?;
-        }
+        let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
+        let capabilities = match &mantle {
+            Some(_) => super::model_catalog::route_capabilities(
+                py,
+                &model,
+                custom_llm_provider.as_deref(),
+                argument("model_info")?,
+            )?,
+            None if bedrock => {
+                let requested = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
+                MessagesModelCapabilities {
+                    bedrock: with_invoke_flags(
+                        super::model_catalog::bedrock_capabilities(
+                            py,
+                            &model,
+                            argument("model_info")?,
+                        )?,
+                        &requested,
+                    ),
+                    ..requested
+                }
+            }
+            None => self.capabilities(py, &model, custom_llm_provider.as_deref())?,
+        };
         let shaping = MessagesShaping {
             capabilities,
             settings: MessagesSettings {
@@ -788,6 +828,22 @@ impl MessagesPythonHost {
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
         )
+    }
+
+    fn mantle_models(&self, py: Python<'_>) -> PyResult<Option<MantleModels>> {
+        let Some(model) = self.view.request(py)?.get_item("model")? else {
+            return Ok(None);
+        };
+        let Ok(model) = model.extract::<String>() else {
+            return Ok(None);
+        };
+        let provider = self.provider(py);
+        Ok(mantle_capability_lookup(&provider, &model)
+            .zip(mantle_logged_model(&provider, &model))
+            .map(|(lookup, logged)| MantleModels {
+                sent: lookup.model,
+                logged,
+            }))
     }
 
     fn provider(&self, py: Python<'_>) -> String {
@@ -912,13 +968,61 @@ impl MessagesPythonHost {
                 ))?;
             return Ok(PyErr::from_value(raised));
         }
+        let unresolved_provider = refused_resolving_provider(&error);
+        let bad_request = raises_bad_request(&error);
         route_failure(py, error, RequestMarker::Messages, |native| {
             if self.stream_opened {
                 native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
             }
+            if unresolved_provider {
+                // Python never resolved the provider, so its error names the model as requested.
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER, "")?;
+                if let Some(model) = self.view.request(py)?.get_item("model")? {
+                    value.setattr(MESSAGES_PROVIDER_MODEL, model)?;
+                }
+            } else if let Some(models) = self.mantle_models(py)? {
+                let value = native.value(py);
+                value.setattr(MESSAGES_PROVIDER_MODEL, models.sent)?;
+                value.setattr(MESSAGES_LOGGED_MODEL, models.logged)?;
+                if bad_request {
+                    // Python's Mantle configs inherit the Bedrock invoke transform, which raises
+                    // its `BadRequestError` naming `bedrock`.
+                    value.setattr(MESSAGES_PROVIDER, BEDROCK_PROVIDER)?;
+                }
+                // The Mantle routes map a credential Rust could not acquire from a fixed class
+                // list, never by running Python's signing again.
+                if value
+                    .getattr_opt(MESSAGES_CREDENTIAL_FAILURE)?
+                    .is_some_and(|kind| kind.eq(REPLAYED_CREDENTIAL_FAILURE).unwrap_or(false))
+                {
+                    value.setattr(MESSAGES_CREDENTIAL_FAILURE, UNAVAILABLE_CREDENTIALS)?;
+                }
+            }
             Ok(self.map_failure(py, native))
         })
     }
+}
+
+/// The models a Mantle route's errors name: the one Python's handler logs the call under before
+/// its config transforms the request, and the model id that transform sends.
+struct MantleModels {
+    logged: String,
+    sent: String,
+}
+
+/// Whether Rust refused the call where Python's `get_llm_provider` refuses it, before any provider
+/// is resolved: a `bedrock_mantle/` region that is not a valid AWS region.
+fn refused_resolving_provider(error: &Error) -> bool {
+    matches!(
+        error
+            .rejected_request()
+            .and_then(|rejection| rejection.downcast_ref::<litellm_llms::ErrorDetail>()),
+        Some(litellm_llms::ErrorDetail::InvalidMantleRegion {
+            check: litellm_llms::MantleRegionCheck::ProviderResolution,
+            ..
+        })
+    )
 }
 
 impl MessagesPythonHost {
