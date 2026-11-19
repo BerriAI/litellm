@@ -12,10 +12,8 @@ use axum::{
 };
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
-use litellm_llms_types::{
-    headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
-    recognized::python_truthy,
-};
+use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_python_compat::truthy::json_truthy;
 use litellm_router::REQUEST_SETTINGS;
 use serde_json::{Map, Value};
 
@@ -116,7 +114,7 @@ fn project(
         .chain(tools)
         .collect();
     let timeout = deployment.timeout.or(deployment.messages_timeouts.for_call(
-        body.get("stream").is_some_and(python_truthy),
+        body.get("stream").is_some_and(json_truthy),
         shaping.settings.request_timeout(),
     ));
     Ok(MessagesCall {

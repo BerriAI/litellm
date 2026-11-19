@@ -26,9 +26,7 @@ from litellm.constants import (
 from litellm.router import CustomRoutingStrategyBase, Router
 from litellm.router_utils.kubernetes_pod_discovery import (
     KubernetesPodDiscovery,
-    async_resolve_pods_after,
     async_resolve_pods_after_bound,
-    resolve_pods_after,
     resolve_pods_after_bound,
 )
 
@@ -2070,22 +2068,6 @@ async def test_positional_request_kwargs_reach_all_pod_resolver_decorators(
     ) -> list[_AddrInfo]:
         return _records("10.0.0.1", "10.0.0.2", "10.0.0.3", port=int(port or 0))
 
-    class _Selector:
-        def __init__(self, discovery: KubernetesPodDiscovery) -> None:
-            self.kubernetes_pod_discovery: Final = discovery
-
-        @resolve_pods_after
-        def sync(self, deployment: dict[str, object], request_kwargs: Mapping[str, object]) -> dict[str, object]:
-            return deployment
-
-        @async_resolve_pods_after
-        async def async_call(
-            self,
-            deployment: dict[str, object],
-            request_kwargs: Mapping[str, object],
-        ) -> dict[str, object]:
-            return deployment
-
     class _BoundSelector:
         def sync(self, deployment: dict[str, object], request_kwargs: Mapping[str, object]) -> dict[str, object]:
             return deployment
@@ -2105,8 +2087,6 @@ async def test_positional_request_kwargs_reach_all_pod_resolver_decorators(
         if _ranked_session_ips(candidate)[0] != "10.0.0.1"
     )
     request_kwargs: Final = {"metadata": {"session_id": session_id}}
-    sync_selector: Final = _Selector(KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment))
-    async_selector: Final = _Selector(KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment))
     bound_selector: Final = _BoundSelector()
     bound_sync: Final = resolve_pods_after_bound(
         bound_selector.sync,
@@ -2117,17 +2097,12 @@ async def test_positional_request_kwargs_reach_all_pod_resolver_decorators(
         KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment),
     )
 
-    sync_result: Final = sync_selector.sync(_deployment(), request_kwargs)
-    async_result: Final = await async_selector.async_call(_deployment(), request_kwargs)
     bound_sync_result: Final = bound_sync(_deployment(), request_kwargs)
     bound_async_result: Final = await bound_async(_deployment(), request_kwargs)
 
     assert (
-        tuple(
-            httpx.URL(_api_base(result)).host
-            for result in (sync_result, async_result, bound_sync_result, bound_async_result)
-        )
-        == (_ranked_session_ips(session_id)[0],) * 4
+        tuple(httpx.URL(_api_base(result)).host for result in (bound_sync_result, bound_async_result))
+        == (_ranked_session_ips(session_id)[0],) * 2
     )
 
 

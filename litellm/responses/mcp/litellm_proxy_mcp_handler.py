@@ -991,6 +991,13 @@ class LiteLLM_Proxy_MCP_Handler:
                     if user_identifier:
                         logging_request_data["user"] = user_identifier
 
+                logging_metadata["guardrails"] = TypeAdapter(list[object]).validate_python(
+                    TypeAdapter(Mapping[str, object])
+                    .validate_python((guardrail_context or {}).get("metadata") or {})
+                    .get("guardrails")
+                    or ()
+                )
+
                 litellm_logging_obj: LiteLLMLoggingObj | None = None
                 try:
                     litellm_logging_obj, _ = function_setup(
@@ -1063,11 +1070,14 @@ class LiteLLM_Proxy_MCP_Handler:
                 if proxy_logging_obj:
                     result = await proxy_logging_obj.post_mcp_call_hook(
                         response=result,
-                        request_data=(
-                            litellm_logging_obj.model_call_details
-                            if litellm_logging_obj
-                            else {"mcp_tool_name": tool_name}
-                        ),
+                        request_data={
+                            **(
+                                litellm_logging_obj.model_call_details
+                                if litellm_logging_obj
+                                else {"mcp_tool_name": tool_name}
+                            ),
+                            "metadata": logging_metadata,
+                        },
                         user_api_key_dict=typed_user_api_key_auth,
                     )
 

@@ -106,6 +106,7 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         api_base: Some("https://provider.example/v1".into()),
         custom_llm_provider: Some("test-provider".into()),
         litellm_params: Default::default(),
+        configurable_clientside_auth_params: Box::default(),
         timeout: Some(Duration::from_secs(7)),
         messages_timeouts: MessagesTimeouts {
             timeout: Some(Duration::from_secs(120)),

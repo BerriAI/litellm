@@ -5,10 +5,11 @@ use std::{collections::HashMap, time::Duration};
 use litellm_config::{Config, Spelled, seconds};
 use litellm_env::Lookup;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
-use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
+use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
 use litellm_model_catalog::Catalog;
 use litellm_python_compat::flags::lax_bool;
 use litellm_router_types::ExtraParams;
+use serde_json::Value;
 
 pub use deployment::{Deployment, MessagesTimeouts, REQUEST_SETTINGS};
 
@@ -33,6 +34,20 @@ fn additional_drop_params(extra: &ExtraParams) -> Vec<String> {
     extra
         .get("additional_drop_params")
         .map(deployment::drop_paths)
+        .unwrap_or_default()
+}
+
+fn string_list(extra: &ExtraParams, key: &str) -> Vec<String> {
+    extra
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -81,7 +96,7 @@ impl Router {
                                     .map(str::to_owned),
                                 ..MessagesSettings::default()
                             },
-                            capabilities: anthropic_model_capabilities(
+                            capabilities: messages_route_capabilities(
                                 catalog,
                                 &model.litellm_params.model,
                                 model.litellm_params.custom_llm_provider.as_deref(),
@@ -97,6 +112,11 @@ impl Router {
                                 },
                             ),
                         },
+                        configurable_clientside_auth_params: string_list(
+                            &litellm_params.extra,
+                            "configurable_clientside_auth_params",
+                        )
+                        .into_boxed_slice(),
                         litellm_params,
                         ..Deployment::default()
                     },
