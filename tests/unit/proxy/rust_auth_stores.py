@@ -10,7 +10,7 @@ import json
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from pydantic import BaseModel
@@ -169,13 +169,17 @@ class FakeBudgetStore:
     """``LiteLLM_BudgetTable`` rows by ``budget_id``."""
 
     rows: dict[str, Mapping[str, object] | Exception] = field(default_factory=dict)
+    writer: dict[str, Mapping[str, object] | Exception] | None = None
     lookups: list[str] = field(default_factory=list)
 
     async def find_end_user_default_budget(self, budget_id: str) -> str | None:
         self.lookups.append(budget_id)
         return _json(self.rows.get(budget_id))
 
-    async def find_team_member_default_budget(self, budget_id: str) -> str | None:
+    async def find_team_member_default_budget(self, budget_id: str, *, use_writer: bool = False) -> str | None:
+        if use_writer and self.writer is not None:
+            self.lookups.append(budget_id)
+            return _json(self.writer.get(budget_id))
         return await self.find_end_user_default_budget(budget_id)
 
 
@@ -436,16 +440,52 @@ class FakeTeamStore:
 
 @dataclass
 class FakeTeamMembershipStore:
-    """Membership rows by ``(user_id, team_id)``, shaped through ``LiteLLM_TeamMembership``."""
+    """Membership rows by ``(user_id, team_id)``, shaped through ``LiteLLM_TeamMembership``.
+
+    A member add is logged in ``adds`` as ``(user_id, team_id, budget_id)`` and ends as ``add_outcome``. An added
+    member gets a row here and is appended to ``roster_before``, the roster the team holds when the add takes its
+    lock, with ``roster_email`` as its email. The budget of its own it came with is kept in ``own_budgets`` as
+    ``(allowed_models, budget_duration, budget_reset_at, created_by, updated_by)``."""
 
     rows: dict[tuple[str, str], Mapping[str, object] | BaseModel | Exception] = field(default_factory=dict)
     writer: dict[tuple[str, str], Mapping[str, object] | BaseModel | Exception] | None = None
     lookups: list[tuple[str, str, bool]] = field(default_factory=list)
+    adds: list[tuple[str, str, str | None]] = field(default_factory=list)
+    add_outcome: Literal["added", "already_member", "team_missing", "user_missing"] = "added"
+    add_error: Exception | None = None
+    own_budgets: dict[str, tuple[Sequence[str], str | None, float | None, str, str]] = field(default_factory=dict)
+    roster_email: str | None = None
+    roster_before: Sequence[Mapping[str, object]] = ()
 
     async def find_with_budget(self, user_id: str, team_id: str, *, use_writer: bool = False) -> str | None:
         self.lookups.append((user_id, team_id, use_writer))
         source = self.writer if use_writer and self.writer is not None else self.rows
         return _answer(source.get((user_id, team_id)), LiteLLM_TeamMembership)
+
+    async def add_member(
+        self,
+        user_id: str,
+        team_id: str,
+        *,
+        budget_id: str | None = None,
+        own_budget: tuple[Sequence[str], str | None, float | None, str, str] | None = None,
+    ) -> tuple[Literal["added", "already_member", "team_missing", "user_missing"], str | None, str | None]:
+        self.adds.append((user_id, team_id, budget_id))
+        if self.add_error is not None:
+            raise self.add_error
+        if self.add_outcome != "added":
+            return self.add_outcome, None, None
+        if own_budget is not None and budget_id is not None:
+            self.own_budgets[budget_id] = own_budget
+        source: Final = self.writer if self.writer is not None else self.rows
+        row: Final = source.setdefault(
+            (user_id, team_id), {"user_id": user_id, "team_id": team_id, "budget_id": budget_id}
+        )
+        stored_roster: Final = (
+            *self.roster_before,
+            {"user_id": user_id, "user_email": self.roster_email, "role": "user"},
+        )
+        return "added", _answer(row, LiteLLM_TeamMembership), json.dumps(stored_roster)
 
 
 @dataclass
