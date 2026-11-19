@@ -53,6 +53,7 @@ def _upstream_response_id(response_id: str, provider: object) -> str | None:
 
 _FORWARDED_KEYS: Final = (
     "api_key",
+    "ssl_verify",
     "api_base",
     "api_version",
     "azure_ad_token",
@@ -97,15 +98,41 @@ def _stored_system_texts(listed: object) -> Iterator[str]:
                 yield text
 
 
+def _instructions_beyond(instructions: object, stored: str) -> str | None:
+    """What `instructions` adds to the stored system text: "" for nothing, None when it does not start with it."""
+    if not isinstance(instructions, str) or not instructions.startswith(stored):
+        return None
+    if instructions == stored:
+        return ""
+    return instructions[len(stored) + 1 :] if instructions[len(stored)] == "\n" else None
+
+
 def _without_instructions(request: Mapping[str, object], listed: object) -> Mapping[str, object]:
     texts: Final = tuple(_stored_system_texts(listed))
-    if not texts or _sent(request, "instructions") not in (" ".join(texts), "\n".join(texts)):
+    instructions: Final = _sent(request, "instructions")
+    remaining: Final = next(
+        (
+            beyond
+            for beyond in (_instructions_beyond(instructions, joiner.join(texts)) for joiner in (" ", "\n"))
+            if beyond is not None
+        ),
+        None,
+    )
+    if not texts or remaining is None:
         return request
+    # a caller's own `instructions` follow the system text, and the first turn sent them without it
+    kept: Final = {"instructions": remaining} if remaining else {}
     extra_body: Final = as_str_mapping(request.get("extra_body"))
     return {
         **{key: value for key, value in request.items() if key != "instructions"},
+        **(kept if "instructions" in request else {}),
         **(
-            {"extra_body": {key: value for key, value in extra_body.items() if key != "instructions"}}
+            {
+                "extra_body": {
+                    **{key: value for key, value in extra_body.items() if key != "instructions"},
+                    **(kept if "instructions" in extra_body else {}),
+                }
+            }
             if extra_body is not None
             else {}
         ),
