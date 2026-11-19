@@ -37,7 +37,7 @@ _STATEMENTS_QUERY: Final = (
 )
 _CREATE_EXTENSION: Final = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
 _CONNECTIONS_QUERY: Final = (
-    "SELECT coalesce(host(client_addr), 'local'), application_name, coalesce(state, 'unknown'), count(*) "
+    "SELECT coalesce(host(client_addr), 'local'), coalesce(application_name, ''), coalesce(state, 'unknown'), count(*) "
     "FROM pg_stat_activity WHERE datname = current_database() "
     "AND backend_type = 'client backend' AND pid <> pg_backend_pid() GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
 )
@@ -45,8 +45,10 @@ _CONNECTIONS_SAMPLE_SECONDS: Final = 1.0
 _CONNECTION_OWNERS: Final = TypeAdapter(list[tuple[str, str, str, int]])
 _SPENDLOGS_STORAGE_QUERY: Final = """
     SELECT (SELECT count(*) FROM "LiteLLM_SpendLogs"),
-           pg_table_size('"LiteLLM_SpendLogs"'),
-           pg_total_relation_size('"LiteLLM_SpendLogs"'),
+           (SELECT coalesce(sum(pg_table_size(relid)), pg_table_size('"LiteLLM_SpendLogs"'))
+            FROM pg_partition_tree('"LiteLLM_SpendLogs"') WHERE isleaf),
+           (SELECT coalesce(sum(pg_total_relation_size(relid)), pg_total_relation_size('"LiteLLM_SpendLogs"'))
+            FROM pg_partition_tree('"LiteLLM_SpendLogs"') WHERE isleaf),
            count(*) FILTER (WHERE compression = 'pglz'),
            count(*) FILTER (WHERE compression = 'lz4')
     FROM "LiteLLM_SpendLogs"
@@ -232,7 +234,7 @@ class ConnectionsSampler:
                 owners: Final = tuple(_CONNECTION_OWNERS.validate_python(conn.execute(_CONNECTIONS_QUERY).fetchall()))
                 count: Final = sum(size for _, _, _, size in owners)
                 if self.peak is None or count > self.peak:
-                    print(f"Postgres connection owners at sample peak {count}: {owners!r}")
+                    print(f"Postgres connection owners at sample peak {count}: {owners!r}")  # noqa: T201 - perf log
                 self._counts.record(count)
                 _ = self._stop.wait(_CONNECTIONS_SAMPLE_SECONDS)
 
