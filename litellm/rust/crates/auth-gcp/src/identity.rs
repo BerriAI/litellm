@@ -8,7 +8,12 @@ use litellm_secret_value::SecretValue;
 use moka::future::Cache;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{future::Future, os::unix::fs::MetadataExt, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+};
 
 use google_cloud_auth::{
     build_errors::Error as BuildError,
@@ -280,11 +285,11 @@ impl SdkCredentials {
     }
 }
 
-/// A key file as it is on disk: `os.stat`'s inode, modification time and size, which change when
-/// the file is rewritten or replaced.
+/// A key file as it is on disk: `os.stat`'s inode (unix only), modification time and size, which
+/// change when the file is rewritten or replaced.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct FileVersion {
-    inode: u64,
+    inode: Option<u64>,
     modified: Duration,
     size: u64,
 }
@@ -293,14 +298,25 @@ impl FileVersion {
     fn of(path: &str) -> Option<Self> {
         let metadata = std::fs::metadata(path).ok()?;
         Some(Self {
-            inode: metadata.ino(),
-            modified: Duration::new(
-                u64::try_from(metadata.mtime()).unwrap_or_default(),
-                u32::try_from(metadata.mtime_nsec()).unwrap_or_default(),
-            ),
-            size: metadata.size(),
+            inode: inode(&metadata),
+            modified: metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .unwrap_or_default(),
+            size: metadata.len(),
         })
     }
+}
+
+#[cfg(unix)]
+fn inode(metadata: &std::fs::Metadata) -> Option<u64> {
+    Some(std::os::unix::fs::MetadataExt::ino(metadata))
+}
+
+#[cfg(not(unix))]
+fn inode(_: &std::fs::Metadata) -> Option<u64> {
+    None
 }
 
 async fn load_application_credentials(path: &str) -> Result<Arc<dyn GcpTokenSource>, Error> {
@@ -661,6 +677,22 @@ mod tests {
         let path = file.path().to_str().unwrap();
         let before = CredentialCacheKey::versioned(path);
         std::fs::write(file.path(), r#"{"rotated": true}"#).unwrap();
+        assert!(matches!(before, CredentialCacheKey::KeyFile { .. }));
+        assert_ne!(before, CredentialCacheKey::versioned(path));
+    }
+
+    #[rstest::rstest]
+    fn a_key_file_s_cache_key_changes_when_only_its_modification_time_does() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "{}").unwrap();
+        let path = file.path().to_str().unwrap();
+        file.as_file()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+            .unwrap();
+        let before = CredentialCacheKey::versioned(path);
+        file.as_file()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_060))
+            .unwrap();
         assert!(matches!(before, CredentialCacheKey::KeyFile { .. }));
         assert_ne!(before, CredentialCacheKey::versioned(path));
     }
