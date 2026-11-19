@@ -2119,6 +2119,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         content_position: Final = (output_index, _stream_event_field(event, "content_index"))
         write_field: Final = OpenAIResponsesHandler._write_event_field
         part: Final = _stream_event_field(event, "part")
+        part_field: Final = "reasoning" if isinstance(stream_item_field(part, "reasoning"), str) else "text"
         match _stream_event_field(event, "type"):
             case "response.reasoning_summary_text.delta" if summary_position in rewrites.summaries:
                 write_field(event, "delta", next(rewrites.summary_deltas[summary_position]))
@@ -2132,8 +2133,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                 write_field(event, "delta", next(rewrites.content_deltas[content_position]))
             case "response.reasoning_text.done" if content_position in rewrites.contents:
                 write_field(event, "text", rewrites.contents[content_position])
+            case "response.content_part.added" if content_position in rewrites.contents and stream_item_field(
+                part, part_field
+            ):
+                write_field(part, part_field, rewrites.contents[content_position])
             case "response.content_part.done" if content_position in rewrites.contents and part is not None:
-                part_field: Final = "reasoning" if isinstance(stream_item_field(part, "reasoning"), str) else "text"
                 write_field(part, part_field, rewrites.contents[content_position])
             case _:
                 pass

@@ -52,6 +52,7 @@ from litellm.types.guardrails import BlockedWord, ContentFilterAction, ContentFi
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ChatCompletionToolCallChunk,
+    ContentPartAddedEvent,
     ContentPartDoneEvent,
     ContentPartDonePartReasoningText,
     ContentPartDonePartRefusal,
@@ -5994,6 +5995,37 @@ class TestReasoningOutputReachesOutputGuardrails:
         await _deliver([part_done, done, _completed_event(item)])
 
         assert done["text"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_part_announced_with_text_is_masked_and_an_empty_one_stays_empty(self) -> None:
+        announced: Final = ContentPartAddedEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+            item_id="rs_1",
+            output_index=0,
+            content_index=0,
+            part=ContentPartDonePartReasoningText(type="reasoning_text", reasoning="a persimmon"),
+        )
+        announced_empty: Final = {
+            "type": "response.content_part.added",
+            "item_id": "rs_1",
+            "output_index": 0,
+            "content_index": 1,
+            "part": {"type": "reasoning_text", "text": ""},
+        }
+        item: Final = {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [],
+            "content": [
+                {"type": "reasoning_text", "text": "a persimmon"},
+                {"type": "reasoning_text", "text": "another persimmon"},
+            ],
+        }
+
+        await _deliver([announced, announced_empty, _completed_event(item)])
+
+        assert announced.part.reasoning == "a [MASKED]"
+        assert announced_empty["part"]["text"] == ""
 
     @pytest.mark.asyncio
     async def test_a_message_rewrite_never_lands_on_a_reasoning_item_at_the_same_index(self) -> None:
