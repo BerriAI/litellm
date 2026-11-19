@@ -6027,6 +6027,7 @@ class PrismaClient:
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
         self.autorouter_turn_transactions: list[AutoRouterTurnTransaction] = []
         self.baseline_accounting_lock: Final = asyncio.Lock()
+        self.baseline_accounting_recovery_due_at = 0.0
         self.proxy_logging_obj = proxy_logging_obj
         self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")

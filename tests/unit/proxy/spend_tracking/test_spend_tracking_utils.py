@@ -39,7 +39,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
 from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
@@ -7752,6 +7752,7 @@ def test_spend_logs_payload(model_id: str | None):
     expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
         "is_silent_experiment",
         "upstream_provider",
+        "route_call_type",
         "user_api_key_customer_org_id",
         "user_api_key_customer_org_alias",
         "user_api_key_customer_team_id",
@@ -8901,3 +8902,89 @@ def test_spend_log_metadata_retention_drops_accounting_inputs_it_was_not_told_to
     parsed: Final = json.loads(str(stored["metadata"]))
     assert "user_api_key_alias" not in parsed
     assert parsed == {"usage_object": metadata["usage_object"], "status": metadata["status"]}
+
+
+def _stored_spend_metadata(call_type: str, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "custom_llm_provider": "openai",
+            "call_type": call_type,
+            "litellm_call_id": "route-call-type-request",
+            "litellm_params": {**litellm_params},
+        },
+        response_obj=litellm.ModelResponse(
+            id="route-call-type-request",
+            model="gpt-4o-mini",
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        start_time=datetime.datetime(2026, 11, 2, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2026, 11, 2, tzinfo=timezone.utc),
+    )
+    return json.loads(payload["metadata"])
+
+
+@pytest.mark.parametrize(
+    ("route", "route_call_type"),
+    [
+        ("/v1beta/models/gpt-4o-mini:generateContent", "agenerate_content"),
+        ("/models/gpt-4o-mini:generateContent", "agenerate_content"),
+        ("/v1beta/models/openai/gpt-4o-mini:generateContent", "agenerate_content"),
+        ("/v1beta/models/gpt-4o-mini:streamGenerateContent", "agenerate_content_stream"),
+        ("/models/gpt-4o-mini:streamGenerateContent", "agenerate_content_stream"),
+    ],
+)
+def test_adapter_completion_row_records_the_generate_content_route(route: str, route_call_type: str) -> None:
+    stored: Final = _stored_spend_metadata("acompletion", {"metadata": {"user_api_key_request_route": route}})
+    assert stored["route_call_type"] == route_call_type
+
+
+@pytest.mark.parametrize(
+    ("call_type", "metadata"),
+    [
+        ("acompletion", {"user_api_key_request_route": "/chat/completions"}),
+        ("acompletion", {"user_api_key_request_route": "/v1/chat/completions"}),
+        ("acompletion", {}),
+        ("agenerate_content", {"user_api_key_request_route": "/v1beta/models/gpt-4o-mini:generateContent"}),
+        (
+            "acompletion",
+            {
+                "user_api_key_request_route": "/v1beta/models/gpt-4o-mini:generateContent",
+                INTERNAL_CALL_ORIGIN_METADATA_KEY: "llm_as_a_judge",
+            },
+        ),
+        ("acompletion", {"user_api_key_request_route": "/chat/completions", "route_call_type": "agenerate_content"}),
+        ("acompletion", {"route_call_type": "agenerate_content_stream"}),
+    ],
+)
+def test_row_outside_the_adapter_path_has_no_route_call_type(call_type: str, metadata: Mapping[str, object]) -> None:
+    assert "route_call_type" not in _stored_spend_metadata(call_type, {"metadata": metadata})
+
+
+@pytest.mark.asyncio
+async def test_client_metadata_cannot_attribute_a_chat_request_to_generate_content() -> None:
+    forged: Final = {
+        "user_api_key_request_route": "/v1beta/models/gpt-4o-mini:generateContent",
+        "route_call_type": "agenerate_content",
+    }
+    request: Final = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.__str__.return_value = "http://localhost/chat/completions"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4o-mini", "metadata": {**forged}, "litellm_metadata": {**forged}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/chat/completions"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    stored: Final = _stored_spend_metadata(
+        "acompletion", {key: updated[key] for key in ("metadata", "litellm_metadata") if key in updated}
+    )
+    assert updated["metadata"]["user_api_key_request_route"] == "/chat/completions"
+    assert "route_call_type" not in stored

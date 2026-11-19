@@ -37,7 +37,9 @@ async def registration_refusal(prisma_client: "PrismaClient | None", authenticat
     """Why this request may not register a new customer, or None when it may."""
     if prisma_client is None:
         return None
-    store: Final = AppStore(prisma_client.db)
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    store: Final = AppStore(prisma_client.db, cache=user_api_key_cache)
     definition: Final = await store.definition()
     resource_id: Final = (
         await authenticated_resource_id(store, definition.resource_type, authenticated)

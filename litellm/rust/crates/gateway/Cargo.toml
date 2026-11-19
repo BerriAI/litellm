@@ -30,6 +30,7 @@ litellm-redis-resolve.workspace = true
 litellm-redis-types.workspace = true
 rustls.workspace = true
 litellm-http.workspace = true
+litellm-license.workspace = true
 litellm-llms.workspace = true
 litellm-model-catalog.workspace = true
 litellm-secrets.workspace = true

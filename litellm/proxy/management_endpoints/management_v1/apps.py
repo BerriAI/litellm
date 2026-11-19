@@ -34,12 +34,14 @@ def resolve(result: T | AppFailure) -> T:
 
 
 async def get_app_store() -> AsyncIterator[AppStore]:
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(503, "Database unavailable.")
     async with prisma_client.db.tx() as db:
-        yield AppStore(db)
+        store: Final = AppStore(db, cache=user_api_key_cache)
+        yield store
+    await store.invalidate_definition_cache()
 
 
 Store: TypeAlias = Annotated[AppStore, Depends(get_app_store)]

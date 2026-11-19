@@ -3,6 +3,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use litellm_config::Environment;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
 
@@ -58,6 +59,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Logger::new(StderrSink { level }).install_global()?;
     let config = litellm_gateway::load_config(settings.litellm_config).await?;
     let state = litellm_gateway::AppState::build(&config).await?;
+    let environment: Environment = settings::from_iter(std::env::vars_os())?;
+    let entitlements = litellm_gateway::build_license(
+        &config,
+        &environment,
+        &state.inference.resources.pool,
+        &state.inference.http,
+    )
+    .await?;
+    tracing::info!(
+        enterprise = entitlements.is_enterprise(),
+        "license verified"
+    );
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
