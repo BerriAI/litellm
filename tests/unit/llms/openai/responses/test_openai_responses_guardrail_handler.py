@@ -5740,6 +5740,14 @@ class TestReasoningOutputReachesOutputGuardrails:
         assert fields == _provider_fields("a [MASKED]", "a fig")
 
     @pytest.mark.asyncio
+    async def test_provider_field_thinking_is_masked_when_the_output_is_empty(self) -> None:
+        response: Final = {"output": [], "provider_specific_fields": _provider_fields("a persimmon")}
+
+        await OpenAIResponsesHandler().process_output_response(response, PersimmonTextMaskingGuardrail())
+
+        assert response["provider_specific_fields"] == _provider_fields("a [MASKED]")
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "fields",
         [None, {"citations": None, "thinking_blocks": None}, _provider_fields("")],
@@ -6108,6 +6116,22 @@ class TestReasoningOutputReachesOutputGuardrails:
 
         assert events[1]["item"]["summary"][0]["text"] == "a [MASKED]"
         assert events[1]["item"]["encrypted_content"] == "gAAAAABopaque-persimmon"
+
+    @pytest.mark.asyncio
+    async def test_a_summary_part_only_the_finished_item_holds_is_masked_with_no_terminal_event(self) -> None:
+        position: Final = {"item_id": "rs_1", "output_index": 0, "summary_index": 0}
+        events: Final = [
+            {"type": "response.reasoning_summary_text.done", **position, "text": "a fig"},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": _openai_reasoning_item("a fig", "a persimmon"),
+            },
+        ]
+
+        await _deliver(events)
+
+        assert [part["text"] for part in events[1]["item"]["summary"]] == ["a fig", "a [MASKED]"]
 
     @pytest.mark.asyncio
     async def test_a_second_summary_part_with_no_terminal_event_keeps_its_place(self) -> None:

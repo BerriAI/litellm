@@ -733,6 +733,16 @@ def _carries_whole_output_item(event: _StreamEventFields) -> bool:
     return event_type == "response.output_item.done"
 
 
+def _released_parts(
+    item_parts: Sequence[object], streamed_texts: Mapping[object, str], part_type: str
+) -> tuple[object, ...]:
+    streamed_parts: Final = _indexed_text_parts(streamed_texts, part_type)
+    return tuple(
+        streamed_parts[index] if index in streamed_texts or index >= len(item_parts) else item_parts[index]
+        for index in range(max(len(item_parts), len(streamed_parts)))
+    )
+
+
 def _released_reasoning_item(item_events: Sequence[object]) -> Mapping[str, object]:
     announced_items: Final = tuple(
         stream_item_field(event, "item")
@@ -742,17 +752,21 @@ def _released_reasoning_item(item_events: Sequence[object]) -> Mapping[str, obje
     fields: Final = dict(chain.from_iterable(_incomplete_item_fields(item).items() for item in announced_items))
     summary_texts: Final = _stream_part_texts(_events_of_types(item_events, _REASONING_SUMMARY_TEXT_EVENT_TYPES))
     content_texts: Final = _stream_part_texts(_events_of_types(item_events, _REASONING_TEXT_EVENT_TYPES))
-    summary: Final = _indexed_text_parts(
-        {key.summary_index: text for key, text in summary_texts.items()}, "summary_text"
+    summary: Final = _released_parts(
+        stream_item_items(fields, "summary"),
+        {key.summary_index: text for key, text in summary_texts.items()},
+        "summary_text",
     )
-    content: Final = _indexed_text_parts(
-        {key.content_index: text for key, text in content_texts.items()}, "reasoning_text"
+    content: Final = _released_parts(
+        stream_item_items(fields, "content"),
+        {key.content_index: text for key, text in content_texts.items()},
+        "reasoning_text",
     )
     return {
         **fields,
         "type": "reasoning",
-        "summary": summary or fields.get("summary"),
-        "content": content or fields.get("content"),
+        "summary": summary if summary_texts else fields.get("summary"),
+        "content": content if content_texts else fields.get("content"),
     }
 
 
@@ -1632,10 +1646,6 @@ class OpenAIResponsesHandler(BaseTranslation):
             response_output = response.output or []
         else:
             verbose_proxy_logger.debug("OpenAI Responses API: No output found in response")
-            return response
-
-        if not response_output:
-            verbose_proxy_logger.debug("OpenAI Responses API: Empty output in response")
             return response
 
         # Step 1: Extract all text content and tool calls from response output
