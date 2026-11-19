@@ -34,6 +34,12 @@ class _PrismaTranscript(BaseModel):
     truncated: bool | None = None
 
 
+def _normalized_hint(hint: str) -> str:
+    if hint.lower() == "indic-auto":
+        return "indic-auto"
+    return f"{hint.lower()}-IN" if len(hint) == 2 else hint
+
+
 def _language_code(model: str, language: object) -> str:
     if language is not None and not isinstance(language, str):
         raise UnsupportedParamsError(message="language must be a string", model=model, llm_provider="gnani")
@@ -46,7 +52,7 @@ def _language_code(model: str, language: object) -> str:
             model=model,
             llm_provider="gnani",
         )
-    return ",".join(f"{hint.lower()}-IN" if len(hint) == 2 else hint for hint in hints)
+    return ",".join(_normalized_hint(hint) for hint in hints)
 
 
 class GnaniAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
