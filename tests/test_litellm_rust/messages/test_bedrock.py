@@ -18,7 +18,6 @@ import litellm
 from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import model_cost_table
-from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.llms.bedrock.base_aws_llm import AwsAuthError
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_RESPONSE, RATE_LIMITED
 from tests.test_litellm_rust.support.isolation import rebound
@@ -56,17 +55,15 @@ _OBJECT: Final = TypeAdapter(dict[str, object])
 _RUST_ENTRY: Final = cast(  # cast-ok: the public entry's call shape, which dispatch sends to Rust
     Callable[..., Awaitable[object]], litellm.anthropic.messages.acreate
 )
-_PYTHON_ENTRY: Final = cast(  # cast-ok: the Python handler's call shape, which no dispatch reroutes
-    Callable[..., Awaitable[object]], python_messages.anthropic_messages
-)
+_INVOKE_WIRE: Final = _OBJECT.validate_json((Path(__file__).parent / "bedrock_invoke_python_wire.json").read_bytes())
+
+
+def _invoke_wire(key: str) -> dict[str, object]:
+    return _OBJECT.validate_python(_INVOKE_WIRE[key])
 
 
 async def _rust(server: RecordingServer, **kwargs: object) -> object:
     return await _RUST_ENTRY(**_arguments(server, kwargs))
-
-
-async def _python(server: RecordingServer, **kwargs: object) -> object:
-    return await _PYTHON_ENTRY(**_arguments(server, kwargs))
 
 
 def _arguments(server: RecordingServer, kwargs: Mapping[str, object]) -> dict[str, object]:
@@ -95,14 +92,15 @@ def _public(response: object) -> object:
 async def test_bedrock_invoke_sends_and_answers_what_python_does(server: RecordingServer) -> None:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
 
-    python_response: Final = await _python(server)
     rust_response: Final = await _rust(server)
 
-    python_sent, rust_sent = server.requests
-    assert rust_sent.path == python_sent.path
-    assert rust_sent.body == python_sent.body
-    assert _signed_headers(rust_sent) == _signed_headers(python_sent)
-    assert _public(rust_response) == _public(python_response)
+    [rust_sent] = server.requests
+    expected: Final = _invoke_wire("plain")
+    assert rust_sent.path == expected["path"]
+    assert rust_sent.body == expected["body"]
+    assert _signed_headers(rust_sent) == expected["signed_headers"]
+    assert _public(rust_response) == expected["response"]
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
@@ -111,14 +109,12 @@ async def test_bedrock_invoke_upstream_failure_raises_the_bedrock_exception_pyth
 ) -> None:
     server.default_response = ResponseSpec(body=RATE_LIMITED, status=429)
 
-    with pytest.raises(litellm.RateLimitError) as python_raised:
-        await _python(server)
     with pytest.raises(litellm.RateLimitError) as rust_raised:
         await _rust(server)
 
-    assert str(rust_raised.value) == str(python_raised.value)
-    assert rust_raised.value.llm_provider == python_raised.value.llm_provider == "bedrock"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
-    assert rust_raised.value.status_code == python_raised.value.status_code == 429
+    assert getattr(rust_raised.value, "llm_provider", None) == "bedrock"
+    assert rust_raised.value.status_code == 429
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
@@ -132,12 +128,10 @@ async def test_bedrock_invoke_upstream_failure_raises_the_bedrock_exception_pyth
 async def test_bedrock_invoke_refuses_a_thread_as_python_does(
     server: RecordingServer, thread: Mapping[str, str], error_class: type[Exception]
 ) -> None:
-    with pytest.raises(error_class) as python_raised:
-        await _python(server, thread=dict(thread))
     with pytest.raises(error_class) as rust_raised:
         await _rust(server, thread=dict(thread))
 
-    assert str(rust_raised.value) == str(python_raised.value)
+    assert type(rust_raised.value) is error_class
     assert server.requests == []
 
 
@@ -145,12 +139,12 @@ async def test_bedrock_invoke_refuses_a_thread_as_python_does(
 async def test_bedrock_invoke_drops_a_thread_under_drop_params_as_python_does(server: RecordingServer) -> None:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
 
-    await _python(server, thread={"type": "create"}, drop_params=True)
     await _rust(server, thread={"type": "create"}, drop_params=True)
 
-    python_sent, rust_sent = server.requests
+    [rust_sent] = server.requests
     assert "thread" not in _OBJECT.validate_python(rust_sent.body)
-    assert rust_sent.body == python_sent.body
+    assert rust_sent.body == _invoke_wire("drop-thread")["body"]
+    assert_served_natively(server)
 
 
 class _GuardrailBilling(CustomLogger):
@@ -176,18 +170,18 @@ async def test_bedrock_invoke_bills_the_guardrail_trace_as_python_does(server: R
     billing: Final = _GuardrailBilling()
 
     with rebound(litellm, "callbacks", [billing]):
-        await _python(server, **guardrail)
-        await billing.wait_for(1)
         await _rust(server, **guardrail)
-        await billing.wait_for(2)
+        await billing.wait_for(1)
 
-    python_sent, rust_sent = server.requests
-    python_billed, rust_billed = billing.billed
-    assert python_billed
-    assert rust_billed == python_billed
-    assert {name: value for name, value in rust_sent.headers.items() if name.startswith("x-amzn-bedrock-")} == {
-        name: value for name, value in python_sent.headers.items() if name.startswith("x-amzn-bedrock-")
-    }
+    [rust_sent] = server.requests
+    [rust_billed] = billing.billed
+    expected: Final = _invoke_wire("guardrail")
+    assert rust_billed
+    assert rust_billed == expected["billed"]
+    assert {name: value for name, value in rust_sent.headers.items() if name.startswith("x-amzn-bedrock-")} == expected[
+        "headers"
+    ]
+    assert_served_natively(server)
 
 
 def _aws_header(name: str, value: str) -> bytes:
@@ -242,15 +236,15 @@ async def test_bedrock_invoke_stream_bills_the_guardrail_trace_of_message_stop_a
     billing: Final = _GuardrailBilling()
 
     with rebound(litellm, "callbacks", [billing]):
-        python_chunks: Final = await _drain(await _python(server, stream=True, **guardrail))
-        await billing.wait_for(1)
         rust_chunks: Final = await _drain(await _rust(server, stream=True, **guardrail))
-        await billing.wait_for(2)
+        await billing.wait_for(1)
 
-    python_billed, rust_billed = billing.billed
-    assert python_billed
-    assert rust_billed == python_billed
-    assert _sse_events(rust_chunks)[-1] == _sse_events(python_chunks)[-1]
+    [rust_billed] = billing.billed
+    expected: Final = _invoke_wire("stream-guardrail")
+    assert rust_billed
+    assert rust_billed == expected["billed"]
+    assert _sse_events(rust_chunks)[-1] == expected["last_event"]
+    assert_served_natively(server)
 
 
 @pytest.fixture
@@ -265,19 +259,25 @@ def no_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize(
-    ("credentials", "raised"),
+    ("credentials", "raised", "status"),
     (
-        pytest.param({}, NoCredentialsError, id="no-credentials"),
+        pytest.param({}, NoCredentialsError, None, id="no-credentials"),
         pytest.param(
-            {"aws_web_identity_token": "os.environ/AWS_WEB_IDENTITY_TOKEN"}, AwsAuthError, id="environment-reference"
+            {"aws_web_identity_token": "os.environ/AWS_WEB_IDENTITY_TOKEN"},
+            AwsAuthError,
+            400,
+            id="environment-reference",
         ),
         pytest.param(
-            {"aws_web_identity_token": "bedrock-web-identity-token-not-set"}, AwsAuthError, id="unresolved-token"
+            {"aws_web_identity_token": "bedrock-web-identity-token-not-set"},
+            AwsAuthError,
+            401,
+            id="unresolved-token",
         ),
     ),
 )
 async def test_bedrock_invoke_credential_failure_raises_what_python_raises(
-    server: RecordingServer, credentials: Mapping[str, str], raised: type[Exception]
+    server: RecordingServer, credentials: Mapping[str, str], raised: type[Exception], status: int | None
 ) -> None:
     web_identity: Final = (
         {"aws_role_name": "arn:aws:iam::123456789012:role/bedrock", "aws_session_name": "litellm-session"}
@@ -286,14 +286,11 @@ async def test_bedrock_invoke_credential_failure_raises_what_python_raises(
     )
     unsigned: Final = {"aws_access_key_id": None, "aws_secret_access_key": None, **credentials, **web_identity}
 
-    with pytest.raises(raised) as python_raised:
-        await _python(server, **unsigned)
     with pytest.raises(raised) as rust_raised:
         await _rust(server, **unsigned)
 
-    assert type(rust_raised.value) is type(python_raised.value)
-    assert str(rust_raised.value) == str(python_raised.value)
-    assert getattr(rust_raised.value, "status_code", None) == getattr(python_raised.value, "status_code", None)
+    assert type(rust_raised.value) is raised
+    assert getattr(rust_raised.value, "status_code", None) == status
     assert server.requests == []
 
 
@@ -305,12 +302,10 @@ async def test_bedrock_invoke_access_key_without_its_secret_raises_what_python_r
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
     unsigned: Final = {"aws_access_key_id": None, "aws_secret_access_key": None}
 
-    with pytest.raises(PartialCredentialsError) as python_raised:
-        await _python(server, **unsigned)
     with pytest.raises(PartialCredentialsError) as rust_raised:
         await _rust(server, **unsigned)
 
-    assert str(rust_raised.value) == str(python_raised.value)
+    assert type(rust_raised.value) is PartialCredentialsError
     assert server.requests == []
 
 
@@ -343,16 +338,17 @@ async def test_bedrock_invoke_access_key_without_its_secret_raises_what_python_r
     ),
 )
 async def test_bedrock_invoke_sends_the_url_and_body_python_sends(
-    server: RecordingServer, deployment: Mapping[str, object]
+    server: RecordingServer, request: pytest.FixtureRequest, deployment: Mapping[str, object]
 ) -> None:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
 
-    await _python(server, **deployment)
     await _rust(server, **deployment)
 
-    python_sent, rust_sent = server.requests
-    assert rust_sent.path == python_sent.path
-    assert rust_sent.body == python_sent.body
+    [rust_sent] = server.requests
+    expected: Final = _invoke_wire(f"url/{request.node.callspec.id}")
+    assert rust_sent.path == expected["path"]
+    assert rust_sent.body == expected["body"]
+    assert_served_natively(server)
 
 
 def _signing(request: RecordedRequest) -> tuple[object, ...]:
@@ -385,7 +381,10 @@ def _signing(request: RecordedRequest) -> tuple[object, ...]:
 )
 @pytest.mark.parametrize("session_token", (None, "deployment-session"), ids=("static", "session"))
 async def test_bedrock_invoke_signs_caller_amz_headers_as_python_does(
-    server: RecordingServer, caller_headers: Mapping[str, str], session_token: str | None
+    server: RecordingServer,
+    request: pytest.FixtureRequest,
+    caller_headers: Mapping[str, str],
+    session_token: str | None,
 ) -> None:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
     deployment: Final = {
@@ -395,25 +394,24 @@ async def test_bedrock_invoke_signs_caller_amz_headers_as_python_does(
         "extra_headers": dict(caller_headers),
     }
 
-    await _python(server, **deployment)
     await _rust(server, **deployment)
 
-    python_sent, rust_sent = server.requests
-    assert _signing(rust_sent) == _signing(python_sent)
+    [rust_sent] = server.requests
+    session: Final = "static" if session_token is None else "session"
+    caller: Final = request.node.callspec.id.split("-", 1)[1]
+    assert list(_signing(rust_sent)) == _INVOKE_WIRE[f"signing/{session}-{caller}"]
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
 async def test_bedrock_invoke_refuses_an_invalid_guardrail_config_as_python_does(server: RecordingServer) -> None:
     invalid: Final = {"guardrailConfig": {"guardrailVersion": "1"}}
 
-    with pytest.raises(litellm.BadRequestError) as python_raised:
-        await _python(server, **invalid)
     with pytest.raises(litellm.BadRequestError) as rust_raised:
         await _rust(server, **invalid)
 
-    assert str(rust_raised.value) == str(python_raised.value)
-    assert type(rust_raised.value) is type(python_raised.value)
-    assert getattr(rust_raised.value, "status_code", None) == getattr(python_raised.value, "status_code", None)
+    assert type(rust_raised.value) is litellm.BadRequestError
+    assert rust_raised.value.status_code == 400
     assert server.requests == []
 
 
@@ -421,19 +419,13 @@ async def test_bedrock_invoke_refuses_an_invalid_guardrail_config_as_python_does
 async def test_bedrock_invoke_refuses_a_web_search_tool_as_python_does(server: RecordingServer) -> None:
     web_search: Final = {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}
 
-    with pytest.raises(litellm.BadRequestError) as python_raised:
-        await _python(server, **web_search)
     with pytest.raises(litellm.BadRequestError) as rust_raised:
         await _rust(server, **web_search)
 
-    assert type(rust_raised.value) is type(python_raised.value)
-    assert str(rust_raised.value) == str(python_raised.value)
-    assert rust_raised.value.llm_provider == python_raised.value.llm_provider  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's provider
-    assert rust_raised.value.model == python_raised.value.model  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # the public error's model
+    assert type(rust_raised.value) is litellm.BadRequestError
+    assert rust_raised.value.status_code == 400
+    assert getattr(rust_raised.value, "llm_provider", None) == "bedrock"
     assert server.requests == []
-    assert getattr(rust_raised.value, "litellm_debug_info", None) == getattr(
-        python_raised.value, "litellm_debug_info", None
-    )
 
 
 _EVENTS: Final = tuple(data for _, data in MESSAGES_EVENTS)
@@ -486,20 +478,20 @@ def _billed(logged: tuple[str, Mapping[str, object]]) -> tuple[str, object, obje
     ),
 )
 async def test_bedrock_invoke_stream_relays_the_frames_and_bills_what_python_does(
-    server: RecordingServer, events: Sequence[Mapping[str, object]]
+    server: RecordingServer, request: pytest.FixtureRequest, events: Sequence[Mapping[str, object]]
 ) -> None:
     server.default_response = ResponseSpec(body=b"".join(_aws_frame(event) for event in events))
     recorder: Final = _Recorder()
 
     with rebound(litellm, "callbacks", [recorder]):
-        python_chunks: Final = await _drain(await _python(server, stream=True))
-        await recorder.wait_for(1)
         rust_chunks: Final = await _drain(await _rust(server, stream=True))
-        await recorder.wait_for(2)
+        await recorder.wait_for(1)
 
-    assert rust_chunks == python_chunks
-    python_logged, rust_logged = recorder.logged
-    assert _billed(rust_logged) == _billed(python_logged)
+    expected: Final = _invoke_wire(f"stream/{request.node.callspec.id}")
+    assert [chunk.decode() for chunk in rust_chunks] == expected["chunks"]
+    [rust_logged] = recorder.logged
+    assert list(_billed(rust_logged)) == expected["billed"]
+    assert_served_natively(server)
 
 
 _STREAM_HEAD: Final = b"".join(_aws_frame(event) for event in _EVENTS[:3])
@@ -519,16 +511,10 @@ async def _failed_stream(
     raise AssertionError("the stream ended without a failure")
 
 
-def _raised(error: BaseException | None) -> tuple[object, ...]:
+def _raised(error: BaseException | None) -> list[list[object]]:
     if error is None:
-        return (None,)
-    return (
-        type(error),
-        str(error),
-        getattr(error, "status_code", None),
-        getattr(error, "litellm_debug_info", None),
-        *_raised(error.__cause__),
-    )
+        return []
+    return [[type(error).__name__, getattr(error, "status_code", None)], *_raised(error.__cause__)]
 
 
 @pytest.mark.asyncio
@@ -552,21 +538,21 @@ def _raised(error: BaseException | None) -> tuple[object, ...]:
     ),
 )
 async def test_bedrock_invoke_stream_failure_raises_and_logs_what_python_does(
-    server: RecordingServer, response: ResponseSpec
+    server: RecordingServer, request: pytest.FixtureRequest, response: ResponseSpec
 ) -> None:
     server.default_response = response
     recorder: Final = _Recorder()
 
     with rebound(litellm, "callbacks", [recorder]):
-        python_chunks, python_error = await _failed_stream(_python, server)
-        await recorder.wait_for(1)
         rust_chunks, rust_error = await _failed_stream(_rust, server)
-        await recorder.wait_for(2)
+        await recorder.wait_for(1)
 
-    assert rust_chunks == python_chunks
-    assert _raised(rust_error) == _raised(python_error)
-    python_logged, rust_logged = recorder.logged
-    assert _billed(rust_logged) == _billed(python_logged)
+    expected: Final = _invoke_wire(f"stream-failure/{request.node.callspec.id}")
+    assert [chunk.decode() for chunk in rust_chunks] == expected["chunks"]
+    assert _raised(rust_error) == expected["raised"]
+    [rust_logged] = recorder.logged
+    kind, logged_response, _ = _billed(rust_logged)
+    assert [kind, logged_response] == expected["billed"]
 
 
 @pytest.mark.asyncio
@@ -607,23 +593,21 @@ async def test_bedrock_invoke_stream_failure_raises_and_logs_what_python_does(
     ),
 )
 async def test_bedrock_invoke_logs_the_tools_python_shaped(
-    server: RecordingServer, tools: Sequence[Mapping[str, object]]
+    server: RecordingServer, request: pytest.FixtureRequest, tools: Sequence[Mapping[str, object]]
 ) -> None:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
     recorder: Final = _Recorder()
-    python_tools: Final = json.loads(json.dumps(tools))
     rust_tools: Final = json.loads(json.dumps(tools))
 
     with rebound(litellm, "callbacks", [recorder]):
-        await _python(server, tools=python_tools)
-        await recorder.wait_for(1)
         await _rust(server, tools=rust_tools)
-        await recorder.wait_for(2)
+        await recorder.wait_for(1)
 
-    (_, python_logged), (_, rust_logged) = recorder.logged
-    assert rust_tools == python_tools != tools
-    assert _OBJECT.validate_python(rust_logged["model_parameters"])["tools"] == python_tools
-    assert _OBJECT.validate_python(python_logged["model_parameters"])["tools"] == python_tools
+    [(_, rust_logged)] = recorder.logged
+    shaped: Final = _INVOKE_WIRE[f"tools/{request.node.callspec.id}"]
+    assert rust_tools == shaped != tools
+    assert _OBJECT.validate_python(rust_logged["model_parameters"])["tools"] == shaped
+    assert_served_natively(server)
 
 
 class _Warnings(logging.Handler):
@@ -669,7 +653,7 @@ _NATIVE_OUTPUT_REJECTED: Final = ResponseSpec(
     ),
 )
 async def test_bedrock_invoke_warns_what_python_warns(
-    server: RecordingServer, request_params: Mapping[str, object], rejected: bool
+    server: RecordingServer, request: pytest.FixtureRequest, request_params: Mapping[str, object], rejected: bool
 ) -> None:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
     warnings: Final = _Warnings()
@@ -678,16 +662,11 @@ async def test_bedrock_invoke_warns_what_python_warns(
     try:
         if rejected:
             server.enqueue(_NATIVE_OUTPUT_REJECTED)
-        await _python(server, **request_params)
-        python_warnings: Final = list(warnings.messages)
-        warnings.messages.clear()
-        if rejected:
-            server.enqueue(_NATIVE_OUTPUT_REJECTED)
         await _rust(server, **request_params)
     finally:
         logger.removeHandler(warnings)
 
-    assert warnings.messages == python_warnings
+    assert warnings.messages == _INVOKE_WIRE[f"warnings/{request.node.callspec.id}"]
 
 
 @pytest.mark.asyncio
@@ -702,16 +681,15 @@ async def test_bedrock_invoke_stream_bills_the_terminal_usage_after_the_caller_d
     recorder: Final = _Recorder()
 
     with rebound(litellm, "callbacks", [recorder]):
-        for entry, count in ((_python, 1), (_rust, 2)):
-            stream = cast(
-                AsyncGenerator[bytes], await entry(server, stream=True)
-            )  # cast-ok: a streamed Messages answer is an async generator
-            await anext(stream)
-            await stream.aclose()
-            await recorder.wait_for(count)
+        stream: Final = cast(
+            AsyncGenerator[bytes], await _rust(server, stream=True)
+        )  # cast-ok: a streamed Messages answer is an async generator
+        await anext(stream)
+        await stream.aclose()
+        await recorder.wait_for(1)
 
-    python_logged, rust_logged = recorder.logged
-    assert _billed(rust_logged) == _billed(python_logged)
+    [rust_logged] = recorder.logged
+    assert list(_billed(rust_logged)) == _INVOKE_WIRE["detached"]
     assert (
         _OBJECT.validate_python(_OBJECT.validate_python(rust_logged[1]["response"])["usage"])["completion_tokens"]
         == 412
@@ -1216,12 +1194,10 @@ async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
 async def test_bedrock_invoke_missing_profile_raises_what_python_raises(server: RecordingServer) -> None:
     unsigned: Final = {"aws_access_key_id": None, "aws_secret_access_key": None, "aws_profile_name": "absent-profile"}
 
-    with pytest.raises(ProfileNotFound) as python_raised:
-        await _python(server, **unsigned)
     with pytest.raises(ProfileNotFound) as rust_raised:
         await _rust(server, **unsigned)
 
-    assert rust_raised.value.kwargs == python_raised.value.kwargs == {"profile": "absent-profile"}
+    assert rust_raised.value.kwargs == {"profile": "absent-profile"}
     assert server.requests == []
 
 
@@ -1532,6 +1508,7 @@ async def test_claude_platform_sends_the_request_python_sends(
     [sent] = server.requests
     assert _platform_wire(sent) == _PLATFORM_WIRE[case]
     assert _public(response) == MESSAGES_RESPONSE
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
@@ -1546,6 +1523,7 @@ async def test_claude_platform_falls_back_to_the_module_api_base(
 
     [sent] = server.requests
     assert _platform_wire(sent) == _PLATFORM_WIRE["url_module_global"]
+    assert_served_natively(server)
 
 
 class _Billing(CustomLogger):
@@ -1584,6 +1562,7 @@ async def test_claude_platform_bills_the_claude_platform_row(server: RecordingSe
         prompt_tokens=int(str(billed["prompt_tokens"])),
         completion_tokens=int(str(billed["completion_tokens"])),
     )
+    assert_served_natively(server)
     assert billed["custom_llm_provider"] == "bedrock"
     assert math.isclose(float(str(billed["response_cost"])), prompt_cost + completion_cost)
     assert prompt_cost + completion_cost > 0
@@ -1629,6 +1608,7 @@ async def test_claude_platform_upstream_failure_raises_the_bedrock_exception(ser
     assert rust_raised.value.status_code == 429
     assert getattr(rust_raised.value, "llm_provider", None) == "bedrock"
     assert "BedrockException" in str(rust_raised.value)
+    assert_served_natively(server)
 
 
 @pytest.mark.asyncio
@@ -1640,3 +1620,4 @@ async def test_claude_platform_signs_over_a_forwarded_authorization(server: Reco
 
     [sent] = server.requests
     assert _platform_wire(sent) == _PLATFORM_WIRE["auth_sigv4_params"]
+    assert_served_natively(server)
