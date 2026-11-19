@@ -13,7 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+from litellm.litellm_core_utils.usage.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
 )
 from litellm.llms.vertex_ai.common_utils import (

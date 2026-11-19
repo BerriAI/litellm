@@ -36,8 +36,8 @@ from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     drops_unsupported_params,
     map_finish_reason,
+    object_mapping,
 )
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     invalid_type_message,

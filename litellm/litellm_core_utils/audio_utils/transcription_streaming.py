@@ -16,7 +16,7 @@ from openai.types.audio import (
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+from litellm.litellm_core_utils.usage.usage_object_transformation import (
     TranscriptionUsageObjectTransformation,
 )
 from litellm.types.utils import TranscriptionResponse, TranscriptionUsageTokensObject, Usage

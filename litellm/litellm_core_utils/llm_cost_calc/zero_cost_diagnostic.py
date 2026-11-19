@@ -7,7 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input
-from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+from litellm.litellm_core_utils.usage.token_details import parse_prompt_tokens_details
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
