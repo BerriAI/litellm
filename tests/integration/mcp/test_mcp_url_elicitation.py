@@ -878,7 +878,10 @@ def hooked(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, 
                 }
             )
         )
-        with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path) as candidate:
+        with (
+            gateway_from_environment() as gateway,
+            owned_proxy(gateway, directory, {"MAX_STRING_LENGTH_PROMPT_IN_DB": "100000"}, config=path) as candidate,
+        ):
             yield candidate, sink
 
 
@@ -977,3 +980,40 @@ def test_output_guardrail_and_post_tool_call_hook_each_see_one_url_elicitation_o
         assert relayed == {"jsonrpc": "2.0", "id": 1, "error": elicitation}, relayed
         texts: Final = [str(elicitation["message"]), f"Sign in as {email}."]
         assert _sunk_texts(sink, email) == {"guardrail": [texts], "hook": [texts]}
+
+
+def test_failure_log_of_an_elicitation_refused_by_an_output_guardrail_never_stores_the_upstream_message(
+    hooked: tuple[Gateway, Wire],
+) -> None:
+    gateway: Final = hooked[0]
+    email: Final = f"john.doe.{uuid.uuid4().hex[:8]}@example.com"
+    with (
+        _output_guardrail(gateway, "Authorize", "MASK"),
+        _output_guardrail(gateway, email, "BLOCK"),
+        _granted(gateway, *_addressed_tools(email, "none")) as (upstream, alias, _, key),
+    ):
+        caller: Final = McpCaller(gateway, key, "mcp", alias)
+        refused: Final = f"Error: Content blocked: keyword '{email}' detected"
+        control: Final = eventually(
+            lambda: caller.call(f"{alias}-whoami", {}),
+            lambda outcome: outcome.error == refused,
+            seconds=40,
+            return_last_on_timeout=True,
+        )
+        assert control.error == refused, control.raw
+        upstream.drain()
+        since: Final = len(gateway.request("GET", "/spend/logs", params={"api_key": key}).json())
+        nonce: Final = uuid.uuid4().hex
+        outcome: Final = caller.call(f"{alias}-consent", {"nonce": nonce})
+        assert (outcome.text, outcome.error) == (refused, refused), outcome.raw
+        assert _upstream_nonces(upstream) == [nonce]
+        logged: Final = eventually(
+            lambda: gateway.request("GET", "/spend/logs", params={"api_key": key}),
+            lambda listed: nonce in listed.text and len(listed.json()) > since,
+            seconds=70,
+            return_last_on_timeout=True,
+        )
+        rows: Final = [row for row in logged.json() if nonce in json.dumps(row)]
+        assert [(row["status"], "Authorize to continue for" in json.dumps(row)) for row in rows] == [
+            ("failure", False)
+        ], rows

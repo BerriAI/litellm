@@ -2646,6 +2646,17 @@ def _elicitation_message(elicitation: Mapping[str, JsonValue] | None) -> str | N
     return message if isinstance(message, str) else None
 
 
+async def _result_or_url_elicitation(
+    execution: Awaitable[CallToolResult | InputRequiredResult],
+) -> CallToolResult | InputRequiredResult | MCPError:
+    try:
+        return await execution
+    except MCPError as error:
+        if not is_url_elicitation_required(error):
+            raise
+        return error
+
+
 async def _relay_guarded_url_elicitation(
     execution: Awaitable[CallToolResult | InputRequiredResult],
     logging_obj: LiteLLMLoggingObj | None,
@@ -2654,54 +2665,52 @@ async def _relay_guarded_url_elicitation(
     request_data: Mapping[str, object],
     start_time: datetime,
 ) -> CallToolResult | InputRequiredResult:
-    try:
-        return await execution
-    except MCPError as error:
-        if not is_url_elicitation_required(error):
-            raise
-        data: Final = _json_object(error.error.data)
-        listed: Final = data.get("elicitations") if data is not None else None
-        elicitations: Final = TypeAdapter(list[JsonValue]).validate_python(listed) if isinstance(listed, list) else []
-        entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
-        messages: Final = tuple(_elicitation_message(entry) for entry in entries)
-        guarded: Final = tuple(index for index, message in enumerate(messages) if message is not None)
-        guarded_result: Final = await _run_post_mcp_call_guardrails(
-            CallToolResult(
-                content=[
-                    TextContent(type="text", text=error.error.message),
-                    *(TextContent(type="text", text=message) for message in messages if message is not None),
-                ]
-            ),
-            litellm_logging_obj=logging_obj,
-            original_auth=original_auth,
-            guardrail_auth=guardrail_auth,
-            request_data=request_data,
+    elicitation_error: Final = await _result_or_url_elicitation(execution)
+    if not isinstance(elicitation_error, MCPError):
+        return elicitation_error
+    data: Final = _json_object(elicitation_error.error.data)
+    listed: Final = data.get("elicitations") if data is not None else None
+    elicitations: Final = TypeAdapter(list[JsonValue]).validate_python(listed) if isinstance(listed, list) else []
+    entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
+    messages: Final = tuple(_elicitation_message(entry) for entry in entries)
+    guarded: Final = tuple(index for index, message in enumerate(messages) if message is not None)
+    guarded_result: Final = await _run_post_mcp_call_guardrails(
+        CallToolResult(
+            content=[
+                TextContent(type="text", text=elicitation_error.error.message),
+                *(TextContent(type="text", text=message) for message in messages if message is not None),
+            ]
+        ),
+        litellm_logging_obj=logging_obj,
+        original_auth=original_auth,
+        guardrail_auth=guardrail_auth,
+        request_data=request_data,
+    )
+    checked: Final = (
+        await logging_obj.async_post_mcp_tool_call_hook(  # pyright: ignore[reportUnknownMemberType]  # hook takes the logger's untyped call details
+            kwargs=logging_obj.model_call_details,
+            response_obj=guarded_result,
+            start_time=start_time,
+            end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
         )
-        checked: Final = (
-            await logging_obj.async_post_mcp_tool_call_hook(  # pyright: ignore[reportUnknownMemberType]  # hook takes the logger's untyped call details
-                kwargs=logging_obj.model_call_details,
-                response_obj=guarded_result,
-                start_time=start_time,
-                end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
-            )
-            if logging_obj is not None
-            else guarded_result
-        )
-        texts: Final = tuple(TextContent.model_validate(block).text for block in checked.content)
-        replaced: Final = dict(zip(guarded, texts[1:], strict=True))
-        raise MCPError(
-            code=error.error.code,
-            message=texts[0],
-            data={
-                **data,
-                "elicitations": [
-                    {**entry, "message": replaced[index]} if entry is not None and index in replaced else elicitation
-                    for index, (elicitation, entry) in enumerate(zip(elicitations, entries, strict=True))
-                ],
-            }
-            if data is not None and replaced
-            else error.error.data,
-        ) from None
+        if logging_obj is not None
+        else guarded_result
+    )
+    texts: Final = tuple(TextContent.model_validate(block).text for block in checked.content)
+    replaced: Final = dict(zip(guarded, texts[1:], strict=True))
+    raise MCPError(
+        code=elicitation_error.error.code,
+        message=texts[0],
+        data={
+            **data,
+            "elicitations": [
+                {**entry, "message": replaced[index]} if entry is not None and index in replaced else elicitation
+                for index, (elicitation, entry) in enumerate(zip(elicitations, entries, strict=True))
+            ],
+        }
+        if data is not None and replaced
+        else elicitation_error.error.data,
+    )
 
 
 def _guarded_progress_callback(
