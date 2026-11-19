@@ -156,6 +156,10 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
         "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
     },
 }
+_OPENAI_PREDICATE_RESPONSE: Final[Mapping[str, object]] = {
+    **_OPENAI_RESPONSE,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+}
 
 
 class _RecordingLogger(CustomLogger):
@@ -2780,7 +2784,7 @@ def default_openai_base(monkeypatch: pytest.MonkeyPatch) -> None:
     ids=("object", "array_of_objects"),
 )
 async def test_openai_receives_input_json_parts_as_sent(data: object, respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     await litellm.adecisions(
         model="openai/gpt-6-luna",
@@ -2798,7 +2802,7 @@ async def test_input_json_with_a_prompt_cache_breakpoint_is_refused_before_opena
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
     marked: Final = {
         "type": "input_json",
         "data": dict(_ORDER_EVIDENCE),
@@ -2821,7 +2825,7 @@ async def test_input_json_with_a_prompt_cache_breakpoint_is_refused_before_opena
 async def test_drop_params_drops_a_prompt_cache_breakpoint_on_input_json_before_openai(
     respx_mock: respx.MockRouter,
 ) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
     marked: Final = {
         "type": "input_json",
         "data": dict(_ORDER_EVIDENCE),
@@ -2852,7 +2856,7 @@ async def test_drop_params_drops_a_prompt_cache_breakpoint_on_input_json_before_
 async def test_input_json_shapes_openai_refuses_are_refused_before_http(
     message: Mapping[str, object], respx_mock: respx.MockRouter
 ) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
 
     with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
         await litellm.adecisions(
