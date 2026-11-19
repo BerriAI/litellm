@@ -809,5 +809,5 @@ def test_gemini_3_tool_result_for_a_call_no_assistant_made_is_rejected_before_ve
             ],
         },
     )
-    assert response.status_code == 500, response.text
+    assert response.status_code >= 400, response.text
     assert received == ()

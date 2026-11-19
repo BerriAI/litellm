@@ -662,3 +662,27 @@ def test_tool_results_answer_calls_from_every_assistant_message_merged_into_one_
     responses: Final = [part["function_response"] for part in contents[2]["parts"]]
     assert [response["name"] for response in responses] == ["get_weather", "get_time"]
     assert [response.get("id") for response in responses] == [call["function_call"].get("id") for call in calls]
+
+
+def test_tool_result_cannot_answer_a_call_from_an_earlier_assistant_turn() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_a", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_a", "content": "sunny"},
+        {"role": "user", "content": "And the time in Rome?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_b", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_a", "content": "noon"},
+    ]
+
+    with pytest.raises(Exception, match="Missing corresponding tool call"):
+        transformation.gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash")
