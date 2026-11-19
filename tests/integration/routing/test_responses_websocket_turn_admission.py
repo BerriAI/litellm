@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import os
 import threading
 import time
@@ -61,8 +62,17 @@ SPEND_ROWS_FOR_KEY: Final = (
 )
 STORED_TIME_RESOLUTION_SECONDS: Final = 0.001
 TURN_CHECK_FAULT: Final = "turn_check_fault"
+PASSTHROUGH_WORD: Final = "rutabaga"
 FAULTING_TURN_CHECK: Final = f"""
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+
+
+class PassthroughTurnGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if "{PASSTHROUGH_WORD}" in str(data.get("input")):
+            self.raise_passthrough_exception(violation_message="passthrough blocked {PASSTHROUGH_WORD}", request_data=data)
+        return data
 
 
 class FaultingTurnCheck(CustomLogger):
@@ -82,6 +92,28 @@ HEAVY_TURN_USAGE: Final[dict[str, JsonValue]] = {
     "total_tokens": HEAVY_TURN_TOKENS,
 }
 SOCKET_TPM_LIMIT: Final = 1000
+BLOCKED_WORD: Final = "kumquat"
+TURN_GUARDRAIL: Final = "ws-turn-content-filter"
+PASSTHROUGH_GUARDRAIL: Final = "ws-turn-passthrough"
+TURN_GUARDRAIL_CONFIGS: Final[tuple[dict[str, JsonValue], ...]] = (
+    {
+        "guardrail_name": TURN_GUARDRAIL,
+        "litellm_params": {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "default_on": False,
+            "blocked_words": [{"keyword": BLOCKED_WORD, "action": "BLOCK"}],
+        },
+    },
+    {
+        "guardrail_name": PASSTHROUGH_GUARDRAIL,
+        "litellm_params": {
+            "guardrail": "faulting_turn_check.PassthroughTurnGuardrail",
+            "mode": "pre_call",
+            "default_on": False,
+        },
+    },
+)
 FrameReader = Callable[[], int]
 
 
@@ -100,13 +132,19 @@ def _redis() -> Redis:
     return Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]), decode_responses=True)
 
 
-def _config(directory: Path, router_settings: Mapping[str, JsonValue], callbacks: tuple[str, ...]) -> Path:
+def _config(
+    directory: Path,
+    router_settings: Mapping[str, JsonValue],
+    callbacks: tuple[str, ...],
+    guardrails: tuple[Mapping[str, JsonValue], ...],
+) -> Path:
     base: Final = JSON_OBJECT.validate_python(yaml.safe_load(PROXY_CONFIG.read_text()))
     path: Final = directory / "turn-admission.yaml"
     path.write_text(
         yaml.safe_dump(
             {
                 **base,
+                **({"guardrails": [dict(guardrail) for guardrail in guardrails]} if guardrails else {}),
                 "general_settings": {**object_value(base["general_settings"]), "store_prompts_in_spend_logs": True},
                 "litellm_settings": {
                     **object_value(base["litellm_settings"]),
@@ -130,11 +168,14 @@ def _admitting_proxy(
     cert: tuple[Path, Path],
     router_settings: Mapping[str, JsonValue],
     callback_sources: Mapping[str, str] = MappingProxyType({}),
+    guardrails: tuple[Mapping[str, JsonValue], ...] = (),
 ) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("responses-ws-turn-admission")
     for module, source in callback_sources.items():
         (directory / f"{module}.py").write_text(source)
-    config: Final = _config(directory, router_settings, tuple(f"{module}.instance" for module in callback_sources))
+    config: Final = _config(
+        directory, router_settings, tuple(f"{module}.instance" for module in callback_sources), guardrails
+    )
     with gateway_from_environment() as base:
         with owned_proxy(
             base,
@@ -162,7 +203,9 @@ def limited(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -
 
 @pytest.fixture(scope="module")
 def faulting(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -> Iterator[Gateway]:
-    with _admitting_proxy(tmp_path_factory, cert, {}, {"faulting_turn_check": FAULTING_TURN_CHECK}) as proxy:
+    with _admitting_proxy(
+        tmp_path_factory, cert, {}, {"faulting_turn_check": FAULTING_TURN_CHECK}, TURN_GUARDRAIL_CONFIGS
+    ) as proxy:
         yield proxy
 
 
@@ -597,6 +640,84 @@ def test_a_native_turn_the_provider_fails_relays_the_provider_error_frame_unchan
         assert failed == (dict(error),), failed
         _assert_completed_without_error(after)
         assert deployment.forwarded_turns() == 3
+
+
+@contextmanager
+def _relay_deployment(relay: str, scenario: Scenario, cert: tuple[Path, Path]) -> Iterator[Deployment]:
+    if relay == "managed":
+        yield _managed(scenario)
+        return
+    with responses_peer(cert) as peer:
+        yield _native(scenario, peer)
+
+
+@pytest.mark.parametrize("relay", ("managed", "native"))
+@pytest.mark.parametrize(
+    ("guardrail", "blocked_word"),
+    ((TURN_GUARDRAIL, BLOCKED_WORD), (PASSTHROUGH_GUARDRAIL, PASSTHROUGH_WORD)),
+    ids=("raising", "passthrough"),
+)
+def test_a_turn_a_guardrail_blocks_gets_a_400_error_frame_and_the_socket_serves_the_next_turn(
+    faulting: Gateway, cert: tuple[Path, Path], relay: str, guardrail: str, blocked_word: str
+) -> None:
+    """Regression: Codex ignores the guardrail's error frame without a numeric status and hangs on the open socket,
+    and retries one whose status is a 5xx."""
+    with faulting.scenario() as scenario, _relay_deployment(relay, scenario, cert) as deployment:
+        key: Final = scenario.key(models=[deployment.name], guardrails=[guardrail])
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                return (
+                    await _say(connection, deployment.name),
+                    await _say(connection, deployment.name, f"{blocked_word} {uuid.uuid4().hex}"),
+                    await _say(connection, deployment.name),
+                )
+
+        first, blocked, after = asyncio.run(session())
+
+        _assert_completed_without_error(first)
+        _assert_turn_ended_by_one_error_frame(blocked, 400)
+        error: Final = object_value(blocked[-1]["error"])
+        assert error["type"] == "invalid_request_error", blocked
+        assert blocked_word in string_value(error["message"]), blocked
+        _assert_completed_without_error(after)
+        assert deployment.forwarded_turns() == 2
+
+
+@pytest.mark.parametrize(
+    ("model_in_url", "first_frame"),
+    (
+        pytest.param(True, "not json", id="not-json"),
+        pytest.param(True, json.dumps({"type": "response.cancel"}), id="not-response-create"),
+        pytest.param(False, json.dumps({"type": "response.create", "input": "hi"}), id="no-model"),
+    ),
+)
+def test_a_first_frame_the_socket_cannot_start_from_gets_a_400_error_frame_before_the_1008_close(
+    faulting: Gateway, model_in_url: bool, first_frame: str
+) -> None:
+    """Regression: every error frame on the socket carries the HTTP status a client like Codex reads."""
+    with faulting.scenario() as scenario:
+        deployment: Final = _managed(scenario)
+        key: Final = scenario.key(models=[deployment.name])
+        with_model: Final = _socket_url(faulting, deployment.name)
+        url: Final = with_model if model_in_url else with_model.split("?", 1)[0]
+
+        async def rejected() -> tuple[dict[str, JsonValue], int | None]:
+            async with websockets.connect(
+                url, additional_headers={"Authorization": f"Bearer {key}"}, open_timeout=10
+            ) as connection:
+                await connection.send(first_frame)
+                received: Final = JSON_OBJECT.validate_json(await asyncio.wait_for(connection.recv(), timeout=20))
+                await asyncio.wait_for(connection.wait_closed(), timeout=20)
+                return received, connection.close_code
+
+        received, close_code = asyncio.run(rejected())
+
+        assert received["type"] == "error", received
+        assert received["status"] == 400, received
+        assert object_value(received["error"])["type"] == "invalid_request_error", received
+        assert close_code == 1008, close_code
+        assert deployment.forwarded_turns() == 0
 
 
 def test_a_turn_still_streaming_when_the_next_turns_check_fails_completes_and_is_billed(
