@@ -1226,7 +1226,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         release_on_scan_requested: Final = _streaming_setting("streaming_buffer_release_on_scan", False)
         masking_guardrail: Final = (
             guardrail_to_apply
-            if isinstance(guardrail_to_apply, CustomGuardrail) and guardrail_to_apply.mask_response_content
+            if isinstance(guardrail_to_apply, CustomGuardrail)
+            and guardrail_to_apply.mask_response_content
+            and guardrail_to_apply.masks_streamed_responses
             else None
         )
         route_delivers_rewrites: Final = _route_delivers_ended_stream_rewrites(

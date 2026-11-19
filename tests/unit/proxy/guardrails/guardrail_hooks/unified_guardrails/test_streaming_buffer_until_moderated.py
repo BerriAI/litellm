@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
     _is_redundant_scan,
@@ -1223,3 +1224,41 @@ async def test_masking_guardrail_holds_a_text_completion_stream_and_releases_it_
 
     assert released_before_each_chunk == [0, 0, 0], "a chunk reached the client before the end-of-stream scan"
     assert "".join(chunk.choices[0].text or "" for chunk in collected) == f"call {MASKED_MARKER} now"
+
+
+class _AktoWithoutNetwork(AktoGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_masking_guardrail_that_never_masks_a_stream_keeps_streaming_live() -> None:
+    guardrail: Final = _AktoWithoutNetwork(
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        guardrail_name="akto",
+        event_hook="post_call",
+        mask_response_content=True,
+    )
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: Final[list[object]] = []  # mutable-ok: the client side of the stream under test
+    yielded_count: Final[list[int]] = []  # mutable-ok: records how much reached the client per chunk
+
+    async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+        response=_windowed_chat_stream(yielded_count, collected, ["call ", ORIGINAL_MARKER, " now"]),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+
+    assert yielded_count == [0, 1, 2, 3], "a guardrail that cannot mask a stream held it anyway"
