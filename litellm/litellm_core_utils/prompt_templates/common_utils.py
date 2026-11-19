@@ -1087,7 +1087,14 @@ def unpack_defs(
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = next((scope[ref_name] for scope in active_defs if ref_name in scope), None)
+                target_schema = next(
+                    (
+                        scope[node["$ref"]] if node["$ref"] in scope else scope[ref_name]
+                        for scope in active_defs
+                        if ref_name in scope
+                    ),
+                    None,
+                )
                 # Unknown reference – leave untouched
                 if target_schema is None:
                     continue
@@ -1180,6 +1187,22 @@ def _has_legacy_defs(schema: object) -> bool:
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
 
 
+def _definitions_shadowed_by_defs(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+    dollar_defs: Final = json_schema.get("$defs")
+    definitions: Final = json_schema.get("definitions")
+    if not isinstance(dollar_defs, dict) or not isinstance(definitions, dict):
+        return MappingProxyType({})
+    current: Final = _SCHEMA_NODE.validate_python(dollar_defs)
+    legacy: Final = _SCHEMA_NODE.validate_python(definitions)
+    return MappingProxyType(
+        {
+            f"#/definitions/{name}": legacy[name]
+            for name in current.keys() & legacy.keys()
+            if current[name] != legacy[name]
+        }
+    )
+
+
 def defs_unpacked(json_schema: Mapping[str, object], keep_ref_siblings: bool = False) -> Mapping[str, object]:
     import copy
 
@@ -1189,6 +1212,7 @@ def defs_unpacked(json_schema: Mapping[str, object], keep_ref_siblings: bool = F
     defs: Final = {
         **(definitions if isinstance(definitions, dict) else {}),
         **(dollar_defs if isinstance(dollar_defs, dict) else {}),
+        **_definitions_shadowed_by_defs(json_schema),
     }
     if defs:
         unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES, keep_ref_siblings=keep_ref_siblings)
