@@ -1,5 +1,5 @@
-import { chooseAppOption } from "./appTestUtils";
-import userEvent from "@testing-library/user-event";
+import { appBudgetPolicyCases, chooseAppOption, saveAppBudget } from "./appTestUtils";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
 import { uiHref } from "@/utils/uiHref";
@@ -101,6 +101,15 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+async function openBudget() {
+  const user = userEvent.setup();
+  render(<CustomerOrganizationApps organizationId="org-1" />);
+  await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+  return user;
+}
+
+const saveBudget = (user: UserEvent) => saveAppBudget(user, requests, "Save app budget");
+
 describe("customer app budgets", () => {
   it.each([null, { "test-model": 10000 }])(
     "copies the selected preset's hidden policy into Custom %j",
@@ -120,16 +129,12 @@ describe("customer app budgets", () => {
             })
           : serve(input, init),
       );
-      const user = userEvent.setup();
-      render(<CustomerOrganizationApps organizationId="org-1" />);
-      await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+      const user = await openBudget();
       const source = screen.getByRole("combobox", { name: "Budget source" });
       await chooseAppOption(user, source, /^Tier 2/);
       await chooseAppOption(user, source, "Enter custom limits instead");
       fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "250" } });
-      await user.click(screen.getByRole("button", { name: "Save app budget" }));
-      await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-      expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+      expect(await saveBudget(user)).toEqual({
         budget: { max_budget: 250, budget_duration: "1mo", ...selectedPolicy },
         customer_member_budget: null,
       });
@@ -149,15 +154,11 @@ describe("customer app budgets", () => {
         ? json({ detail: "Catalog unavailable" }, 503)
         : serve(input, init),
     );
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const user = await openBudget();
     fireEvent.change(await screen.findByRole("spinbutton", { name: "Requests per minute" }), {
       target: { value: "11" },
     });
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toMatchObject({
+    expect(await saveBudget(user)).toMatchObject({
       budget: { rpm_limit: 11 },
     });
   });
@@ -172,9 +173,7 @@ describe("customer app budgets", () => {
       customer_member_budget_id: "member-policy",
       effective_customer_member_budget: policy,
     };
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const user = await openBudget();
     customAssociation = {
       ...customAssociation,
       budget: { ...policy, max_budget: 25 },
@@ -183,9 +182,7 @@ describe("customer app budgets", () => {
     await act(() => testQueryClient.refetchQueries({ queryKey: organizationAppKey(app.app_id, "org-1"), exact: true }));
     for (const input of screen.getAllByRole("spinbutton", { name: "Requests per minute" }))
       fireEvent.change(input, { target: { value: "11" } });
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+    expect(await saveBudget(user)).toEqual({
       budget: { rpm_limit: 11 },
       customer_member_budget: { rpm_limit: 11 },
     });
@@ -205,16 +202,12 @@ describe("customer app budgets", () => {
         allowed_models: ["test-model"],
       },
     };
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const user = await openBudget();
     await chooseAppOption(user, screen.getByRole("combobox", { name: "Budget source" }), "Enter custom limits instead");
     fireEvent.change(screen.getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
       target: { value: "0" },
     });
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+    expect(await saveBudget(user)).toEqual({
       budget: { max_budget: 0, budget_duration: null },
       customer_member_budget: null,
     });
@@ -248,15 +241,11 @@ describe("customer app budgets", () => {
       customer_member_budget_id: "member-policy",
       effective_customer_member_budget: { max_budget: 150, budget_duration: "1mo", rpm_limit: 20 },
     };
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const user = await openBudget();
     const section = within(await screen.findByRole("region", { name: "Per-member limits (optional)" }));
     expect(section.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(150);
     fireEvent.change(section.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+    expect(await saveBudget(user)).toEqual({
       budget_id: "standard",
       customer_member_budget: { rpm_limit: 0 },
     });
@@ -341,9 +330,7 @@ describe("customer app budgets", () => {
       }
       return serve(input, init);
     });
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const user = await openBudget();
     if (status === "error") expect(await screen.findByText("Legacy catalog unavailable")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Budget source" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save app budget" })).not.toBeInTheDocument();
@@ -488,9 +475,7 @@ describe("customer app budgets", () => {
     });
 
     expect(screen.getByRole("switch", { name: "Set per-member limits" })).not.toBeChecked();
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toMatchObject({
+    expect(await saveBudget(user)).toMatchObject({
       budget: {
         max_budget: 100,
         budget_duration: "1mo",
@@ -521,9 +506,7 @@ describe("customer app budgets", () => {
         return json(customBudget);
       return serve(input, init);
     });
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const user = await openBudget();
     const limits = within(screen.getByRole("region", { name: "Budget source" }));
     expect(limits.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(100);
     expect(limits.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(1000);
@@ -534,18 +517,16 @@ describe("customer app budgets", () => {
     await user.click(await screen.findByRole("option", { name: /^Tier 1/ }));
     await user.click(member.getByRole("switch", { name: "Set per-member limits" }));
     expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+    expect(await saveBudget(user)).toEqual({
       budget_id: "standard",
       budget_override: null,
       customer_member_budget: null,
     });
   });
 
-  it.each(["custom", "legacy", "temporary"])(
-    "should save a private org budget and preserve temporary overrides %s",
-    async (source) => {
+  it.each(appBudgetPolicyCases)(
+    "should save a private org budget and preserve temporary overrides $source",
+    async ({ legacy, temporary, policy, expectedPatch }) => {
       bound = true;
       assigned = true;
       const serve = fetchMock.getMockImplementation()!;
@@ -558,33 +539,18 @@ describe("customer app budgets", () => {
             })
           : serve(input, init),
       );
-      const legacy = source === "legacy";
-      const temporary = source === "temporary";
       customAssociation = {
         ...assignedBudget,
+        ...policy,
         budget_id: legacy ? null : "private",
-        budget: legacy ? null : { max_budget: 5, budget_duration: "1mo" },
-        budget_override: legacy || temporary ? { max_budget: legacy ? 5 : 20, budget_duration: "1mo" } : null,
         budget_override_id: legacy || temporary ? "override" : null,
-        budget_override_expires_at: temporary ? "2027-01-01T00:00:00Z" : null,
       };
-      const user = userEvent.setup();
-      render(<CustomerOrganizationApps organizationId="org-1" />);
-      await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+      const user = await openBudget();
       expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(5);
       fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "7" } });
-      await user.click(screen.getByRole("button", { name: "Save app budget" }));
-      await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-      expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
-        budget: {
-          max_budget: 7,
-          budget_duration: "1mo",
-          ...(legacy
-            ? { soft_budget: null, tpm_limit: null, rpm_limit: null, allowed_models: null, budget_limits: null }
-            : {}),
-        },
+      expect(await saveBudget(user)).toEqual({
+        ...expectedPatch,
         customer_member_budget: null,
-        ...(legacy ? { budget_override: null } : {}),
       });
     },
   );
@@ -626,18 +592,14 @@ describe("customer app budgets", () => {
         ? json({ default_budgets: [preset] })
         : serve(input, init),
     );
-    const user = userEvent.setup();
-    render(<CustomerOrganizationApps organizationId="org-1" />);
-    await user.click(await screen.findByRole("button", { name: "Edit budget for chat" }));
+    const user = await openBudget();
     await user.click(await screen.findByRole("combobox", { name: "Budget source" }));
     await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
     expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(500);
     expect(screen.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(5000);
     expect(screen.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(10000);
     fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "750" } });
-    await user.click(screen.getByRole("button", { name: "Save app budget" }));
-    await waitFor(() => expect(requests.some((request) => request.method === "PUT")).toBe(true));
-    expect(await requests.find((request) => request.method === "PUT")!.json()).toEqual({
+    expect(await saveBudget(user)).toEqual({
       budget: { max_budget: 750, budget_duration: "1mo" },
       customer_member_budget: null,
     });

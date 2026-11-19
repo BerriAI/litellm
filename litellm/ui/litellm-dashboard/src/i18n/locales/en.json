@@ -99,6 +99,7 @@
     "year": "year",
     "rpmLimit": "{{count}} RPM",
     "windowBudget": "{{period}} spend limit (USD)",
+    "windowBudgetHint": "Leave an amount blank to remove that spend limit. Other spend limits and TPM/RPM limits stay unchanged.",
     "removeWindow": "Remove limit",
     "source": "Budget source",
     "customBudget": "Custom budget",

@@ -1,4 +1,4 @@
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { $api } from "@/lib/http/api";
 import { registerBaseUrlGetter } from "@/lib/http/runtime";
@@ -81,6 +81,20 @@ const lastRequest = (): Request => {
   return request;
 };
 
+function renderSettings(entity: CustomerHierarchyEntity, response = entity.record) {
+  fetchMock.mockResolvedValue(json(response));
+  render(settings(entity));
+  return userEvent.setup();
+}
+
+async function saveChanges(user?: Pick<UserEvent, "click">): Promise<unknown> {
+  const button = screen.getByRole("button", { name: "Save changes" });
+  if (user) await user.click(button);
+  else fireEvent.click(button);
+  await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+  return lastRequest().clone().json();
+}
+
 describe("CustomerHierarchySettings", () => {
   beforeEach(() => {
     registerBaseUrlGetter(() => "http://localhost");
@@ -101,13 +115,10 @@ describe("CustomerHierarchySettings", () => {
 
   it("sets organization rate limits without requiring a dollar budget", async () => {
     const unlimited = { ...organization, budget: null };
-    fetchMock.mockResolvedValue(json(unlimited));
-    render(settings({ kind: "organization", record: unlimited }));
+    renderSettings({ kind: "organization", record: unlimited });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toMatchObject({
+    expect(await saveChanges()).toMatchObject({
       budget: { tpm_limit: 50000, rpm_limit: 60 },
     });
   });
@@ -115,7 +126,6 @@ describe("CustomerHierarchySettings", () => {
   it.each([false, true])(
     "omits an unchanged displayed cap on an RPM-only organization edit, shared %s",
     async (shared) => {
-      const user = userEvent.setup();
       const displayed = {
         ...organization,
         budget_id: shared ? "shared" : "owned",
@@ -126,8 +136,7 @@ describe("CustomerHierarchySettings", () => {
           budget_limits: [{ budget_duration: "12mo", max_budget: 1200 }],
         },
       };
-      fetchMock.mockResolvedValue(json(displayed));
-      render(settings({ kind: "organization", record: displayed }));
+      const user = renderSettings({ kind: "organization", record: displayed });
       if (shared)
         await chooseSelectOption(
           user,
@@ -136,9 +145,7 @@ describe("CustomerHierarchySettings", () => {
         );
       expect(screen.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(150);
       fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "0" } });
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
-      await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-      expect(await lastRequest().clone().json()).toEqual({ budget: { rpm_limit: 0 } });
+      expect(await saveChanges(user)).toEqual({ budget: { rpm_limit: 0 } });
     },
   );
 
@@ -162,7 +169,6 @@ describe("CustomerHierarchySettings", () => {
     ["7d", false, "$0", null],
     ["7d", true, "", null],
   ] as const)("keeps reset %s via group %s with %s", async (budget_duration, viaGroup, amount, max_budget = 100) => {
-    const user = userEvent.setup();
     const custom = {
       ...organization,
       budget_id: "owned",
@@ -173,9 +179,7 @@ describe("CustomerHierarchySettings", () => {
         budget_limits: [{ max_budget: 1000, budget_duration: "12mo" }],
       },
     };
-    fetchMock.mockResolvedValue(json(custom));
-    render(settings({ kind: "organization", record: custom }));
-    const save = screen.getByRole("button", { name: "Save changes" });
+    const user = renderSettings({ kind: "organization", record: custom });
     const source = screen.getByRole("combobox", { name: "Customer organization limits" });
     fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
     if (viaGroup) {
@@ -185,11 +189,10 @@ describe("CustomerHierarchySettings", () => {
     fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), {
       target: { value: amount ? "0" : "" },
     });
-    await user.click(save);
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    const body = await saveChanges(user);
     expect(lastRequest().method).toBe("PATCH");
     expect(new URL(lastRequest().url).pathname).toBe("/management/v1/customer_organizations/org-1");
-    expect(await lastRequest().clone().json()).toEqual({
+    expect(body).toEqual({
       alias: "Renamed",
       ...(amount || max_budget != null
         ? { budget: { max_budget: amount ? 0 : null, ...(amount ? { budget_duration } : {}) } }
@@ -217,9 +220,7 @@ describe("CustomerHierarchySettings", () => {
       expect(save).toBeDisabled();
       fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
     }
-    await user.click(save);
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual(
+    expect(await saveChanges(user)).toEqual(
       amount === "Growth"
         ? { alias: "Renamed" }
         : { budget: { max_budget: amount ? 175 : null, ...(amount ? { budget_duration: "1mo" } : {}) } },
@@ -253,36 +254,28 @@ describe("CustomerHierarchySettings", () => {
       });
     }
     fireEvent.change(screen.getByRole("textbox", { name: "Display name" }), { target: { value: "Renamed" } });
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({
+    expect(await saveChanges(userEvent)).toEqual({
       alias: "Renamed",
       ...(!shared ? { budget: { max_budget: 40, budget_duration: "1mo", tpm_limit: 300 } } : {}),
     });
   });
 
   it("clears the custom spend cap while retaining soft budgets and rate limits", async () => {
-    fetchMock.mockResolvedValue(json(organization));
-    render(settings({ kind: "organization", record: organization }));
+    renderSettings({ kind: "organization", record: organization });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({ budget: { max_budget: null } });
+    expect(await saveChanges()).toEqual({ budget: { max_budget: null } });
   });
 
   it("should show friendly template names while sending the selected template identifier", async () => {
-    const user = userEvent.setup();
-    fetchMock.mockResolvedValue(json(member));
-    render(settings({ kind: "member", record: { ...member, budget_override: null } }));
+    const user = renderSettings({ kind: "member", record: { ...member, budget_override: null } }, member);
     const template = screen.getByRole("combobox", { name: "Budget template" });
     expect(template).toHaveTextContent("Standard (default)");
     expect(template).not.toHaveTextContent("template-1");
     await chooseSelectOption(user, template, /^Pro/);
     expect(template).toHaveTextContent("Pro");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    const body = await saveChanges(user);
     expect(new URL(lastRequest().url).pathname).toBe("/management/v1/customer_members/member-1");
-    expect(await lastRequest().clone().json()).toEqual({ budget_id: "template-2" });
+    expect(body).toEqual({ budget_id: "template-2" });
   });
 
   it.each([
@@ -300,18 +293,16 @@ describe("CustomerHierarchySettings", () => {
         budget_limits: [{ max_budget: 100, budget_duration: "12mo" }],
       },
     };
-    fetchMock.mockResolvedValue(json(custom));
-    render(settings({ kind: "member", record: custom }));
+    renderSettings({ kind: "member", record: custom });
     expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(10);
     expect(screen.getByRole("spinbutton", { name: "Yearly budget" })).toHaveValue(100);
     fireEvent.change(screen.getByRole("spinbutton", { name: `${period} budget` }), {
       target: { value: amount },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    const body = await saveChanges();
     const savedAmount = amount ? 75 : null;
     const yearlyWindows = amount ? [{ max_budget: 75, budget_duration: "12mo" }] : null;
-    expect(await lastRequest().clone().json()).toEqual({
+    expect(body).toEqual({
       budget:
         period === "Monthly"
           ? { max_budget: savedAmount, ...(savedAmount != null ? { budget_duration: "1mo" } : {}) }
@@ -320,10 +311,9 @@ describe("CustomerHierarchySettings", () => {
   });
 
   it("shows custom fields and saves monthly spend and rate limits together", async () => {
-    const user = userEvent.setup();
-    fetchMock.mockResolvedValue(json(member));
-    render(
-      settings({ kind: "member", record: { ...member, budget_override: null, budget_override_expires_at: null } }),
+    const user = renderSettings(
+      { kind: "member", record: { ...member, budget_override: null, budget_override_expires_at: null } },
+      member,
     );
     expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
     await chooseSelectOption(
@@ -334,9 +324,7 @@ describe("CustomerHierarchySettings", () => {
     fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "75" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "50000" } });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "60" } });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({
+    expect(await saveChanges(user)).toEqual({
       budget: {
         max_budget: 75,
         budget_duration: "1mo",
@@ -363,17 +351,13 @@ describe("CustomerHierarchySettings", () => {
   });
 
   it("shows an owned base as Custom and preserves its temporary grant when selecting a preset", async () => {
-    const user = userEvent.setup();
     const custom = { ...member, budget_id: "owned", budget: { max_budget: 15, budget_duration: "1mo" } };
-    fetchMock.mockResolvedValue(json(custom));
-    render(settings({ kind: "member", record: custom }));
+    const user = renderSettings({ kind: "member", record: custom });
     expect(screen.getByRole("combobox", { name: "Budget template" })).toHaveTextContent("Custom");
     expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(15);
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget template" }), /^Standard/);
     expect(screen.queryByRole("spinbutton", { name: "Monthly budget" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({ budget_id: "template-1" });
+    expect(await saveChanges(user)).toEqual({ budget_id: "template-1" });
   });
 
   it("converts legacy permanent overrides without changing untouched inherited limits", async () => {
@@ -383,14 +367,11 @@ describe("CustomerHierarchySettings", () => {
       budget_override_expires_at: null,
       effective_budget: { max_budget: 70, budget_duration: "1mo", rpm_limit: 10 },
     };
-    fetchMock.mockResolvedValue(json(legacy));
-    render(settings({ kind: "member", record: legacy }));
+    renderSettings({ kind: "member", record: legacy });
     expect(screen.getByRole("combobox", { name: "Budget template" })).toHaveTextContent("Custom");
     expect(screen.getByRole("spinbutton", { name: "Monthly budget" })).toHaveValue(20);
     fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly budget" }), { target: { value: "50" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
-    expect(await lastRequest().clone().json()).toEqual({
+    expect(await saveChanges()).toEqual({
       budget: {
         budget_limits: null,
         max_budget: 50,

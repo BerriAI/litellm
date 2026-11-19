@@ -89,14 +89,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function renderCustomerForm(name = "Example customer") {
+  const user = userEvent.setup();
+  renderWithProviders(<Harness />);
+  fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: name } });
+  return user;
+}
+
 describe("CreateCustomerDialog", () => {
   it.each([false, true])("starts with the organization default and respects a custom opt-out (%s)", async (custom) => {
     defaultBudgetId = "named-group";
-    const user = userEvent.setup();
-    renderWithProviders(<Harness />);
+    const user = renderCustomerForm();
     const profile = screen.getByRole("combobox", { name: "Customer organization limits" });
     await waitFor(() => expect(profile).toHaveTextContent("Growth"));
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
     if (custom) {
       await user.click(profile);
       await user.click(await screen.findByRole("option", { name: "Enter custom limits instead" }));
@@ -113,9 +118,7 @@ describe("CreateCustomerDialog", () => {
     ["Growth", "named-group"],
     ["Custom", "custom"],
   ])("creates an organization using the %s profile", async (name, id) => {
-    const user = userEvent.setup();
-    renderWithProviders(<Harness />);
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    const user = renderCustomerForm();
     const profile = screen.getByRole("combobox", { name: "Customer organization limits" });
     await waitFor(() => expect(profile).toBeEnabled());
     await user.click(profile);
@@ -128,14 +131,12 @@ describe("CreateCustomerDialog", () => {
 
   it("submits custom limits when the profile catalog is unavailable", async () => {
     catalogStatus = 503;
-    const user = userEvent.setup();
-    renderWithProviders(<Harness />);
+    const user = renderCustomerForm();
     await chooseSelectOption(
       user,
       screen.getByRole("combobox", { name: "Customer organization limits" }),
       "Enter custom limits instead",
     );
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
     fireEvent.change(screen.getByLabelText("Spend limit (USD)"), { target: { value: "40" } });
     await userEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
@@ -146,8 +147,7 @@ describe("CreateCustomerDialog", () => {
   it("preserves the server default when the catalog fails and limits are untouched", async () => {
     catalogStatus = 503;
     defaultBudgetId = "named-group";
-    renderWithProviders(<Harness />);
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    renderCustomerForm();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create customer" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
@@ -156,9 +156,7 @@ describe("CreateCustomerDialog", () => {
   });
 
   it("previews profile limits and preserves custom values when switching modes", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<Harness />);
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    const user = renderCustomerForm();
     fireEvent.change(await screen.findByLabelText("Spend limit (USD)"), { target: { value: "15000" } });
     fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "25000" } });
     fireEvent.change(screen.getByLabelText("Requests per minute"), { target: { value: "120" } });
@@ -206,8 +204,7 @@ describe("CreateCustomerDialog", () => {
 
   it("surfaces the free-tier 403 detail", async () => {
     freeTierReached = true;
-    renderWithProviders(<Harness />);
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Sixth customer" } });
+    renderCustomerForm("Sixth customer");
     await waitFor(() => expect(screen.getByRole("button", { name: "Create customer" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() =>
@@ -217,9 +214,7 @@ describe("CreateCustomerDialog", () => {
     );
   });
   it("adds a custom group and selects a remaining default when that group is removed", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<Harness />);
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    const user = renderCustomerForm();
     await user.click(screen.getByRole("combobox", { name: "Group 2 at the cap" }));
     await user.click(screen.getByRole("option", { name: "Pause, allow increase requests" }));
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
@@ -245,9 +240,7 @@ describe("CreateCustomerDialog", () => {
   });
 
   it("shows duplicate-name validation without making a request", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<Harness />);
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    const user = renderCustomerForm();
     fireEvent.change(screen.getByLabelText("Group name 2"), { target: { value: " power_user " } });
     await user.click(screen.getByRole("button", { name: "Create customer" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Use a unique name for each budget group.");
@@ -255,10 +248,8 @@ describe("CreateCustomerDialog", () => {
   });
 
   it("preserves entered budgets after failure and clears the form after a successful retry", async () => {
-    const user = userEvent.setup();
     rejectCreation = true;
-    renderWithProviders(<Harness />);
-    fireEvent.change(screen.getByLabelText("Customer name"), { target: { value: "Example customer" } });
+    const user = renderCustomerForm();
     fireEvent.change(screen.getByLabelText("Organization ID (optional)"), { target: { value: "existing-id" } });
     fireEvent.change(screen.getByLabelText("Group 2 yearly budget (USD)"), { target: { value: "450" } });
     await user.click(screen.getByRole("button", { name: "Create customer" }));

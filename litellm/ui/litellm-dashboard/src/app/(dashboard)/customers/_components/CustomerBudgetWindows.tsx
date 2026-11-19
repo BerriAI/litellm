@@ -19,7 +19,7 @@ export default function CustomerBudgetWindows({
 }) {
   const { t } = useTranslation();
   const WindowLabel = removable ? "label" : Label;
-  return windows.map(({ budget, maxBudget }, index) => {
+  const rows = windows.map(({ budget, maxBudget }, index) => {
     const period = budget.budget_duration;
     if (!removable && (period === "1mo" || period === "12mo")) return null;
     const inputId = `${id}-window-${index}`;
@@ -35,7 +35,8 @@ export default function CustomerBudgetWindows({
             min={0}
             step="any"
             value={maxBudget}
-            placeholder={removable ? undefined : t("customerPortal.createDialog.noLimit")}
+            placeholder={t("customerPortal.createDialog.noLimit")}
+            aria-describedby={removable ? `${id}-windows-hint` : undefined}
             onChange={(event) =>
               onChange(windows.map((entry, i) => (i === index ? { ...entry, maxBudget: event.target.value } : entry)))
             }
@@ -49,4 +50,14 @@ export default function CustomerBudgetWindows({
       </div>
     );
   });
+  return (
+    <>
+      {removable && windows.length > 0 && (
+        <p id={`${id}-windows-hint`} className="text-xs text-muted-foreground">
+          {t("apps.windowBudgetHint")}
+        </p>
+      )}
+      {rows}
+    </>
+  );
 }
