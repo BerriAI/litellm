@@ -1,6 +1,7 @@
 import json
 import os
 from copy import deepcopy
+from typing import Final
 from unittest.mock import AsyncMock
 
 import httpx
@@ -238,10 +239,6 @@ class TestAliceCredentialStripping:
 
         sent_request_data = posted_body["request_data"]
         assert sent_request_data["model"] == "claude-3-5-sonnet"
-        assert sent_request_data["proxy_server_request"]["url"] == "/v1/messages"
-        assert "headers" not in sent_request_data["proxy_server_request"]
-        assert sent_request_data["proxy_server_request"]["body"]["model"] == "claude-3-5-sonnet"
-        assert "headers" not in sent_request_data["proxy_server_request"]["body"]["metadata"]
         assert sent_request_data["metadata"]["user_api_key_alias"] == "payments-bot"
         assert "headers" not in sent_request_data["metadata"]
         assert "requester_metadata" in sent_request_data["metadata"]
@@ -262,6 +259,159 @@ class TestAliceCredentialStripping:
 
         assert request_data["api_key"] == "sk-forwarded-provider-secret"
         assert request_data["secret_fields"] == {"raw_headers": {}}
+
+
+_PROMPT: Final = "summarize the attached report"
+_IMAGE: Final = "data:image/png;base64,aGVsbG8="
+_TOOLS: Final = [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}]
+
+
+def _conversation() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": "you are terse"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": _PROMPT}, {"type": "image_url", "image_url": {"url": _IMAGE}}],
+        },
+    ]
+
+
+def _request_data(messages: list[dict[str, object]]) -> dict[str, object]:
+    snapshot: Final[dict[str, object]] = {"url": "/v1/chat/completions", "body": {"messages": messages}}
+    snapshot["body"]["proxy_server_request"] = snapshot
+    return {
+        "model": "gpt-4o",
+        "messages": messages,
+        "proxy_server_request": snapshot,
+        "metadata": {"user_api_key_alias": "payments-bot"},
+    }
+
+
+_INSTRUCTIONS: Final = "answer in one paragraph"
+_RESPONSES_TOOLS: Final = [{"type": "function", "name": "search", "parameters": {"type": "object"}}]
+
+
+def _responses_request_data() -> dict[str, object]:
+    return {
+        "model": "gpt-4o",
+        "instructions": _INSTRUCTIONS,
+        "input": [{"role": "user", "content": _PROMPT}],
+        "tools": _RESPONSES_TOOLS,
+    }
+
+
+class TestAliceRequestDataCopies:
+    """request_data never repeats what inputs already carries, so a prompt crosses once per inputs slot."""
+
+    @pytest.mark.asyncio
+    async def test_each_message_and_image_crosses_once_per_inputs_slot(self):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        messages: Final = _conversation()
+        request_data: Final = _request_data(messages)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_PROMPT], "images": [_IMAGE], "structured_messages": messages},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        body: Final = guardrail.async_handler.post.call_args.kwargs["json"]
+        serialized: Final = json.dumps(body)
+        assert serialized.count(_PROMPT) == 2
+        assert serialized.count(_IMAGE) == 2
+        assert body["inputs"]["structured_messages"] == messages
+        assert body["request_data"] == {"model": "gpt-4o", "metadata": {"user_api_key_alias": "payments-bot"}}
+        assert request_data["messages"] is messages
+        assert "proxy_server_request" in request_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [{}, {"structured_messages": []}], ids=["absent", "empty"])
+    async def test_keeps_messages_when_structured_messages_are_empty(self, structured: dict[str, object]):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        messages: Final = _conversation()
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["the summary"], **structured}, request_data=_request_data(messages), input_type="response"
+        )
+
+        sent_request_data: Final = guardrail.async_handler.post.call_args.kwargs["json"]["request_data"]
+        assert sent_request_data["messages"] == messages
+        assert "proxy_server_request" not in sent_request_data
+        assert json.dumps(sent_request_data).count(_PROMPT) == 1
+
+    @pytest.mark.asyncio
+    async def test_keeps_request_tools_and_omits_only_at_the_root(self):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        request_data: Final = {
+            "model": "gpt-4o",
+            "tools": _TOOLS,
+            "litellm_metadata": {"messages": "nested", "proxy_server_request": "nested"},
+        }
+        sent: Final = deepcopy(request_data)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_PROMPT], "structured_messages": _conversation(), "tools": _TOOLS},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert guardrail.async_handler.post.call_args.kwargs["json"]["request_data"] == sent
+
+    @pytest.mark.asyncio
+    async def test_a_cycle_back_to_request_data_does_not_resend_the_omitted_copies(self):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        messages: Final = _conversation()
+        request_data: Final = _request_data(messages)
+        request_data["metadata"]["request"] = request_data
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_PROMPT], "structured_messages": messages},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        body: Final = guardrail.async_handler.post.call_args.kwargs["json"]
+        assert json.dumps(body).count(_PROMPT) == 2
+        assert body["request_data"]["metadata"] == {"user_api_key_alias": "payments-bot", "request": None}
+
+    @pytest.mark.asyncio
+    async def test_leaves_out_the_responses_input_and_instructions_once_parsed(self):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+        request_data: Final = _responses_request_data()
+        structured: Final = [{"role": "system", "content": _INSTRUCTIONS}, {"role": "user", "content": _PROMPT}]
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_PROMPT], "structured_messages": structured},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        body: Final = guardrail.async_handler.post.call_args.kwargs["json"]
+        serialized: Final = json.dumps(body)
+        assert serialized.count(_PROMPT) == 2
+        assert serialized.count(_INSTRUCTIONS) == 1
+        assert body["request_data"] == {"model": "gpt-4o", "tools": _RESPONSES_TOOLS}
+        assert request_data["input"] == [{"role": "user", "content": _PROMPT}]
+        assert request_data["instructions"] == _INSTRUCTIONS
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [{}, {"structured_messages": []}], ids=["absent", "empty"])
+    async def test_keeps_the_responses_input_and_instructions_without_a_parsed_conversation(
+        self, structured: dict[str, object]
+    ):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = AsyncMock(return_value=_verdict({"verdict": "ALLOW", "categories": []}))
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [_PROMPT], **structured}, request_data=_responses_request_data(), input_type="request"
+        )
+
+        assert guardrail.async_handler.post.call_args.kwargs["json"]["request_data"] == _responses_request_data()
 
 
 class TestAliceVerdicts:

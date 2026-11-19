@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import can_object_call_model
 from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_member_auto_create import ensure_customer_member, ensure_customer_organization
@@ -39,6 +39,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
+from litellm.rust_bridge._native import jwt_claims
 from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
@@ -133,39 +134,86 @@ def customer_org_alias_cache_key(customer_org_alias: str) -> str:
 def _header_value(headers: Mapping[str, object] | None, header: str) -> str | None:
     if headers is None:
         return None
+    lower_header: Final = header.lower()
     values: Final = tuple(
         value.strip()
         for name, value in headers.items()
-        if name.lower() == header and isinstance(value, str) and value.strip()
+        if name.lower() == lower_header and isinstance(value, str) and value.strip()
     )
     return values[0] if values else None
 
 
-def customer_member_id_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_MEMBER_ID_HEADER)
+@dataclass(frozen=True, slots=True)
+class CustomerIdentityHeaderNames:
+    org_alias: str = CUSTOMER_ORG_ALIAS_HEADER
+    member_id: str = CUSTOMER_MEMBER_ID_HEADER
+
+    @classmethod
+    def from_settings(cls, settings: Mapping[str, object]) -> "CustomerIdentityHeaderNames":
+        org_alias: Final = settings.get("customer_org_alias_header")
+        member_id: Final = settings.get("customer_member_id_header")
+        return cls(
+            org_alias=org_alias if isinstance(org_alias, str) else CUSTOMER_ORG_ALIAS_HEADER,
+            member_id=member_id if isinstance(member_id, str) else CUSTOMER_MEMBER_ID_HEADER,
+        )
 
 
-def customer_org_alias_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_ORG_ALIAS_HEADER)
+_DEFAULT_CUSTOMER_HEADER_NAMES: Final = CustomerIdentityHeaderNames()
 
 
-def customer_team_id_from_headers(headers: Mapping[str, object] | None) -> str | None:
-    return _header_value(headers, CUSTOMER_TEAM_ID_HEADER)
-
-
-def customer_identity_from_headers(headers: Mapping[str, object] | None) -> CustomerRequestIdentity | None:
+def customer_identity_from_headers(
+    headers: Mapping[str, object] | None, *, names: CustomerIdentityHeaderNames = _DEFAULT_CUSTOMER_HEADER_NAMES
+) -> CustomerRequestIdentity | None:
     """The customer the request named, or None when it carried neither customer header."""
     identity: Final = CustomerRequestIdentity(
-        customer_member_id=customer_member_id_from_headers(headers),
-        customer_org_alias=customer_org_alias_from_headers(headers),
-        customer_team_id=customer_team_id_from_headers(headers),
+        customer_member_id=_header_value(headers, names.member_id),
+        customer_org_alias=_header_value(headers, names.org_alias),
+        customer_team_id=_header_value(headers, CUSTOMER_TEAM_ID_HEADER),
     )
     if identity.customer_member_id is None and identity.customer_org_alias is None:
         return None
     return identity
 
 
-def _scope(
+def _maps_customer_claims(mapping: LiteLLM_JWTAuth | JWTIssuerConfig) -> bool:
+    return any(
+        field is not None
+        for field in (
+            mapping.customer_org_alias_jwt_field,
+            mapping.customer_member_id_jwt_field,
+            mapping.customer_team_id_jwt_field,
+        )
+    )
+
+
+def customer_identity_from_request(
+    headers: Mapping[str, object] | None,
+    verified_claims: Mapping[str, object] | None,
+    settings: LiteLLM_JWTAuth,
+    *,
+    general_settings: Mapping[str, object] | None = None,
+) -> CustomerRequestIdentity | None:
+    """With customer claims mapped, a verified JWT alone names the customer and the headers are ignored."""
+    claims_name_customer: Final = verified_claims is not None and (
+        _maps_customer_claims(settings) or any(_maps_customer_claims(issuer) for issuer in settings.issuers or ())
+    )
+    if not claims_name_customer or verified_claims is None:
+        names: Final = (
+            CustomerIdentityHeaderNames.from_settings(general_settings)
+            if general_settings is not None
+            else _DEFAULT_CUSTOMER_HEADER_NAMES
+        )
+        return customer_identity_from_headers(headers, names=names)
+    mapped: Final = jwt_claims(dict(verified_claims), settings)
+    identity: Final = CustomerRequestIdentity(
+        customer_org_alias=mapped.customer_org_alias or None,
+        customer_member_id=mapped.customer_member_id or None,
+        customer_team_id=mapped.customer_team_id or None,
+    )
+    return identity if identity.customer_member_id is not None or identity.customer_org_alias is not None else None
+
+
+def customer_scope(
     key: CustomerScopeKey, entity_id: str, spend: float, budget: Budget | None, budget_reset_at: datetime | None = None
 ) -> CustomerScopeAuth:
     if budget is None:
@@ -189,7 +237,7 @@ def _scope(
 def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
     budget: Final = related_budget(team.budget, now)
     override: Final = related_budget(team.budget_override, now, budget.max_budget if budget is not None else None)
-    return _scope(
+    return customer_scope(
         "customer_team",
         team.customer_team_id,
         team.spend,
@@ -201,7 +249,8 @@ def _team_scope(team: _TeamRow, now: datetime) -> CustomerScopeAuth:
 def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime) -> CustomerHierarchyAuth:
     """The org, team and member scopes of one member row loaded with ``_MEMBER_INCLUDE`` plus its ``teams`` rows.
     The member's limits are its effective budget: the selected organization template under any unexpired override.
-    ``scopes`` charges the first team in ``parent_team_ids``; ``select_customer_team`` swaps in another."""
+    ``scopes`` charges the first team in ``parent_team_ids``; ``select_customer_team`` swaps in another.
+    """
     member: Final = _MemberRow.model_validate(row)
     organization: Final = member.parent_org
     template: Final = related_budget(member.budget, now)
@@ -218,7 +267,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -226,7 +275,7 @@ def customer_hierarchy_from_member_row(row: Mapping[str, object], now: datetime)
                 customer_row_reset_at(organization, now),
             ),
             *team_scopes[:1],
-            _scope(
+            customer_scope(
                 "customer_member",
                 member.customer_member_id,
                 member.spend,
@@ -259,7 +308,7 @@ def customer_hierarchy_from_organization_row(row: Mapping[str, object], now: dat
         customer_org_id=organization.customer_org_id,
         customer_org_alias=organization.alias,
         scopes=(
-            _scope(
+            customer_scope(
                 "customer_org",
                 organization.customer_org_id,
                 organization.spend,
@@ -365,7 +414,7 @@ async def _accounting_scope(
     if row is None:
         return None
     values: Final = row.model_dump()
-    return _scope(
+    return customer_scope(
         key, entity_id, _SPEND.validate_python(values.get("spend", 0)), related_budget(values.get("budget"), now)
     )
 
@@ -512,7 +561,8 @@ def check_customer_hierarchy_model_access(
 
 def _untracked(message: str, header: str) -> None:
     """An id the proxy does not know is logged and the request runs without that customer level, never refused:
-    the headers are attribution, and a customer whose rows are not set up yet must keep working."""
+    the headers are attribution, and a customer whose rows are not set up yet must keep working.
+    """
     verbose_proxy_logger.warning("Customer %s not tracked, %s", header, message)
 
 
@@ -542,7 +592,8 @@ async def _register_organization(
     key_metadata: Mapping[str, object],
 ) -> CustomerHierarchyAuth | None:
     """An alias the proxy has never seen becomes an organization with that id and alias, so a customer's first
-    request is charged to it instead of running untracked. A key pinned to another organization is refused first."""
+    request is charged to it instead of running untracked. A key pinned to another organization is refused first.
+    """
     if not _registrable(customer_org_alias):
         verbose_proxy_logger.warning(
             "Could not register customer organization: alias is not a valid customer identifier"
@@ -553,7 +604,7 @@ async def _register_organization(
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
             verbose_proxy_logger.warning(
-                "CUSTOMER TRACKING OFF for organization %s because the free customer portal limit was reached. "
+                "CUSTOMER TRACKING OFF for organization %s because the Customer Management free tier limit was reached. "
                 "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
                 customer_org_alias,
             )
@@ -608,7 +659,7 @@ async def _register_member(
 ) -> CustomerHierarchyAuth | None:
     """A member the request named for the first time joins the aliased organization's default team. Without an
     alias there is no organization to place it in, and the member stays unknown."""
-    if organization is None:
+    if organization is None or organization.customer_org_id is None:
         return None
     if not _registrable(customer_member_id):
         verbose_proxy_logger.warning(
@@ -620,7 +671,7 @@ async def _register_member(
     if isinstance(registered, Failure):
         if registered.code is ErrorCode.FREE_TIER_LIMIT:
             verbose_proxy_logger.warning(
-                "CUSTOMER TRACKING OFF for member %s because the free customer portal limit was reached. "
+                "CUSTOMER TRACKING OFF for member %s because the Customer Management free tier limit was reached. "
                 "Upgrade to Enterprise to remove the limits: https://www.litellm.ai/enterprise",
                 customer_member_id,
             )
@@ -669,7 +720,8 @@ async def load_customer_hierarchy(
     """The hierarchy the headers name, or None when the proxy knows none of the ids, in which case the request runs
     untracked. An alias the proxy has never seen is registered as a new organization first. A member header next to an alias header must name a member of that organization; a member the
     organization has never seen is registered in its default team first, and when that fails the organization
-    alone is charged. A key pinned to another organization is refused before any row is created."""
+    alone is charged. A key pinned to another organization is refused before any row is created.
+    """
     organization: Final = (
         await _organization_named_by_alias(
             identity.customer_org_alias, prisma_client, user_api_key_cache, register_organization, key_metadata
@@ -721,7 +773,8 @@ async def resolve_customer_hierarchy(
     register_organization: OrganizationRegistrar = ensure_customer_organization,
 ) -> CustomerHierarchyAuth | None:
     """Load the hierarchy the headers name and admit the request against it, or None when no id is known.
-    ``request_model`` is the model the route will actually serve, which may differ from the body."""
+    ``request_model`` is the model the route will actually serve, which may differ from the body.
+    """
     from litellm.proxy.proxy_server import get_current_spend
 
     metadata: Final = key_metadata or {}
@@ -759,6 +812,8 @@ async def check_customer_hierarchy_access(
 
 def check_customer_hierarchy_key_scope(hierarchy: CustomerHierarchyAuth, key_metadata: Mapping[str, object]) -> None:
     """A key whose metadata pins ``customer_org_id`` may only act for members of that organization."""
+    if hierarchy.customer_org_id is None:
+        return
     _check_key_scope(hierarchy.customer_org_id, key_metadata)
 
 

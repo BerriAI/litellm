@@ -61,6 +61,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -733,6 +734,7 @@ class BaseResponsesAPIStreamingIterator:
             "additional_headers": {**headers},
             "headers": {**raw_headers},
             **_stamped_bill_hidden_params(source),
+            **{key: source[key] for key in (AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,) if key in source},
             **existing,
         }
 
@@ -2323,12 +2325,12 @@ class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
     may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, the
     Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, and how
-    to carry those guardrail records onto the connection's failure row when the deployment then refuses the turn."""
+    to bill the turn as its own failed request when the deployment then refuses it."""
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
-    bill_refusal: Callable[[Exception], None] | None = None
+    bill_refusal: Callable[[Exception], Awaitable[None]] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -2361,10 +2363,9 @@ def _frame_rejection_event(rejection: Exception) -> str:
 async def _reject_guarded_turn(
     websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
 ) -> None:
-    """Answers the refused turn and leaves its guardrail records to the connection's close-time failure row, which
-    runs every failure hook once per socket, like the first refusal it records."""
+    """Bills the refused turn as its own failed request, then answers it on the open socket."""
     if guarded.bill_refusal is not None:
-        guarded.bill_refusal(rejection)
+        await guarded.bill_refusal(rejection)
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
 

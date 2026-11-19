@@ -1,9 +1,11 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from io import BytesIO, StringIO
 from pathlib import Path
+from types import MappingProxyType
 from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +23,7 @@ from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
 from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
     VertexAIImagenImageEditConfig,
 )
+from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -179,6 +182,39 @@ class TestVertexAIGeminiImageEditTransformation:
 
         assert mapped["aspectRatio"] == "16:9"
 
+    @pytest.mark.parametrize(
+        ("requested", "request_count"),
+        [
+            (ImageEditOptionalRequestParams(size="1792x1024"), 1),
+            (ImageEditOptionalRequestParams(size="1792x1024", n=1), 1),
+            (ImageEditOptionalRequestParams(size="1792x1024", n=3), 3),
+        ],
+    )
+    def test_n_is_accepted_and_served_by_single_image_requests(
+        self, requested: ImageEditOptionalRequestParams, request_count: int
+    ) -> None:
+        assert "n" in self.config.get_supported_openai_params(self.model)
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=requested,
+            model=self.model,
+            drop_params=False,
+        )
+
+        request_body, _ = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=[BytesIO(b"fake_image_data")],
+            image_edit_optional_request_params=mapped,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert self.config.get_request_count(self.model, mapped) == request_count
+        assert json.loads(request_body)["generationConfig"] == {
+            "response_modalities": ["IMAGE"],
+            "image_config": {"aspect_ratio": "16:9"},
+        }
+
     def test_get_complete_url(self) -> None:
         """Test URL generation for Vertex AI Gemini"""
         with patch.dict(
@@ -242,9 +278,7 @@ class TestVertexAIGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode(
-                                        "utf-8"
-                                    ),
+                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
                                 }
                             }
                         ]
@@ -266,9 +300,7 @@ class TestVertexAIGeminiImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 1
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises BadRequestError with 400 status code"""
@@ -481,25 +513,18 @@ class TestVertexAIImagenImageEditTransformation:
         # Second should be MASK reference
         assert reference_images[1]["referenceType"] == "REFERENCE_TYPE_MASK"
         assert "maskImageConfig" in reference_images[1]
-        assert (
-            reference_images[1]["maskImageConfig"]["maskMode"]
-            == "MASK_MODE_USER_PROVIDED"
-        )
+        assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
             "predictions": [
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode("utf-8"),
                     "mimeType": "image/png",
                 },
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode("utf-8"),
                     "mimeType": "image/png",
                 },
             ]
@@ -518,12 +543,8 @@ class TestVertexAIImagenImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 2
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
-        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
+        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises ValueError"""
@@ -549,10 +570,7 @@ class TestVertexAIImagenImageEditTransformation:
         assert self.config._read_all_bytes(bio) == b"test_bytesio"
 
         # Test with bytearray
-        assert (
-            self.config._read_all_bytes(bytearray(b"test_bytearray"))
-            == b"test_bytearray"
-        )
+        assert self.config._read_all_bytes(bytearray(b"test_bytearray")) == b"test_bytearray"
 
     @pytest.mark.parametrize(
         ("image", "expected"),
@@ -758,3 +776,70 @@ def test_imagen_image_edit_maps_malformed_predictions_to_a_connection_error_with
         500,
         False,
     )
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType({**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+_FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+_SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+def _sent_gemini_edit(extra_headers: Mapping[str, str] | None = None) -> httpx.Request:
+    sent: Final[list[httpx.Request]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]},
+        )
+
+    litellm.image_edit(
+        model="vertex_ai/gemini-3.1-flash-image",
+        image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+        prompt="mountains",
+        api_base="https://vertex.test/edit",
+        metadata=dict(_PROXY_METADATA),
+        labels=dict(_FORGED),
+        extra_headers=dict(extra_headers or {}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+    )
+    return sent[0]
+
+
+def _sent_gemini_edit_body() -> Mapping[str, object]:
+    return _SENT_BODY.validate_json(_sent_gemini_edit().content)
+
+
+def test_vertex_gemini_edit_sends_identity_labels_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit_body()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit_body()
+
+    assert sorted(setting_off) == ["contents", "generationConfig"]
+    assert {key: value for key, value in setting_on.items() if key != "labels"} == setting_off
+    assert list(_SENT_LABELS.validate_python(setting_on["labels"]).items()) == [
+        *_IDENTITY.items(),
+        ("app", "bot"),
+        ("cost-center", "cc-1"),
+    ]
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_headers: Final = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit(caller_headers).headers
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit(caller_headers).headers
+
+    assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"
