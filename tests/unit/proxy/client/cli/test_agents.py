@@ -891,8 +891,17 @@ class TestClaudeModelSync:
             (["claude", "--model=m"], "m"),
             (["claude", "-p", "hi", "--model", "m"], "m"),
             (["claude", "--model", "first", "--model", "second"], "second"),
+            (["claude", "--model=first", "--model", "second"], "second"),
+            (["claude", "--model", "first", "--model=second"], "second"),
         ],
-        ids=["spaced", "assigned", "after-other-args", "last-flag-wins"],
+        ids=[
+            "spaced",
+            "assigned",
+            "after-other-args",
+            "last-spaced-wins",
+            "assigned-then-spaced",
+            "spaced-then-assigned",
+        ],
     )
     def test_the_model_flag_names_the_group_to_size(self, command, model):
         _, env = self._sync(command, groups=({"model_group": model},))

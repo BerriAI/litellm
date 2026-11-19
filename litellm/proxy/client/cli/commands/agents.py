@@ -937,11 +937,12 @@ def opencode_model_sync_env(
 def _model_flag_values(command: Sequence[str]) -> tuple[str, ...]:
     args: Final = tuple(command[1:])
     options: Final = tuple(args[: args.index("--")]) if "--" in args else args
-    spaced: Final = tuple(
-        options[index + 1] for index, arg in enumerate(options) if arg == _MODEL_FLAG and index + 1 < len(options)
+    prefix: Final = _MODEL_FLAG + "="
+    return tuple(
+        options[index + 1] if arg == _MODEL_FLAG else arg.removeprefix(prefix)
+        for index, arg in enumerate(options)
+        if (arg == _MODEL_FLAG and index + 1 < len(options)) or arg.startswith(prefix)
     )
-    assigned: Final = tuple(arg.partition("=")[2] for arg in options if arg.startswith(_MODEL_FLAG + "="))
-    return spaced + assigned
 
 
 @dataclass(frozen=True, slots=True)
