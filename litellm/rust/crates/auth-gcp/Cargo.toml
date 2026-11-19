@@ -33,6 +33,7 @@ url.workspace = true
 veil.workspace = true
 
 gcp_auth = "0.12.7"
+rsa = "0.9.10"
 shlex = "2.0.1"
 google-cloud-auth.workspace = true
 http.workspace = true
@@ -43,6 +44,7 @@ time = { workspace = true, features = ["formatting"] }
 axum = { workspace = true, features = ["json"] }
 percent-encoding.workspace = true
 rcgen = "0.14.10"
+rsa = { version = "0.9.10", features = ["sha2"] }
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

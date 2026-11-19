@@ -1,0 +1,1 @@
+A change to how a Vertex AI Messages login path behaves (`src/vertex_messages/`, including `legacy/`) updates the matching row of [PARITY.md](PARITY.md) in the same commit, and a new or removed path adds or removes its row

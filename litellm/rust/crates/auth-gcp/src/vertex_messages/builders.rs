@@ -9,6 +9,12 @@ use google_cloud_auth::credentials::{
     external_account::ProgrammaticBuilder, subject_token::SubjectTokenProvider,
 };
 use litellm_auth_aws::AwsAuthService;
+use rsa::{
+    RsaPrivateKey,
+    pkcs1::DecodeRsaPrivateKey,
+    pkcs8::{EncodePrivateKey, LineEnding},
+};
+use serde_json::Value;
 
 use super::{
     bounded_file_source,
@@ -18,7 +24,10 @@ use super::{
     legacy,
     source::{ExternalAccountInfo, ServiceAccountInfo, target_principal},
 };
-use crate::{GcpTokenSource, identity::SdkCredentials};
+use crate::{
+    GcpTokenSource,
+    identity::{SdkCredentials, SdkJson},
+};
 
 const NO_CREDENTIAL_SOURCE: &str = "The external account credentials name no credential_source.";
 const NO_PRINCIPAL: &str = "The service account impersonation URL names no service account.";
@@ -127,9 +136,32 @@ pub(crate) fn service_account(
         ));
     }
     build(
-        SdkCredentials::ServiceAccount(info.sdk.clone()),
+        SdkCredentials::ServiceAccount(with_pkcs8_private_key(info)),
         PythonException::Value,
     )
+}
+
+/// The key with a PKCS#1 `private_key` re-encoded as the PKCS#8 Google's Rust SDK reads, since
+/// google-auth signs with either.
+fn with_pkcs8_private_key(info: &ServiceAccountInfo) -> SdkJson {
+    let pkcs8 = info
+        .private_key
+        .as_deref()
+        .and_then(|key| RsaPrivateKey::from_pkcs1_pem(key).ok())
+        .and_then(|key| key.to_pkcs8_pem(LineEnding::LF).ok());
+    match pkcs8 {
+        Some(pem) => SdkJson(
+            info.sdk
+                .0
+                .iter()
+                .map(|(field, value)| match field.as_str() {
+                    "private_key" => (field.clone(), Value::String(pem.to_string())),
+                    _ => (field.clone(), value.clone()),
+                })
+                .collect(),
+        ),
+        None => info.sdk.clone(),
+    }
 }
 
 /// An external account in `vertex_credentials` with LiteLLM's own `aws_*` keys, which Python's

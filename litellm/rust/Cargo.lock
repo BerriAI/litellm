@@ -3536,6 +3536,7 @@ dependencies = [
  "percent-encoding",
  "rcgen",
  "reqwest",
+ "rsa",
  "rstest",
  "rustls 0.23.42",
  "serde",

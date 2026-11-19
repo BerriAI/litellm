@@ -722,6 +722,42 @@ mod tests {
     }
 
     #[rstest]
+    #[case::pkcs8(PRIVATE_KEY)]
+    #[case::pkcs1(PKCS1_PRIVATE_KEY)]
+    #[tokio::test]
+    async fn a_service_account_token_verifies_against_the_key_s_public_half(
+        #[future] google: Google,
+        #[case] private_key: &str,
+    ) {
+        use rsa::{
+            RsaPrivateKey,
+            pkcs1v15::{Signature, VerifyingKey},
+            pkcs8::DecodePrivateKey,
+            sha2::Sha256,
+            signature::Verifier,
+        };
+
+        let google = google.await;
+        let login = auth(at(&google))
+            .login(
+                Some(service_account(json!({"private_key": private_key})).to_string()),
+                None,
+            )
+            .await
+            .unwrap();
+        let token = login.token.expose();
+        let (signed, signature) = token.rsplit_once('.').unwrap();
+        let public = VerifyingKey::<Sha256>::new(
+            RsaPrivateKey::from_pkcs8_pem(PRIVATE_KEY)
+                .unwrap()
+                .to_public_key(),
+        );
+        let signature =
+            Signature::try_from(URL_SAFE_NO_PAD.decode(signature).unwrap().as_slice()).unwrap();
+        assert!(public.verify(signed.as_bytes(), &signature).is_ok());
+    }
+
+    #[rstest]
     #[tokio::test]
     async fn an_authorized_user_refreshes_at_google_whatever_token_uri_it_names(
         #[future] google: Google,
@@ -1148,7 +1184,6 @@ mod tests {
     #[case::vertex_credentials_file_missing(Box::new(|google: &Google, _: &Path| (Some("/nonexistent/vertex-key.json".into()), at(google))), None, PythonException::Value)]
     #[case::service_account_without_a_private_key(explicit(|_| json!({"client_email": CLIENT_EMAIL, "token_uri": "https://t"})), None, PythonException::Malformed)]
     #[case::service_account_with_an_unloadable_key(explicit(|_| service_account(json!({"private_key": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"}))), None, PythonException::Value)]
-    #[case::service_account_with_a_pkcs1_key(explicit(|_| service_account(json!({"private_key": PKCS1_PRIVATE_KEY}))), None, PythonException::Value)]
     #[case::authorized_user_missing_a_field(explicit(|_| json!({"type": "authorized_user", "client_id": "c", "client_secret": "s"})), None, PythonException::Value)]
     #[case::external_account_without_a_source(explicit(|google| json!({"type": "external_account", "audience": POOL_AUDIENCE, "token_url": google.token_url()})), None, PythonException::InvalidValue)]
     #[case::executable_not_allowed(explicit(|google| external_account(google, json!({"executable": {"command": "/bin/true"}}))), None, PythonException::Malformed)]
