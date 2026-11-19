@@ -13092,7 +13092,6 @@
         "mode": "chat",
         "output_cost_per_token": 9e-07,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
-        "successor_model": "azure_ai/mistral-large-4-latest",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
