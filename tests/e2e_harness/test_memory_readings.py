@@ -25,8 +25,8 @@ def test_same_workers_can_be_compared_in_any_order() -> None:
     [
         _workers(("pod-a", 11)),
         _workers(),
-        _workers(("pod-b", 13)),
-        _workers(("pod-a", 11), ("pod-a", 12), ("pod-b", 13)),
+        _workers(("pod-a", 11), ("pod-a", 12), ("pod-a", 13)),
+        _workers(("pod-a", 11), ("pod-a", 13), ("pod-a", 14)),
     ],
 )
 def test_unmatched_capture_is_probe_incomplete(after: MappingProxyType[WorkerKey, RssReading]) -> None:
@@ -42,9 +42,17 @@ def test_missing_baseline_or_pod_identity_is_probe_incomplete(before: MappingPro
         assert_same_rss_workers(before, _workers((None, 12)))
 
 
-@pytest.mark.parametrize("after", [_workers(("pod-a", 13)), _workers(("pod-a", 11), ("pod-a", 12), ("pod-a", 13))])
+@pytest.mark.parametrize("after", [_workers(("pod-a", 13)), _workers(("pod-a", 11), ("pod-a", 13))])
 def test_new_pid_on_the_same_pod_is_worker_death(after: MappingProxyType[WorkerKey, RssReading]) -> None:
     before: Final = _workers(("pod-a", 11), ("pod-a", 12))
 
     with pytest.raises(AssertionError, match="worker death: new pid on the same pod"):
+        assert_same_rss_workers(before, after)
+
+
+@pytest.mark.parametrize("after", [_workers(("pod-b", 11)), _workers(("pod-a", 11), ("pod-a", 12), ("pod-b", 13))])
+def test_new_hostname_after_warm_window_is_worker_death(after: MappingProxyType[WorkerKey, RssReading]) -> None:
+    before: Final = _workers(("pod-a", 11), ("pod-a", 12))
+
+    with pytest.raises(AssertionError, match="worker death: new pod hostname after the warm window"):
         assert_same_rss_workers(before, after)

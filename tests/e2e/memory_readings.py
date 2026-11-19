@@ -59,10 +59,22 @@ class RssCapture:
         return (("idle_rss_heaviest_mb", heaviest.ram_usage_mb), ("idle_rss_heaviest_worker", heaviest.where))
 
 
+def _pids_on_pod(workers: Mapping[WorkerKey, RssReading], pod: str) -> frozenset[int]:
+    return frozenset(worker[2] for worker in workers if worker[1] == pod)
+
+
 def assert_same_rss_workers(before: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]) -> None:
     known_pods: Final = frozenset(worker[1] for worker in before if worker[1] is not None)
+    new_pods: Final = frozenset(worker[1] for worker in after if worker[1] is not None) - known_pods
+    assert not before or not new_pods, f"worker death: new pod hostname after the warm window: {sorted(new_pods)}"
+    replaced_pods: Final = frozenset(
+        pod
+        for pod in known_pods
+        if _pids_on_pod(before, pod) - _pids_on_pod(after, pod)
+        and len(_pids_on_pod(after, pod)) <= len(_pids_on_pod(before, pod))
+    )
     known_pids: Final = frozenset(worker[1:] for worker in before)
-    new_pids: Final = tuple(worker for worker in after if worker[1] in known_pods and worker[1:] not in known_pids)
+    new_pids: Final = tuple(worker for worker in after if worker[1] in replaced_pods and worker[1:] not in known_pids)
     assert not new_pids, f"worker death: new pid on the same pod: {new_pids}"
     assert before and before.keys() == after.keys(), (
         "probe incomplete: RSS growth limit set but nothing observed for a matching worker baseline; "
