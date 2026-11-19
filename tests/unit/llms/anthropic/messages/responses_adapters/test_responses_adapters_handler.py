@@ -164,6 +164,16 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             True,
         ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+        (
+            {"store": False, "truncation": "auto", "extra_body": {"truncation": "disabled"}},
+            {"store": False, "truncation": "disabled"},
+            False,
+        ),
+        (
+            {"store": False, "truncation": "disabled", "extra_body": {"truncation": "auto"}},
+            {"store": False, "truncation": "auto"},
+            True,
+        ),
     ],
 )
 async def test_messages_system_input_requires_forwarded_store_false(
