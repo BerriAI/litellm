@@ -30,6 +30,10 @@ def _foundry_models_route_base(api_base: str | None) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, f"{path}/models", parts.query, parts.fragment))
 
 
+def _embedding_inputs(input: str | list[str]) -> list[str]:  # mutable-ok: the route request builders take list[str]
+    return [input] if isinstance(input, str) else input
+
+
 class AzureAIEmbedding(OpenAIChatCompletion):
     def _process_response(
         self,
@@ -47,10 +51,10 @@ class AzureAIEmbedding(OpenAIChatCompletion):
 
             for idx in range(len(input)):
                 if idx in image_embeddings_idx:
-                    combined_responses.append(image_embedding_responses[image_idx])
+                    combined_responses.append({**image_embedding_responses[image_idx], "index": idx})
                     image_idx += 1
                 else:
-                    combined_responses.append(text_embedding_responses[text_idx])
+                    combined_responses.append({**text_embedding_responses[text_idx], "index": idx})
                     text_idx += 1
 
             model_response.data = combined_responses
@@ -189,7 +193,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         if v1_embeddings_request["input"]:
             response: Final[EmbeddingResponse] = await super().embedding(
                 model=model,
-                input=input,
+                input=list(v1_embeddings_request["input"]),
                 timeout=timeout,
                 logging_obj=logging_obj,
                 model_response=model_response,
@@ -235,10 +239,11 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         assemble result in-order, and return
         """
         resolved_api_base: Final = _foundry_models_route_base(api_base)
+        inputs: Final = _embedding_inputs(input)
         if aembedding is True:
             return self.async_embedding(
                 model,
-                input,
+                inputs,
                 timeout,
                 logging_obj,
                 model_response,
@@ -252,7 +257,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_request,
             v1_embeddings_request,
             image_embeddings_idx,
-        ) = AzureAICohereConfig().transform_request(input=input, optional_params=optional_params, model=model)
+        ) = AzureAICohereConfig().transform_request(input=inputs, optional_params=optional_params, model=model)
 
         image_embedding_responses: list | None = None
         text_embedding_responses: list | None = None
@@ -277,7 +282,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         if v1_embeddings_request["input"]:
             response: Final[EmbeddingResponse] = super().embedding(
                 model,
-                input,
+                list(v1_embeddings_request["input"]),
                 timeout,
                 logging_obj,
                 model_response,
@@ -298,5 +303,5 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             text_embedding_responses=text_embedding_responses,
             image_embeddings_idx=image_embeddings_idx,
             model_response=model_response,
-            input=input,
+            input=inputs,
         )
