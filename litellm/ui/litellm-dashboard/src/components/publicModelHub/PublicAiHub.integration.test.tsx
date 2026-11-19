@@ -12,6 +12,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import { chooseSelectOption, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import PublicAiHub from "./PublicAiHub";
 import { CatalogNavbar } from "./CatalogNavbar";
+import { CatalogFilters } from "./CatalogFilters";
 
 const { apiGetMock, realGet, navigation, uiSettings, replaceMock, hubInfo, theme } = vi.hoisted(() => ({
   theme: { resolvedTheme: undefined as string | undefined, setTheme: vi.fn() },
@@ -197,6 +198,17 @@ beforeEach(() => {
 });
 
 describe("PublicAiHub", () => {
+  it("server-renders the narrow filter action as collapsed before the viewport is known", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(
+      <CatalogFilters count={0} onClear={vi.fn()}>
+        <fieldset>Capabilities</fieldset>
+      </CatalogFilters>,
+    );
+
+    expect(within(container).getByRole("button", { name: "Filters" })).toHaveAttribute("aria-expanded", "false");
+  });
+
   it.each([
     { savedTheme: "dark", label: "Switch to light mode" },
     { savedTheme: "light", label: "Switch to dark mode" },

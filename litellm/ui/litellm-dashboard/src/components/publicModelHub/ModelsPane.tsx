@@ -376,7 +376,7 @@ export function ModelsPane({
   return (
     <div
       data-slot="catalog-layout"
-      className="grid min-w-0 grid-cols-[218px_minmax(0,1fr)] items-start gap-[34px] pt-6 in-data-[catalog-narrow]:grid-cols-1 in-data-[catalog-narrow]:gap-5 in-data-[catalog-narrow]:pt-[22px]"
+      className="grid min-w-0 grid-cols-[218px_minmax(0,1fr)] items-start gap-[34px] pt-6 catalog-narrow:grid-cols-1 catalog-narrow:gap-5 catalog-narrow:pt-[22px]"
     >
       <ModelFilters hub={hub} />
       <div data-slot="catalog-results" className="flex min-w-0 flex-col gap-0">

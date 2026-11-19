@@ -90,10 +90,10 @@ export function HubHeader({ info, status, tab }: { info: HubInfo | undefined; st
   return (
     <header
       data-slot="catalog-hero"
-      className="grid min-h-[280px] grid-cols-[minmax(0,1fr)_390px] items-start gap-[30px] pt-10 pb-8 in-data-[catalog-narrow]:grid-cols-[minmax(0,1fr)_300px] max-[800px]:grid-cols-[minmax(0,1fr)_230px] max-[800px]:gap-2.5 max-[640px]:relative max-[640px]:block max-[640px]:min-h-52 max-[640px]:overflow-hidden max-[640px]:py-8"
+      className="grid min-h-[280px] grid-cols-[minmax(0,1fr)_390px] items-start gap-[30px] pt-10 pb-8 catalog-narrow:min-[800px]:grid-cols-[minmax(0,1fr)_300px] max-[800px]:grid-cols-[minmax(0,1fr)_230px] max-[800px]:gap-2.5 max-[640px]:relative max-[640px]:block max-[640px]:min-h-52 max-[640px]:overflow-hidden max-[640px]:py-8"
     >
       <div className="min-w-0 max-[640px]:relative max-[640px]:z-raised">
-        <h1 className="mt-0 mb-5 font-[family-name:var(--font-catalog-display),sans-serif] text-[96px] leading-[0.9] font-semibold tracking-[-2px] uppercase in-data-[catalog-narrow]:text-[81px] max-[800px]:text-[68px] max-[640px]:text-[clamp(52px,10.6vw,68px)] max-[640px]:tracking-[-1px]">
+        <h1 className="mt-0 mb-5 font-[family-name:var(--font-catalog-display),sans-serif] text-[96px] leading-[0.9] font-semibold tracking-[-2px] uppercase catalog-narrow:min-[800px]:text-[81px] max-[800px]:text-[68px] max-[640px]:text-[clamp(52px,10.6vw,68px)] max-[640px]:tracking-[-1px]">
           {t(tab === "skills" ? "publicModelHub.catalog.skillsHub" : "publicModelHub.catalog.modelHub")}
         </h1>
         <p

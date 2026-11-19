@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-const CATALOG_NARROW_QUERY = "(max-width: 1100px)";
+import { narrow as CATALOG_NARROW_QUERY } from "./catalogBreakpoints.json";
 
 const subscribe = (onChange: () => void) => {
   const query = window.matchMedia(CATALOG_NARROW_QUERY);

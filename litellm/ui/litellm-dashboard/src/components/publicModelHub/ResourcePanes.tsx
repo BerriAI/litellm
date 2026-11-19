@@ -118,7 +118,7 @@ export function SkillsPane({ rows, loading, error, onRetry, selected, onSelect }
   return (
     <div
       data-slot="catalog-layout"
-      className="grid min-w-0 grid-cols-[220px_minmax(0,1fr)] gap-8 in-data-[catalog-narrow]:grid-cols-1"
+      className="grid min-w-0 grid-cols-[220px_minmax(0,1fr)] gap-8 catalog-narrow:grid-cols-1"
     >
       <CatalogFilters count={domains.length} onClear={() => setDomains([])}>
         <fieldset data-slot="catalog-filter-section" className="min-w-0">

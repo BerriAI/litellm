@@ -1,3 +1,5 @@
+@reference "../../app/globals.css";
+
 .typography {
   --page-width: 1600px;
   --page-gutter: 44px;
@@ -46,8 +48,10 @@
   --primary-foreground: var(--background);
 }
 
-.typography:where([data-catalog-narrow]) {
-  --page-gutter: 28px;
+@variant catalog-narrow {
+  .typography {
+    --page-gutter: 28px;
+  }
 }
 
 @media (max-width: 640px) {
