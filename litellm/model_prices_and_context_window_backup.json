@@ -50403,7 +50403,8 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "sambanova/GLM-5.3": {
         "cache_read_input_token_cost": 1.4e-07,

@@ -5,7 +5,7 @@ this is OpenAI compatible - no translation needed / occurs
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Final, Literal, overload
+from typing import Final, Literal, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -15,6 +15,22 @@ from litellm.types.llms.openai import AllMessageValues
 
 DEFAULT_INTEGRATION_SOURCE: Final = "litellm"
 INTEGRATION_SOURCE_HEADER: Final = "X-Integration-Source"
+
+
+def _is_text_part(part: object) -> bool:
+    match part:
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
+
+
+def _has_non_text_part(message: Mapping[str, object]) -> bool:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return False
+    parts: Final = cast("list[object]", content)  # cast-ok: isinstance narrows object to an unparameterized list
+    return not all(_is_text_part(part) for part in parts)
 
 
 class SambanovaConfig(OpenAIGPTConfig):
@@ -165,17 +181,14 @@ class SambanovaConfig(OpenAIGPTConfig):
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
-        """
-        Transform messages to handle content list conversion.
+        transformed: Final = [
+            message
+            if _has_non_text_part(message)
+            else handle_messages_with_content_list_to_str_conversion([message])[0]
+            for message in messages
+        ]
 
-        SambaNova API doesn't support content as a list - only string content.
-        This converts content lists like [{"type": "text", "text": "..."}] to strings.
-        """
+        async def _async_transform() -> list[AllMessageValues]:
+            return transformed
 
-        async def _async_transform():
-            return handle_messages_with_content_list_to_str_conversion(messages)
-
-        if is_async:
-            return _async_transform()
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
-        return messages
+        return _async_transform() if is_async else transformed

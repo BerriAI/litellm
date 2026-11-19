@@ -122,3 +122,10 @@ def test_content_list_converted_to_string():
     out = SambanovaConfig()._transform_messages(messages, model="MiniMax-M3")
     assert isinstance(out[0]["content"], str)
     assert "a" in out[0]["content"] and "b" in out[0]["content"]
+
+
+def test_image_parts_are_forwarded_to_vision_models():
+    image_part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    messages = [{"role": "user", "content": [{"type": "text", "text": "what color?"}, image_part]}]
+    out = SambanovaConfig()._transform_messages(messages, model="MiniMax-M3.1-Flash")
+    assert out[0]["content"] == [{"type": "text", "text": "what color?"}, image_part]
