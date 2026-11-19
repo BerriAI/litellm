@@ -34,6 +34,7 @@ from litellm.llms.anthropic.messages.adapters.transformation import (
     truncate_tool_name,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
+    is_non_empty_text_block,
     keep_original_fields,
     scannable_tool_result_request,
 )
@@ -1105,14 +1106,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
         for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                continue
-            text = block.get("text")
-            if not isinstance(text, str) or not text:
+            if not isinstance(block, dict) or not is_non_empty_text_block(block):
                 continue
             anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
                 "type": "text",
-                "text": text,
+                "text": block["text"],
             }
             cache_control = block.get("cache_control")
             if cache_control:

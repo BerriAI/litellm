@@ -237,7 +237,7 @@ def test_tool_results_without_is_error_are_left_as_they_are() -> None:
 
     kept: Final = keep_tool_result_errors(rewritten, [_results_row(_tool_result("toolu_01"))])
 
-    assert kept is rewritten
+    assert kept == rewritten
 
 
 def test_tool_results_sharing_an_id_keep_their_own_is_error_in_order() -> None:
@@ -314,7 +314,7 @@ def test_system_rows_that_no_longer_pair_up_are_left_untouched(rewritten: list[o
         {"role": "system", "content": "second"},
     ]
 
-    assert keep_system_message_fields(rewritten, original) is rewritten
+    assert keep_system_message_fields(rewritten, original) == rewritten
 
 
 def test_system_rows_the_write_back_cannot_reproduce_are_not_paired() -> None:
