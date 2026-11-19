@@ -49,6 +49,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     _fal_target,
@@ -79,11 +80,12 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.utils import CallTypes, CallTypesLiteral
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe, host_in_loop_probing_vault
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -11882,6 +11884,44 @@ class TestOpenSearchProxyRoute:
         sent: Final = route.calls.last.request
         assert (sent.content, sent.headers["content-type"]) == (body, content_type)
         assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            b'{"title":"Remote work","model":"another-model"}',
+            b'{"title":"Remote work","api_base":"https://elsewhere.example"}',
+            b'{"title":"Remote work","base_url":"https://elsewhere.example"}',
+        ],
+        ids=["model", "api_base", "base_url"],
+    )
+    def test_a_document_field_named_like_an_llm_param_is_written_for_a_model_limited_key(
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        document: bytes,
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        key: Final = "sk-opensearch-model-limited-writer"
+        grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
+        cache: Final = UserApiKeyCache()
+        cache.set_cache(
+            key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
+        )
+        monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
+                return_value=httpx.Response(201, json={"_id": "abc", "result": "created"})
+            )
+            response = opensearch_client.post(
+                "/opensearch/docs/_doc",
+                content=document,
+                headers={"Content-Type": JSON_TYPE, "Authorization": f"Bearer {key}"},
+            )
+
+        assert (response.status_code, route.calls.last.request.content) == (201, document)
 
     def test_a_bulk_action_naming_the_path_index_is_sent_to_the_mapped_index(
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
