@@ -91,6 +91,10 @@ PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
 }
 
 
+def carries_caller_credentials(kwargs: Mapping[str, object]) -> bool:
+    return any(kwargs.get(key) is not None for key in clientside_credential_keys)
+
+
 def request_for_provider(
     kwargs: Mapping[str, object], provider: str | None, credentials_sent_for: frozenset[str]
 ) -> Mapping[str, object]:

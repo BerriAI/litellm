@@ -25,7 +25,7 @@ import json
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import date, datetime, time
-from functools import cached_property, partial
+from functools import partial
 from time import perf_counter
 from time import time as unix_time
 from types import MappingProxyType
@@ -55,7 +55,7 @@ from litellm.litellm_core_utils.attempt_settlement import (
     routed_attempt,
 )
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.clientside_credential_handler import PROVIDER_BOUND_PARAMS, request_for_provider
+from litellm.litellm_core_utils.clientside_credential_handler import carries_caller_credentials, request_for_provider
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
@@ -3040,6 +3040,7 @@ class RustCore(
         *,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        credential_scope: frozenset[str] | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
         """Drive ``call`` to its ``done`` or ``failed`` step, answering every step on the host.
         ``cut_deployment`` is the attempt whose stream failed, for a recovery call, and
@@ -3047,7 +3048,14 @@ class RustCore(
         ``fresh`` is a call from the top, through the retry and fallback wrappers, and
         ``passthrough`` serves an attempt whose pick failed."""
         driver: Final = _Driver(
-            self, plan, prepared, cut_deployment, stream_failure, fresh=fresh, passthrough=passthrough
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            fresh=fresh,
+            passthrough=passthrough,
+            credential_scope=credential_scope,
         )
         try:
             return await self._run_steps(driver, call)
@@ -3117,8 +3125,18 @@ class RustCore(
         stream_failure: tuple[int, BaseException] | None = None,
         *,
         fresh: bool = False,
+        credential_scope: frozenset[str] | None = None,
     ) -> "tuple[_Driver, Mapping[str, object]]":
-        driver: Final = _Driver(self, plan, prepared, cut_deployment, stream_failure, sync=True, fresh=fresh)
+        driver: Final = _Driver(
+            self,
+            plan,
+            prepared,
+            cut_deployment,
+            stream_failure,
+            sync=True,
+            fresh=fresh,
+            credential_scope=credential_scope,
+        )
         try:
             return self._run_sync_steps(driver, call)
         except BaseException:
@@ -3202,12 +3220,18 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        credential_scope: frozenset[str] | None = None,
     ) -> object:
         """The fallback walk for a stream that failed before content: the fallback's response with the
         router's headers, or the error the walk ended on."""
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = await self._run(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            credential_scope=credential_scope,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
@@ -3220,23 +3244,36 @@ class RustCore(
         request: Mapping[str, object],
         origin: Mapping[str, object],
         failure: BaseException,
+        credential_scope: frozenset[str] | None = None,
     ) -> object:
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
         driver, step = self._run_sync(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
+            plan_for(op),
+            call,
+            request,
+            origin.get("deployment_id"),
+            (_origin_level(origin), failure),
+            credential_scope=credential_scope,
         )
         if step["kind"] == "failed":
             raise driver.failed(step)
         return driver.finish(step)
 
     async def retry_stream(
-        self, op: str, request: Mapping[str, object], origin: Mapping[str, object], failure: BaseException
+        self,
+        op: str,
+        request: Mapping[str, object],
+        origin: Mapping[str, object],
+        failure: BaseException,
+        credential_scope: frozenset[str] | None = None,
     ) -> "tuple[object, int, int] | BaseException":
         """A same-group retry of a stream that failed before content: the retried response (without the
         router's headers) with the retry count and budget, or the newest failure (``failure`` itself
         when no retry ran)."""
         call: Final = self._recovery_call("retry", op, request, origin, failure)
-        driver, step = await self._run(plan_for(op), call, request, origin.get("deployment_id"))
+        driver, step = await self._run(
+            plan_for(op), call, request, origin.get("deployment_id"), credential_scope=credential_scope
+        )
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
@@ -4012,6 +4049,11 @@ def _lookup_error(kind: object, model: str, default_deployment: object) -> BaseE
     return None
 
 
+def _serves_the_primary(step: Mapping[str, object]) -> bool:
+    depth: Final = step.get("fallback_depth")
+    return not isinstance(depth, int) or depth == 0
+
+
 def _origin_level(origin: Mapping[str, object]) -> int:
     level: Final = origin.get("level")
     return level if isinstance(level, int) else 0
@@ -4520,6 +4562,7 @@ class _Driver:
         sync: bool = False,
         fresh: bool = False,
         passthrough: "Callable[[Mapping[str, object], str], Awaitable[object]] | None" = None,
+        credential_scope: frozenset[str] | None = None,
     ) -> None:
         self._core: Final = core
         self._sync: Final = sync
@@ -4536,7 +4579,8 @@ class _Driver:
         self._base_level: Final = stream_failure[0] if stream_failure is not None else 0
         # How many fallback hops deep the walk is: the "Successful fallback" lines a served hop logs.
         self._fallback_depth: int = 0
-        self._requested_selection: str | None = get_pre_routing_selection(request)
+        self._carries_caller_credentials: Final = carries_caller_credentials(request)
+        self._credential_scope: frozenset[str] | None = credential_scope
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
         )
@@ -5103,6 +5147,7 @@ class _Driver:
             routed=routed if isinstance(routed, str) else None,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
+            credential_scope=self._credential_scope,
         )
 
     def _failed(
@@ -5377,19 +5422,26 @@ class _Driver:
         )
 
     def _hop_request(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
-        """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
         params: Final = as_str_mapping(step.get("params"))
-        level: Final = step.get("fallback_level")
-        request: Final = (
-            self._request
-            if not isinstance(level, int) or level == 0 or self._request.keys().isdisjoint(PROVIDER_BOUND_PARAMS)
-            else request_for_provider(self._request, provider(), self._credentials_sent_for)
-        )
+        request: Final = self._request_for(step, provider)
         return request if params is None else {**request, **params}
 
-    @cached_property
-    def _credentials_sent_for(self) -> frozenset[str]:
-        model: Final = self._requested_selection or _routed_model(self._request)
+    def _request_for(self, step: Mapping[str, object], provider: Callable[[], str | None]) -> Mapping[str, object]:
+        if not self._carries_caller_credentials:
+            return self._request
+        if _serves_the_primary(step):
+            _ = self._settled_credential_scope(get_pre_routing_selection(self._request) or _routed_model(self._request))
+            return self._request
+        return request_for_provider(
+            self._request, provider(), self._settled_credential_scope(_routed_model(self._request))
+        )
+
+    def _settled_credential_scope(self, requested: object) -> frozenset[str]:
+        if self._credential_scope is None:
+            self._credential_scope = self._providers_serving(requested)
+        return self._credential_scope
+
+    def _providers_serving(self, model: object) -> frozenset[str]:
         if not isinstance(model, str):
             return frozenset()
         providers: Final = (
@@ -5640,15 +5692,11 @@ class _Driver:
     async def pre_route(self, step: Mapping[str, object]) -> object:
         request: Final = self._request
         try:
-            routed: Final = await self._core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above
+            return await self._core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above
                 step, request, *self._plan.pick_input(request), call_type=self._plan.handler
             )
         except Exception as error:  # noqa: BLE001  # see select
             return self._pick_raised(error, logged=True)
-        depth: Final = step.get("fallback_depth")
-        if not isinstance(depth, int) or depth == 0:
-            self._requested_selection = get_pre_routing_selection(request)
-        return routed
 
     def pre_route_sync(self, step: Mapping[str, object]) -> object:
         request: Final = self._request

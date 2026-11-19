@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -1683,3 +1684,149 @@ async def test_admin_fallback_from_a_name_several_teams_share_still_serves(
     )
 
     assert response.choices[0].message.content == "served by the anthropic backup"
+
+
+@pytest.mark.asyncio
+async def test_fallback_without_caller_credentials_keeps_the_requests_headers(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _anthropic_router(
+        {
+            "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
+            "aws_access_key_id": "AKIAFALLBACKTEST",
+            "aws_secret_access_key": "fallback-test-secret",
+            "aws_region_name": "us-east-1",
+        }
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded_response())
+    bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_bedrock_converse_response()
+    )
+
+    await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], headers={"x-admin-configured": "kept"}
+    )
+
+    assert bedrock.calls.last.request.headers["x-admin-configured"] == "kept"
+
+
+class _StreamCutBeforeContent(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        role_only: Final = {
+            "id": "s",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-tier",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        }
+        yield f"data: {json.dumps(role_only)}\n\n".encode()
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+def _chat_stream_sse(content: str) -> str:
+    chunk: Final = {
+        "id": "s",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-tier",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+    }
+    return f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_stream_recovery_after_a_complexity_routed_fallback_keeps_the_callers_key_off_the_next_hop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-admin-key"},
+            },
+            _complexity_router("smart-openai", "gpt-tier"),
+            {
+                "model_name": "gpt-tier",
+                "litellm_params": {
+                    "model": "openai/gpt-tier",
+                    "api_key": "sk-openai-tier-admin-key",
+                    "api_base": "https://openai-tier.local/v1",
+                },
+            },
+            {
+                "model_name": "gpt-backup",
+                "litellm_params": {
+                    "model": "openai/gpt-backup",
+                    "api_key": "sk-openai-backup-admin-key",
+                    "api_base": "https://openai-backup.local/v1",
+                },
+            },
+        ],
+        fallbacks=[{"claude": ["smart-openai", "gpt-backup"]}],
+        num_retries=0,
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded_response())
+    respx_mock.post("https://openai-tier.local/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_StreamCutBeforeContent()
+        )
+    )
+    backup: Final = respx_mock.post("https://openai-backup.local/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_chat_stream_sse("backup"))
+    )
+
+    response: Final = await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY, stream=True
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert backup.calls.last.request.headers["authorization"] == "Bearer sk-openai-backup-admin-key"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "backup"
+
+
+@pytest.mark.asyncio
+async def test_stream_recovery_from_a_complexity_routed_primary_keeps_the_callers_key_on_a_same_provider_hop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            _complexity_router("smart", "gpt-tier"),
+            {
+                "model_name": "gpt-tier",
+                "litellm_params": {
+                    "model": "openai/gpt-tier",
+                    "api_key": "sk-openai-tier-admin-key",
+                    "api_base": "https://openai-tier.local/v1",
+                },
+            },
+            {
+                "model_name": "gpt-backup",
+                "litellm_params": {
+                    "model": "openai/gpt-backup",
+                    "api_key": "sk-openai-backup-admin-key",
+                    "api_base": "https://openai-backup.local/v1",
+                },
+            },
+        ],
+        fallbacks=[{"gpt-tier": ["gpt-backup"]}],
+        num_retries=0,
+    )
+    respx_mock.post("https://openai-tier.local/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_StreamCutBeforeContent()
+        )
+    )
+    backup: Final = respx_mock.post("https://openai-backup.local/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_chat_stream_sse("backup"))
+    )
+
+    response: Final = await router.acompletion(
+        model="smart", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_KEY, stream=True
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert backup.calls.last.request.headers["authorization"] == f"Bearer {_CALLER_KEY}"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "backup"

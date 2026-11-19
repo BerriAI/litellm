@@ -138,6 +138,7 @@ class StreamAttempt:
     # The background recording of the stream's failure, which a same-group retry waits for so it
     # picks with the failed deployment already cooled down.
     failure_recording: "asyncio.Task[None] | None" = None
+    credential_scope: frozenset[str] | None = None
 
     @property
     def model_group(self) -> str:
@@ -177,14 +178,18 @@ class StreamAttempt:
 
     async def fallback(self, trigger: BaseException, request: Mapping[str, object] | None = None) -> object:
         """The fallback walk for this stream's failure; raises when no fallback answers."""
-        return await self.core.recover_stream("fallback", self.op, request or self.request, self.origin(), trigger)
+        return await self.core.recover_stream(
+            "fallback", self.op, request or self.request, self.origin(), trigger, self.credential_scope
+        )
 
     def fallback_sync(self, trigger: BaseException) -> object:
-        return self.core.recover_stream_sync("fallback", self.op, self.request, self.origin(), trigger)
+        return self.core.recover_stream_sync(
+            "fallback", self.op, self.request, self.origin(), trigger, self.credential_scope
+        )
 
     async def retry(self, trigger: BaseException) -> "tuple[object, int, int] | BaseException":
         """A same-group retry: the retried response with the retry count and budget, or the newest failure."""
-        return await self.core.retry_stream(self.op, self.request, self.origin(), trigger)
+        return await self.core.retry_stream(self.op, self.request, self.origin(), trigger, self.credential_scope)
 
     # -- the stream's outcome, reported once when it ends --------------------------------------
 
