@@ -410,6 +410,16 @@ class AppStore:
             return True
         return budget_id in await self.shared_profile_ids() and await self.budget(budget_id) is not None
 
+    async def validate_settings(self, data: AppPatch | AppCreate) -> AppFailure | None:
+        if not await self.valid_profile(data.default_tier_budget_id):
+            return AppFailure(422, "The default profile must be an existing customer budget group.")
+        if data.budget_id is not None and (
+            data.budget_id not in await budget_group_ids(self.customers.config, BudgetGroupScope.APP)
+            or await self.budget(data.budget_id) is None
+        ):
+            return AppFailure(422, "The app budget must be an existing overall-app budget group.")
+        return None
+
     async def get(self, app_id: str) -> App | AppFailure:
         row: Final = await self.apps.find_unique(where={"app_id": app_id})
         if row is None or not row.model_dump().get("resource_id"):
@@ -468,8 +478,9 @@ class AppStore:
         resource: Final = await self.resource(definition.resource_type, data.resource_id)
         if isinstance(resource, AppFailure):
             return resource
-        if not await self.valid_profile(data.default_tier_budget_id):
-            return AppFailure(422, "The default profile must be an existing customer budget group.")
+        failure: Final = await self.validate_settings(data)
+        if failure is not None:
+            return failure
         existing: Final = await self.by_resource(definition.resource_type, data.resource_id)
         if existing is not None:
             return existing
@@ -504,12 +515,20 @@ class AppStore:
         )
         return await self.response(row)
 
-    async def fields(self, data: AppPatch | AppCreate, actor: str, current: App | None = None) -> Mapping[str, object]:
-        budget_id: Final = (
-            await self.customers.update_budget(current.budget_id if current else None, data.budget, actor)
-            if data.budget is not None
-            else None
+    async def overall_budget_id(self, current_id: str | None, data: AppPatch | AppCreate, actor: str) -> str | None:
+        if data.budget_id is not None:
+            return data.budget_id
+        if "budget" not in data.model_fields_set:
+            return data.budget_id if "budget_id" in data.model_fields_set else current_id
+        return await self.customers.private_budget_patch(
+            current_id,
+            MemberPatch(budget=data.budget),
+            actor,
+            shared_ids=await budget_group_ids(self.customers.config, BudgetGroupScope.APP),
         )
+
+    async def fields(self, data: AppPatch | AppCreate, actor: str, current: App | None = None) -> Mapping[str, object]:
+        budget_id: Final = await self.overall_budget_id(current.budget_id if current else None, data, actor)
         member_id: Final = (
             await self.customers.update_budget(
                 current.default_customer_member_budget_id if current else None,
@@ -520,7 +539,7 @@ class AppStore:
             else None
         )
         return {
-            **({"budget_id": budget_id} if "budget" in data.model_fields_set else {}),
+            **({"budget_id": budget_id} if {"budget", "budget_id"} & data.model_fields_set else {}),
             **(
                 {"default_tier_budget_id": data.default_tier_budget_id}
                 if "default_tier_budget_id" in data.model_fields_set
@@ -554,8 +573,9 @@ class AppStore:
         app: Final = await self.writable(app_id)
         if isinstance(app, AppFailure):
             return app
-        if not await self.valid_profile(data.default_tier_budget_id):
-            return AppFailure(422, "The default profile must be an existing customer budget group.")
+        failure: Final = await self.validate_settings(data)
+        if failure is not None:
+            return failure
         row: Final = await self.apps.update(where={"app_id": app_id}, data=await self.fields(data, actor, app))
         if row is None:
             return AppFailure(404, "App not found.")
