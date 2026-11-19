@@ -181,15 +181,19 @@ const memberPatch = (
   const alias = aliasChanges(member.alias, fields.alias);
   const clearLegacy = legacyMemberBudgetClear(member);
   const templateChanged = fields.templateId !== initial.templateId;
-  if (templateChanged && fields.templateId)
-    return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearLegacy } } };
   const changed = budgetChanged(fields, initial) || fields.overrideExpiry !== initial.overrideExpiry;
+  if (templateChanged && fields.templateId && !changed)
+    return { ok: true, patch: { kind: "member", body: { ...alias, budget_id: fields.templateId, ...clearLegacy } } };
+  const templateSelection = templateChanged ? { budget_id: fields.templateId || null } : {};
   if (!changed)
-    return { ok: true, patch: { kind: "member", body: { ...alias, ...(templateChanged ? { budget_id: null } : {}) } } };
+    return { ok: true, patch: { kind: "member", body: { ...alias, ...templateSelection } } };
   if (!fields.budgetEnabled && initial.budgetEnabled && initial.overrideExpiry) {
     return {
       ok: true,
-      patch: { kind: "member", body: { ...alias, budget_override: null, budget_override_expires_at: null } },
+      patch: {
+        kind: "member",
+        body: { ...alias, ...templateSelection, budget_override: null, budget_override_expires_at: null },
+      },
     };
   }
   const budget = fields.budgetEnabled ? parseBudget(fields) : null;
@@ -203,6 +207,7 @@ const memberPatch = (
         kind: "member",
         body: {
           ...alias,
+          ...templateSelection,
           budget_override: budget,
           ...(fields.overrideExpiry !== initial.overrideExpiry
             ? { budget_override_expires_at: expiry.toISOString() }
@@ -211,6 +216,8 @@ const memberPatch = (
       },
     };
   }
+  if (templateChanged && fields.templateId)
+    return { ok: true, patch: { kind: "member", body: { ...alias, ...templateSelection, ...clearLegacy } } };
   const permanentBudget = {
     ...(clearLegacy.budget_override === null ? member.effective_budget : {}),
     ...budget,

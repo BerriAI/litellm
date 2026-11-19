@@ -153,6 +153,36 @@ describe("customer hierarchy settings payloads", () => {
     });
   });
 
+  it("should save a preset change together with a temporary limit and expiry edit", () => {
+    const entity: CustomerHierarchyEntity = { kind: "member", record: member };
+    const expiry = "2026-12-02T12:00";
+    expect(
+      buildCustomerHierarchyPatch(entity, {
+        ...customerHierarchyFields(entity),
+        templateId: "template-2",
+        maxBudget: "30",
+        overrideExpiry: expiry,
+      }),
+    ).toEqual({
+      ok: true,
+      patch: {
+        kind: "member",
+        body: {
+          budget_id: "template-2",
+          budget_override: {
+            max_budget: 30,
+            soft_budget: null,
+            tpm_limit: null,
+            rpm_limit: 4,
+            budget_duration: null,
+            allowed_models: null,
+          },
+          budget_override_expires_at: new Date(expiry).toISOString(),
+        },
+      },
+    });
+  });
+
   it("should require a template or an override for a member", () => {
     const entity: CustomerHierarchyEntity = { kind: "member", record: member };
     expect(
