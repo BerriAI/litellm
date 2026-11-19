@@ -307,15 +307,25 @@ impl NativeModelCostMap {
     }
 
     /// Prices a token call from the facts in `document`, `None` when Python prices it the old way. `row` is a price
-    /// row the caller passes for this call alone
-    #[pyo3(signature = (document, row=None))]
+    /// row the caller passes for this call alone, `breakdown_row` the row it looked up for the stored breakdown and
+    /// `fee_row` the Azure AI Model Router row whose fee the call bills
+    #[pyo3(signature = (document, row=None, breakdown_row=None, fee_row=None))]
     fn price(
         &self,
         py: Python<'_>,
         document: &Bound<'_, PyAny>,
         row: Option<&Bound<'_, PyMapping>>,
+        breakdown_row: Option<&Bound<'_, PyMapping>>,
+        fee_row: Option<&Bound<'_, PyMapping>>,
     ) -> PyResult<Option<NativeReceipt>> {
-        cost::price(py, &*self.cost_snapshot(py)?, document, row)
+        cost::price(
+            py,
+            &*self.cost_snapshot(py)?,
+            document,
+            row,
+            breakdown_row,
+            fee_row,
+        )
     }
 
     /// Prices a per-unit call (rerank, vector store search, OCR) from the facts in `document`, a receipt or why it is

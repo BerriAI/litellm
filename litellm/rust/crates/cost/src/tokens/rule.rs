@@ -21,7 +21,7 @@ use super::branch::{self, Formula};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Lookup {
     Catalog,
-    Given { breakdown_by_name: bool },
+    Given,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +126,28 @@ pub(super) fn free_without_row(query: &TokensQuery) -> bool {
             .is_some_and(|first| branch(first) == Some(Branch::Lemonade))
 }
 
+/// The usage the branch pricing `query` bills. xAI bills reasoning tokens as completion text, and a usage whose total
+/// is its prompt plus its completion already counts them there (`billed_usage` in `llms/xai/cost_calculator.py`)
+pub(super) fn billed_usage(candidate: &Candidate, query: &TokensQuery) -> TokenUsage {
+    let xai = matches!(&candidate.provider, Provider::Other(name) if name == "xai");
+    if query.rules != TokenRules::Branch || !xai {
+        return query.usage.clone();
+    }
+    let raw = &query.raw;
+    let folded = raw.prompt_tokens + raw.completion_tokens == raw.total_tokens;
+    TokenUsage {
+        output: crate::query::Modalities {
+            text: match folded {
+                true => raw.completion_tokens,
+                false => raw.completion_tokens + raw.reasoning_tokens,
+            },
+            ..Default::default()
+        },
+        reasoning: 0,
+        ..query.usage.clone()
+    }
+}
+
 /// How the branch pricing `query` bills a stated cost, `None` when it reads none
 pub(super) fn stated(query: &TokensQuery) -> Option<Stated> {
     if query.rules != TokenRules::Branch {
@@ -162,13 +184,14 @@ impl Rule {
     ) -> Result<Self, Kind> {
         if branch::per_second_rate(row).is_some() {
             match (query.rules, query.elapsed) {
-                (TokenRules::Generic, None) => {}
+                (TokenRules::Generic | TokenRules::GenericTier, None) => {}
                 (_, Some(_)) => return Ok(Self::Formula(Formula::PerSecond)),
                 (_, None) => return Err(Kind::Tokens),
             }
         }
         match (query.rules, &candidate.provider) {
             (TokenRules::Generic, _) => return Ok(Self::Generic(Reads::ALL)),
+            (TokenRules::GenericTier, _) => return Ok(Self::Generic(Reads::TIER)),
             (TokenRules::Override, Provider::Anthropic) => return Ok(Self::Anthropic),
             (TokenRules::Override, _) => return Ok(Self::Generic(Reads::ALL)),
             (TokenRules::Branch, _) => {}
@@ -180,7 +203,7 @@ impl Rule {
             Provider::Bedrock => Ok(Self::Bedrock {
                 geo: match lookup {
                     Lookup::Catalog => at.provenance != Provenance::Registered,
-                    Lookup::Given { .. } => true,
+                    Lookup::Given => true,
                 },
             }),
             Provider::VertexAi if web_search && !model.to_lowercase().contains("claude") => {

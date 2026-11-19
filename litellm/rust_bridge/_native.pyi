@@ -1,6 +1,5 @@
 from asyncio import Future
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
 from typing import (
     ClassVar,
     Final,
@@ -121,47 +120,6 @@ class NativeProvenance:
     def etag(self) -> str | None: ...
 
 @final
-class NativePrices:
-    def __new__(cls, row: Mapping[str, object], provider: str | None) -> NativePrices: ...
-    def quote(self, prompt_tokens: int, call: NativeCallContext) -> NativeQuote: ...
-
-@final
-class NativeCallContext:
-    def __new__(
-        cls,
-        *,
-        service_tier: str | None,
-        data_residency: str | None,
-        vertex_location: str | None,
-        at: datetime,
-    ) -> NativeCallContext: ...
-
-@final
-class NativeQuote:
-    @property
-    def input(self) -> float: ...
-    @property
-    def output(self) -> float: ...
-    @property
-    def reasoning(self) -> float: ...
-    @property
-    def cache_read(self) -> float: ...
-    @property
-    def explicit_cache_read(self) -> float: ...
-    @property
-    def cache_read_audio(self) -> float | None: ...
-    @property
-    def cache_read_image(self) -> float | None: ...
-    @property
-    def cache_write(self) -> float: ...
-    @property
-    def cache_write_1h(self) -> float: ...
-    @property
-    def cache_write_12h(self) -> float: ...
-    @property
-    def uplift(self) -> float: ...
-
-@final
 class NativeBilledRates:
     @property
     def input(self) -> float: ...
@@ -272,7 +230,11 @@ class NativeModelCostMap:
     @property
     def provenance(self) -> NativeProvenance: ...
     def price(
-        self, document: Mapping[str, object], row: Mapping[str, object] | None = None
+        self,
+        document: Mapping[str, object],
+        row: Mapping[str, object] | None = None,
+        breakdown_row: Mapping[str, object] | None = None,
+        fee_row: Mapping[str, object] | None = None,
     ) -> NativeReceipt | None: ...
     def bound(
         self, document: Mapping[str, object], rows: Sequence[Mapping[str, object]]
@@ -2354,7 +2316,6 @@ __all__ = [
     "NativeAuthCache",
     "NativeBilledRates",
     "NativeBudgets",
-    "NativeCallContext",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
@@ -2373,9 +2334,7 @@ __all__ = [
     "NativeParallelRequestLimiter",
     "NativeParallelRequestLimiterState",
     "NativePending",
-    "NativePrices",
     "NativeProvenance",
-    "NativeQuote",
     "NativeRateCard",
     "NativeRateLimits",
     "NativeReceipt",
