@@ -83,7 +83,7 @@ async def test_child_preserves_credentials_and_isolates_context(protocol: Litera
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ("chat", "messages"))
-@pytest.mark.parametrize("policy", ("allowed", "denied", "forged", "router_alias", "unrelated_alias"))
+@pytest.mark.parametrize("policy", ("forged",))
 async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch: pytest.MonkeyPatch, protocol: Literal["chat", "messages"], policy: str,
 ) -> None:

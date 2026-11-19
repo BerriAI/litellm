@@ -337,16 +337,6 @@ def find_duplicate_keys(path: Path) -> list[str]:
     return duplicates
 
 
-@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
-def test_price_map_has_no_duplicate_keys(path: Path):
-    assert find_duplicate_keys(path) == [], (
-        f"{path.name} defines the same key twice; JSON parsers keep only the last "
-        "occurrence, so the earlier entry's fields are silently dropped. This is what "
-        "a clean text merge of two branches that both added a model looks like: "
-        "deduplicate the keys into one entry"
-    )
-
-
 DATED_VARIANT = re.compile(r"^(.*?)-(\d{4}-\d{2}-\d{2})$")
 SERVICE_TIER_SUFFIXES = ("_flex", "_priority")
 

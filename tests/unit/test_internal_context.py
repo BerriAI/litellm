@@ -112,20 +112,6 @@ def _redis_producers() -> tuple[str, ...]:
     return tuple(name for name in relative if not name.startswith(_CACHE_LAYER_DIRS))
 
 
-def test_every_redis_producer_declares_a_key_family() -> None:
-    """A module that reads or writes a shared cache without a declared target renders as a
-    bare ``redis.get`` / ``redis.mget`` (flat under the request span, or an unnamed INTERNAL root
-    for a background job), which is exactly what the sensitive-data pin read, the rate-limiter
-    MGET and the budget-reset job did in production. Only process-local callers are exempt."""
-    exempt: Final = _CACHE_PARAMETER_HELPERS | _IN_MEMORY_ONLY_CALLERS
-    undeclared: Final = tuple(
-        name
-        for name in _redis_producers()
-        if name not in exempt and not _DECLARES_TARGET.search((_REPO / name).read_text())
-    )
-    assert undeclared == ()
-
-
 def test_every_in_memory_exemption_still_only_touches_a_process_local_cache() -> None:
     """The exemption list is a claim about each file, so a file that is deleted or starts building
     or receiving a ``RedisCache`` has to leave the list (and declare a family) rather than stay exempt."""

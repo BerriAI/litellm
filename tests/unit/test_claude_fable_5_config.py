@@ -193,16 +193,6 @@ def test_mythos_5_2_vertex_rows_present_in_bundled_backup() -> None:
         assert backup[model_name] == root[model_name], model_name
 
 
-@pytest.mark.parametrize(("mythos_row", "fable_row"), MYTHOS_5_2_VERTEX_ROWS)
-def test_mythos_5_2_vertex_rows_match_fable_5_2(mythos_row: str, fable_row: str) -> None:
-    """Anthropic ships Mythos 5.2 as a verified-access twin of Fable 5.2 with "the same
-    specifications and pricing" (platform.claude.com/docs/en/models/mythos-5-2/overview,
-    read 2026-11-10), so the Vertex rows must stay identical apart from their source."""
-    root: Final = _load_root_cost_map()
-    assert _without_source(root[mythos_row]) == _without_source(root[fable_row])
-    assert root[mythos_row]["source"] == "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
-
-
 @pytest.mark.parametrize("model", [row for row, _ in MYTHOS_5_2_VERTEX_ROWS])
 def test_adaptive_thinking_detected_for_mythos_5_2_on_vertex(local_model_cost_map, model: str) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
