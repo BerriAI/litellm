@@ -305,22 +305,24 @@ def make_ui_spend_logs_mock_prisma(
                     ]
 
                 totals_sql, models_sql = sql_query.split("LEFT JOIN LATERAL", 1)
-                return [
-                    {
+
+                def session_totals(session_id: object, api_key: object) -> dict[str, object]:
+                    group: Final = tuple(
+                        row
+                        for row in scoped_rows(totals_sql)
+                        if (row["session_id"], row["api_key"]) == (session_id, api_key)
+                    )
+                    return {
                         "session_id": session_id,
                         "api_key": api_key,
                         "session_total_count": len(group),
                         "session_total_spend": sum(row.get("spend", 0) for row in group),
                         "session_models": sorted({row["model"] for row in scoped_rows(models_sql) if row.get("model")}),
                     }
+
+                return [
+                    session_totals(session_id, api_key)
                     for session_id, api_key in {(row["session_id"], row["api_key"]) for row in scoped_rows(totals_sql)}
-                    for group in [
-                        [
-                            row
-                            for row in scoped_rows(totals_sql)
-                            if (row["session_id"], row["api_key"]) == (session_id, api_key)
-                        ]
-                    ]
                 ]
             if 'SELECT DISTINCT "user", team_id' in sql_query:
                 return _emulate_spend_log_owner_lookup(mock_spend_logs, sql_query, params)
